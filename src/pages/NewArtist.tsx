@@ -2,13 +2,26 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Music, ArrowLeft } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Music, ArrowLeft, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 
 const NewArtist = () => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setAvatarPreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,6 +62,27 @@ const NewArtist = () => {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label>Profile Picture</Label>
+                <div className="flex items-center gap-4">
+                  <Avatar className="w-20 h-20">
+                    <AvatarImage src={avatarPreview || undefined} />
+                    <AvatarFallback className="bg-muted">
+                      <Upload className="w-8 h-8 text-muted-foreground" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <Input
+                      id="avatar"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleAvatarChange}
+                      className="cursor-pointer"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Upload JPG, PNG or GIF</p>
+                  </div>
+                </div>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="artist-name">Artist Name</Label>
                 <Input id="artist-name" placeholder="Enter artist name" required />

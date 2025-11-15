@@ -2,14 +2,15 @@ import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Music, Plus, Search, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 // Mock data
 const mockArtists = [
-  { id: 1, name: "Luna Rivers", genre: "Electronic", hasContract: true },
-  { id: 2, name: "The Echoes", genre: "Indie Rock", hasContract: true },
-  { id: 3, name: "DJ Neon", genre: "EDM", hasContract: false },
+  { id: 1, name: "Luna Rivers", genre: "Electronic", hasContract: true, avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Luna" },
+  { id: 2, name: "The Echoes", genre: "Indie Rock", hasContract: true, avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Echoes" },
+  { id: 3, name: "DJ Neon", genre: "EDM", hasContract: false, avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Neon" },
 ];
 
 const Artists = () => {
@@ -64,10 +65,13 @@ const Artists = () => {
           {filteredArtists.map((artist) => (
             <Card key={artist.id} className="hover:shadow-lg transition-shadow">
               <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-3">
-                    <Music className="w-6 h-6 text-primary" />
-                  </div>
+                <div className="flex items-start justify-between mb-4">
+                  <Avatar className="w-16 h-16">
+                    <AvatarImage src={artist.avatar} alt={artist.name} />
+                    <AvatarFallback className="bg-primary text-primary-foreground text-xl">
+                      {artist.name.charAt(0)}
+                    </AvatarFallback>
+                  </Avatar>
                   {artist.hasContract && (
                     <div className="flex items-center gap-1 text-xs text-success bg-success/10 px-2 py-1 rounded-full">
                       <FileText className="w-3 h-3" />
