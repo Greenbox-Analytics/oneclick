@@ -3,7 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Music, Upload, FileText, ArrowLeft } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Music, Upload, FileText, ArrowLeft, Camera } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
 const ArtistProfile = () => {
@@ -16,6 +17,11 @@ const ArtistProfile = () => {
     name: id === "1" ? "Luna Rivers" : id === "2" ? "The Echoes" : "DJ Neon",
     genre: id === "1" ? "Electronic" : id === "2" ? "Indie Rock" : "EDM",
     email: "artist@example.com",
+    avatar: id === "1" 
+      ? "https://api.dicebear.com/7.x/avataaars/svg?seed=Luna"
+      : id === "2" 
+      ? "https://api.dicebear.com/7.x/avataaars/svg?seed=Echoes"
+      : "https://api.dicebear.com/7.x/avataaars/svg?seed=Neon",
   };
 
   const handleContractUpload = () => {
@@ -41,9 +47,22 @@ const ArtistProfile = () => {
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
-        <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground mb-2">{artist.name}</h2>
-          <p className="text-muted-foreground">{artist.genre}</p>
+        <div className="mb-8 flex items-start gap-6">
+          <div className="relative group">
+            <Avatar className="w-24 h-24">
+              <AvatarImage src={artist.avatar} alt={artist.name} />
+              <AvatarFallback className="bg-primary text-primary-foreground text-3xl">
+                {artist.name.charAt(0)}
+              </AvatarFallback>
+            </Avatar>
+            <button className="absolute inset-0 bg-background/80 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+              <Camera className="w-6 h-6 text-foreground" />
+            </button>
+          </div>
+          <div>
+            <h2 className="text-3xl font-bold text-foreground mb-2">{artist.name}</h2>
+            <p className="text-muted-foreground">{artist.genre}</p>
+          </div>
         </div>
 
         <div className="grid gap-6">
