@@ -1,73 +1,117 @@
-# Welcome to your Lovable project
+# Msanii AI
 
-## Project info
+A modern web application for managing artists and royalties, built with React, TypeScript, and Supabase.
 
-**URL**: https://lovable.dev/projects/636edc71-fa8e-4cf2-bf1f-906e08db041e
+Msanii is a comprehensive platform that helps you organize and track your artist roster, manage royalty information, and streamline your music business operations. Features include secure authentication with Google sign-in, artist profiles, and protected user data.
 
-## How can I edit this code?
+## 🚀 Quick Start
 
-There are several ways of editing your application.
+### Prerequisites
 
-**Use Lovable**
+- [Conda](https://docs.conda.io/en/latest/miniconda.html) (Miniconda or Anaconda)
+- [Node.js](https://nodejs.org/) 18+ (will be installed via Conda)
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/636edc71-fa8e-4cf2-bf1f-906e08db041e) and start prompting.
+### 1. Set Up Conda Environment
 
-Changes made via Lovable will be committed automatically to this repo.
+Create and activate a new Conda environment:
 
-**Use your preferred IDE**
+```bash
+# Create a new conda environment with Node.js
+conda create -n msanii-ai nodejs -c conda-forge
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+# Activate the environment
+conda activate msanii-ai
+```
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### 2. Install Dependencies
 
-Follow these steps:
+```bash
+npm install
+```
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+### 3. Configure Environment Variables
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+Create your environment file:
 
-# Step 3: Install the necessary dependencies.
-npm i
+```bash
+cp .env.example .env
+```
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+Edit `.env` and add your Supabase credentials (see [Authentication Setup](#authentication-setup) below).
+
+### 4. Run the Project
+
+Start the development server:
+
+```bash
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+The app will be available at `http://localhost:5173`
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## 🔐 Authentication Setup
 
-**Use GitHub Codespaces**
+This app uses Supabase for authentication with Google OAuth support. To set up:
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+1. Go to [Supabase](https://supabase.com)
+2. Access [OneClick](https://supabase.com/dashboard/project/sfugklkakdflrqhmkfps) project
+3. Get project credentials from Settings → API
+4. Add them to your local `.env` file:
+   ```env
+   VITE_SUPABASE_URL=your-project-url
+   VITE_SUPABASE_ANON_KEY=your-anon-key
+   ```
 
-## What technologies are used for this project?
+## 📁 Project Structure
 
-This project is built with:
+```
+oneclick/
+├── src/
+│   ├── components/     # Reusable UI components
+│   ├── contexts/       # React context providers
+│   ├── hooks/          # Custom React hooks
+│   ├── lib/            # Utilities and configurations
+│   ├── pages/          # Page components
+│   └── App.tsx         # Main app component
+├── public/             # Static assets
+└── .env               # Environment variables (not in git)
+```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## 🛠️ Available Scripts
 
-## How can I deploy this project?
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run preview` - Preview production build
+- `npm run lint` - Run ESLint
 
-Simply open [Lovable](https://lovable.dev/projects/636edc71-fa8e-4cf2-bf1f-906e08db041e) and click on Share -> Publish.
+## 🔒 Protected Routes
 
-## Can I connect a custom domain to my Lovable project?
+The following routes require authentication:
+- `/dashboard` - Main dashboard
+- `/artists` - Artist list
+- `/artists/new` - Create new artist
+- `/artists/:id` - Artist profile
+- `/tools` - Tools page
+- `/profile` - User profile
 
-Yes, you can!
+## 🌟 Features
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+- ✅ Google OAuth authentication
+- ✅ Email/password authentication
+- ✅ Protected routes
+- ✅ Artist management
+- ✅ User profiles
+- ✅ Responsive design with Tailwind CSS
+- ✅ Modern UI components with shadcn/ui
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+## 🤝 Contributing
+
+1. Create a feature branch
+2. Make your changes
+3. Test thoroughly
+4. Submit a pull request
+
+## 📝 License
+
+This project is private and proprietary.
+
