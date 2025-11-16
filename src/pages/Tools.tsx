@@ -68,7 +68,7 @@ const Tools = () => {
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
               <Music className="w-6 h-6 text-primary-foreground" />
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Artist Manager</h1>
+            <h1 className="text-2xl font-bold text-foreground">Msanii AI</h1>
           </div>
           <Button variant="outline" onClick={() => navigate("/dashboard")}>
             Back to Dashboard
@@ -78,7 +78,7 @@ const Tools = () => {
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground mb-2">clickSplit</h2>
+          <h2 className="text-3xl font-bold text-foreground mb-2">OneClick</h2>
           <p className="text-muted-foreground">Calculate royalty splits across your artists</p>
         </div>
 
@@ -124,7 +124,7 @@ const Tools = () => {
                 disabled={selectedArtists.length === 0}
               >
                 <Calculator className="w-4 h-4 mr-2" />
-                Calculate Royalty Split
+                OneClick
               </Button>
             </CardContent>
           </Card>
