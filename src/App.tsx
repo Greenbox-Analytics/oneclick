@@ -12,6 +12,7 @@ import Artists from "./pages/Artists";
 import ArtistProfile from "./pages/ArtistProfile";
 import NewArtist from "./pages/NewArtist";
 import Tools from "./pages/Tools";
+import DocumentUpload from "./pages/DocumentUpload";
 import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 
@@ -64,6 +65,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Tools />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/oneclick/:artistId/documents"
+              element={
+                <ProtectedRoute>
+                  <DocumentUpload />
                 </ProtectedRoute>
               }
             />

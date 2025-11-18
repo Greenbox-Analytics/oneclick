@@ -2,10 +2,11 @@ import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Music, Calculator, AlertCircle } from "lucide-react";
+import { Music, AlertCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
+//This is temporary placeholder data. TODO: Later to be replaced with a backend API
 const mockArtists = [
   { id: 1, name: "Luna Rivers", hasContract: true },
   { id: 2, name: "The Echoes", hasContract: true },
@@ -14,50 +15,30 @@ const mockArtists = [
 
 const Tools = () => {
   const navigate = useNavigate();
+  //State tracks artist user has selected and errors
   const [selectedArtists, setSelectedArtists] = useState<number[]>([]);
-  const [royaltyResults, setRoyaltyResults] = useState<any>(null);
   const [error, setError] = useState<string>("");
 
+  //This lets us select/deselect a single artist (only one artist can be selected at a time)
   const handleArtistToggle = (artistId: number) => {
     setSelectedArtists(prev =>
       prev.includes(artistId)
-        ? prev.filter(id => id !== artistId)
-        : [...prev, artistId]
+        ? [] // Deselect if already selected
+        : [artistId] // Select only this artist (replaces any previous selection)
     );
   };
 
-  const handleCalculateRoyalties = () => {
+  //Navigate to document upload page for the selected artist
+  const handleContinue = () => {
     setError("");
-    setRoyaltyResults(null);
 
     if (selectedArtists.length === 0) {
       setError("Please select at least one artist");
       return;
     }
 
-    const artistsWithoutContract = selectedArtists.filter(id => {
-      const artist = mockArtists.find(a => a.id === id);
-      return artist && !artist.hasContract;
-    });
-
-    if (artistsWithoutContract.length > 0) {
-      const artistNames = artistsWithoutContract
-        .map(id => mockArtists.find(a => a.id === id)?.name)
-        .join(", ");
-      setError(`Cannot calculate royalties. Missing contracts for: ${artistNames}`);
-      return;
-    }
-
-    // TODO: Call backend royalty split API
-    // Mock result
-    setRoyaltyResults({
-      splits: selectedArtists.map(id => ({
-        artist: mockArtists.find(a => a.id === id)?.name,
-        percentage: (100 / selectedArtists.length).toFixed(2),
-        amount: `$${(1000 / selectedArtists.length).toFixed(2)}`,
-      })),
-      total: "$1,000.00",
-    });
+    const selectedArtistId = selectedArtists[0];
+    navigate(`/oneclick/${selectedArtistId}/documents`);
   };
 
   return (
@@ -90,7 +71,7 @@ const Tools = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               {mockArtists.map((artist) => (
-                <div key={artist.id} className="flex items-center justify-between p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
+                <div key={artist.id} className="flex items-center p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
                   <div className="flex items-center gap-3">
                     <Checkbox
                       id={`artist-${artist.id}`}
@@ -104,27 +85,15 @@ const Tools = () => {
                       {artist.name}
                     </label>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {artist.hasContract ? (
-                      <span className="text-xs text-success bg-success/10 px-2 py-1 rounded-full">
-                        Contract ✓
-                      </span>
-                    ) : (
-                      <span className="text-xs text-destructive bg-destructive/10 px-2 py-1 rounded-full">
-                        No Contract
-                      </span>
-                    )}
-                  </div>
                 </div>
               ))}
 
               <Button
-                onClick={handleCalculateRoyalties}
+                onClick={handleContinue}
                 className="w-full"
                 disabled={selectedArtists.length === 0}
               >
-                <Calculator className="w-4 h-4 mr-2" />
-                OneClick
+                Continue
               </Button>
             </CardContent>
           </Card>
@@ -135,31 +104,6 @@ const Tools = () => {
               <AlertTitle>Error</AlertTitle>
               <AlertDescription>{error}</AlertDescription>
             </Alert>
-          )}
-
-          {royaltyResults && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Royalty Split Results</CardTitle>
-                <CardDescription>Total Amount: {royaltyResults.total}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {royaltyResults.splits.map((split: any, index: number) => (
-                    <div
-                      key={index}
-                      className="flex items-center justify-between p-4 bg-secondary/50 rounded-lg"
-                    >
-                      <span className="font-medium text-foreground">{split.artist}</span>
-                      <div className="text-right">
-                        <div className="font-bold text-primary">{split.amount}</div>
-                        <div className="text-sm text-muted-foreground">{split.percentage}%</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
           )}
         </div>
       </main>
