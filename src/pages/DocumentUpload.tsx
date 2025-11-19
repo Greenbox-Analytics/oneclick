@@ -6,9 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 // Icons from lucide-react for visual elements
-import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet } from "lucide-react";
+import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2 } from "lucide-react";
 // React Router hooks for navigation and getting URL parameters
 import { useNavigate, useParams } from "react-router-dom";
 // Recharts for pie chart
@@ -63,6 +65,10 @@ const DocumentUpload = () => {
   // null means no results yet, object contains the calculated royalty data
   const [royaltyResults, setRoyaltyResults] = useState<RoyaltyResults | null>(null);
 
+  // State to track selected existing documents from artist profile
+  const [selectedExistingContracts, setSelectedExistingContracts] = useState<string[]>([]);
+  const [selectedExistingRoyaltyStatements, setSelectedExistingRoyaltyStatements] = useState<string[]>([]);
+
   // Temporary mock data for artists - TODO: Replace with API call to fetch real artist data
   // This should eventually fetch from your backend using the artistId
   const mockArtists = [
@@ -75,6 +81,19 @@ const DocumentUpload = () => {
   // Converts artistId (string) to number for comparison
   // Returns undefined if no artist is found
   const artist = mockArtists.find(a => a.id === Number(artistId));
+
+  // Mock data for existing documents on artist profile
+  // TODO: Replace with API call to fetch actual documents from artist profile
+  const existingContracts = artist?.hasContract ? [
+    { id: "contract-1", name: "Artist Contract.pdf", uploadedDate: "3 months ago", type: "contract" },
+    { id: "contract-2", name: "Amended Contract 2024.pdf", uploadedDate: "1 month ago", type: "contract" },
+  ] : [];
+
+  const existingRoyaltyStatements = [
+    { id: "royalty-1", name: "Q1 2024 Royalty Statement.xlsx", uploadedDate: "2 weeks ago", type: "royalty" },
+    { id: "royalty-2", name: "Q2 2024 Royalty Statement.xlsx", uploadedDate: "1 week ago", type: "royalty" },
+    { id: "royalty-3", name: "Q3 2024 Royalty Statement.csv", uploadedDate: "3 days ago", type: "royalty" },
+  ];
 
   /**
    * Handles contract file selection from the file input
@@ -145,10 +164,36 @@ const DocumentUpload = () => {
   };
 
   /**
-   * Handles the calculation of royalties after documents are uploaded
+   * Handles selection/deselection of existing contract documents
+   * 
+   * @param contractId - The ID of the contract to toggle
+   */
+  const handleToggleExistingContract = (contractId: string) => {
+    setSelectedExistingContracts(prev =>
+      prev.includes(contractId)
+        ? prev.filter(id => id !== contractId)
+        : [...prev, contractId]
+    );
+  };
+
+  /**
+   * Handles selection/deselection of existing royalty statement documents
+   * 
+   * @param statementId - The ID of the royalty statement to toggle
+   */
+  const handleToggleExistingRoyaltyStatement = (statementId: string) => {
+    setSelectedExistingRoyaltyStatements(prev =>
+      prev.includes(statementId)
+        ? prev.filter(id => id !== statementId)
+        : [...prev, statementId]
+    );
+  };
+
+  /**
+   * Handles the calculation of royalties after documents are uploaded or selected
    * 
    * This function:
-   * 1. Checks if there are files to upload (contracts and royalty statements)
+   * 1. Checks if there are files uploaded OR existing documents selected (contracts and royalty statements)
    * 2. Sets loading state to true (disables buttons, shows "Calculating...")
    * 3. Processes files and calculates royalties (currently mocked with dummy data)
    * 4. Displays results on the same page
@@ -156,8 +201,12 @@ const DocumentUpload = () => {
    * TODO: Replace with actual API call to process documents and calculate royalties
    */
   const handleCalculateRoyalties = async () => {
-    // Don't proceed if both file types are not uploaded
-    if (contractFiles.length === 0 || royaltyStatementFiles.length === 0) return;
+    // Check if we have either uploaded files OR selected existing documents for both types
+    const hasContracts = contractFiles.length > 0 || selectedExistingContracts.length > 0;
+    const hasRoyaltyStatements = royaltyStatementFiles.length > 0 || selectedExistingRoyaltyStatements.length > 0;
+    
+    // Don't proceed if both file types are not available (either uploaded or selected)
+    if (!hasContracts || !hasRoyaltyStatements) return;
 
     // Set uploading state to true - this will:
     // - Change button text to "Calculating..."
@@ -330,36 +379,90 @@ const DocumentUpload = () => {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Contract file upload drop zone area */}
-              <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
-                <FileSignature className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                <p className="text-foreground font-medium mb-2 text-sm">Upload Contract</p>
-                <p className="text-muted-foreground mb-4 text-xs">
-                  PDF or Word DOCX files only
-                </p>
-                {/* Hidden file input for contracts - accepts only PDF and DOCX */}
-                <Input
-                  id="contract-upload"
-                  type="file"
-                  multiple
-                  accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  onChange={handleContractFileChange}
-                  className="hidden"
-                />
-                <label htmlFor="contract-upload">
-                  <Button variant="outline" size="sm" asChild>
-                    <span>
-                      <Upload className="w-4 h-4 mr-2" />
-                      Select Files
-                    </span>
-                  </Button>
-                </label>
-              </div>
+              {/* Tabs for Upload vs Select Existing */}
+              <Tabs defaultValue="upload" className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="upload">Upload New</TabsTrigger>
+                  <TabsTrigger value="existing">Select Existing</TabsTrigger>
+                </TabsList>
+                
+                {/* Upload New Files Tab */}
+                <TabsContent value="upload" className="space-y-4 mt-4">
+                  <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
+                    <FileSignature className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                    <p className="text-foreground font-medium mb-2 text-sm">Upload Contract</p>
+                    <p className="text-muted-foreground mb-4 text-xs">
+                      PDF or Word DOCX files only
+                    </p>
+                    {/* Hidden file input for contracts - accepts only PDF and DOCX */}
+                    <Input
+                      id="contract-upload"
+                      type="file"
+                      multiple
+                      accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      onChange={handleContractFileChange}
+                      className="hidden"
+                    />
+                    <label htmlFor="contract-upload">
+                      <Button variant="outline" size="sm" asChild>
+                        <span>
+                          <Upload className="w-4 h-4 mr-2" />
+                          Select Files
+                        </span>
+                      </Button>
+                    </label>
+                  </div>
+                </TabsContent>
 
-              {/* Contract files list */}
+                {/* Select Existing Documents Tab */}
+                <TabsContent value="existing" className="space-y-4 mt-4">
+                  {existingContracts.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground mb-2">Available Contracts:</p>
+                      {existingContracts.map((contract) => (
+                        <div
+                          key={contract.id}
+                          className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
+                        >
+                          <div className="flex items-center gap-3 flex-1">
+                            <Checkbox
+                              id={`existing-contract-${contract.id}`}
+                              checked={selectedExistingContracts.includes(contract.id)}
+                              onCheckedChange={() => handleToggleExistingContract(contract.id)}
+                            />
+                            <label
+                              htmlFor={`existing-contract-${contract.id}`}
+                              className="flex items-center gap-2 flex-1 cursor-pointer"
+                            >
+                              <FileText className="w-4 h-4 text-primary" />
+                              <div>
+                                <p className="text-sm font-medium text-foreground">{contract.name}</p>
+                                <p className="text-xs text-muted-foreground">Uploaded {contract.uploadedDate}</p>
+                              </div>
+                            </label>
+                          </div>
+                          {selectedExistingContracts.includes(contract.id) && (
+                            <CheckCircle2 className="w-4 h-4 text-primary" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
+                      <FileText className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                      <p className="text-foreground font-medium mb-2 text-sm">No existing contracts</p>
+                      <p className="text-muted-foreground text-xs">
+                        No contracts found on this artist's profile
+                      </p>
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+
+              {/* Contract files list - Uploaded files */}
               {contractFiles.length > 0 && (
                 <div className="space-y-2">
-                  <h3 className="text-xs font-medium text-foreground">Contract Files:</h3>
+                  <h3 className="text-xs font-medium text-foreground">Uploaded Contract Files:</h3>
                   <div className="space-y-2">
                     {contractFiles.map((file, index) => (
                       <div
@@ -388,6 +491,29 @@ const DocumentUpload = () => {
                   </div>
                 </div>
               )}
+
+              {/* Selected existing contracts summary */}
+              {selectedExistingContracts.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-medium text-foreground">Selected Existing Contracts:</h3>
+                  <div className="space-y-2">
+                    {existingContracts
+                      .filter(contract => selectedExistingContracts.includes(contract.id))
+                      .map((contract) => (
+                        <div
+                          key={contract.id}
+                          className="flex items-center gap-2 p-2 border border-border rounded-lg bg-secondary/50"
+                        >
+                          <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-foreground truncate">{contract.name}</p>
+                            <p className="text-xs text-muted-foreground">From artist profile</p>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -403,36 +529,90 @@ const DocumentUpload = () => {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Royalty statement file upload drop zone area */}
-              <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
-                <Receipt className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                <p className="text-foreground font-medium mb-2 text-sm">Upload Royalty Statement</p>
-                <p className="text-muted-foreground mb-4 text-xs">
-                  Excel (XLSX, XLS) or CSV files only
-                </p>
-                {/* Hidden file input for royalty statements - accepts only Excel and CSV */}
-                <Input
-                  id="royalty-upload"
-                  type="file"
-                  multiple
-                  accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
-                  onChange={handleRoyaltyStatementFileChange}
-                  className="hidden"
-                />
-                <label htmlFor="royalty-upload">
-                  <Button variant="outline" size="sm" asChild>
-                    <span>
-                      <Upload className="w-4 h-4 mr-2" />
-                      Select Files
-                    </span>
-                  </Button>
-                </label>
-              </div>
+              {/* Tabs for Upload vs Select Existing */}
+              <Tabs defaultValue="upload" className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="upload">Upload New</TabsTrigger>
+                  <TabsTrigger value="existing">Select Existing</TabsTrigger>
+                </TabsList>
+                
+                {/* Upload New Files Tab */}
+                <TabsContent value="upload" className="space-y-4 mt-4">
+                  <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
+                    <Receipt className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                    <p className="text-foreground font-medium mb-2 text-sm">Upload Royalty Statement</p>
+                    <p className="text-muted-foreground mb-4 text-xs">
+                      Excel (XLSX, XLS) or CSV files only
+                    </p>
+                    {/* Hidden file input for royalty statements - accepts only Excel and CSV */}
+                    <Input
+                      id="royalty-upload"
+                      type="file"
+                      multiple
+                      accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                      onChange={handleRoyaltyStatementFileChange}
+                      className="hidden"
+                    />
+                    <label htmlFor="royalty-upload">
+                      <Button variant="outline" size="sm" asChild>
+                        <span>
+                          <Upload className="w-4 h-4 mr-2" />
+                          Select Files
+                        </span>
+                      </Button>
+                    </label>
+                  </div>
+                </TabsContent>
 
-              {/* Royalty statement files list */}
+                {/* Select Existing Documents Tab */}
+                <TabsContent value="existing" className="space-y-4 mt-4">
+                  {existingRoyaltyStatements.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground mb-2">Available Royalty Statements:</p>
+                      {existingRoyaltyStatements.map((statement) => (
+                        <div
+                          key={statement.id}
+                          className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
+                        >
+                          <div className="flex items-center gap-3 flex-1">
+                            <Checkbox
+                              id={`existing-royalty-${statement.id}`}
+                              checked={selectedExistingRoyaltyStatements.includes(statement.id)}
+                              onCheckedChange={() => handleToggleExistingRoyaltyStatement(statement.id)}
+                            />
+                            <label
+                              htmlFor={`existing-royalty-${statement.id}`}
+                              className="flex items-center gap-2 flex-1 cursor-pointer"
+                            >
+                              <FileText className="w-4 h-4 text-primary" />
+                              <div>
+                                <p className="text-sm font-medium text-foreground">{statement.name}</p>
+                                <p className="text-xs text-muted-foreground">Uploaded {statement.uploadedDate}</p>
+                              </div>
+                            </label>
+                          </div>
+                          {selectedExistingRoyaltyStatements.includes(statement.id) && (
+                            <CheckCircle2 className="w-4 h-4 text-primary" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
+                      <FileText className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                      <p className="text-foreground font-medium mb-2 text-sm">No existing royalty statements</p>
+                      <p className="text-muted-foreground text-xs">
+                        No royalty statements found on this artist's profile
+                      </p>
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+
+              {/* Royalty statement files list - Uploaded files */}
               {royaltyStatementFiles.length > 0 && (
                 <div className="space-y-2">
-                  <h3 className="text-xs font-medium text-foreground">Royalty Statement Files:</h3>
+                  <h3 className="text-xs font-medium text-foreground">Uploaded Royalty Statement Files:</h3>
                   <div className="space-y-2">
                     {royaltyStatementFiles.map((file, index) => (
                       <div
@@ -461,6 +641,29 @@ const DocumentUpload = () => {
                   </div>
                 </div>
               )}
+
+              {/* Selected existing royalty statements summary */}
+              {selectedExistingRoyaltyStatements.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-medium text-foreground">Selected Existing Royalty Statements:</h3>
+                  <div className="space-y-2">
+                    {existingRoyaltyStatements
+                      .filter(statement => selectedExistingRoyaltyStatements.includes(statement.id))
+                      .map((statement) => (
+                        <div
+                          key={statement.id}
+                          className="flex items-center gap-2 p-2 border border-border rounded-lg bg-secondary/50"
+                        >
+                          <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-foreground truncate">{statement.name}</p>
+                            <p className="text-xs text-muted-foreground">From artist profile</p>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -471,7 +674,9 @@ const DocumentUpload = () => {
           {/* Disabled if BOTH contract and royalty statement files are not uploaded, or currently uploading */}
           <Button
             onClick={handleCalculateRoyalties}
-            disabled={(contractFiles.length === 0 || royaltyStatementFiles.length === 0) || isUploading}
+            disabled={((contractFiles.length === 0 && selectedExistingContracts.length === 0) || 
+                       (royaltyStatementFiles.length === 0 && selectedExistingRoyaltyStatements.length === 0)) || 
+                       isUploading}
           >
             {/* Conditional text: show "Calculating..." during calculation, otherwise "Calculate Royalties" */}
             {isUploading ? "Calculating..." : "Calculate Royalties"}
