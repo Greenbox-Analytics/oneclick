@@ -14,7 +14,72 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      artists: {
+        Row: {
+          additional_epk: string | null
+          additional_linktree: string | null
+          additional_press_kit: string | null
+          avatar_url: string | null
+          bio: string | null
+          created_at: string
+          custom_links: Json | null
+          dsp_apple_music: string | null
+          dsp_soundcloud: string | null
+          dsp_spotify: string | null
+          email: string
+          genres: string[] | null
+          has_contract: boolean | null
+          id: string
+          name: string
+          social_instagram: string | null
+          social_tiktok: string | null
+          social_youtube: string | null
+          updated_at: string
+        }
+        Insert: {
+          additional_epk?: string | null
+          additional_linktree?: string | null
+          additional_press_kit?: string | null
+          avatar_url?: string | null
+          bio?: string | null
+          created_at?: string
+          custom_links?: Json | null
+          dsp_apple_music?: string | null
+          dsp_soundcloud?: string | null
+          dsp_spotify?: string | null
+          email: string
+          genres?: string[] | null
+          has_contract?: boolean | null
+          id?: string
+          name: string
+          social_instagram?: string | null
+          social_tiktok?: string | null
+          social_youtube?: string | null
+          updated_at?: string
+        }
+        Update: {
+          additional_epk?: string | null
+          additional_linktree?: string | null
+          additional_press_kit?: string | null
+          avatar_url?: string | null
+          bio?: string | null
+          created_at?: string
+          custom_links?: Json | null
+          dsp_apple_music?: string | null
+          dsp_soundcloud?: string | null
+          dsp_spotify?: string | null
+          email?: string
+          genres?: string[] | null
+          has_contract?: boolean | null
+          id?: string
+          name?: string
+          social_instagram?: string | null
+          social_tiktok?: string | null
+          social_youtube?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

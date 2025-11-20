@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,54 +14,139 @@ import { useNavigate, useParams } from "react-router-dom";
 const ArtistProfile = () => {
   const navigate = useNavigate();
   const { id } = useParams();
-  const [hasContract, setHasContract] = useState(id === "1" || id === "2");
+  const { toast } = useToast();
+  const [hasContract, setHasContract] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Mock data
   const initialArtist = {
-    name: id === "1" ? "Luna Rivers" : id === "2" ? "The Echoes" : "DJ Neon",
-    email: "artist@example.com",
-    bio: id === "1" 
-      ? "Electronic artist pushing boundaries with ambient soundscapes and experimental beats."
-      : id === "2"
-      ? "Indie rock band known for raw energy and authentic storytelling."
-      : "EDM producer bringing high-energy performances to festivals worldwide.",
-    genres: id === "1" ? ["Electronic", "Ambient", "Experimental"] : id === "2" ? ["Indie Rock", "Alternative"] : ["EDM", "House"],
-    avatar: id === "1" 
-      ? "https://api.dicebear.com/7.x/avataaars/svg?seed=Luna"
-      : id === "2" 
-      ? "https://api.dicebear.com/7.x/avataaars/svg?seed=Echoes"
-      : "https://api.dicebear.com/7.x/avataaars/svg?seed=Neon",
+    name: "",
+    email: "",
+    bio: "",
+    genres: [] as string[],
+    avatar: "",
     social: {
-      instagram: "@artist_instagram",
-      tiktok: "@artist_tiktok",
-      youtube: "@artist_youtube",
+      instagram: "",
+      tiktok: "",
+      youtube: "",
     },
     dsp: {
-      spotify: "spotify:artist:...",
-      appleMusic: "https://music.apple.com/artist/...",
-      soundcloud: "soundcloud.com/artist",
+      spotify: "",
+      appleMusic: "",
+      soundcloud: "",
     },
     additional: {
-      epk: "https://epk.example.com",
-      pressKit: "https://press.example.com",
-      linktree: "https://linktr.ee/artist",
+      epk: "",
+      pressKit: "",
+      linktree: "",
     },
-    customLinks: id === "1" ? [
-      { id: "1", label: "Website", url: "https://{sample_personal_website}" },
-      { id: "2", label: "Merch Store", url: "https://{sample_shop}" }
-    ] : [],
+    customLinks: [] as { id: string; label: string; url: string }[],
   };
 
   const [formData, setFormData] = useState(initialArtist);
+
+  // Fetch artist data from Supabase
+  useEffect(() => {
+    const fetchArtist = async () => {
+      if (!id) return;
+      
+      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('artists')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "Failed to load artist data",
+          variant: "destructive",
+        });
+        setIsLoading(false);
+        return;
+      }
+
+      if (data) {
+        setFormData({
+          name: data.name,
+          email: data.email,
+          bio: data.bio || "",
+          genres: data.genres || [],
+          avatar: data.avatar_url || "",
+          social: {
+            instagram: data.social_instagram || "",
+            tiktok: data.social_tiktok || "",
+            youtube: data.social_youtube || "",
+          },
+          dsp: {
+            spotify: data.dsp_spotify || "",
+            appleMusic: data.dsp_apple_music || "",
+            soundcloud: data.dsp_soundcloud || "",
+          },
+          additional: {
+            epk: data.additional_epk || "",
+            pressKit: data.additional_press_kit || "",
+            linktree: data.additional_linktree || "",
+          },
+          customLinks: Array.isArray(data.custom_links) 
+            ? data.custom_links.map((link: any) => ({
+                id: link.id || Date.now().toString(),
+                label: link.label || "",
+                url: link.url || ""
+              }))
+            : [],
+        });
+        setHasContract(data.has_contract || false);
+      }
+      setIsLoading(false);
+    };
+
+    fetchArtist();
+  }, [id, toast]);
 
   const handleContractUpload = () => {
     // TODO: Add backend contract upload logic
     setHasContract(true);
   };
 
-  const handleSave = () => {
-    // TODO: Add backend save logic
+  const handleSave = async () => {
+    if (!id) return;
+
+    const { error } = await supabase
+      .from('artists')
+      .update({
+        name: formData.name,
+        email: formData.email,
+        bio: formData.bio,
+        genres: formData.genres,
+        avatar_url: formData.avatar,
+        social_instagram: formData.social.instagram,
+        social_tiktok: formData.social.tiktok,
+        social_youtube: formData.social.youtube,
+        dsp_spotify: formData.dsp.spotify,
+        dsp_apple_music: formData.dsp.appleMusic,
+        dsp_soundcloud: formData.dsp.soundcloud,
+        additional_epk: formData.additional.epk,
+        additional_press_kit: formData.additional.pressKit,
+        additional_linktree: formData.additional.linktree,
+        custom_links: formData.customLinks,
+      })
+      .eq('id', id);
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to save artist data",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Success",
+      description: "Artist profile updated successfully",
+    });
     setIsEditMode(false);
   };
 
