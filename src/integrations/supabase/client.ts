@@ -2,9 +2,9 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
-// Support both VITE_ prefixed (Lovable) and non-prefixed (edge functions) env vars
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || import.meta.env.SUPABASE_URL;
-const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.SUPABASE_PUBLISHABLE_KEY;
+// Use explicit Supabase URL and anon key in the browser (anon key is safe to expose)
+const SUPABASE_URL = 'https://sfugklkakdflrqhmkfps.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNmdWdrbGtha2RmbHJxaG1rZnBzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxNzcyMjgsImV4cCI6MjA3ODc1MzIyOH0.D6IO4Un0P6oAJltqA7buGumuDrJzxXXTi3scfhEB7Es';
 
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
