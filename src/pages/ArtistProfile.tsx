@@ -8,8 +8,18 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, Upload, FileText, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2 } from "lucide-react";
+import { Music, Upload, FileText, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const ArtistProfile = () => {
   const navigate = useNavigate();
@@ -18,6 +28,7 @@ const ArtistProfile = () => {
   const [hasContract, setHasContract] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   const initialArtist = {
     name: "",
@@ -155,6 +166,30 @@ const ArtistProfile = () => {
     setIsEditMode(false);
   };
 
+  const handleDeleteArtist = async () => {
+    if (!id) return;
+
+    const { error } = await supabase
+      .from('artists')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete artist. Please try again.",
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Success",
+        description: `${formData.name} has been deleted.`,
+      });
+      navigate("/artists");
+    }
+    setShowDeleteDialog(false);
+  };
+
   const updateField = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
@@ -222,6 +257,14 @@ const ArtistProfile = () => {
             <h1 className="text-2xl font-bold text-foreground">Msanii AI</h1>
           </div>
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
+              onClick={() => setShowDeleteDialog(true)}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete Artist
+            </Button>
             <Button
               variant={isEditMode ? "outline" : "default"}
               onClick={() => isEditMode ? handleCancel() : setIsEditMode(true)}
@@ -442,7 +485,7 @@ const ArtistProfile = () => {
             <CardContent className="space-y-4 pt-6">
               <FieldContainer>
                 <div className="flex items-center gap-2 mb-2">
-                  <img src="/public/spotify.svg" alt="Spotify" className="w-4 h-4" />
+                  <img src="/spotify.svg" alt="Spotify" className="w-4 h-4" />
                   <Label htmlFor="spotify" className="text-sm font-semibold text-muted-foreground">Spotify</Label>
                 </div>
                 {isEditMode ? (
@@ -460,7 +503,7 @@ const ArtistProfile = () => {
 
               <FieldContainer>
                 <div className="flex items-center gap-2 mb-2">
-                  <img src="/public/apple_music.png" alt="Apple Music" className="w-4 h-4" />
+                  <img src="/apple_music.png" alt="Apple Music" className="w-4 h-4" />
                   <Label htmlFor="appleMusic" className="text-sm font-semibold text-muted-foreground">Apple Music</Label>
                 </div>
                 {isEditMode ? (
@@ -478,7 +521,7 @@ const ArtistProfile = () => {
 
               <FieldContainer>
                 <div className="flex items-center gap-2 mb-2">
-                  <div className="w-4 h-4 rounded-full bg-orange-500" />
+                  <img src="/soundcloud.png" alt="SoundCloud" className="w-4 h-4" />
                   <Label htmlFor="soundcloud" className="text-sm font-semibold text-muted-foreground">SoundCloud</Label>
                 </div>
                 {isEditMode ? (
@@ -686,6 +729,27 @@ const ArtistProfile = () => {
           </Card>
         </div>
       </main>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Artist Profile?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>{formData.name}</strong> and all associated data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteArtist}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete Artist
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

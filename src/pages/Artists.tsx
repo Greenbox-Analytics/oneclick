@@ -4,8 +4,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Music, Plus, Search, FileText } from "lucide-react";
+import { Music, Plus, Search, FileText, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
 
 interface Artist {
   id: string;
@@ -17,9 +28,11 @@ interface Artist {
 
 const Artists = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [artistToDelete, setArtistToDelete] = useState<Artist | null>(null);
 
   useEffect(() => {
     const fetchArtists = async () => {
@@ -36,6 +49,30 @@ const Artists = () => {
 
     fetchArtists();
   }, []);
+
+  const handleDeleteArtist = async () => {
+    if (!artistToDelete) return;
+
+    const { error } = await supabase
+      .from('artists')
+      .delete()
+      .eq('id', artistToDelete.id);
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete artist. Please try again.",
+        variant: "destructive",
+      });
+    } else {
+      setArtists(artists.filter(a => a.id !== artistToDelete.id));
+      toast({
+        title: "Success",
+        description: `${artistToDelete.name} has been deleted.`,
+      });
+    }
+    setArtistToDelete(null);
+  };
 
   const filteredArtists = artists.filter(artist =>
     artist.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -108,13 +145,24 @@ const Artists = () => {
                     <CardTitle>{artist.name}</CardTitle>
                     <CardDescription>{artist.genres.join(', ')}</CardDescription>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="space-y-2">
                     <Button
                       variant="outline"
                       className="w-full"
                       onClick={() => navigate(`/artists/${artist.id}`)}
                     >
                       View Profile
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setArtistToDelete(artist);
+                      }}
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete Artist
                     </Button>
                   </CardContent>
                 </Card>
@@ -129,6 +177,27 @@ const Artists = () => {
           </>
         )}
       </main>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!artistToDelete} onOpenChange={() => setArtistToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>{artistToDelete?.name}</strong> and all associated data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteArtist}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete Artist
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
