@@ -21,6 +21,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+// Helper component for field containers (defined outside to prevent re-renders)
+const FieldContainer = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
+  <div className={`p-4 rounded-lg border border-border bg-card/50 hover:bg-card transition-colors ${className}`}>
+    {children}
+  </div>
+);
+
 const ArtistProfile = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -30,7 +37,7 @@ const ArtistProfile = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const initialArtist = {
+  const [formData, setFormData] = useState({
     name: "",
     email: "",
     bio: "",
@@ -52,9 +59,9 @@ const ArtistProfile = () => {
       linktree: "",
     },
     customLinks: [] as { id: string; label: string; url: string }[],
-  };
-
-  const [formData, setFormData] = useState(initialArtist);
+  });
+  
+  const [originalData, setOriginalData] = useState(formData);
 
   // Fetch artist data from Supabase
   useEffect(() => {
@@ -79,7 +86,7 @@ const ArtistProfile = () => {
       }
 
       if (data) {
-        setFormData({
+        const artistData = {
           name: data.name,
           email: data.email,
           bio: data.bio || "",
@@ -107,7 +114,9 @@ const ArtistProfile = () => {
                 url: link.url || ""
               }))
             : [],
-        });
+        };
+        setFormData(artistData);
+        setOriginalData(artistData);
         setHasContract(data.has_contract || false);
       }
       setIsLoading(false);
@@ -162,7 +171,7 @@ const ArtistProfile = () => {
   };
 
   const handleCancel = () => {
-    setFormData(initialArtist);
+    setFormData(originalData);
     setIsEditMode(false);
   };
 
@@ -238,13 +247,6 @@ const ArtistProfile = () => {
       customLinks: prev.customLinks.filter(link => link.id !== linkId)
     }));
   };
-
-  // Helper component for field containers
-  const FieldContainer = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
-    <div className={`p-4 rounded-lg border border-border bg-card/50 hover:bg-card transition-colors ${className}`}>
-      {children}
-    </div>
-  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-secondary/10">
@@ -493,7 +495,7 @@ const ArtistProfile = () => {
                     id="spotify"
                     value={formData.dsp.spotify}
                     onChange={(e) => updateNestedField('dsp', 'spotify', e.target.value)}
-                    placeholder=""
+                    placeholder="https://open.spotify.com/artist/..."
                     className="bg-background border-2 focus:border-green-500 transition-colors"
                   />
                 ) : (
