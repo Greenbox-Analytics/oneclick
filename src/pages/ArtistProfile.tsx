@@ -21,6 +21,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 // Helper component for field containers (defined outside to prevent re-renders)
 const FieldContainer = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
@@ -40,6 +47,11 @@ const ArtistProfile = () => {
   const [projects, setProjects] = useState<Tables<'projects'>[]>([]);
   const [newProjectName, setNewProjectName] = useState("");
   const [showNewProject, setShowNewProject] = useState(false);
+  const [projectFiles, setProjectFiles] = useState<Record<string, any[]>>({});
+  const [uploadingFile, setUploadingFile] = useState<string | null>(null);
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  const [selectedFileType, setSelectedFileType] = useState<string | null>(null);
+  const [fileToDelete, setFileToDelete] = useState<any>(null);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -146,6 +158,186 @@ const ArtistProfile = () => {
     fetchArtist();
     fetchProjects();
   }, [id, toast]);
+
+  // Fetch files for all projects
+  useEffect(() => {
+    const fetchAllProjectFiles = async () => {
+      if (projects.length === 0) return;
+
+      const filesPromises = projects.map(async (project) => {
+        const { data, error } = await supabase
+          .from('project_files')
+          .select('*')
+          .eq('project_id', project.id);
+
+        if (error) {
+          console.error('Error fetching files:', error);
+          return { projectId: project.id, files: [] };
+        }
+
+        return { projectId: project.id, files: data || [] };
+      });
+
+      const results = await Promise.all(filesPromises);
+      const filesMap: Record<string, any[]> = {};
+      results.forEach(({ projectId, files }) => {
+        filesMap[projectId] = files;
+      });
+      setProjectFiles(filesMap);
+    };
+
+    fetchAllProjectFiles();
+  }, [projects]);
+
+  const handleFileUpload = async (projectId: string, folderCategory: string, event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploadingFile(`${projectId}-${folderCategory}`);
+
+    try {
+      // Upload to Supabase storage
+      const filePath = `${projectId}/${folderCategory}/${Date.now()}_${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from('project-files')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from('project-files')
+        .getPublicUrl(filePath);
+
+      // Create database record
+      const { data, error: dbError } = await supabase
+        .from('project_files')
+        .insert({
+          project_id: projectId,
+          file_name: file.name,
+          file_url: urlData.publicUrl,
+          folder_category: folderCategory,
+          file_size: file.size,
+          file_type: file.type,
+        })
+        .select()
+        .single();
+
+      if (dbError) throw dbError;
+
+      // Update local state
+      setProjectFiles(prev => ({
+        ...prev,
+        [projectId]: [...(prev[projectId] || []), data],
+      }));
+
+      toast({
+        title: "Success",
+        description: "File uploaded successfully",
+      });
+    } catch (error: any) {
+      console.error('Upload error:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to upload file",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingFile(null);
+    }
+  };
+
+  const handleFileView = async (file: any) => {
+    try {
+      const { data, error } = await supabase.storage
+        .from('project-files')
+        .createSignedUrl(file.file_path, 3600); // 1 hour expiry
+
+      if (error) throw error;
+
+      window.open(data.signedUrl, '_blank');
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: "Failed to open file",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleFileDownload = async (file: any) => {
+    try {
+      const { data, error } = await supabase.storage
+        .from('project-files')
+        .download(file.file_path);
+
+      if (error) throw error;
+
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.file_name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: "Failed to download file",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const confirmFileDelete = (file: any) => {
+    setFileToDelete(file);
+  };
+
+  const handleFileDelete = async () => {
+    if (!fileToDelete) return;
+
+    try {
+      // Delete from storage
+      const { error: storageError } = await supabase.storage
+        .from('project-files')
+        .remove([fileToDelete.file_path]);
+
+      if (storageError) throw storageError;
+
+      // Delete from database
+      const { error: dbError } = await supabase
+        .from('project_files')
+        .delete()
+        .eq('id', fileToDelete.id);
+
+      if (dbError) throw dbError;
+
+      // Update local state
+      setProjectFiles(prev => ({
+        ...prev,
+        [fileToDelete.project_id]: (prev[fileToDelete.project_id] || []).filter(f => f.id !== fileToDelete.id),
+      }));
+
+      toast({
+        title: "Success",
+        description: "File deleted successfully",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: "Failed to delete file",
+        variant: "destructive",
+      });
+    } finally {
+      setFileToDelete(null);
+    }
+  };
+
+  const getFileCountByType = (projectId: string, fileType: string) => {
+    const files = projectFiles[projectId] || [];
+    return files.filter(f => f.file_type === fileType).length;
+  };
 
   const handleContractUpload = () => {
     // TODO: Add backend contract upload logic
@@ -820,34 +1012,58 @@ const ArtistProfile = () => {
                       </CardHeader>
                       <CardContent>
                         <div className="grid grid-cols-2 gap-3">
-                          <div className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
-                            <div className="flex items-center gap-2 text-sm font-medium">
-                              <Folder className="w-4 h-4 text-amber-500" />
-                              Contracts
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">0 files</p>
-                          </div>
-                          <div className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
-                            <div className="flex items-center gap-2 text-sm font-medium">
-                              <Folder className="w-4 h-4 text-blue-500" />
-                              Split Sheets
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">0 files</p>
-                          </div>
-                          <div className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
-                            <div className="flex items-center gap-2 text-sm font-medium">
-                              <Folder className="w-4 h-4 text-green-500" />
-                              Royalty Statements
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">0 files</p>
-                          </div>
-                          <div className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
-                            <div className="flex items-center gap-2 text-sm font-medium">
-                              <Folder className="w-4 h-4 text-purple-500" />
-                              Other Files
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">0 files</p>
-                          </div>
+                          {[
+                            { name: 'Contracts', color: 'amber', category: 'contract' },
+                            { name: 'Split Sheets', color: 'blue', category: 'split_sheet' },
+                            { name: 'Royalty Statements', color: 'green', category: 'royalty_statement' },
+                            { name: 'Other Files', color: 'purple', category: 'other' },
+                          ].map((folder) => {
+                            const fileCount = getFileCountByType(project.id, folder.category);
+                            const isUploading = uploadingFile === `${project.id}-${folder.category}`;
+                            
+                            return (
+                              <div key={folder.category} className="relative">
+                                <input
+                                  type="file"
+                                  id={`upload-${project.id}-${folder.category}`}
+                                  className="hidden"
+                                  onChange={(e) => handleFileUpload(project.id, folder.category, e)}
+                                  disabled={isUploading}
+                                />
+                                <div 
+                                  className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer group"
+                                  onClick={() => {
+                                    setSelectedProject(project.id);
+                                    setSelectedFileType(folder.category);
+                                  }}
+                                >
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2 text-sm font-medium">
+                                      <Folder className={`w-4 h-4 text-${folder.color}-500`} />
+                                      {folder.name}
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        document.getElementById(`upload-${project.id}-${folder.category}`)?.click();
+                                      }}
+                                      disabled={isUploading}
+                                    >
+                                      {isUploading ? (
+                                        <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                                      ) : (
+                                        <Upload className="w-3 h-3" />
+                                      )}
+                                    </Button>
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">{fileCount} file{fileCount !== 1 ? 's' : ''}</p>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </CardContent>
                     </Card>
