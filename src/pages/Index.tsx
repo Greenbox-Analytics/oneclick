@@ -41,45 +41,59 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Hero Section */}
-      <section className="relative overflow-hidden border-b border-border">
-        <div className="container mx-auto px-4 py-24 md:py-32">
-          <div className="max-w-4xl mx-auto text-center">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-xl bg-primary/10 border border-primary/20 mb-8">
-              <Music className="w-8 h-8 text-primary" />
+      {/* Header Navigation */}
+      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            {/* Logo and Company Name */}
+            <div 
+              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" 
+              onClick={() => navigate("/")}
+            >
+              <img src="/iconspear.png" alt="Msanii AI" className="w-8 h-8" />
+              <span className="text-xl font-bold text-foreground">Msanii AI</span>
             </div>
-            <h1 className="text-4xl md:text-6xl font-bold text-foreground mb-6 tracking-tight">
-              Professional Artist Management
-              <span className="block text-primary mt-2">Built for Music Managers</span>
-            </h1>
-            <p className="text-lg md:text-xl text-muted-foreground mb-10 max-w-2xl mx-auto leading-relaxed">
-              Streamline your workflow with enterprise-grade tools for royalty tracking, contract management, 
-              and artist portfolio organization. Built by industry professionals, for industry professionals.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button size="lg" onClick={() => navigate("/auth")} className="text-base px-8">
-                Get Started Free
+            
+            {/* Navigation Buttons */}
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" onClick={() => navigate("/")} className="text-base">
+                Home
               </Button>
-              <Button size="lg" variant="outline" onClick={() => navigate("/auth")} className="text-base px-8">
+              <Button onClick={() => navigate("/auth")} className="text-base">
                 Sign In
               </Button>
             </div>
           </div>
         </div>
-        
-        {/* Subtle background pattern */}
-        <div className="absolute inset-0 -z-10 bg-[linear-gradient(to_right,hsl(var(--border))_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border))_1px,transparent_1px)] bg-[size:4rem_4rem] opacity-20"></div>
+      </header>
+
+      {/* Hero Section */}
+      <section className="relative overflow-hidden">
+        <div className="container mx-auto px-4 py-16 md:py-24">
+          <div className="max-w-3xl mx-auto text-center">
+            <h1 className="text-5xl md:text-6xl font-bold text-foreground mb-6 tracking-tight">
+              Artist Management
+              <span className="block text-primary mt-2">Simplified</span>
+            </h1>
+            <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
+              Streamline your workflow with powerful tools built for music professionals.
+            </p>
+            <Button size="lg" onClick={() => navigate("/auth")} className="text-base px-8 h-12">
+              Get Started
+            </Button>
+          </div>
+        </div>
       </section>
 
       {/* Features Grid */}
-      <section className="py-24 md:py-32">
+      <section className="py-16 md:py-24 bg-muted/30">
         <div className="container mx-auto px-4">
-          <div className="max-w-3xl mx-auto text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              Everything You Need to Manage Artists
+          <div className="max-w-2xl mx-auto text-center mb-12">
+            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-3">
+              Everything You Need
             </h2>
             <p className="text-lg text-muted-foreground">
-              Powerful features designed specifically for independent music managers and labels.
+              Powerful features for independent music managers.
             </p>
           </div>
 
@@ -87,17 +101,14 @@ const Index = () => {
             {features.map((feature, index) => {
               const Icon = feature.icon;
               return (
-                <Card 
-                  key={index} 
-                  className="p-6 hover:shadow-lg transition-shadow duration-200 border-border bg-card"
-                >
-                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-lg bg-primary/10 mb-4">
+                <Card key={index} className="p-6 text-center border-border/50 hover:border-primary/20 transition-colors bg-card/50">
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-lg bg-primary/5 mb-4">
                     <Icon className="w-6 h-6 text-primary" />
                   </div>
-                  <h3 className="text-xl font-semibold text-card-foreground mb-2">
+                  <h3 className="text-lg font-semibold text-foreground mb-2">
                     {feature.title}
                   </h3>
-                  <p className="text-muted-foreground leading-relaxed">
+                  <p className="text-muted-foreground text-sm leading-relaxed">
                     {feature.description}
                   </p>
                 </Card>
@@ -107,22 +118,21 @@ const Index = () => {
         </div>
       </section>
 
-      {/* CTA Section */}
-      <section className="py-24 border-t border-border">
+      {/* Footer */}
+      <footer className="border-t border-border py-8">
         <div className="container mx-auto px-4">
-          <div className="max-w-3xl mx-auto text-center">
-            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              Ready to Elevate Your Artist Management?
-            </h2>
-            <p className="text-lg text-muted-foreground mb-8">
-              Join professional music managers who trust Msanii AI to streamline their workflow.
+          <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+            <p className="text-sm text-muted-foreground">
+              &copy; {new Date().getFullYear()} Msanii AI
             </p>
-            <Button size="lg" onClick={() => navigate("/auth")} className="text-base px-10">
-              Start Managing Artists Today
-            </Button>
+            <div className="flex gap-6">
+              <a href="/about" className="text-sm text-muted-foreground hover:text-foreground transition-colors">About</a>
+              <a href="/contact" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Contact</a>
+              <a href="/privacy" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Privacy</a>
+            </div>
           </div>
         </div>
-      </section>
+      </footer>
     </div>
   );
 };
