@@ -216,6 +216,7 @@ const ArtistProfile = () => {
           project_id: projectId,
           file_name: file.name,
           file_url: urlData.publicUrl,
+          file_path: filePath,
           folder_category: folderCategory,
           file_size: file.size,
           file_type: file.type,
@@ -334,9 +335,9 @@ const ArtistProfile = () => {
     }
   };
 
-  const getFileCountByType = (projectId: string, fileType: string) => {
+  const getFileCountByType = (projectId: string, folderCategory: string) => {
     const files = projectFiles[projectId] || [];
-    return files.filter(f => f.file_type === fileType).length;
+    return files.filter(f => f.folder_category === folderCategory).length;
   };
 
   const handleContractUpload = () => {
@@ -1091,6 +1092,102 @@ const ArtistProfile = () => {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete Artist
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Files Viewer Dialog */}
+      <Dialog open={selectedProject !== null && selectedFileType !== null} onOpenChange={(open) => {
+        if (!open) {
+          setSelectedProject(null);
+          setSelectedFileType(null);
+        }
+      }}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Folder className="w-5 h-5" />
+              {selectedFileType === 'contract' && 'Contracts'}
+              {selectedFileType === 'split_sheet' && 'Split Sheets'}
+              {selectedFileType === 'royalty_statement' && 'Royalty Statements'}
+              {selectedFileType === 'other' && 'Other Files'}
+            </DialogTitle>
+            <DialogDescription>
+              {projects.find(p => p.id === selectedProject)?.name}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-2">
+            {selectedProject && selectedFileType && projectFiles[selectedProject]?.filter(f => f.folder_category === selectedFileType).length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <Folder className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                <p>No files uploaded yet</p>
+              </div>
+            ) : (
+              selectedProject && selectedFileType && projectFiles[selectedProject]?.filter(f => f.folder_category === selectedFileType).map((file) => (
+                <div key={file.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <FileText className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{file.file_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {file.file_size ? `${(file.file_size / 1024).toFixed(1)} KB` : 'Unknown size'} • {new Date(file.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => window.open(file.file_url, '_blank')}
+                      title="View file"
+                    >
+                      <FileText className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleFileDownload(file)}
+                      title="Download file"
+                    >
+                      <Upload className="w-4 h-4 rotate-180" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => confirmFileDelete(file)}
+                      className="text-destructive hover:text-destructive"
+                      title="Delete file"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* File Delete Confirmation Dialog */}
+      <AlertDialog open={fileToDelete !== null} onOpenChange={(open) => {
+        if (!open) setFileToDelete(null);
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete File?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>{fileToDelete?.file_name}</strong>. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleFileDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete File
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
