@@ -681,7 +681,7 @@ const ArtistProfile = () => {
             <CardHeader className="bg-gradient-to-r from-amber-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <FileText className="w-5 h-5 text-amber-500" />
-                <CardTitle>Contract Management</CardTitle>
+                <CardTitle>Portfolio</CardTitle>
               </div>
               <CardDescription>Upload and manage artist contracts</CardDescription>
             </CardHeader>
