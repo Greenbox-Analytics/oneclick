@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import type { Tables } from "@/integrations/supabase/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, Upload, FileText, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2 } from "lucide-react";
+import { Music, Upload, FileText, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2, Folder, Plus } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   AlertDialog,
@@ -36,6 +37,9 @@ const ArtistProfile = () => {
   const [isEditMode, setIsEditMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [projects, setProjects] = useState<Tables<'projects'>[]>([]);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [showNewProject, setShowNewProject] = useState(false);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -122,7 +126,25 @@ const ArtistProfile = () => {
       setIsLoading(false);
     };
 
+    const fetchProjects = async () => {
+      if (!id) return;
+
+      const { data, error } = await supabase
+        .from('projects')
+        .select('*')
+        .eq('artist_id', id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching projects:', error);
+        return;
+      }
+
+      setProjects(data || []);
+    };
+
     fetchArtist();
+    fetchProjects();
   }, [id, toast]);
 
   const handleContractUpload = () => {
@@ -246,6 +268,60 @@ const ArtistProfile = () => {
       ...prev,
       customLinks: prev.customLinks.filter(link => link.id !== linkId)
     }));
+  };
+
+  const handleAddProject = async () => {
+    if (!id || !newProjectName.trim()) return;
+
+    const { data, error } = await supabase
+      .from('projects')
+      .insert({
+        artist_id: id,
+        name: newProjectName,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating project:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create project",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setProjects([data, ...projects]);
+    setNewProjectName("");
+    setShowNewProject(false);
+    toast({
+      title: "Success",
+      description: "Project created successfully",
+    });
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', projectId);
+
+    if (error) {
+      console.error('Error deleting project:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete project",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setProjects(projects.filter(p => p.id !== projectId));
+    toast({
+      title: "Success",
+      description: "Project deleted successfully",
+    });
   };
 
   return (
@@ -676,57 +752,105 @@ const ArtistProfile = () => {
             </CardContent>
           </Card>
 
-          {/* Contract Management */}
+          {/* Portfolio Section */}
           <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
             <CardHeader className="bg-gradient-to-r from-amber-500/5 to-transparent">
-              <div className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-amber-500" />
-                <CardTitle>Portfolio</CardTitle>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-amber-500" />
+                  <CardTitle>Portfolio</CardTitle>
+                </div>
+                <Button
+                  onClick={() => setShowNewProject(true)}
+                  size="sm"
+                  className="bg-amber-500 hover:bg-amber-600"
+                >
+                  <Plus className="w-4 h-4 mr-1" />
+                  New Project
+                </Button>
               </div>
-              <CardDescription>Upload and manage artist contracts</CardDescription>
+              <CardDescription>Manage artist projects and files</CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
-              {hasContract ? (
-                <div className="space-y-4">
-                  <FieldContainer className="bg-gradient-to-br from-primary/5 to-transparent border-2 border-primary/20">
-                    <div className="flex items-center gap-4">
-                      <div className="p-3 rounded-lg bg-primary/10">
-                        <FileText className="w-8 h-8 text-primary" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-semibold text-foreground text-lg">Artist Contract.pdf</p>
-                        <p className="text-sm text-muted-foreground">Uploaded 3 months ago</p>
-                      </div>
-                    </div>
-                  </FieldContainer>
-                  <div className="flex gap-3">
-                    <Button variant="outline" className="flex-1">
-                      <FileText className="w-4 h-4 mr-2" />
-                      View Contract
+              {showNewProject && (
+                <div className="mb-6 p-4 border border-border rounded-lg bg-muted/30">
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Project name"
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleAddProject()}
+                    />
+                    <Button onClick={handleAddProject} size="sm">
+                      Add
                     </Button>
-                    <Button variant="outline" className="flex-1" onClick={() => setHasContract(false)}>
-                      <Upload className="w-4 h-4 mr-2" />
-                      Replace Contract
+                    <Button onClick={() => {
+                      setShowNewProject(false);
+                      setNewProjectName("");
+                    }} variant="ghost" size="sm">
+                      Cancel
                     </Button>
                   </div>
                 </div>
-              ) : (
-                <FieldContainer className="border-2 border-dashed text-center py-8">
-                  <div className="flex flex-col items-center">
-                    <div className="p-4 rounded-full bg-muted/50 mb-4">
-                      <Upload className="w-12 h-12 text-muted-foreground" />
-                    </div>
-                    <p className="text-foreground font-semibold text-lg mb-2">No contract uploaded</p>
-                    <p className="text-muted-foreground mb-6 text-sm max-w-sm">
-                      Upload a contract to enable royalty calculations and track artist agreements
-                    </p>
-                    <Button onClick={handleContractUpload} size="lg">
-                      <Upload className="w-4 h-4 mr-2" />
-                      Upload Contract
-                    </Button>
-                  </div>
-                </FieldContainer>
               )}
+
+              <div className="space-y-4">
+                {projects.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-8">
+                    No projects yet. Create your first project to get started.
+                  </p>
+                ) : (
+                  projects.map((project) => (
+                    <Card key={project.id} className="border-border/50">
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-lg">{project.name}</CardTitle>
+                          <Button
+                            onClick={() => handleDeleteProject(project.id)}
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                              <Folder className="w-4 h-4 text-amber-500" />
+                              Contracts
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">0 files</p>
+                          </div>
+                          <div className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                              <Folder className="w-4 h-4 text-blue-500" />
+                              Split Sheets
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">0 files</p>
+                          </div>
+                          <div className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                              <Folder className="w-4 h-4 text-green-500" />
+                              Royalty Statements
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">0 files</p>
+                          </div>
+                          <div className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                              <Folder className="w-4 h-4 text-purple-500" />
+                              Other Files
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">0 files</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))
+                )}
+              </div>
             </CardContent>
           </Card>
         </div>
