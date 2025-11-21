@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, User, Users, Plus } from "lucide-react";
+import { Music, Calculator, User, Users, Plus, Instagram } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 const Dashboard = () => {
@@ -10,9 +10,12 @@ const Dashboard = () => {
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-6 h-6 text-primary-foreground" />
+          <div 
+            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+            onClick={() => navigate("/")}
+          >
+            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center p-1.5">
+              <img src="/iconspear.png" alt="Msanii AI" className="w-full h-full object-contain" />
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii AI</h1>
           </div>
