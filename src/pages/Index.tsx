@@ -50,7 +50,7 @@ const Index = () => {
               className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" 
               onClick={() => navigate("/")}
             >
-              <img src="/iconspear.png" alt="Msanii AI" className="w-8 h-8" />
+              <Music className="w-8 h-8" />
               <span className="text-xl font-bold text-foreground">Msanii AI</span>
             </div>
             
@@ -123,7 +123,7 @@ const Index = () => {
         <div className="container mx-auto px-4">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <p className="text-sm text-muted-foreground">
-              &copy; {new Date().getFullYear()} Msanii AI
+              &copy; {new Date().getFullYear()} Greenbox Analytics Inc.
             </p>
             <div className="flex gap-6">
               <a href="/about" className="text-sm text-muted-foreground hover:text-foreground transition-colors">About</a>

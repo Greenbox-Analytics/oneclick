@@ -15,7 +15,7 @@ const Dashboard = () => {
             onClick={() => navigate("/")}
           >
             <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center p-1.5">
-              <img src="/iconspear.png" alt="Msanii AI" className="w-full h-full object-contain" />
+              <Music className="w-full h-full object-contain" />
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii AI</h1>
           </div>
