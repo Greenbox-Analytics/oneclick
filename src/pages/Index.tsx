@@ -46,19 +46,13 @@ const Index = () => {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             {/* Logo and Company Name */}
-            <div 
-              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" 
-              onClick={() => navigate("/")}
-            >
+            <div className="flex items-center gap-3">
               <Music className="w-8 h-8" />
-              <span className="text-xl font-bold text-foreground">Msanii AI</span>
+              <span className="text-xl font-bold text-foreground">Msanii</span>
             </div>
             
             {/* Navigation Buttons */}
             <div className="flex items-center gap-3">
-              <Button variant="ghost" onClick={() => navigate("/")} className="text-base">
-                Home
-              </Button>
               <Button onClick={() => navigate("/auth")} className="text-base">
                 Sign In
               </Button>

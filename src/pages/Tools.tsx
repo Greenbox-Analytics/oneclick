@@ -68,7 +68,7 @@ const Tools = () => {
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
               <Music className="w-6 h-6 text-primary-foreground" />
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii AI</h1>
+            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <Button variant="outline" onClick={() => navigate("/dashboard")}>
             Back to Dashboard

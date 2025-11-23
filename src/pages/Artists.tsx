@@ -89,7 +89,7 @@ const Artists = () => {
             <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center p-1.5">
               <Music className="w-full h-full object-contain" />
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii AI</h1>
+            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <Button variant="outline" onClick={() => navigate("/dashboard")}>
             Back to Dashboard

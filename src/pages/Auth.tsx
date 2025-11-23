@@ -94,7 +94,7 @@ const Auth = () => {
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-xl bg-primary/10 mb-4 p-3">
             <Music className="w-full h-full object-contain" />
           </div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">Msanii AI</h1>
+          <h1 className="text-3xl font-bold text-foreground mb-2">Msanii</h1>
           <p className="text-muted-foreground">Manage your artists and royalties</p>
         </div>
 
