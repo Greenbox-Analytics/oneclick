@@ -75,6 +75,8 @@ const ArtistProfile = () => {
       linktree: "",
     },
     customLinks: [] as { id: string; label: string; url: string }[],
+    customSocialLinks: [] as { id: string; label: string; url: string }[],
+    customDspLinks: [] as { id: string; label: string; url: string }[],
   });
   
   const [originalData, setOriginalData] = useState(formData);
@@ -125,6 +127,20 @@ const ArtistProfile = () => {
           },
           customLinks: Array.isArray(data.custom_links) 
             ? data.custom_links.map((link: any) => ({
+                id: link.id || Date.now().toString(),
+                label: link.label || "",
+                url: link.url || ""
+              }))
+            : [],
+          customSocialLinks: Array.isArray(data.custom_social_links)
+            ? data.custom_social_links.map((link: any) => ({
+                id: link.id || Date.now().toString(),
+                label: link.label || "",
+                url: link.url || ""
+              }))
+            : [],
+          customDspLinks: Array.isArray(data.custom_dsp_links)
+            ? data.custom_dsp_links.map((link: any) => ({
                 id: link.id || Date.now().toString(),
                 label: link.label || "",
                 url: link.url || ""
@@ -366,6 +382,8 @@ const ArtistProfile = () => {
         additional_press_kit: formData.additional.pressKit,
         additional_linktree: formData.additional.linktree,
         custom_links: formData.customLinks,
+        custom_social_links: formData.customSocialLinks,
+        custom_dsp_links: formData.customDspLinks,
       })
       .eq('id', id);
 
@@ -383,6 +401,7 @@ const ArtistProfile = () => {
       description: "Artist profile updated successfully",
     });
     setIsEditMode(false);
+    setOriginalData(formData);
   };
 
   const handleCancel = () => {
@@ -463,6 +482,62 @@ const ArtistProfile = () => {
     }));
   };
 
+  const addCustomSocialLink = () => {
+    const newLink = {
+      id: Date.now().toString(),
+      label: "",
+      url: ""
+    };
+    setFormData(prev => ({
+      ...prev,
+      customSocialLinks: [...prev.customSocialLinks, newLink]
+    }));
+  };
+
+  const updateCustomSocialLink = (linkId: string, field: 'label' | 'url', value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      customSocialLinks: prev.customSocialLinks.map(link =>
+        link.id === linkId ? { ...link, [field]: value } : link
+      )
+    }));
+  };
+
+  const removeCustomSocialLink = (linkId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      customSocialLinks: prev.customSocialLinks.filter(link => link.id !== linkId)
+    }));
+  };
+
+  const addCustomDspLink = () => {
+    const newLink = {
+      id: Date.now().toString(),
+      label: "",
+      url: ""
+    };
+    setFormData(prev => ({
+      ...prev,
+      customDspLinks: [...prev.customDspLinks, newLink]
+    }));
+  };
+
+  const updateCustomDspLink = (linkId: string, field: 'label' | 'url', value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      customDspLinks: prev.customDspLinks.map(link =>
+        link.id === linkId ? { ...link, [field]: value } : link
+      )
+    }));
+  };
+
+  const removeCustomDspLink = (linkId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      customDspLinks: prev.customDspLinks.filter(link => link.id !== linkId)
+    }));
+  };
+
   const handleAddProject = async () => {
     if (!id || !newProjectName.trim()) return;
 
@@ -526,9 +601,9 @@ const ArtistProfile = () => {
             onClick={() => navigate("/")}
           >
             <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center p-1.5">
-              <img src="/iconspear.png" alt="Msanii AI" className="w-full h-full object-contain" />
+              <Music className="w-full h-full object-contain" />
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii AI</h1>
+            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <div className="flex gap-2">
             <Button
@@ -702,7 +777,7 @@ const ArtistProfile = () => {
                     id="instagram"
                     value={formData.social.instagram}
                     onChange={(e) => updateNestedField('social', 'instagram', e.target.value)}
-                    placeholder="@username"
+                    placeholder="https://instagram.com/username"
                     className="bg-background border-2 focus:border-pink-500 transition-colors"
                   />
                 ) : (
@@ -720,7 +795,7 @@ const ArtistProfile = () => {
                     id="tiktok"
                     value={formData.social.tiktok}
                     onChange={(e) => updateNestedField('social', 'tiktok', e.target.value)}
-                    placeholder="@username"
+                    placeholder="https://tiktok.com/@username"
                     className="bg-background border-2 focus:border-blue-500 transition-colors"
                   />
                 ) : (
@@ -738,13 +813,82 @@ const ArtistProfile = () => {
                     id="youtube"
                     value={formData.social.youtube}
                     onChange={(e) => updateNestedField('social', 'youtube', e.target.value)}
-                    placeholder="@channel"
+                    placeholder="https://youtube.com/@channel"
                     className="bg-background border-2 focus:border-red-500 transition-colors"
                   />
                 ) : (
                   <p className="text-foreground text-lg">{formData.social.youtube}</p>
                 )}
               </FieldContainer>
+
+              {/* Custom Social Links Section */}
+              {(formData.customSocialLinks.length > 0 || isEditMode) && (
+                <div className="pt-4 border-t border-border">
+                  <div className="flex items-center justify-between mb-4">
+                    <Label className="text-sm font-semibold text-muted-foreground">Custom Social Links</Label>
+                    {isEditMode && (
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        size="sm"
+                        onClick={addCustomSocialLink}
+                        className="text-xs"
+                      >
+                        <Plus className="w-3 h-3 mr-1" />
+                        Add Link
+                      </Button>
+                    )}
+                  </div>
+                  
+                  <div className="space-y-3">
+                    {formData.customSocialLinks.map((link) => (
+                      <FieldContainer key={link.id} className="relative">
+                        {isEditMode ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2">
+                              <Input 
+                                value={link.label}
+                                onChange={(e) => updateCustomSocialLink(link.id, 'label', e.target.value)}
+                                placeholder="Platform Name (e.g., Twitter, Threads)"
+                                className="bg-background border-2 focus:border-pink-500 transition-colors flex-1"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => removeCustomSocialLink(link.id)}
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
+                            </div>
+                            <Input 
+                              value={link.url}
+                              onChange={(e) => updateCustomSocialLink(link.id, 'url', e.target.value)}
+                              placeholder="https://example.com/username"
+                              className="bg-background border-2 focus:border-pink-500 transition-colors"
+                            />
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="flex items-center gap-2 mb-2">
+                              <LinkIcon className="w-4 h-4 text-pink-500" />
+                              <Label className="text-sm font-semibold text-muted-foreground">{link.label}</Label>
+                            </div>
+                            <p className="text-foreground text-lg break-all">{link.url}</p>
+                          </div>
+                        )}
+                      </FieldContainer>
+                    ))}
+                    
+                    {formData.customSocialLinks.length === 0 && isEditMode && (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        No custom social links added. Click "Add Link" to create one.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -803,13 +947,82 @@ const ArtistProfile = () => {
                     id="soundcloud"
                     value={formData.dsp.soundcloud}
                     onChange={(e) => updateNestedField('dsp', 'soundcloud', e.target.value)}
-                    placeholder="soundcloud.com/artist"
+                    placeholder="https://soundcloud.com/artist"
                     className="bg-background border-2 focus:border-orange-500 transition-colors"
                   />
                 ) : (
                   <p className="text-foreground text-lg">{formData.dsp.soundcloud}</p>
                 )}
               </FieldContainer>
+
+              {/* Custom DSP Links Section */}
+              {(formData.customDspLinks.length > 0 || isEditMode) && (
+                <div className="pt-4 border-t border-border">
+                  <div className="flex items-center justify-between mb-4">
+                    <Label className="text-sm font-semibold text-muted-foreground">Custom DSP Links</Label>
+                    {isEditMode && (
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        size="sm"
+                        onClick={addCustomDspLink}
+                        className="text-xs"
+                      >
+                        <Plus className="w-3 h-3 mr-1" />
+                        Add Link
+                      </Button>
+                    )}
+                  </div>
+                  
+                  <div className="space-y-3">
+                    {formData.customDspLinks.map((link) => (
+                      <FieldContainer key={link.id} className="relative">
+                        {isEditMode ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2">
+                              <Input 
+                                value={link.label}
+                                onChange={(e) => updateCustomDspLink(link.id, 'label', e.target.value)}
+                                placeholder="Platform Name (e.g., Tidal, Deezer)"
+                                className="bg-background border-2 focus:border-green-500 transition-colors flex-1"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => removeCustomDspLink(link.id)}
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
+                            </div>
+                            <Input 
+                              value={link.url}
+                              onChange={(e) => updateCustomDspLink(link.id, 'url', e.target.value)}
+                              placeholder="https://example.com/artist/..."
+                              className="bg-background border-2 focus:border-green-500 transition-colors"
+                            />
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="flex items-center gap-2 mb-2">
+                              <LinkIcon className="w-4 h-4 text-green-500" />
+                              <Label className="text-sm font-semibold text-muted-foreground">{link.label}</Label>
+                            </div>
+                            <p className="text-foreground text-lg break-all">{link.url}</p>
+                          </div>
+                        )}
+                      </FieldContainer>
+                    ))}
+                    
+                    {formData.customDspLinks.length === 0 && isEditMode && (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        No custom DSP links added. Click "Add Link" to create one.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 

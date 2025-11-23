@@ -46,19 +46,13 @@ const Index = () => {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             {/* Logo and Company Name */}
-            <div 
-              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" 
-              onClick={() => navigate("/")}
-            >
-              <img src="/iconspear.png" alt="Msanii AI" className="w-8 h-8" />
-              <span className="text-xl font-bold text-foreground">Msanii AI</span>
+            <div className="flex items-center gap-3">
+              <Music className="w-8 h-8" />
+              <span className="text-xl font-bold text-foreground">Msanii</span>
             </div>
             
             {/* Navigation Buttons */}
             <div className="flex items-center gap-3">
-              <Button variant="ghost" onClick={() => navigate("/")} className="text-base">
-                Home
-              </Button>
               <Button onClick={() => navigate("/auth")} className="text-base">
                 Sign In
               </Button>
@@ -123,7 +117,7 @@ const Index = () => {
         <div className="container mx-auto px-4">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
             <p className="text-sm text-muted-foreground">
-              &copy; {new Date().getFullYear()} Msanii AI
+              &copy; {new Date().getFullYear()} Greenbox Analytics Inc.
             </p>
             <div className="flex gap-6">
               <a href="/about" className="text-sm text-muted-foreground hover:text-foreground transition-colors">About</a>
