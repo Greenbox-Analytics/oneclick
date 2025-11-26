@@ -9,8 +9,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 // Icons from lucide-react for visual elements
-import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2 } from "lucide-react";
+import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder } from "lucide-react";
 // React Router hooks for navigation and getting URL parameters
 import { useNavigate, useParams } from "react-router-dom";
 // Recharts for pie chart
@@ -82,17 +83,30 @@ const DocumentUpload = () => {
   // Returns undefined if no artist is found
   const artist = mockArtists.find(a => a.id === Number(artistId));
 
-  // Mock data for existing documents on artist profile
-  // TODO: Replace with API call to fetch actual documents from artist profile
+  // State to track selected project for filtering existing contracts
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+
+  // State to track selected project for saving new contract uploads
+  const [newContractProjectId, setNewContractProjectId] = useState<string>("");
+
+  // Mock data for projects on artist profile
+  const existingProjects = [
+    { id: "project-1", name: "Midnight Dreams (EP)" },
+    { id: "project-2", name: "Summer Vibes (Single)" },
+    { id: "project-3", name: "Neon Lights (Album)" },
+  ];
+
+  // Mock data for existing documents on artist profile linked to projects
+  // TODO: Replace with API call to fetch actual documents from artist profile based on project
   const existingContracts = artist?.hasContract ? [
-    { id: "contract-1", name: "Artist Contract.pdf", uploadedDate: "3 months ago", type: "contract" },
-    { id: "contract-2", name: "Amended Contract 2024.pdf", uploadedDate: "1 month ago", type: "contract" },
+    { id: "contract-1", name: "Artist Contract.pdf", uploadedDate: "3 months ago", type: "contract", projectId: "project-1" },
+    { id: "contract-2", name: "Amended Contract 2024.pdf", uploadedDate: "1 month ago", type: "contract", projectId: "project-3" },
   ] : [];
 
   const existingRoyaltyStatements = [
-    { id: "royalty-1", name: "Q1 2024 Royalty Statement.xlsx", uploadedDate: "2 weeks ago", type: "royalty" },
-    { id: "royalty-2", name: "Q2 2024 Royalty Statement.xlsx", uploadedDate: "1 week ago", type: "royalty" },
-    { id: "royalty-3", name: "Q3 2024 Royalty Statement.csv", uploadedDate: "3 days ago", type: "royalty" },
+    { id: "royalty-1", name: "Q1 2024 Royalty Statement.xlsx", uploadedDate: "2 weeks ago", type: "royalty", projectId: "project-1" },
+    { id: "royalty-2", name: "Q2 2024 Royalty Statement.xlsx", uploadedDate: "1 week ago", type: "royalty", projectId: "project-2" },
+    { id: "royalty-3", name: "Q3 2024 Royalty Statement.csv", uploadedDate: "3 days ago", type: "royalty", projectId: "project-3" },
   ];
 
   /**
@@ -412,48 +426,111 @@ const DocumentUpload = () => {
                       </Button>
                     </label>
                   </div>
+
+                  {/* Project Selection for New Uploads */}
+                  {contractFiles.length > 0 && (
+                    <div className="space-y-2 pt-2 border-t border-border">
+                      <div className="flex items-center gap-2">
+                        <Folder className="w-4 h-4 text-muted-foreground" />
+                        <label htmlFor="project-select" className="text-sm font-medium text-foreground">
+                          Save to Project (Optional)
+                        </label>
+                      </div>
+                      <Select value={newContractProjectId} onValueChange={setNewContractProjectId}>
+                        <SelectTrigger id="project-select" className="w-full">
+                          <SelectValue placeholder="Select a project..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None (Don't save to project)</SelectItem>
+                          {existingProjects.map((project) => (
+                            <SelectItem key={project.id} value={project.id}>
+                              {project.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Associate these files with an existing project in your library.
+                      </p>
+                    </div>
+                  )}
                 </TabsContent>
 
                 {/* Select Existing Documents Tab */}
                 <TabsContent value="existing" className="space-y-4 mt-4">
-                  {existingContracts.length > 0 ? (
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium text-foreground mb-2">Available Contracts:</p>
-                      {existingContracts.map((contract) => (
-                        <div
-                          key={contract.id}
-                          className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
-                        >
-                          <div className="flex items-center gap-3 flex-1">
-                            <Checkbox
-                              id={`existing-contract-${contract.id}`}
-                              checked={selectedExistingContracts.includes(contract.id)}
-                              onCheckedChange={() => handleToggleExistingContract(contract.id)}
-                            />
-                            <label
-                              htmlFor={`existing-contract-${contract.id}`}
-                              className="flex items-center gap-2 flex-1 cursor-pointer"
-                            >
-                              <FileText className="w-4 h-4 text-primary" />
-                              <div>
-                                <p className="text-sm font-medium text-foreground">{contract.name}</p>
-                                <p className="text-xs text-muted-foreground">Uploaded {contract.uploadedDate}</p>
-                              </div>
-                            </label>
+                  {!selectedProject ? (
+                    <div className="space-y-4">
+                      <p className="text-sm font-medium text-foreground">Select a Project:</p>
+                      <div className="grid gap-3">
+                        {existingProjects.map((project) => (
+                          <div
+                            key={project.id}
+                            className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer"
+                            onClick={() => setSelectedProject(project.id)}
+                          >
+                            <Folder className="w-5 h-5 text-primary" />
+                            <span className="font-medium text-foreground">{project.name}</span>
                           </div>
-                          {selectedExistingContracts.includes(contract.id) && (
-                            <CheckCircle2 className="w-4 h-4 text-primary" />
-                          )}
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
                   ) : (
-                    <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
-                      <FileText className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                      <p className="text-foreground font-medium mb-2 text-sm">No existing contracts</p>
-                      <p className="text-muted-foreground text-xs">
-                        No contracts found on this artist's profile
-                      </p>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-medium text-foreground">
+                          Contracts in {existingProjects.find(p => p.id === selectedProject)?.name}:
+                        </p>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => setSelectedProject(null)}
+                          className="text-xs h-8"
+                        >
+                          Change Project
+                        </Button>
+                      </div>
+                      
+                      {existingContracts.filter(c => c.projectId === selectedProject).length > 0 ? (
+                        <div className="space-y-2">
+                          {existingContracts
+                            .filter(contract => contract.projectId === selectedProject)
+                            .map((contract) => (
+                              <div
+                                key={contract.id}
+                                className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
+                              >
+                                <div className="flex items-center gap-3 flex-1">
+                                  <Checkbox
+                                    id={`existing-contract-${contract.id}`}
+                                    checked={selectedExistingContracts.includes(contract.id)}
+                                    onCheckedChange={() => handleToggleExistingContract(contract.id)}
+                                  />
+                                  <label
+                                    htmlFor={`existing-contract-${contract.id}`}
+                                    className="flex items-center gap-2 flex-1 cursor-pointer"
+                                  >
+                                    <FileText className="w-4 h-4 text-primary" />
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{contract.name}</p>
+                                      <p className="text-xs text-muted-foreground">Uploaded {contract.uploadedDate}</p>
+                                    </div>
+                                  </label>
+                                </div>
+                                {selectedExistingContracts.includes(contract.id) && (
+                                  <CheckCircle2 className="w-4 h-4 text-primary" />
+                                )}
+                              </div>
+                            ))}
+                        </div>
+                      ) : (
+                        <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
+                          <FileText className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                          <p className="text-foreground font-medium mb-2 text-sm">No existing contracts</p>
+                          <p className="text-muted-foreground text-xs">
+                            No contracts found in this project
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </TabsContent>
