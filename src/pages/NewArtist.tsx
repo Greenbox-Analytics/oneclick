@@ -6,11 +6,19 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Music, ArrowLeft, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 const NewArtist = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    genre: "",
+  });
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -23,13 +31,38 @@ const NewArtist = () => {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    // TODO: Add backend logic to create artist
-    setTimeout(() => {
-      navigate("/artists");
-    }, 1000);
+
+    const { data, error } = await supabase
+      .from('artists')
+      .insert({
+        name: formData.name,
+        email: formData.email,
+        bio: "",
+        genres: formData.genre.split(',').map(g => g.trim()).filter(Boolean),
+        avatar_url: avatarPreview || "",
+      })
+      .select()
+      .single();
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to create artist",
+        variant: "destructive",
+      });
+      setIsLoading(false);
+      return;
+    }
+
+    toast({
+      title: "Success",
+      description: "Artist created successfully",
+    });
+    
+    navigate(`/artists/${data.id}`);
   };
 
   return (
@@ -40,7 +73,7 @@ const NewArtist = () => {
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
               <Music className="w-6 h-6 text-primary-foreground" />
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii AI</h1>
+            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <Button variant="outline" onClick={() => navigate("/artists")}>
             <ArrowLeft className="w-4 h-4 mr-2" />
@@ -85,15 +118,34 @@ const NewArtist = () => {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="artist-name">Artist Name</Label>
-                <Input id="artist-name" placeholder="Enter artist name" required />
+                <Input 
+                  id="artist-name" 
+                  placeholder="Enter artist name" 
+                  required 
+                  value={formData.name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="genre">Genre</Label>
-                <Input id="genre" placeholder="e.g., Electronic, Rock, Hip-Hop" required />
+                <Input 
+                  id="genre" 
+                  placeholder="e.g., Electronic, Rock, Hip-Hop" 
+                  required 
+                  value={formData.genre}
+                  onChange={(e) => setFormData(prev => ({ ...prev, genre: e.target.value }))}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" placeholder="artist@example.com" required />
+                <Input 
+                  id="email" 
+                  type="email" 
+                  placeholder="artist@example.com" 
+                  required 
+                  value={formData.email}
+                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="phone">Phone (Optional)</Label>
