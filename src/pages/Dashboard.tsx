@@ -88,7 +88,7 @@ const Dashboard = () => {
               <Plus className="w-4 h-4 mr-2" />
               Add New Artist
             </Button>
-            <Button variant="outline" onClick={() => navigate("/tools")}>
+            <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
               <Calculator className="w-4 h-4 mr-2" />
               OneClick
             </Button>
