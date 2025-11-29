@@ -1,4 +1,4 @@
-# Msanii AI
+# Msanii
 
 A modern web application for managing artists and royalties, built with React, TypeScript, and Supabase.
 
