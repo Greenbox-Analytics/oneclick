@@ -1,34 +1,63 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Music, AlertCircle } from "lucide-react";
+import { Music, AlertCircle, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-//This is temporary placeholder data. TODO: Later to be replaced with a backend API
-const mockArtists = [
-  { id: 1, name: "Luna Rivers", hasContract: true },
-  { id: 2, name: "The Echoes", hasContract: true },
-  { id: 3, name: "DJ Neon", hasContract: false },
-];
+// Backend API URL
+const API_URL = "http://localhost:8000";
+
+interface Artist {
+  id: string; // UUID in database
+  name: string;
+  has_contract: boolean;
+  // Add other fields as needed
+}
 
 const OneClick = () => {
   const navigate = useNavigate();
-  //State tracks artist user has selected and errors
-  const [selectedArtists, setSelectedArtists] = useState<number[]>([]);
+  
+  // State for fetched artists
+  const [artists, setArtists] = useState<Artist[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // State tracks artist user has selected and errors
+  // Changed to string[] because Supabase IDs are UUIDs (strings)
+  const [selectedArtists, setSelectedArtists] = useState<string[]>([]);
   const [error, setError] = useState<string>("");
 
-  //This lets us select/deselect a single artist (only one artist can be selected at a time)
-  const handleArtistToggle = (artistId: number) => {
-    setSelectedArtists(prev =>
+  // Fetch artists from backend on component mount
+  useEffect(() => {
+    fetch(`${API_URL}/artists`)
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error("Failed to fetch artists");
+        }
+        return res.json();
+      })
+      .then((data) => {
+        setArtists(data);
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        console.error("Error fetching artists:", err);
+        setError("Failed to load artists. Please check your backend connection.");
+        setIsLoading(false);
+      });
+  }, []);
+
+  // This lets us select/deselect a single artist (only one artist can be selected at a time)
+  const handleArtistToggle = (artistId: string) => {
+    setSelectedArtists((prev) =>
       prev.includes(artistId)
         ? [] // Deselect if already selected
         : [artistId] // Select only this artist (replaces any previous selection)
     );
   };
 
-  //Navigate to document upload page for the selected artist
+  // Navigate to document upload page for the selected artist
   const handleContinue = () => {
     setError("");
 
@@ -52,6 +81,7 @@ const OneClick = () => {
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <Button variant="outline" onClick={() => navigate("/tools")}>
+            <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Tools
           </Button>
         </div>
@@ -70,23 +100,34 @@ const OneClick = () => {
               <CardDescription>Choose artists to include in the royalty calculation</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {mockArtists.map((artist) => (
-                <div key={artist.id} className="flex items-center p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <Checkbox
-                      id={`artist-${artist.id}`}
-                      checked={selectedArtists.includes(artist.id)}
-                      onCheckedChange={() => handleArtistToggle(artist.id)}
-                    />
-                    <label
-                      htmlFor={`artist-${artist.id}`}
-                      className="text-foreground font-medium cursor-pointer"
-                    >
-                      {artist.name}
-                    </label>
-                  </div>
+              {isLoading ? (
+                <div className="text-center py-4 text-muted-foreground">Loading artists...</div>
+              ) : artists.length === 0 ? (
+                <div className="text-center py-4 text-muted-foreground">
+                  No artists found. Please add an artist first.
                 </div>
-              ))}
+              ) : (
+                artists.map((artist) => (
+                  <div
+                    key={artist.id}
+                    className="flex items-center p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Checkbox
+                        id={`artist-${artist.id}`}
+                        checked={selectedArtists.includes(artist.id)}
+                        onCheckedChange={() => handleArtistToggle(artist.id)}
+                      />
+                      <label
+                        htmlFor={`artist-${artist.id}`}
+                        className="text-foreground font-medium cursor-pointer"
+                      >
+                        {artist.name}
+                      </label>
+                    </div>
+                  </div>
+                ))
+              )}
 
               <Button
                 onClick={handleContinue}
