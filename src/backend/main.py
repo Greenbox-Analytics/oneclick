@@ -29,10 +29,12 @@ url: str = os.getenv("VITE_SUPABASE_URL")
 key: str = os.getenv("VITE_SUPABASE_SECRET_KEY")
 
 if not url or not key:
-    print("Warning: VITE_SUPABASE_URL or VITE_SUPABASE_SECRET_KEY not found in environment variables.")
-    supabase: Client = None 
-else:
-    supabase: Client = create_client(url, key)
+    raise RuntimeError(
+        "Missing required environment variables: VITE_SUPABASE_URL and/or VITE_SUPABASE_SECRET_KEY. "
+        "Please create a .env file in the backend directory with these variables."
+    )
+
+supabase: Client = create_client(url, key)
 
 # --- Data Models ---
 class RoyaltyBreakdown(BaseModel):

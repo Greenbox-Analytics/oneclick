@@ -136,6 +136,9 @@ const DocumentUpload = () => {
   // Fetch Contracts when Project Selected
   useEffect(() => {
     if (selectedProject) {
+      // Clear previous selections when changing projects
+      setSelectedExistingContracts([]);
+      
       setIsLoadingProjectFiles(true);
       fetch(`${API_URL}/files/${selectedProject}`)
         .then(res => res.json())
@@ -151,6 +154,7 @@ const DocumentUpload = () => {
         });
     } else {
         setExistingContracts([]);
+        setSelectedExistingContracts([]);
         setIsLoadingProjectFiles(false);
     }
   }, [selectedProject]);
@@ -216,8 +220,8 @@ const DocumentUpload = () => {
             const res = await fetch(`${API_URL}/upload`, { method: "POST", body: formData });
             if (!res.ok) throw new Error("Failed to upload contract");
             const data = await res.json();
-            // Assuming backend returns { path: "..." }
-            uploadedContractPaths.push(data.path); // Use the path returned by backend
+            // Backend returns { "status": "success", "file": {...} }
+            uploadedContractPaths.push(data.file.file_path);
         }
 
         // 2. Upload New Royalty Statements
@@ -230,7 +234,7 @@ const DocumentUpload = () => {
             const res = await fetch(`${API_URL}/upload`, { method: "POST", body: formData });
             if (!res.ok) throw new Error("Failed to upload royalty statement");
             const data = await res.json();
-            uploadedRoyaltyPaths.push(data.path);
+            uploadedRoyaltyPaths.push(data.file.file_path);
         }
 
         // 3. Combine with Selected Existing Files
