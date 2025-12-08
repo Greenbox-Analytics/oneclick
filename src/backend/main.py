@@ -9,6 +9,9 @@ import io
 import uuid
 import time
 from dotenv import load_dotenv
+import sys
+from pathlib import Path
+from vector_search.contract_chatbot import ContractChatbot
 
 # Load environment variables
 load_dotenv()
@@ -49,6 +52,37 @@ class RoyaltyResults(BaseModel):
     totalContributors: int
     totalRevenue: float
     breakdown: List[RoyaltyBreakdown]
+
+# Zoe Chatbot Models
+class ZoeAskRequest(BaseModel):
+    query: str
+    project_id: str
+    contract_ids: Optional[List[str]] = None  # Changed to support multiple contracts
+    user_id: str
+
+class ZoeSource(BaseModel):
+    contract_file: str
+    page_number: int
+    score: float
+    project_name: str
+
+class ZoeAskResponse(BaseModel):
+    query: str
+    answer: str
+    confidence: str
+    sources: List[ZoeSource]
+    search_results_count: int
+    highest_score: Optional[float] = None
+
+# Initialize Zoe chatbot (singleton)
+zoe_chatbot = None
+
+def get_zoe_chatbot():
+    """Get or create Zoe chatbot instance"""
+    global zoe_chatbot
+    if zoe_chatbot is None:
+        zoe_chatbot = ContractChatbot(region="US")
+    return zoe_chatbot
 
 # --- Endpoints ---
 
@@ -245,3 +279,102 @@ async def calculate_royalties(
             }
         ]
     }
+
+# --- Zoe AI Chatbot Endpoints ---
+
+@app.get("/projects")
+async def get_all_projects():
+    """
+    Fetch all projects (for Zoe project selection).
+    """
+    try:
+        response = supabase.table("projects").select("*").execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/artists/{artist_id}/projects")
+async def get_artist_projects(artist_id: str):
+    """
+    Fetch projects for a specific artist (for Zoe artist-based filtering).
+    """
+    try:
+        response = supabase.table("projects").select("*").eq("artist_id", artist_id).execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/contracts")
+async def get_project_contracts(project_id: str):
+    """
+    Fetch contracts (PDF files) for a specific project.
+    """
+    try:
+        response = supabase.table("project_files").select("*").eq("project_id", project_id).eq("folder_category", "contract").execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/zoe/ask", response_model=ZoeAskResponse)
+async def zoe_ask_question(request: ZoeAskRequest):
+    """
+    Zoe AI Chatbot endpoint - Ask questions about contracts.
+    
+    Rules:
+    1. Always filters by user_id and project_id
+    2. If contract_ids are provided, filters by specific contracts and uses top_k=3
+    3. If no contract_ids, searches all contracts in project with top_k=8
+    4. Only answers if highest similarity ≥ 0.75
+    5. Returns answer with source citations
+    """
+    try:
+        # Get Zoe chatbot instance
+        chatbot = get_zoe_chatbot()
+        
+        # Determine top_k based on whether specific contracts are selected
+        # If specific contracts selected: top_k=3 (focused search)
+        # If project-wide search: top_k=8 (broader search)
+        top_k = 3 if request.contract_ids and len(request.contract_ids) > 0 else 8
+        
+        # Ask the question
+        if request.contract_ids and len(request.contract_ids) > 0:
+            # Contract-specific question(s)
+            # For multiple contracts, we'll query each and combine results
+            # For now, use the first contract_id (can be enhanced to handle multiple)
+            result = chatbot.ask_contract(
+                query=request.query,
+                user_id=request.user_id,
+                project_id=request.project_id,
+                contract_id=request.contract_ids[0],  # Use first contract for now
+                top_k=top_k
+            )
+        else:
+            # Project-wide question
+            result = chatbot.ask_project(
+                query=request.query,
+                user_id=request.user_id,
+                project_id=request.project_id,
+                top_k=top_k
+            )
+        
+        # Format response
+        return ZoeAskResponse(
+            query=result["query"],
+            answer=result["answer"],
+            confidence=result["confidence"],
+            sources=[
+                ZoeSource(
+                    contract_file=source["contract_file"],
+                    page_number=source["page_number"],
+                    score=source["score"],
+                    project_name=source["project_name"]
+                )
+                for source in result.get("sources", [])
+            ],
+            search_results_count=result.get("search_results_count", 0),
+            highest_score=result.get("highest_score")
+        )
+        
+    except Exception as e:
+        print(f"Error in Zoe chatbot: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
