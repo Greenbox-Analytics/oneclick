@@ -31,7 +31,6 @@ DEFAULT_REGION = "US"
 
 # Pinecone API configuration
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "us-east-1")
 
 # ============================================================================
 # OPENAI CONFIGURATION
@@ -193,7 +192,6 @@ __all__ = [
     'REGIONAL_INDEXES',
     'DEFAULT_REGION',
     'PINECONE_API_KEY',
-    'PINECONE_ENVIRONMENT',
     
     # OpenAI
     'OPENAI_API_KEY',
