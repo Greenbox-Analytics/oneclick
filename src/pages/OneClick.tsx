@@ -7,7 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 // Backend API URL
-const API_URL = "http://localhost:8000";
+const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
 interface Artist {
   id: string; // UUID in database

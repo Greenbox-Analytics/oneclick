@@ -346,38 +346,69 @@ const ArtistProfile = () => {
   };
 
   const handleFileDelete = async () => {
-    if (!fileToDelete) return;
+    if (!fileToDelete || !user) return;
 
     try {
-      // Delete from storage
-      const { error: storageError } = await supabase.storage
-        .from('project-files')
-        .remove([fileToDelete.file_path]);
+      // If it's a contract file, also delete from vector database
+      if (fileToDelete.folder_category === 'contract') {
+        const formData = new FormData();
+        formData.append("user_id", user.id);
 
-      if (storageError) throw storageError;
+        const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+        const vectorDeleteResponse = await fetch(`${API_URL}/contracts/${fileToDelete.id}`, {
+          method: "DELETE",
+          body: formData,
+        });
 
-      // Delete from database
-      const { error: dbError } = await supabase
-        .from('project_files')
-        .delete()
-        .eq('id', fileToDelete.id);
+        if (!vectorDeleteResponse.ok) {
+          const errorData = await vectorDeleteResponse.json();
+          throw new Error(errorData.detail || "Failed to delete contract vectors");
+        }
 
-      if (dbError) throw dbError;
+        // The backend already handles storage and database deletion for contracts
+        // Update local state
+        setProjectFiles(prev => ({
+          ...prev,
+          [fileToDelete.project_id]: (prev[fileToDelete.project_id] || []).filter(f => f.id !== fileToDelete.id),
+        }));
 
-      // Update local state
-      setProjectFiles(prev => ({
-        ...prev,
-        [fileToDelete.project_id]: (prev[fileToDelete.project_id] || []).filter(f => f.id !== fileToDelete.id),
-      }));
+        toast({
+          title: "Success",
+          description: "Contract and vector data deleted successfully",
+        });
+      } else {
+        // For non-contract files, use the original deletion logic
+        // Delete from storage
+        const { error: storageError } = await supabase.storage
+          .from('project-files')
+          .remove([fileToDelete.file_path]);
 
-      toast({
-        title: "Success",
-        description: "File deleted successfully",
-      });
+        if (storageError) throw storageError;
+
+        // Delete from database
+        const { error: dbError } = await supabase
+          .from('project_files')
+          .delete()
+          .eq('id', fileToDelete.id);
+
+        if (dbError) throw dbError;
+
+        // Update local state
+        setProjectFiles(prev => ({
+          ...prev,
+          [fileToDelete.project_id]: (prev[fileToDelete.project_id] || []).filter(f => f.id !== fileToDelete.id),
+        }));
+
+        toast({
+          title: "Success",
+          description: "File deleted successfully",
+        });
+      }
     } catch (error: any) {
+      console.error("Error deleting file:", error);
       toast({
         title: "Error",
-        description: "Failed to delete file",
+        description: error.message || "Failed to delete file",
         variant: "destructive",
       });
     } finally {

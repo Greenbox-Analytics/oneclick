@@ -8,7 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Upload, FileText, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
-const API_URL = "http://localhost:8000";
+const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
 interface ContractUploadModalProps {
   open: boolean;
