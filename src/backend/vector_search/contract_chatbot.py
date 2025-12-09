@@ -4,7 +4,7 @@ RAG-based Q&A system for contract documents with similarity thresholding.
 
 Features:
 - Semantic search with metadata filtering
-- Similarity threshold enforcement (≥0.75)
+- Similarity threshold enforcement (≥0.50)
 - LLM-powered answer generation with grounding
 - Support for project-level and contract-level queries
 - Conversation history tracking
@@ -32,8 +32,8 @@ openai_client = OpenAI(
 )
 
 # Configuration
-DEFAULT_LLM_MODEL = "gpt-4o-mini"  # Can be changed to gpt-5-nano when available
-MIN_SIMILARITY_THRESHOLD = 0.75
+DEFAULT_LLM_MODEL = "gpt-5-nano" 
+MIN_SIMILARITY_THRESHOLD = 0.5
 DEFAULT_TOP_K = 8
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
@@ -82,7 +82,7 @@ class ContractChatbot:
 CRITICAL RULES:
 1. ONLY answer based on the provided contract excerpts - do not use external knowledge
 2. If the answer is not explicitly stated in the excerpts, respond with: "I don't know based on the available documents."
-3. Always cite the source (contract file and page number) when providing information
+3. Always cite the source (contract file name) when providing information
 4. Be precise with numbers, percentages, dates, and legal terms
 5. If multiple contracts contain relevant information, clearly distinguish between them
 6. Do not make assumptions or inferences beyond what is explicitly stated
@@ -112,7 +112,6 @@ Your answers should be:
             context_parts.append(
                 f"[Excerpt {i}]\n"
                 f"Contract: {match['contract_file']}\n"
-                f"Page: {match['page_number']}\n"
                 f"Relevance Score: {match['score']}\n"
                 f"Project: {match['project_name']}\n"
                 f"\nContent:\n{match['text']}\n"
@@ -161,7 +160,7 @@ CONTRACT EXCERPTS:
 
 Remember to:
 - Only use information from the excerpts above
-- Cite sources (contract file and page number)
+- Cite sources (contract file name)
 - If the answer isn't in the excerpts, say "I don't know based on the available documents."
 """
         
@@ -185,7 +184,6 @@ Remember to:
             sources = [
                 {
                     "contract_file": match["contract_file"],
-                    "page_number": match["page_number"],
                     "score": match["score"],
                     "project_name": match["project_name"]
                 }

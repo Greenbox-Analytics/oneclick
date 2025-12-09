@@ -68,8 +68,8 @@ TOKENIZER_ENCODING = "cl100k_base"
 DEFAULT_TOP_K = 8
 
 # Minimum similarity threshold for chatbot responses
-# Only answer questions if highest similarity >= 0.75
-MIN_SIMILARITY_THRESHOLD = 0.75
+# Only answer questions if highest similarity >= 0.5
+MIN_SIMILARITY_THRESHOLD = 0.5
 
 # Maximum context length to send to LLM (in characters)
 MAX_CONTEXT_LENGTH = 8000
@@ -79,7 +79,7 @@ MAX_CONTEXT_LENGTH = 8000
 # ============================================================================
 
 # Batch size for embedding creation and vector upserts
-BATCH_SIZE = 100
+BATCH_SIZE = 20
 
 # ============================================================================
 # METADATA SCHEMA

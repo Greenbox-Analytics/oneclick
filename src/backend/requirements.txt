@@ -11,6 +11,7 @@ pinecone
 langchain
 langchain-community
 langchain-openai
+langchain-text-splitters
 pymupdf
 tiktoken
 openai

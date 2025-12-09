@@ -4,11 +4,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Music, ArrowLeft, Send, Bot, User, AlertCircle, X } from "lucide-react";
+import { Music, ArrowLeft, Send, Bot, User, AlertCircle, X, Upload, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { ContractUploadModal } from "@/components/ContractUploadModal";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 // Backend API URL
 const API_URL = "http://localhost:8000";
@@ -45,6 +57,7 @@ interface Message {
 const Zoe = () => {
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { user } = useAuth();
 
   // State for artists, projects and contracts
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -59,6 +72,12 @@ const Zoe = () => {
   const [inputMessage, setInputMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Upload/Delete state
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [contractToDelete, setContractToDelete] = useState<Contract | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Fetch artists on mount
   useEffect(() => {
@@ -88,7 +107,7 @@ const Zoe = () => {
   }, [selectedArtist]);
 
   // Fetch contracts when project is selected
-  useEffect(() => {
+  const fetchContracts = () => {
     if (selectedProject) {
       fetch(`${API_URL}/projects/${selectedProject}/contracts`)
         .then((res) => res.json())
@@ -101,6 +120,10 @@ const Zoe = () => {
       setContracts([]);
       setSelectedContracts([]);
     }
+  };
+
+  useEffect(() => {
+    fetchContracts();
   }, [selectedProject]);
 
   // Auto-scroll to bottom when new messages arrive
@@ -108,8 +131,52 @@ const Zoe = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const handleUploadComplete = () => {
+    // Refresh contracts list after upload
+    fetchContracts();
+  };
+
+  const handleDeleteClick = (contract: Contract) => {
+    setContractToDelete(contract);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!contractToDelete || !user) return;
+
+    setDeleting(true);
+    try {
+      const formData = new FormData();
+      formData.append("user_id", user.id);
+
+      const response = await fetch(`${API_URL}/contracts/${contractToDelete.id}`, {
+        method: "DELETE",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Delete failed");
+      }
+
+      // Remove from selected contracts if it was selected
+      setSelectedContracts((prev) => prev.filter((id) => id !== contractToDelete.id));
+      
+      // Refresh contracts list
+      fetchContracts();
+      
+      setDeleteDialogOpen(false);
+      setContractToDelete(null);
+    } catch (err) {
+      console.error("Error deleting contract:", err);
+      setError(err instanceof Error ? err.message : "Failed to delete contract");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || !selectedProject) {
+    if (!inputMessage.trim() || !selectedProject || !user) {
       setError("Please select a project and enter a message");
       return;
     }
@@ -136,7 +203,7 @@ const Zoe = () => {
           query: inputMessage,
           project_id: selectedProject,
           contract_ids: selectedContracts.length > 0 ? selectedContracts : null,
-          user_id: "current-user-id", // TODO: Get from auth context
+          user_id: user.id,
         }),
       });
 
@@ -256,37 +323,73 @@ const Zoe = () => {
                 </div>
               )}
 
-              {/* Contract Filter (Optional) */}
-              {selectedProject && contracts.length > 0 && (
+              {/* Contract Management */}
+              {selectedProject && (
                 <div className="space-y-2">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    Filter by Contracts (Optional)
-                  </label>
-                  <div className="bg-muted/50 rounded-lg p-3 max-h-32 overflow-y-auto">
-                    <div className="space-y-2">
-                      {contracts.map((contract) => (
-                        <div key={contract.id} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={contract.id}
-                            checked={selectedContracts.includes(contract.id)}
-                            onCheckedChange={(checked) => {
-                              if (checked) {
-                                setSelectedContracts([...selectedContracts, contract.id]);
-                              } else {
-                                setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
-                              }
-                            }}
-                          />
-                          <label
-                            htmlFor={contract.id}
-                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                          >
-                            {contract.file_name}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      Contracts {contracts.length > 0 && `(${contracts.length})`}
+                    </label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setUploadModalOpen(true)}
+                      className="h-7 text-xs"
+                    >
+                      <Upload className="w-3 h-3 mr-1" />
+                      Upload
+                    </Button>
                   </div>
+
+                  {contracts.length > 0 ? (
+                    <div className="bg-muted/50 rounded-lg p-3 max-h-32 overflow-y-auto">
+                      <div className="space-y-2">
+                        {contracts.map((contract) => (
+                          <div key={contract.id} className="flex items-center justify-between gap-2 group">
+                            <div className="flex items-center space-x-2 flex-1 min-w-0">
+                              <Checkbox
+                                id={contract.id}
+                                checked={selectedContracts.includes(contract.id)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setSelectedContracts([...selectedContracts, contract.id]);
+                                  } else {
+                                    setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
+                                  }
+                                }}
+                              />
+                              <label
+                                htmlFor={contract.id}
+                                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer truncate"
+                              >
+                                {contract.file_name}
+                              </label>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteClick(contract)}
+                              className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <Trash2 className="w-3 h-3 text-destructive" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-muted/50 rounded-lg p-4 text-center">
+                      <p className="text-sm text-muted-foreground mb-2">No contracts uploaded yet</p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setUploadModalOpen(true)}
+                      >
+                        <Upload className="w-3 h-3 mr-1" />
+                        Upload First Contract
+                      </Button>
+                    </div>
+                  )}
                   {selectedContracts.length > 0 && (
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className="text-xs">
@@ -440,12 +543,45 @@ const Zoe = () => {
                 </div>
                 
                 <p className="text-xs text-muted-foreground mt-2">
-                  Zoe only answers based on your uploaded contracts (similarity ≥ 0.75)
+                  Zoe only answers based on your uploaded contracts, using no outside knowledge.
                 </p>
               </div>
             </CardContent>
           </Card>
       </main>
+
+      {/* Upload Modal */}
+      {selectedProject && (
+        <ContractUploadModal
+          open={uploadModalOpen}
+          onOpenChange={setUploadModalOpen}
+          projectId={selectedProject}
+          onUploadComplete={handleUploadComplete}
+        />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Contract</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{contractToDelete?.file_name}"? This will remove the
+              contract file and all its indexed data from the AI search. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConfirm}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

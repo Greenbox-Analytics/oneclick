@@ -37,7 +37,7 @@ openai_client = OpenAI(
 # Configuration
 EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_TOP_K = 8
-MIN_SIMILARITY_THRESHOLD = 0.75
+MIN_SIMILARITY_THRESHOLD = 0.50
 
 # Regional index mapping
 REGIONAL_INDEXES = {
@@ -127,7 +127,7 @@ class ContractSearch:
         query_embedding = self.create_query_embedding(query)
         
         # Perform search
-        namespace = f"{user_id}_data"
+        namespace = f"{user_id}-namespace"
         
         print(f"Searching in namespace: {namespace}")
         print(f"Filter: {filter_dict}")
@@ -155,8 +155,6 @@ class ContractSearch:
                     "contract_file": match.metadata.get("contract_file"),
                     "project_id": match.metadata.get("project_id"),
                     "project_name": match.metadata.get("project_name"),
-                    "page_number": match.metadata.get("page_number"),
-                    "chunk_index": match.metadata.get("chunk_index"),
                     "text": match.metadata.get("chunk_text", ""),
                     "uploaded_at": match.metadata.get("uploaded_at")
                 })
@@ -245,7 +243,7 @@ class ContractSearch:
         for i, match in enumerate(search_results["matches"], 1):
             context_parts.append(
                 f"[Result {i} - Score: {match['score']}]\n"
-                f"Source: {match['contract_file']} (Page {match['page_number']})\n"
+                f"Source: {match['contract_file']}\n"
                 f"Project: {match['project_name']}\n"
                 f"Content:\n{match['text']}\n"
             )
@@ -274,7 +272,6 @@ if __name__ == "__main__":
         print(f"\nResult #{i}")
         print(f"  Score: {match['score']}")
         print(f"  Contract: {match['contract_file']}")
-        print(f"  Page: {match['page_number']}")
         print(f"  Project: {match['project_name']}")
         print(f"  Content Preview: {match['text'][:200]}...")
         print("-" * 80)
