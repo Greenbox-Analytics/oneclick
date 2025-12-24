@@ -11,6 +11,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Music, Upload, FileText, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2, Folder, Plus } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
+import { ContractUploadModal } from "@/components/ContractUploadModal";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,6 +42,7 @@ const ArtistProfile = () => {
   const navigate = useNavigate();
   const { id } = useParams();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [hasContract, setHasContract] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -52,6 +55,8 @@ const ArtistProfile = () => {
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedFileType, setSelectedFileType] = useState<string | null>(null);
   const [fileToDelete, setFileToDelete] = useState<any>(null);
+  const [contractUploadModalOpen, setContractUploadModalOpen] = useState(false);
+  const [contractUploadProjectId, setContractUploadProjectId] = useState<string>("");
 
   const [formData, setFormData] = useState({
     name: "",
@@ -205,6 +210,35 @@ const ArtistProfile = () => {
     fetchAllProjectFiles();
   }, [projects]);
 
+  const handleContractUploadClick = (projectId: string) => {
+    setContractUploadProjectId(projectId);
+    setContractUploadModalOpen(true);
+  };
+
+  const handleContractUploadComplete = () => {
+    // Refresh project files after upload
+    if (contractUploadProjectId) {
+      fetchProjectFiles(contractUploadProjectId);
+    }
+  };
+
+  const fetchProjectFiles = async (projectId: string) => {
+    const { data, error } = await supabase
+      .from('project_files')
+      .select('*')
+      .eq('project_id', projectId);
+
+    if (error) {
+      console.error('Error fetching files:', error);
+      return;
+    }
+
+    setProjectFiles(prev => ({
+      ...prev,
+      [projectId]: data || [],
+    }));
+  };
+
   const handleFileUpload = async (projectId: string, folderCategory: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -312,38 +346,69 @@ const ArtistProfile = () => {
   };
 
   const handleFileDelete = async () => {
-    if (!fileToDelete) return;
+    if (!fileToDelete || !user) return;
 
     try {
-      // Delete from storage
-      const { error: storageError } = await supabase.storage
-        .from('project-files')
-        .remove([fileToDelete.file_path]);
+      // If it's a contract file, also delete from vector database
+      if (fileToDelete.folder_category === 'contract') {
+        const formData = new FormData();
+        formData.append("user_id", user.id);
 
-      if (storageError) throw storageError;
+        const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+        const vectorDeleteResponse = await fetch(`${API_URL}/contracts/${fileToDelete.id}`, {
+          method: "DELETE",
+          body: formData,
+        });
 
-      // Delete from database
-      const { error: dbError } = await supabase
-        .from('project_files')
-        .delete()
-        .eq('id', fileToDelete.id);
+        if (!vectorDeleteResponse.ok) {
+          const errorData = await vectorDeleteResponse.json();
+          throw new Error(errorData.detail || "Failed to delete contract vectors");
+        }
 
-      if (dbError) throw dbError;
+        // The backend already handles storage and database deletion for contracts
+        // Update local state
+        setProjectFiles(prev => ({
+          ...prev,
+          [fileToDelete.project_id]: (prev[fileToDelete.project_id] || []).filter(f => f.id !== fileToDelete.id),
+        }));
 
-      // Update local state
-      setProjectFiles(prev => ({
-        ...prev,
-        [fileToDelete.project_id]: (prev[fileToDelete.project_id] || []).filter(f => f.id !== fileToDelete.id),
-      }));
+        toast({
+          title: "Success",
+          description: "Contract and vector data deleted successfully",
+        });
+      } else {
+        // For non-contract files, use the original deletion logic
+        // Delete from storage
+        const { error: storageError } = await supabase.storage
+          .from('project-files')
+          .remove([fileToDelete.file_path]);
 
-      toast({
-        title: "Success",
-        description: "File deleted successfully",
-      });
+        if (storageError) throw storageError;
+
+        // Delete from database
+        const { error: dbError } = await supabase
+          .from('project_files')
+          .delete()
+          .eq('id', fileToDelete.id);
+
+        if (dbError) throw dbError;
+
+        // Update local state
+        setProjectFiles(prev => ({
+          ...prev,
+          [fileToDelete.project_id]: (prev[fileToDelete.project_id] || []).filter(f => f.id !== fileToDelete.id),
+        }));
+
+        toast({
+          title: "Success",
+          description: "File deleted successfully",
+        });
+      }
     } catch (error: any) {
+      console.error("Error deleting file:", error);
       toast({
         title: "Error",
-        description: "Failed to delete file",
+        description: error.message || "Failed to delete file",
         variant: "destructive",
       });
     } finally {
@@ -1237,13 +1302,15 @@ const ArtistProfile = () => {
                             
                             return (
                               <div key={folder.category} className="relative">
-                                <input
-                                  type="file"
-                                  id={`upload-${project.id}-${folder.category}`}
-                                  className="hidden"
-                                  onChange={(e) => handleFileUpload(project.id, folder.category, e)}
-                                  disabled={isUploading}
-                                />
+                                {folder.category !== 'contract' && (
+                                  <input
+                                    type="file"
+                                    id={`upload-${project.id}-${folder.category}`}
+                                    className="hidden"
+                                    onChange={(e) => handleFileUpload(project.id, folder.category, e)}
+                                    disabled={isUploading}
+                                  />
+                                )}
                                 <div 
                                   className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer group"
                                   onClick={() => {
@@ -1262,7 +1329,11 @@ const ArtistProfile = () => {
                                       className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        document.getElementById(`upload-${project.id}-${folder.category}`)?.click();
+                                        if (folder.category === 'contract') {
+                                          handleContractUploadClick(project.id);
+                                        } else {
+                                          document.getElementById(`upload-${project.id}-${folder.category}`)?.click();
+                                        }
                                       }}
                                       disabled={isUploading}
                                     >
@@ -1405,6 +1476,16 @@ const ArtistProfile = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Contract Upload Modal */}
+      {contractUploadProjectId && user && (
+        <ContractUploadModal
+          open={contractUploadModalOpen}
+          onOpenChange={setContractUploadModalOpen}
+          projectId={contractUploadProjectId}
+          onUploadComplete={handleContractUploadComplete}
+        />
+      )}
     </div>
   );
 };
