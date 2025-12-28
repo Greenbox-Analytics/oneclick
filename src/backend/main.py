@@ -12,6 +12,12 @@ import tempfile
 from dotenv import load_dotenv
 import sys
 from pathlib import Path
+
+# Add the backend directory to Python path for module resolution
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 from vector_search.contract_chatbot import ContractChatbot
 from vector_search.contract_ingestion import ContractIngestion
 

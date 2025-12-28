@@ -1,9 +1,10 @@
 """
-Contract Chatbot Module
-RAG-based Q&A system for contract documents with similarity thresholding.
+Contract Chatbot Module (OneClick Smart Retrieval)
+RAG-based Q&A system for contract documents with intelligent query categorization.
 
 Features:
-- Semantic search with metadata filtering
+- Smart query categorization for targeted retrieval
+- Section-aware semantic search
 - Similarity threshold enforcement (≥0.50)
 - LLM-powered answer generation with grounding
 - Support for project-level and contract-level queries
@@ -32,8 +33,8 @@ openai_client = OpenAI(
 )
 
 # Configuration
-DEFAULT_LLM_MODEL = "gpt-5-nano" 
-MIN_SIMILARITY_THRESHOLD = 0.5
+DEFAULT_LLM_MODEL = "gpt-5-mini"  # Updated to stable model
+MIN_SIMILARITY_THRESHOLD = 0.30
 DEFAULT_TOP_K = 8
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
@@ -80,13 +81,13 @@ class ContractChatbot:
         return """You are a specialized contract analysis assistant for the music industry. Your role is to answer questions about music contracts accurately and precisely.
 
 CRITICAL RULES:
-1. ONLY answer based on the provided contract excerpts - do not use external knowledge
-2. If the answer is not explicitly stated in the excerpts, respond with: "I don't know based on the available documents."
+1. ONLY answer based on the provided contract contracts - do not use external knowledge
+2. If the answer is not explicitly stated in the contracts, respond with: "I don't know based on the available documents."
 3. Always cite the source (contract file name) when providing information
 4. Be precise with numbers, percentages, dates, and legal terms
 5. If multiple contracts contain relevant information, clearly distinguish between them
 6. Do not make assumptions or inferences beyond what is explicitly stated
-7. If asked about something not in the excerpts, acknowledge the limitation
+7. If asked about something not in the contracts, acknowledge the limitation
 
 Your answers should be:
 - Accurate and grounded in the provided text
@@ -96,7 +97,8 @@ Your answers should be:
     
     def _format_context(self, search_results: Dict) -> str:
         """
-        Format search results as context for LLM
+        Format search results as context for LLM.
+        Uses the same format as oneclick_retrieval.py for consistency.
         
         Args:
             search_results: Results from ContractSearch
@@ -105,29 +107,20 @@ Your answers should be:
             Formatted context string
         """
         if not search_results["matches"]:
-            return "No relevant contract excerpts found."
+            return "No relevant contract contracts found."
         
+        # Format exactly like oneclick_retrieval.py
         context_parts = []
-        for i, match in enumerate(search_results["matches"], 1):
-            context_parts.append(
-                f"[Excerpt {i}]\n"
-                f"Contract: {match['contract_file']}\n"
-                f"Relevance Score: {match['score']}\n"
-                f"Project: {match['project_name']}\n"
-                f"\nContent:\n{match['text']}\n"
-            )
+        for match in search_results["matches"]:
+            section = match.get('section_heading', 'N/A')
+            text = match.get('text', '')
+            context_parts.append(f"[Section: {section}]\n{text}")
         
-        full_context = "\n" + "="*80 + "\n\n".join(context_parts)
-        
-        # Truncate if too long
-        if len(full_context) > MAX_CONTEXT_LENGTH:
-            full_context = full_context[:MAX_CONTEXT_LENGTH] + "\n\n[Context truncated due to length...]"
-        
-        return full_context
+        return "\n\n".join(context_parts)
     
     def _generate_answer(self, query: str, context: str, search_results: Dict) -> Dict:
         """
-        Generate answer using LLM
+        Generate answer using LLM with the same approach as oneclick_retrieval.py.
         
         Args:
             query: User's question
@@ -148,23 +141,21 @@ Your answers should be:
                 "sources": []
             }
         
-        # Create messages for LLM
-        system_prompt = self._create_system_prompt()
-        
-        user_prompt = f"""Based on the following contract excerpts, please answer this question:
+        # Use the same prompts as oneclick_retrieval.py
+        system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
+Your task is to answer questions about contract documents based on the provided context.
+Be precise and only include information that is explicitly stated in the provided context."""
 
-QUESTION: {query}
+        user_prompt = f"""Based on the following contract contracts, answer this question:
 
-CONTRACT EXCERPTS:
+{query}
+
+Contract contracts:
 {context}
 
-Remember to:
-- Only use information from the excerpts above
-- Cite sources (contract file name)
-- If the answer isn't in the excerpts, say "I don't know based on the available documents."
-"""
+Return a clear, concise answer based only on the information provided in the contracts."""
         
-        # Call LLM
+        # Call LLM (same as oneclick_retrieval.py)
         print(f"\nGenerating answer using {self.llm_model}...")
         
         try:
@@ -174,7 +165,6 @@ Remember to:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3,  # Low temperature for factual accuracy
                 max_tokens=1000
             )
             
@@ -185,7 +175,9 @@ Remember to:
                 {
                     "contract_file": match["contract_file"],
                     "score": match["score"],
-                    "project_name": match["project_name"]
+                    "project_name": match["project_name"],
+                    "section_heading": match.get("section_heading", ""),
+                    "section_category": match.get("section_category", "")
                 }
                 for match in search_results["matches"]
             ]
@@ -288,13 +280,104 @@ Remember to:
         
         return result
     
+    def smart_ask(self,
+                  query: str,
+                  user_id: str,
+                  project_id: Optional[str] = None,
+                  contract_id: Optional[str] = None,
+                  top_k: Optional[int] = None) -> Dict:
+        """
+        Ask a question using smart retrieval with automatic query categorization.
+        
+        This method automatically:
+        1. Categorizes the query to determine relevant contract sections
+        2. Adjusts top_k based on query type (general vs specific)
+        3. Filters search to relevant sections for better precision
+        4. Generates a grounded answer based on retrieved context
+        
+        Args:
+            query: User's question
+            user_id: UUID of the user
+            project_id: UUID of the project (optional)
+            contract_id: UUID of specific contract (optional)
+            top_k: Number of search results (auto-adjusted if None)
+            
+        Returns:
+            Dict with answer, sources, categorization, and metadata
+        """
+        print("\n" + "=" * 80)
+        print("SMART CONTRACT CHATBOT (with Query Categorization)")
+        print("=" * 80)
+        print(f"Question: {query}")
+        print(f"User ID: {user_id}")
+        if project_id:
+            print(f"Project ID: {project_id}")
+        if contract_id:
+            print(f"Contract ID: {contract_id}")
+        print("-" * 80)
+        
+        # Step 1: Perform smart search with auto-categorization
+        search_results = self.search_engine.smart_search(
+            query=query,
+            user_id=user_id,
+            project_id=project_id,
+            contract_id=contract_id,
+            top_k=top_k
+        )
+        
+        # Step 2: Check if we have results
+        if not search_results["matches"]:
+            return {
+                "query": query,
+                "answer": "I don't know based on the available documents.",
+                "confidence": "low",
+                "reason": "No relevant documents found",
+                "sources": [],
+                "search_results_count": 0,
+                "categorization": search_results.get("categorization", {})
+            }
+        
+        # Step 3: Format context
+        context = self._format_context(search_results)
+        
+        # Step 4: Generate answer
+        result = self._generate_answer(query, context, search_results)
+        
+        # Step 5: Add query and search metadata
+        result["query"] = query
+        result["search_results_count"] = search_results["total_results"]
+        result["filter"] = search_results["filter"]
+        result["categorization"] = search_results.get("categorization", {})
+        
+        # Step 6: Store in conversation history
+        self.conversation_history.append({
+            "query": query,
+            "answer": result["answer"],
+            "confidence": result["confidence"],
+            "categorization": result.get("categorization", {}),
+            "timestamp": search_results["matches"][0]["uploaded_at"] if search_results["matches"] else None
+        })
+        
+        print("\n" + "=" * 80)
+        print("SMART ANSWER GENERATED")
+        print("=" * 80)
+        print(f"Confidence: {result['confidence']}")
+        if result.get('highest_score'):
+            print(f"Highest Similarity Score: {result['highest_score']}")
+        print(f"Sources Used: {len(result['sources'])}")
+        if result.get('categorization'):
+            print(f"Query Categories: {result['categorization'].get('categories', [])}")
+        print("=" * 80)
+        
+        return result
+    
     def ask_project(self,
                    query: str,
                    user_id: str,
                    project_id: str,
                    top_k: int = DEFAULT_TOP_K) -> Dict:
         """
-        Ask a question about a specific project's contracts
+        Ask a question about a specific project's contracts using smart retrieval.
         
         Args:
             query: User's question
@@ -305,7 +388,7 @@ Remember to:
         Returns:
             Dict with answer and metadata
         """
-        return self.ask(
+        return self.smart_ask(
             query=query,
             user_id=user_id,
             project_id=project_id,
@@ -319,7 +402,7 @@ Remember to:
                     contract_id: str,
                     top_k: int = DEFAULT_TOP_K) -> Dict:
         """
-        Ask a question about a specific contract
+        Ask a question about a specific contract using smart retrieval.
         
         Args:
             query: User's question
@@ -331,7 +414,7 @@ Remember to:
         Returns:
             Dict with answer and metadata
         """
-        return self.ask(
+        return self.smart_ask(
             query=query,
             user_id=user_id,
             project_id=project_id,

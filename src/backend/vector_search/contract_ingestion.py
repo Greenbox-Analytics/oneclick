@@ -1,23 +1,26 @@
 """
-Contract Ingestion Module
-Handles PDF contract uploads, chunking, embedding, and upserting to Pinecone.
+Contract Ingestion Module (OneClick Method)
+Handles PDF contract uploads with intelligent section-based chunking, embedding, and upserting to Pinecone.
 
 Features:
-- Extracts text from PDF contracts
-- Chunks text into 300-600 token segments
+- Converts PDFs to markdown using pymupdf4llm for better structure preservation
+- Splits PDFs into sections based on headings (explicit, heuristic, semantic)
+- Categorizes sections by type (ROYALTY, PUBLISHING, MASTER_RIGHTS, etc.)
+- Chunks each section into smaller pieces using RecursiveCharacterTextSplitter
 - Generates deterministic vector IDs using SHA256
-- Creates rich metadata for filtering
-- Upserts to regional Pinecone indexes
+- Creates rich metadata for intelligent filtering
+- Upserts to regional Pinecone indexes with user-specific namespaces
 """
 
 import os
+import re
 import hashlib
 import json
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from dotenv import load_dotenv
-import fitz  # PyMuPDF
+import pymupdf4llm
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pinecone import Pinecone
 from openai import OpenAI
@@ -43,8 +46,8 @@ openai_client = OpenAI(
 
 # Configuration
 EMBEDDING_MODEL = "text-embedding-3-small"
-CHUNK_SIZE = 1024  # Character-based chunk size
-CHUNK_OVERLAP = 154  # Character overlap
+CHUNK_SIZE = 524  # Token-based chunk size (optimized for contract sections)
+CHUNK_OVERLAP = 100  # Token overlap for context continuity
 BATCH_SIZE = 20
 
 # Regional index mapping
@@ -54,9 +57,21 @@ REGIONAL_INDEXES = {
     "UK": "test-3-small-index"
 }
 
+# Section category keywords for classification
+SECTION_CATEGORIES = {
+    "ROYALTY_CALCULATIONS": ["royalty", "compensation", "revenue share", "compensation", "splits", "payment", "percentage"],
+    "PUBLISHING_RIGHTS": ["publishing", "songwriter", "composition"],
+    "PERFORMANCE_RIGHTS": ["performance", "production services", "live"],
+    "COPYRIGHT": ["copyright", "intellectual property"],
+    "TERMINATION": ["termination", "term", "duration", "end date"],
+    "MASTER_RIGHTS": ["master", "master rights", "master recording"],
+    "OWNERSHIP_RIGHTS": ["ownership", "synchronization", "licensing"],
+    "ACCOUNTING_AND_CREDIT": ["accounting", "credit", "promotion", "audit"],
+}
+
 
 class ContractIngestion:
-    """Handles contract PDF ingestion and vector storage"""
+    """Handles contract PDF ingestion with intelligent section-based chunking and vector storage"""
     
     def __init__(self, region: str = "US"):
         """
@@ -72,7 +87,7 @@ class ContractIngestion:
         self.index_name = REGIONAL_INDEXES[region]
         self.index = pc.Index(self.index_name)
         
-        # Initialize RecursiveCharacterTextSplitter
+        # Initialize RecursiveCharacterTextSplitter for section chunking
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
@@ -80,77 +95,207 @@ class ContractIngestion:
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
-    def extract_text_from_pdf(self, pdf_path: str) -> str:
+    def pdf_to_markdown(self, pdf_path: str) -> str:
         """
-        Extract text from PDF
+        Convert a PDF file to markdown format using pymupdf4llm.
+        This preserves document structure better than simple text extraction.
         
         Args:
             pdf_path: Path to the PDF file
             
         Returns:
-            Full text content from PDF
+            Markdown representation of the PDF content
         """
-        print(f"Extracting text from: {pdf_path}")
-        doc = fitz.open(pdf_path)
-        text = ""
-        page_count = len(doc)
-        
-        for page in doc:
-            text += page.get_text() + "\n"
-        
-        doc.close()
-        print(f"Extracted text from {page_count} pages")
-        return text
+        print(f"Converting PDF to markdown: {pdf_path}")
+        md_text = pymupdf4llm.to_markdown(pdf_path)
+        print(f"Converted to {len(md_text)} characters of markdown")
+        return md_text
     
-    def chunk_text(self, text: str) -> List[Dict]:
+    def split_into_sections(self, markdown_text: str) -> List[Tuple[str, str]]:
         """
-        Chunk text using RecursiveCharacterTextSplitter
+        Split markdown text into sections using a 4-layer approach:
+        1) Explicit headings (markdown # or numbered sections)
+        2) Heuristic heading candidates (caps, bold, short lines)
+        3) Semantic heading validation
+        4) Content-based section inference
         
         Args:
-            text: Full text content from PDF
+            markdown_text: The markdown content
             
         Returns:
-            List of chunk dicts with text
+            List of (header, content) tuples
         """
-        # Use LangChain's RecursiveCharacterTextSplitter
-        chunks = self.text_splitter.split_text(text)
+        lines = markdown_text.splitlines()
+        sections: List[Tuple[str, str]] = []
         
-        print(f"Created {len(chunks)} chunks (size: {CHUNK_SIZE}, overlap: {CHUNK_OVERLAP})")
+        # Layer 1: Explicit Headings (markdown # or numbered like "1. DEFINITIONS")
+        explicit_heading_re = re.compile(
+            r'^(#{1,6}\s+.+|\d+(\.\d+)*[\)\.]?\s+[A-Z].+)$'
+        )
         
-        # Convert to dict format
-        chunk_dicts = []
-        for chunk in chunks:
-            chunk_dicts.append({
-                "text": chunk
-            })
+        explicit_headers = [
+            i for i, line in enumerate(lines)
+            if explicit_heading_re.match(line.strip())
+        ]
         
-        return chunk_dicts
+        if explicit_headers:
+            for idx, start in enumerate(explicit_headers):
+                end = explicit_headers[idx + 1] if idx + 1 < len(explicit_headers) else len(lines)
+                header = lines[start].strip()
+                content = "\n".join(lines[start + 1:end]).strip()
+                sections.append((header, content))
+            return sections
+        
+        # Layer 2: Heuristic Header Detection (ALL CAPS, bold markdown, short title-like)
+        def is_heuristic_header(line: str) -> bool:
+            stripped = line.strip()
+            if not stripped:
+                return False
+            # ALL CAPS and short
+            if stripped.isupper() and len(stripped.split()) <= 10:
+                return True
+            # Bold markdown
+            if stripped.startswith("**") and stripped.endswith("**") and len(stripped.split()) <= 12:
+                return True
+            # Short title-like line ending with colon
+            if len(stripped.split()) <= 6 and stripped.endswith(":"):
+                return True
+            return False
+        
+        header_indices = [i for i, line in enumerate(lines) if is_heuristic_header(line)]
+        
+        if header_indices:
+            for idx, start in enumerate(header_indices):
+                end = header_indices[idx + 1] if idx + 1 < len(header_indices) else len(lines)
+                header = lines[start].strip().strip("*").strip(":")
+                content = "\n".join(lines[start + 1:end]).strip()
+                sections.append((header, content))
+            return sections
+        
+        # Layer 3: Semantic Heading Detection (short, prominent lines validated by context)
+        semantic_candidates = [
+            (i, line.strip())
+            for i, line in enumerate(lines)
+            if 2 <= len(line.split()) <= 8 and line.strip()
+        ]
+        
+        semantic_headers = []
+        for idx, text in semantic_candidates:
+            if self._is_semantic_heading(text):
+                semantic_headers.append(idx)
+        
+        if semantic_headers:
+            for i, start in enumerate(semantic_headers):
+                end = semantic_headers[i + 1] if i + 1 < len(semantic_headers) else len(lines)
+                header = lines[start].strip()
+                content = "\n".join(lines[start + 1:end]).strip()
+                sections.append((header, content))
+            return sections
+        
+        # Layer 4: Content-Based Inference (detect royalty/payment sections)
+        royalty_trigger_re = re.compile(
+            r'(royalt|revenue|shall receive|net revenue|%)',
+            re.IGNORECASE
+        )
+        
+        inferred_starts = [
+            i for i, line in enumerate(lines)
+            if royalty_trigger_re.search(line)
+        ]
+        
+        if inferred_starts:
+            start = inferred_starts[0]
+            sections.append((
+                "Inferred Royalty Section",
+                "\n".join(lines[start:]).strip()
+            ))
+            return sections
+        
+        # Fallback: Return entire document as one section
+        return [("Full Document", markdown_text.strip())]
+    
+    def _is_semantic_heading(self, text: str) -> bool:
+        """
+        Determine if a text is likely a section heading using simple heuristics.
+        Falls back to LLM validation for uncertain cases.
+        
+        Args:
+            text: The text to evaluate
+            
+        Returns:
+            True if text appears to be a heading
+        """
+        # Simple heuristic checks first
+        stripped = text.strip()
+        
+        # Numbered section patterns
+        if re.match(r'^\d+\.?\s+[A-Z]', stripped):
+            return True
+        
+        # All caps short line
+        if stripped.isupper() and len(stripped.split()) <= 6:
+            return True
+        
+        # Title case and short
+        if stripped.istitle() and len(stripped.split()) <= 5:
+            return True
+        
+        # Contains common section header words
+        header_keywords = ['article', 'section', 'clause', 'schedule', 'exhibit', 'appendix']
+        if any(kw in stripped.lower() for kw in header_keywords):
+            return True
+        
+        return False
+    
+    def categorize_section(self, section_header: str) -> str:
+        """
+        Categorize a section based on its header using keyword matching.
+        
+        Args:
+            section_header: The header text of the section
+            
+        Returns:
+            Category string (e.g., "ROYALTY_CALCULATIONS", "PUBLISHING_RIGHTS")
+        """
+        header_lower = section_header.lower()
+        
+        for category, keywords in SECTION_CATEGORIES.items():
+            if any(keyword in header_lower for keyword in keywords):
+                return category
+        
+        return "OTHER"
     
     def generate_deterministic_id(self, chunk_text: str, metadata: Dict) -> str:
         """
-        Generate deterministic vector ID using SHA256 of content + metadata
+        Generate deterministic vector ID using SHA256 of content + stable metadata fields.
         
         This ensures uniqueness across:
-        - Different users (via user_id in metadata)
-        - Different projects (via project_id in metadata)
-        - Different contracts (via contract_id in metadata)
-        - Different versions (content or metadata changes = new hash)
+        - Different users (via user_id)
+        - Different projects (via project_id)
+        - Different contracts (via contract_id)
+        - Different sections (via section_heading)
+        - Content changes (via chunk_text hash)
         
         Args:
-            chunk_text: The text content of the chunk (page_content)
-            metadata: Full metadata dict with all identifying information
+            chunk_text: The text content of the chunk
+            metadata: Metadata dict (only stable fields are used)
             
         Returns:
             SHA256 hash as hex string
         """
-        # Create canonical JSON of metadata (sorted keys for consistency)
-        canonical_metadata = json.dumps(metadata, sort_keys=True)
+        # Use only stable identifiers to create the ID
+        stable_fields = {
+            'user_id': metadata.get('user_id', ''),
+            'contract_id': metadata.get('contract_id', ''),
+            'section_heading': metadata.get('section_heading', ''),
+            'document_name': metadata.get('contract_file', '')
+        }
         
-        # Combine page content + canonical metadata
-        combined_string = chunk_text + canonical_metadata
+        # Normalize metadata to ensure consistent ordering
+        canonical_metadata = json.dumps(stable_fields, sort_keys=True)
+        combined_string = chunk_text + "|" + canonical_metadata
         
-        # Generate SHA256 hash
-        return hashlib.sha256(combined_string.encode()).hexdigest()
+        return hashlib.sha256(combined_string.encode('utf-8')).hexdigest()
     
     def create_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
@@ -178,7 +323,15 @@ class ContractIngestion:
                        contract_id: str,
                        contract_filename: str) -> Dict:
         """
-        Complete ingestion pipeline for a contract PDF
+        Complete ingestion pipeline for a contract PDF using OneClick section-based approach.
+        
+        Pipeline:
+        1. Convert PDF to markdown (preserves structure)
+        2. Split into sections based on headings
+        3. Categorize each section (ROYALTY, PUBLISHING, etc.)
+        4. Chunk each section with RecursiveCharacterTextSplitter
+        5. Generate embeddings for each chunk
+        6. Upsert to user's namespace with rich metadata
         
         Args:
             pdf_path: Path to the PDF file
@@ -192,53 +345,83 @@ class ContractIngestion:
             Dict with ingestion statistics
         """
         print("\n" + "=" * 80)
-        print(f"INGESTING CONTRACT: {contract_filename}")
+        print(f"INGESTING CONTRACT (OneClick Method): {contract_filename}")
         print("=" * 80)
         
-        # Step 1: Extract text from PDF
-        text = self.extract_text_from_pdf(pdf_path)
+        # Step 1: Convert PDF to markdown
+        markdown_text = self.pdf_to_markdown(pdf_path)
         
-        if not text.strip():
+        if not markdown_text.strip():
             raise ValueError("No text content found in PDF")
         
-        # Step 2: Chunk text using RecursiveCharacterTextSplitter
-        chunks = self.chunk_text(text)
+        # Step 2: Split into sections
+        print("\n--- Splitting into sections ---")
+        sections = self.split_into_sections(markdown_text)
+        print(f"Found {len(sections)} sections")
         
-        if not chunks:
+        # Step 3: Categorize sections and chunk each section
+        print("\n--- Categorizing and chunking sections ---")
+        all_chunks = []
+        uploaded_at = datetime.utcnow().isoformat()
+        
+        for section_header, section_content in sections:
+            if not section_content.strip():
+                continue
+                
+            # Categorize the section
+            category = self.categorize_section(section_header)
+            print(f"  Section: '{section_header[:50]}...' -> {category}")
+            
+            # Chunk this section
+            section_chunks = self.text_splitter.split_text(section_content)
+            
+            for chunk_text in section_chunks:
+                all_chunks.append({
+                    "text": chunk_text,
+                    "section_heading": section_header,
+                    "section_category": category
+                })
+        
+        print(f"\nTotal chunks created: {len(all_chunks)}")
+        
+        if not all_chunks:
             raise ValueError("No chunks created from PDF")
         
-        # Step 3: Prepare vectors with metadata
-        vectors_to_upsert = []
-        texts_for_embedding = [chunk["text"] for chunk in chunks]
-        
-        # Create embeddings in batches
+        # Step 4: Create embeddings in batches
+        texts_for_embedding = [chunk["text"] for chunk in all_chunks]
         all_embeddings = []
+        
         for i in range(0, len(texts_for_embedding), BATCH_SIZE):
             batch_texts = texts_for_embedding[i:i + BATCH_SIZE]
             batch_embeddings = self.create_embeddings(batch_texts)
             all_embeddings.extend(batch_embeddings)
         
-        # Step 4: Create vectors with metadata and deterministic IDs
-        uploaded_at = datetime.utcnow().isoformat()
+        # Step 5: Create vectors with metadata and deterministic IDs
+        vectors_to_upsert = []
+        category_counts = {}
         
-        for i, chunk in enumerate(chunks):
+        for i, chunk in enumerate(all_chunks):
             metadata = {
                 "user_id": user_id,
                 "project_id": project_id,
                 "project_name": project_name,
                 "contract_id": contract_id,
-                "contract_file": contract_filename,  # Use contract_file for consistency
-                "uploaded_at": uploaded_at
+                "contract_file": contract_filename,
+                "section_heading": chunk["section_heading"],
+                "section_category": chunk["section_category"],
+                "uploaded_at": uploaded_at,
+                "chunk_text": chunk["text"]
             }
             
-            # Generate deterministic ID from content + metadata
+            # Track category distribution
+            cat = chunk["section_category"]
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+            
+            # Generate deterministic ID
             vector_id = self.generate_deterministic_id(
                 chunk_text=chunk["text"],
                 metadata=metadata
             )
-            
-            # Add chunk_text to metadata for retrieval (not used in ID generation order)
-            metadata["chunk_text"] = chunk["text"]
             
             vectors_to_upsert.append({
                 "id": vector_id,
@@ -246,23 +429,27 @@ class ContractIngestion:
                 "metadata": metadata
             })
         
-        # Step 5: Upsert to Pinecone (using user_id-namespace format)
+        # Step 6: Upsert to Pinecone (using user_id-namespace format)
         namespace = f"{user_id}-namespace"
         
-        print(f"\nUpserting {len(vectors_to_upsert)} vectors to index '{self.index_name}'")
+        print(f"\n--- Upserting to Pinecone ---")
+        print(f"Index: {self.index_name}")
         print(f"Namespace: {namespace}")
+        print(f"Vectors: {len(vectors_to_upsert)}")
         
         # Upsert in batches
         for i in range(0, len(vectors_to_upsert), BATCH_SIZE):
             batch = vectors_to_upsert[i:i + BATCH_SIZE]
             self.index.upsert(vectors=batch, namespace=namespace)
-            print(f"Uploaded batch {i // BATCH_SIZE + 1}/{(len(vectors_to_upsert) + BATCH_SIZE - 1) // BATCH_SIZE}")
+            print(f"  Batch {i // BATCH_SIZE + 1}/{(len(vectors_to_upsert) + BATCH_SIZE - 1) // BATCH_SIZE} uploaded")
         
         stats = {
             "contract_id": contract_id,
             "contract_filename": contract_filename,
-            "total_chunks": len(chunks),
+            "total_sections": len(sections),
+            "total_chunks": len(all_chunks),
             "total_vectors": len(vectors_to_upsert),
+            "category_distribution": category_counts,
             "namespace": namespace,
             "index": self.index_name,
             "region": self.region,
@@ -272,10 +459,10 @@ class ContractIngestion:
         
         print("\n" + "=" * 80)
         print("INGESTION COMPLETE")
+        print(f"  Sections: {stats['total_sections']}")
         print(f"  Chunks: {stats['total_chunks']}")
         print(f"  Vectors: {stats['total_vectors']}")
-        print(f"  Chunk Size: {CHUNK_SIZE} chars")
-        print(f"  Chunk Overlap: {CHUNK_OVERLAP} chars")
+        print(f"  Categories: {category_counts}")
         print("=" * 80)
         
         return stats

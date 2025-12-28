@@ -50,7 +50,7 @@ for header , content in sections:
 
 # Chunking per section
 chunk_size = 524  # tokens
-chunk_overlap = 128  # tokens
+chunk_overlap = 100  # tokens
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=chunk_size,

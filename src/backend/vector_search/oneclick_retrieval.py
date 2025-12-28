@@ -124,22 +124,21 @@ def smart_retrieval(
 Your task is to answer questions about contract documents based on the provided context.
 Be precise and only include information that is explicitly stated in the provided context."""
 
-        user_prompt = f"""Based on the following contract excerpts, answer this question:
+        user_prompt = f"""Based on the following contract contracts, answer this question:
 
 {query_text}
 
-Contract Excerpts:
+Contract:
 {context_text}
 
-Return a clear, concise answer based only on the information provided in the excerpts."""
+Return a clear, concise answer based only on the information provided in the contracts."""
 
         llm_response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0,
             max_tokens=1000
         )
 
