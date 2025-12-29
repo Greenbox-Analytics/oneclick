@@ -383,36 +383,3 @@ class ContractSearch:
             )
         
         return "\n---\n\n".join(context_parts)
-
-
-# Example usage
-if __name__ == "__main__":
-    # Example: Search for royalty information
-    search = ContractSearch(region="US")
-    
-    # Search within a project
-    results = search.search_project(
-        query="What are the royalty percentage splits?",
-        user_id="test-user-123",
-        project_id="test-project-456",
-        top_k=5
-    )
-    
-    print("\n" + "=" * 80)
-    print("SEARCH RESULTS")
-    print("=" * 80)
-    
-    for i, match in enumerate(results["matches"], 1):
-        print(f"\nResult #{i}")
-        print(f"  Score: {match['score']}")
-        print(f"  Contract: {match['contract_file']}")
-        print(f"  Project: {match['project_name']}")
-        print(f"  Content Preview: {match['text'][:200]}...")
-        print("-" * 80)
-    
-    # Get formatted context for LLM
-    context = search.get_context_for_llm(results)
-    print("\n" + "=" * 80)
-    print("FORMATTED CONTEXT FOR LLM")
-    print("=" * 80)
-    print(context[:500] + "..." if len(context) > 500 else context)

@@ -57,7 +57,7 @@ const OneClick = () => {
     );
   };
 
-  // Navigate to document upload page for the selected artist
+  // Navigate to document selection page for the selected artist
   const handleContinue = () => {
     setError("");
 
