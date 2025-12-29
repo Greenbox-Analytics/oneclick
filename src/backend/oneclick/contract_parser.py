@@ -30,7 +30,7 @@ openai_client = OpenAI(
 
 # Configuration
 EMBEDDING_MODEL = "text-embedding-3-small"
-LLM_MODEL = "gpt-4o"
+LLM_MODEL = "gpt-5-mini"
 INDEX_NAME = "test-3-small-index"
 
 
@@ -181,8 +181,7 @@ class MusicContractParser:
         
         response = self.openai_client.chat.completions.create(
             model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0
+            messages=[{"role": "user", "content": prompt}]
         )
         
         return response.choices[0].message.content.strip()
