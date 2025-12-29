@@ -298,8 +298,7 @@ MIN_SIMILARITY_THRESHOLD = 0.75
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 # LLM
-DEFAULT_LLM_MODEL = "gpt-4o-mini"
-LLM_TEMPERATURE = 0.3
+DEFAULT_LLM_MODEL = "gpt-5-mini"
 ```
 
 ## 📝 Best Practices
