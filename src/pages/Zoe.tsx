@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Music, ArrowLeft, Send, Bot, User, AlertCircle, X, Upload, Trash2 } from "lucide-react";
+import { ArrowLeft, Send, Bot, User, AlertCircle, Upload, Trash2, ChevronDown } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -21,6 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 // Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -66,6 +67,11 @@ const Zoe = () => {
   const [selectedArtist, setSelectedArtist] = useState<string>("");
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [selectedContracts, setSelectedContracts] = useState<string[]>([]);
+
+  // Collapsible UI state
+  const [contextOpen, setContextOpen] = useState<boolean>(true);
+  const [contractsOpen, setContractsOpen] = useState<boolean>(false);
+  const prevContractsCountRef = useRef<number>(0);
   
   // Chat state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -78,6 +84,9 @@ const Zoe = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [contractToDelete, setContractToDelete] = useState<Contract | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const selectedArtistName = artists.find((a) => a.id === selectedArtist)?.name;
+  const selectedProjectName = projects.find((p) => p.id === selectedProject)?.name;
 
   // Fetch artists on mount
   useEffect(() => {
@@ -124,12 +133,31 @@ const Zoe = () => {
 
   useEffect(() => {
     fetchContracts();
+    // Reset UI when switching projects
+    if (selectedProject) {
+      setContextOpen(true);
+      setContractsOpen(true);
+    } else {
+      setContextOpen(true);
+      setContractsOpen(false);
+    }
   }, [selectedProject]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Collapse contracts dropdown once at least one contract is selected (first time)
+  useEffect(() => {
+    const prev = prevContractsCountRef.current;
+    if (prev === 0 && selectedContracts.length > 0) {
+      setContractsOpen(false);
+      // Also collapse the whole context to maximize chat
+      setContextOpen(false);
+    }
+    prevContractsCountRef.current = selectedContracts.length;
+  }, [selectedContracts]);
 
   const handleUploadComplete = () => {
     // Refresh contracts list after upload
@@ -249,14 +277,14 @@ const Zoe = () => {
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/20">
       <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 sticky top-0 z-10">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center shadow-lg">
-              <Bot className="w-6 h-6 text-primary-foreground" />
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center shadow">
+              <Bot className="w-5 h-5 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-foreground">Zoe AI Assistant</h1>
-              <p className="text-xs text-muted-foreground">Contract Intelligence</p>
+              <h1 className="text-xl font-semibold text-foreground">Zoe AI Assistant</h1>
+              <p className="text-[11px] text-muted-foreground">Contract Intelligence</p>
             </div>
           </div>
           <Button variant="outline" onClick={() => navigate("/tools")} className="gap-2">
@@ -266,288 +294,328 @@ const Zoe = () => {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-6 max-w-5xl">
-        {/* Chat Interface - Full Height */}
-        <Card className="flex flex-col shadow-xl border-2" style={{ height: 'calc(100vh - 180px)' }}>
+      <main className="container mx-auto px-4 py-4 max-w-5xl">
+        {/* Chat Interface */}
+        <Card className="flex flex-col shadow border" style={{ height: 'calc(100vh - 140px)' }}>
           {/* Header with Context Selection */}
-          <CardHeader className="border-b bg-muted/30 pb-4">
-            <div className="flex items-start justify-between gap-4 mb-4">
+          <CardHeader className="border-b bg-muted/20 py-3">
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <CardTitle className="text-2xl flex items-center gap-2">
-                  <Bot className="w-6 h-6 text-primary" />
-                  Ask Zoe Anything
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-primary" />
+                  Ask Zoe
                 </CardTitle>
-                <CardDescription className="mt-1">
-                  Get instant answers about royalty splits, payment terms, contract duration, and more
+                <CardDescription className="mt-0.5 text-xs">
+                  Ask about royalty splits, payment terms, contract duration, and more
                 </CardDescription>
               </div>
-            </div>
-            
-            {/* Artist and Project Selection */}
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                  Select Artist *
-                </label>
-                <Select value={selectedArtist} onValueChange={setSelectedArtist}>
-                  <SelectTrigger className="h-10">
-                    <SelectValue placeholder="Choose an artist" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {artists.map((artist) => (
-                      <SelectItem key={artist.id} value={artist.id}>
-                        {artist.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {selectedArtist && (
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    Select Project *
-                  </label>
-                  <Select value={selectedProject} onValueChange={setSelectedProject} disabled={!selectedArtist}>
-                    <SelectTrigger className="h-10">
-                      <SelectValue placeholder="Choose a project" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projects.map((project) => (
-                        <SelectItem key={project.id} value={project.id}>
-                          {project.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {/* Contract Management */}
-              {selectedProject && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      Contracts {contracts.length > 0 && `(${contracts.length})`}
-                    </label>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setUploadModalOpen(true)}
-                      className="h-7 text-xs"
-                    >
-                      <Upload className="w-3 h-3 mr-1" />
-                      Upload
+              {/* Context summary + toggle */}
+              <Collapsible open={contextOpen} onOpenChange={setContextOpen}>
+                <div className="flex items-center gap-2">
+                  <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>{selectedArtistName || 'No artist'}</span>
+                    <span>•</span>
+                    <span>{selectedProjectName || 'No project'}</span>
+                    <span>•</span>
+                    <span>
+                      {selectedContracts.length > 0
+                        ? `${selectedContracts.length} selected`
+                        : 'All contracts'}
+                    </span>
+                  </div>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 px-3">
+                      Context
+                      <ChevronDown className={`ml-1 h-4 w-4 transition-transform ${contextOpen ? 'rotate-180' : ''}`} />
                     </Button>
+                  </CollapsibleTrigger>
+                </div>
+                <CollapsibleContent className="mt-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Artist */}
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                        Artist
+                      </label>
+                      <Select value={selectedArtist} onValueChange={(v) => { setSelectedArtist(v); setSelectedProject(''); setSelectedContracts([]); }}>
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Choose an artist" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {artists.map((artist) => (
+                            <SelectItem key={artist.id} value={artist.id}>
+                              {artist.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Project */}
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                        Project
+                      </label>
+                      <Select value={selectedProject} onValueChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }} disabled={!selectedArtist}>
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Choose a project" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {projects.map((project) => (
+                            <SelectItem key={project.id} value={project.id}>
+                              {project.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
 
-                  {contracts.length > 0 ? (
-                    <div className="bg-muted/50 rounded-lg p-3 max-h-32 overflow-y-auto">
-                      <div className="space-y-2">
-                        {contracts.map((contract) => (
-                          <div key={contract.id} className="flex items-center justify-between gap-2 group">
-                            <div className="flex items-center space-x-2 flex-1 min-w-0">
-                              <Checkbox
-                                id={contract.id}
-                                checked={selectedContracts.includes(contract.id)}
-                                onCheckedChange={(checked) => {
-                                  if (checked) {
-                                    setSelectedContracts([...selectedContracts, contract.id]);
-                                  } else {
-                                    setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
-                                  }
-                                }}
-                              />
-                              <label
-                                htmlFor={contract.id}
-                                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer truncate"
-                              >
-                                {contract.file_name}
-                              </label>
-                            </div>
+                  {/* Contracts dropdown */}
+                  {selectedProject && (
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                          Contracts {contracts.length > 0 && `(${contracts.length})`}
+                        </label>
+                        <div className="flex items-center gap-2">
+                          {selectedContracts.length > 0 && (
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleDeleteClick(contract)}
-                              className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                              className="h-7 text-xs"
+                              onClick={() => setSelectedContracts([])}
                             >
-                              <Trash2 className="w-3 h-3 text-destructive" />
+                              Clear
                             </Button>
-                          </div>
-                        ))}
+                          )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setUploadModalOpen(true)}
+                            className="h-7 text-xs"
+                          >
+                            <Upload className="w-3 h-3 mr-1" />
+                            Upload
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="bg-muted/50 rounded-lg p-4 text-center">
-                      <p className="text-sm text-muted-foreground mb-2">No contracts uploaded yet</p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setUploadModalOpen(true)}
-                      >
-                        <Upload className="w-3 h-3 mr-1" />
-                        Upload First Contract
-                      </Button>
-                    </div>
-                  )}
-                  {selectedContracts.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <Badge variant="secondary" className="text-xs">
-                        {selectedContracts.length} contract{selectedContracts.length > 1 ? 's' : ''} selected
-                      </Badge>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 text-xs"
-                        onClick={() => setSelectedContracts([])}
-                      >
-                        Clear
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
 
-              {selectedProject && (
-                <div className="flex items-center gap-2 pt-1">
-                  <Badge variant="outline" className="text-xs">
-                    {selectedContracts.length > 0 
-                      ? `🎯 Searching ${selectedContracts.length} specific contract${selectedContracts.length > 1 ? 's' : ''}`
-                      : `📁 Searching all contracts in project`}
-                  </Badge>
-                </div>
-              )}
+                      {/* Collapsible dropdown trigger */}
+                      <Collapsible open={contractsOpen} onOpenChange={setContractsOpen}>
+                        <CollapsibleTrigger asChild>
+                          <Button variant="secondary" className="w-full justify-between mt-2">
+                            {selectedContracts.length > 0
+                              ? `${selectedContracts.length} selected`
+                              : "Select contracts (optional)"}
+                            <ChevronDown className={`ml-2 h-4 w-4 transition-transform ${contractsOpen ? 'rotate-180' : ''}`} />
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="bg-muted/50 rounded-lg p-3 mt-2 max-h-40 overflow-y-auto">
+                            {contracts.length > 0 ? (
+                              <div className="space-y-2">
+                                {contracts.map((contract) => (
+                                  <div key={contract.id} className="flex items-center justify-between gap-2 group">
+                                    <div className="flex items-center space-x-2 flex-1 min-w-0">
+                                      <Checkbox
+                                        id={contract.id}
+                                        checked={selectedContracts.includes(contract.id)}
+                                        onCheckedChange={(checked) => {
+                                          if (checked) {
+                                            setSelectedContracts([...selectedContracts, contract.id]);
+                                          } else {
+                                            setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
+                                          }
+                                        }}
+                                      />
+                                      <label
+                                        htmlFor={contract.id}
+                                        className="text-sm font-medium leading-none cursor-pointer truncate"
+                                      >
+                                        {contract.file_name}
+                                      </label>
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleDeleteClick(contract)}
+                                      className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      <Trash2 className="w-3 h-3 text-destructive" />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="bg-background/50 rounded-md p-4 text-center">
+                                <p className="text-sm text-muted-foreground mb-2">No contracts uploaded yet</p>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setUploadModalOpen(true)}
+                                >
+                                  <Upload className="w-3 h-3 mr-1" />
+                                  Upload First Contract
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+
+                      {selectedContracts.length > 0 && (
+                        <div className="flex items-center gap-2 mt-2">
+                          <Badge variant="secondary" className="text-xs">
+                            {selectedContracts.length} contract{selectedContracts.length > 1 ? 's' : ''} selected
+                          </Badge>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CollapsibleContent>
+              </Collapsible>
             </div>
+
+            {/* Search scope badge (always visible) */}
+            {selectedProject && (
+              <div className="pt-2">
+                <Badge variant="outline" className="text-xs">
+                  {selectedContracts.length > 0 
+                    ? `🎯 Searching ${selectedContracts.length} specific contract${selectedContracts.length > 1 ? 's' : ''}`
+                    : `📁 Searching all contracts in project`}
+                </Badge>
+              </div>
+            )}
           </CardHeader>
 
           <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
-              {/* Messages Area */}
-              <ScrollArea className="flex-1 px-6">
-                <div className="space-y-4 py-4">
-                  {messages.length === 0 ? (
-                    <div className="text-center py-12 text-muted-foreground">
-                      <Bot className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                      <p className="text-lg font-medium mb-2">No messages yet</p>
-                      <p className="text-sm">
-                        Select a project and start asking questions about your contracts
-                      </p>
-                    </div>
-                  ) : (
-                    messages.map((message, index) => (
+            {/* Messages Area */}
+            <ScrollArea className="flex-1 px-5">
+              <div className="space-y-4 py-4">
+                {messages.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <Bot className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p className="text-base font-medium mb-2">No messages yet</p>
+                    <p className="text-sm">
+                      Select a project and start asking questions about your contracts
+                    </p>
+                  </div>
+                ) : (
+                  messages.map((message, index) => (
+                    <div
+                      key={index}
+                      className={`flex gap-3 ${
+                        message.role === "user" ? "justify-end" : "justify-start"
+                      }`}
+                    >
+                      {message.role === "assistant" && (
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                          <Bot className="w-5 h-5 text-primary" />
+                        </div>
+                      )}
+                      
                       <div
-                        key={index}
-                        className={`flex gap-3 ${
-                          message.role === "user" ? "justify-end" : "justify-start"
+                        className={`max-w-[80%] rounded-lg p-3 sm:p-4 ${
+                          message.role === "user"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted"
                         }`}
                       >
-                        {message.role === "assistant" && (
-                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                            <Bot className="w-5 h-5 text-primary" />
+                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                        
+                        {message.confidence && message.role === "assistant" && (
+                          <div className="mt-3 pt-3 border-t border-border/50">
+                            <Badge
+                              variant={
+                                message.confidence === "high"
+                                  ? "default"
+                                  : message.confidence === "low"
+                                  ? "secondary"
+                                  : "destructive"
+                              }
+                              className="text-xs"
+                            >
+                              {message.confidence} confidence
+                            </Badge>
                           </div>
                         )}
                         
-                        <div
-                          className={`max-w-[80%] rounded-lg p-4 ${
-                            message.role === "user"
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted"
-                          }`}
-                        >
-                          <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                          
-                          {message.confidence && message.role === "assistant" && (
-                            <div className="mt-3 pt-3 border-t border-border/50">
-                              <Badge
-                                variant={
-                                  message.confidence === "high"
-                                    ? "default"
-                                    : message.confidence === "low"
-                                    ? "secondary"
-                                    : "destructive"
-                                }
-                                className="text-xs"
-                              >
-                                {message.confidence} confidence
-                              </Badge>
+                        {message.sources && message.sources.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-border/50">
+                            <p className="text-xs font-medium mb-2">Sources:</p>
+                            <div className="space-y-1">
+                              {message.sources.slice(0, 3).map((source, idx) => (
+                                <p key={idx} className="text-xs text-muted-foreground">
+                                  • {source.contract_file} (Page {source.page_number}) - Score: {source.score.toFixed(2)}
+                                </p>
+                              ))}
                             </div>
-                          )}
-                          
-                          {message.sources && message.sources.length > 0 && (
-                            <div className="mt-3 pt-3 border-t border-border/50">
-                              <p className="text-xs font-medium mb-2">Sources:</p>
-                              <div className="space-y-1">
-                                {message.sources.slice(0, 3).map((source, idx) => (
-                                  <p key={idx} className="text-xs text-muted-foreground">
-                                    • {source.contract_file} (Page {source.page_number}) - Score:{" "}
-                                    {source.score.toFixed(2)}
-                                  </p>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {message.role === "user" && (
-                          <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-                            <User className="w-5 h-5 text-primary-foreground" />
                           </div>
                         )}
                       </div>
-                    ))
-                  )}
-                  
-                  {isLoading && (
-                    <div className="flex gap-3 justify-start">
-                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                        <Bot className="w-5 h-5 text-primary animate-pulse" />
-                      </div>
-                      <div className="bg-muted rounded-lg p-4">
-                        <p className="text-sm text-muted-foreground">Thinking...</p>
-                      </div>
-                    </div>
-                  )}
-                  
-                  <div ref={messagesEndRef} />
-                </div>
-              </ScrollArea>
 
-              {/* Input Area */}
-              <div className="border-t border-border p-4">
-                {error && (
-                  <Alert variant="destructive" className="mb-4">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertTitle>Error</AlertTitle>
-                    <AlertDescription>{error}</AlertDescription>
-                  </Alert>
+                      {message.role === "user" && (
+                        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                          <User className="w-5 h-5 text-primary-foreground" />
+                        </div>
+                      )}
+                    </div>
+                  ))
                 )}
                 
-                <div className="flex gap-2">
-                  <Input
-                    placeholder={
-                      selectedProject
-                        ? "Ask a question about your contracts..."
-                        : "Please select a project first"
-                    }
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    disabled={!selectedProject || isLoading}
-                    className="flex-1"
-                  />
-                  <Button
-                    onClick={handleSendMessage}
-                    disabled={!selectedProject || !inputMessage.trim() || isLoading}
-                  >
-                    <Send className="w-4 h-4" />
-                  </Button>
-                </div>
+                {isLoading && (
+                  <div className="flex gap-3 justify-start">
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                      <Bot className="w-5 h-5 text-primary animate-pulse" />
+                    </div>
+                    <div className="bg-muted rounded-lg p-3 sm:p-4">
+                      <p className="text-sm text-muted-foreground">Thinking...</p>
+                    </div>
+                  </div>
+                )}
                 
-                <p className="text-xs text-muted-foreground mt-2">
-                  Zoe only answers based on your uploaded contracts, using no outside knowledge.
-                </p>
+                <div ref={messagesEndRef} />
               </div>
-            </CardContent>
-          </Card>
+            </ScrollArea>
+
+            {/* Input Area */}
+            <div className="border-t border-border p-4">
+              {error && (
+                <Alert variant="destructive" className="mb-4">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Error</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              
+              <div className="flex gap-2">
+                <Input
+                  placeholder={
+                    selectedProject
+                      ? "Ask a question about your contracts..."
+                      : "Please select a project first"
+                  }
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  disabled={!selectedProject || isLoading}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleSendMessage}
+                  disabled={!selectedProject || !inputMessage.trim() || isLoading}
+                >
+                  <Send className="w-4 h-4" />
+                </Button>
+              </div>
+              
+              <p className="text-[11px] text-muted-foreground mt-2">
+                Zoe only answers based on your uploaded contracts, using no outside knowledge.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       </main>
 
       {/* Upload Modal */}
