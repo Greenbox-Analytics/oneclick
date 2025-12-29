@@ -15,6 +15,8 @@ from typing import List, Dict, Optional
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from openai import OpenAI
+from .helpers import create_query_embedding
+from .query_categorizer import categorize_query, build_metadata_filter
 
 # Load environment variables
 load_dotenv()
@@ -78,22 +80,6 @@ class ContractSearch:
         self.index_name = REGIONAL_INDEXES[region]
         self.index = pc.Index(self.index_name)
     
-    def create_query_embedding(self, query: str) -> List[float]:
-        """
-        Create embedding for search query
-        
-        Args:
-            query: Search query text
-            
-        Returns:
-            Embedding vector
-        """
-        response = openai_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=[query]
-        )
-        return response.data[0].embedding
-    
     def search(self,
                query: str,
                user_id: str,
@@ -154,7 +140,7 @@ class ContractSearch:
         
         # Create query embedding
         print("Creating query embedding...")
-        query_embedding = self.create_query_embedding(query)
+        query_embedding = create_query_embedding(query)
         
         # Perform search
         namespace = f"{user_id}-namespace"
@@ -281,7 +267,6 @@ class ContractSearch:
         Returns:
             Dict with search results and categorization metadata
         """
-        from vector_search.query_categorizer import categorize_query, build_metadata_filter
         
         print("\n" + "=" * 80)
         print("SMART SEARCH WITH AUTO-CATEGORIZATION (OneClick Method)")
@@ -325,7 +310,7 @@ class ContractSearch:
         
         # Step 4: Create query embedding
         print("\n--- Step 3: Semantic Search ---")
-        query_embedding = self.create_query_embedding(query)
+        query_embedding = create_query_embedding(query)
         
         # Step 5: Query Pinecone (same as oneclick_retrieval.py)
         namespace = f"{user_id}-namespace"
