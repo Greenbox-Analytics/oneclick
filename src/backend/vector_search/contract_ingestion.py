@@ -1,50 +1,47 @@
 """
-Contract Ingestion Module
-Handles PDF contract uploads, chunking, embedding, and upserting to Pinecone.
+Contract Ingestion Module (OneClick Method)
+Handles PDF contract uploads with intelligent section-based chunking, embedding, and upserting to Pinecone.
 
 Features:
-- Extracts text from PDF contracts
-- Chunks text into 300-600 token segments
+- Converts PDFs to markdown using pymupdf4llm for better structure preservation
+- Splits PDFs into sections based on headings (explicit, heuristic, semantic)
+- Categorizes sections by type (ROYALTY, PUBLISHING, MASTER_RIGHTS, etc.)
+- Chunks each section into smaller pieces using RecursiveCharacterTextSplitter
 - Generates deterministic vector IDs using SHA256
-- Creates rich metadata for filtering
-- Upserts to regional Pinecone indexes
+- Creates rich metadata for intelligent filtering
+- Upserts to regional Pinecone indexes with user-specific namespaces
 """
 
 import os
-import hashlib
 import json
-from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Dict
 from datetime import datetime
+from pathlib import Path
 from dotenv import load_dotenv
-import fitz  # PyMuPDF
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pinecone import Pinecone
-from openai import OpenAI
+from vector_search.helpers import (
+    pdf_to_markdown,
+    split_into_sections,
+    categorize_section,
+    create_embeddings,
+    generate_deterministic_id
+)
 
 # Load environment variables
 load_dotenv()
 
 # Initialize clients
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 if not PINECONE_API_KEY:
     raise ValueError("PINECONE_API_KEY not found in .env file")
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY not found in .env file")
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
-openai_client = OpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None
-)
 
 # Configuration
-EMBEDDING_MODEL = "text-embedding-3-small"
-CHUNK_SIZE = 1024  # Character-based chunk size
-CHUNK_OVERLAP = 154  # Character overlap
+CHUNK_SIZE = 524  # Token-based chunk size (optimized for contract sections)
+CHUNK_OVERLAP = 100  # Token overlap for context continuity
 BATCH_SIZE = 20
 
 # Regional index mapping
@@ -56,7 +53,7 @@ REGIONAL_INDEXES = {
 
 
 class ContractIngestion:
-    """Handles contract PDF ingestion and vector storage"""
+    """Handles contract PDF ingestion with intelligent section-based chunking and vector storage"""
     
     def __init__(self, region: str = "US"):
         """
@@ -72,103 +69,13 @@ class ContractIngestion:
         self.index_name = REGIONAL_INDEXES[region]
         self.index = pc.Index(self.index_name)
         
-        # Initialize RecursiveCharacterTextSplitter
+        # Initialize RecursiveCharacterTextSplitter for section chunking
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
             length_function=len,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
-    
-    def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """
-        Extract text from PDF
-        
-        Args:
-            pdf_path: Path to the PDF file
-            
-        Returns:
-            Full text content from PDF
-        """
-        print(f"Extracting text from: {pdf_path}")
-        doc = fitz.open(pdf_path)
-        text = ""
-        page_count = len(doc)
-        
-        for page in doc:
-            text += page.get_text() + "\n"
-        
-        doc.close()
-        print(f"Extracted text from {page_count} pages")
-        return text
-    
-    def chunk_text(self, text: str) -> List[Dict]:
-        """
-        Chunk text using RecursiveCharacterTextSplitter
-        
-        Args:
-            text: Full text content from PDF
-            
-        Returns:
-            List of chunk dicts with text
-        """
-        # Use LangChain's RecursiveCharacterTextSplitter
-        chunks = self.text_splitter.split_text(text)
-        
-        print(f"Created {len(chunks)} chunks (size: {CHUNK_SIZE}, overlap: {CHUNK_OVERLAP})")
-        
-        # Convert to dict format
-        chunk_dicts = []
-        for chunk in chunks:
-            chunk_dicts.append({
-                "text": chunk
-            })
-        
-        return chunk_dicts
-    
-    def generate_deterministic_id(self, chunk_text: str, metadata: Dict) -> str:
-        """
-        Generate deterministic vector ID using SHA256 of content + metadata
-        
-        This ensures uniqueness across:
-        - Different users (via user_id in metadata)
-        - Different projects (via project_id in metadata)
-        - Different contracts (via contract_id in metadata)
-        - Different versions (content or metadata changes = new hash)
-        
-        Args:
-            chunk_text: The text content of the chunk (page_content)
-            metadata: Full metadata dict with all identifying information
-            
-        Returns:
-            SHA256 hash as hex string
-        """
-        # Create canonical JSON of metadata (sorted keys for consistency)
-        canonical_metadata = json.dumps(metadata, sort_keys=True)
-        
-        # Combine page content + canonical metadata
-        combined_string = chunk_text + canonical_metadata
-        
-        # Generate SHA256 hash
-        return hashlib.sha256(combined_string.encode()).hexdigest()
-    
-    def create_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """
-        Create embeddings using OpenAI text-embedding-3-small
-        
-        Args:
-            texts: List of text strings to embed
-            
-        Returns:
-            List of embedding vectors
-        """
-        print(f"Creating embeddings for {len(texts)} chunks...")
-        response = openai_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=texts
-        )
-        embeddings = [item.embedding for item in response.data]
-        return embeddings
     
     def ingest_contract(self, 
                        pdf_path: str,
@@ -178,7 +85,15 @@ class ContractIngestion:
                        contract_id: str,
                        contract_filename: str) -> Dict:
         """
-        Complete ingestion pipeline for a contract PDF
+        Complete ingestion pipeline for a contract PDF using OneClick section-based approach.
+        
+        Pipeline:
+        1. Convert PDF to markdown (preserves structure)
+        2. Split into sections based on headings
+        3. Categorize each section (ROYALTY, PUBLISHING, etc.)
+        4. Chunk each section with RecursiveCharacterTextSplitter
+        5. Generate embeddings for each chunk
+        6. Upsert to user's namespace with rich metadata
         
         Args:
             pdf_path: Path to the PDF file
@@ -192,53 +107,83 @@ class ContractIngestion:
             Dict with ingestion statistics
         """
         print("\n" + "=" * 80)
-        print(f"INGESTING CONTRACT: {contract_filename}")
+        print(f"INGESTING CONTRACT (OneClick Method): {contract_filename}")
         print("=" * 80)
         
-        # Step 1: Extract text from PDF
-        text = self.extract_text_from_pdf(pdf_path)
+        # Step 1: Convert PDF to markdown
+        markdown_text = pdf_to_markdown(pdf_path)
         
-        if not text.strip():
+        if not markdown_text.strip():
             raise ValueError("No text content found in PDF")
         
-        # Step 2: Chunk text using RecursiveCharacterTextSplitter
-        chunks = self.chunk_text(text)
+        # Step 2: Split into sections
+        print("\n--- Splitting into sections ---")
+        sections = split_into_sections(markdown_text)
+        print(f"Found {len(sections)} sections")
         
-        if not chunks:
-            raise ValueError("No chunks created from PDF")
-        
-        # Step 3: Prepare vectors with metadata
-        vectors_to_upsert = []
-        texts_for_embedding = [chunk["text"] for chunk in chunks]
-        
-        # Create embeddings in batches
-        all_embeddings = []
-        for i in range(0, len(texts_for_embedding), BATCH_SIZE):
-            batch_texts = texts_for_embedding[i:i + BATCH_SIZE]
-            batch_embeddings = self.create_embeddings(batch_texts)
-            all_embeddings.extend(batch_embeddings)
-        
-        # Step 4: Create vectors with metadata and deterministic IDs
+        # Step 3: Categorize sections and chunk each section
+        print("\n--- Categorizing and chunking sections ---")
+        all_chunks = []
         uploaded_at = datetime.utcnow().isoformat()
         
-        for i, chunk in enumerate(chunks):
+        for section_header, section_content in sections:
+            if not section_content.strip():
+                continue
+                
+            # Categorize the section
+            category = categorize_section(section_header)
+            print(f"  Section: '{section_header[:50]}...' -> {category}")
+            
+            # Chunk this section
+            section_chunks = self.text_splitter.split_text(section_content)
+            
+            for chunk_text in section_chunks:
+                all_chunks.append({
+                    "text": chunk_text,
+                    "section_heading": section_header,
+                    "section_category": category
+                })
+        
+        print(f"\nTotal chunks created: {len(all_chunks)}")
+        
+        if not all_chunks:
+            raise ValueError("No chunks created from PDF")
+        
+        # Step 4: Create embeddings in batches
+        texts_for_embedding = [chunk["text"] for chunk in all_chunks]
+        all_embeddings = []
+        
+        for i in range(0, len(texts_for_embedding), BATCH_SIZE):
+            batch_texts = texts_for_embedding[i:i + BATCH_SIZE]
+            batch_embeddings = create_embeddings(batch_texts)
+            all_embeddings.extend(batch_embeddings)
+        
+        # Step 5: Create vectors with metadata and deterministic IDs
+        vectors_to_upsert = []
+        category_counts = {}
+        
+        for i, chunk in enumerate(all_chunks):
             metadata = {
                 "user_id": user_id,
                 "project_id": project_id,
                 "project_name": project_name,
                 "contract_id": contract_id,
-                "contract_file": contract_filename,  # Use contract_file for consistency
-                "uploaded_at": uploaded_at
+                "contract_file": contract_filename,
+                "section_heading": chunk["section_heading"],
+                "section_category": chunk["section_category"],
+                "uploaded_at": uploaded_at,
+                "chunk_text": chunk["text"]
             }
             
-            # Generate deterministic ID from content + metadata
-            vector_id = self.generate_deterministic_id(
+            # Track category distribution
+            cat = chunk["section_category"]
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+            
+            # Generate deterministic ID
+            vector_id = generate_deterministic_id(
                 chunk_text=chunk["text"],
                 metadata=metadata
             )
-            
-            # Add chunk_text to metadata for retrieval (not used in ID generation order)
-            metadata["chunk_text"] = chunk["text"]
             
             vectors_to_upsert.append({
                 "id": vector_id,
@@ -246,23 +191,27 @@ class ContractIngestion:
                 "metadata": metadata
             })
         
-        # Step 5: Upsert to Pinecone (using user_id-namespace format)
+        # Step 6: Upsert to Pinecone (using user_id-namespace format)
         namespace = f"{user_id}-namespace"
         
-        print(f"\nUpserting {len(vectors_to_upsert)} vectors to index '{self.index_name}'")
+        print("\n--- Upserting to Pinecone ---")
+        print(f"Index: {self.index_name}")
         print(f"Namespace: {namespace}")
+        print(f"Vectors: {len(vectors_to_upsert)}")
         
         # Upsert in batches
         for i in range(0, len(vectors_to_upsert), BATCH_SIZE):
             batch = vectors_to_upsert[i:i + BATCH_SIZE]
             self.index.upsert(vectors=batch, namespace=namespace)
-            print(f"Uploaded batch {i // BATCH_SIZE + 1}/{(len(vectors_to_upsert) + BATCH_SIZE - 1) // BATCH_SIZE}")
+            print(f"  Batch {i // BATCH_SIZE + 1}/{(len(vectors_to_upsert) + BATCH_SIZE - 1) // BATCH_SIZE} uploaded")
         
         stats = {
             "contract_id": contract_id,
             "contract_filename": contract_filename,
-            "total_chunks": len(chunks),
+            "total_sections": len(sections),
+            "total_chunks": len(all_chunks),
             "total_vectors": len(vectors_to_upsert),
+            "category_distribution": category_counts,
             "namespace": namespace,
             "index": self.index_name,
             "region": self.region,
@@ -272,10 +221,10 @@ class ContractIngestion:
         
         print("\n" + "=" * 80)
         print("INGESTION COMPLETE")
+        print(f"  Sections: {stats['total_sections']}")
         print(f"  Chunks: {stats['total_chunks']}")
         print(f"  Vectors: {stats['total_vectors']}")
-        print(f"  Chunk Size: {CHUNK_SIZE} chars")
-        print(f"  Chunk Overlap: {CHUNK_OVERLAP} chars")
+        print(f"  Categories: {category_counts}")
         print("=" * 80)
         
         return stats

@@ -1,9 +1,10 @@
 """
 Contract Semantic Search Module
-Performs filtered vector similarity search over contract embeddings.
+Performs filtered vector similarity search over contract embeddings with section category support.
 
 Features:
-- Metadata-based filtering (user_id, project_id, contract_id)
+- Metadata-based filtering (user_id, project_id, contract_id, section_category)
+- Smart query categorization for targeted retrieval
 - Configurable top_k (default 5-8)
 - Similarity score thresholding
 - Regional index support
@@ -14,6 +15,8 @@ from typing import List, Dict, Optional
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from openai import OpenAI
+from .helpers import create_query_embedding
+from .query_categorizer import categorize_query, build_metadata_filter
 
 # Load environment variables
 load_dotenv()
@@ -46,6 +49,19 @@ REGIONAL_INDEXES = {
     "UK": "test-3-small-index"
 }
 
+# Valid section categories (must match contract_ingestion.py)
+VALID_SECTION_CATEGORIES = [
+    "ROYALTY_CALCULATIONS",
+    "PUBLISHING_RIGHTS",
+    "PERFORMANCE_RIGHTS",
+    "COPYRIGHT",
+    "TERMINATION",
+    "MASTER_RIGHTS",
+    "OWNERSHIP_RIGHTS",
+    "ACCOUNTING_AND_CREDIT",
+    "OTHER"
+]
+
 
 class ContractSearch:
     """Handles semantic search over contract embeddings"""
@@ -64,37 +80,24 @@ class ContractSearch:
         self.index_name = REGIONAL_INDEXES[region]
         self.index = pc.Index(self.index_name)
     
-    def create_query_embedding(self, query: str) -> List[float]:
-        """
-        Create embedding for search query
-        
-        Args:
-            query: Search query text
-            
-        Returns:
-            Embedding vector
-        """
-        response = openai_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=[query]
-        )
-        return response.data[0].embedding
-    
     def search(self,
                query: str,
                user_id: str,
                project_id: Optional[str] = None,
                contract_id: Optional[str] = None,
+               section_categories: Optional[List[str]] = None,
                top_k: int = DEFAULT_TOP_K,
                min_score: Optional[float] = None) -> Dict:
         """
-        Perform semantic search with metadata filtering
+        Perform semantic search with metadata filtering including section categories.
         
         Args:
             query: Search query text
             user_id: UUID of the user (required for namespace and filtering)
             project_id: UUID of the project (optional filter)
             contract_id: UUID of specific contract (optional filter)
+            section_categories: List of section categories to filter by (optional)
+                e.g., ["ROYALTY_CALCULATIONS", "PUBLISHING_RIGHTS"]
             top_k: Number of results to return (default 8)
             min_score: Minimum similarity score threshold (optional)
             
@@ -102,7 +105,7 @@ class ContractSearch:
             Dict with search results and metadata
         """
         print("\n" + "=" * 80)
-        print("SEMANTIC SEARCH")
+        print("SEMANTIC SEARCH (with category support)")
         print("=" * 80)
         print(f"Query: {query}")
         print(f"User ID: {user_id}")
@@ -110,6 +113,8 @@ class ContractSearch:
             print(f"Project ID: {project_id}")
         if contract_id:
             print(f"Contract ID: {contract_id}")
+        if section_categories:
+            print(f"Section Categories: {section_categories}")
         print(f"Top K: {top_k}")
         print("-" * 80)
         
@@ -122,9 +127,20 @@ class ContractSearch:
         if contract_id:
             filter_dict["contract_id"] = contract_id
         
+        # Add section category filter if provided
+        if section_categories:
+            # Validate categories
+            valid_cats = [c for c in section_categories if c in VALID_SECTION_CATEGORIES]
+            if valid_cats:
+                if len(valid_cats) == 1:
+                    filter_dict["section_category"] = valid_cats[0]
+                else:
+                    # Use $in operator for multiple categories
+                    filter_dict["section_category"] = {"$in": valid_cats}
+        
         # Create query embedding
         print("Creating query embedding...")
-        query_embedding = self.create_query_embedding(query)
+        query_embedding = create_query_embedding(query)
         
         # Perform search
         namespace = f"{user_id}-namespace"
@@ -155,6 +171,8 @@ class ContractSearch:
                     "contract_file": match.metadata.get("contract_file"),
                     "project_id": match.metadata.get("project_id"),
                     "project_name": match.metadata.get("project_name"),
+                    "section_heading": match.metadata.get("section_heading", ""),
+                    "section_category": match.metadata.get("section_category", "OTHER"),
                     "text": match.metadata.get("chunk_text", ""),
                     "uploaded_at": match.metadata.get("uploaded_at")
                 })
@@ -226,6 +244,122 @@ class ContractSearch:
             top_k=top_k
         )
     
+    def smart_search(self,
+                    query: str,
+                    user_id: str,
+                    project_id: Optional[str] = None,
+                    contract_id: Optional[str] = None,
+                    top_k: Optional[int] = None) -> Dict:
+        """
+        Perform intelligent search with automatic query categorization.
+        Uses the same approach as oneclick_retrieval.py.
+        
+        Uses LLM to determine which contract sections are most relevant to the query,
+        then filters search to those sections for better precision.
+        
+        Args:
+            query: User's question
+            user_id: UUID of the user
+            project_id: UUID of the project (optional)
+            contract_id: UUID of specific contract (optional)
+            top_k: Number of results (auto-adjusted if None)
+            
+        Returns:
+            Dict with search results and categorization metadata
+        """
+        
+        print("\n" + "=" * 80)
+        print("SMART SEARCH WITH AUTO-CATEGORIZATION (OneClick Method)")
+        print("=" * 80)
+        print(f"Query: '{query}'")
+        
+        # Step 1: Categorize the query (same as oneclick_retrieval.py)
+        print("\n--- Step 1: Query Categorization ---")
+        categorization = categorize_query(query, openai_client)
+        
+        print(f"Categories: {', '.join(categorization['categories'])}")
+        print(f"Is General Query: {categorization['is_general']}")
+        print(f"Confidence: {categorization['confidence']}")
+        print(f"Reasoning: {categorization.get('reasoning', '')}")
+        
+        # Step 2: Auto-adjust top_k based on query type (same as oneclick_retrieval.py)
+        if top_k is None:
+            if categorization['is_general']:
+                top_k = 5  # More context for general queries
+            else:
+                top_k = 3  # Focused results for specific queries
+        
+        print(f"Top-K: {top_k} (auto-adjusted for {'general' if categorization['is_general'] else 'specific'} query)")
+        
+        # Step 3: Build metadata filter using oneclick method
+        print("\n--- Step 2: Building Metadata Filter ---")
+        metadata_filter = build_metadata_filter(
+            categories=categorization['categories'],
+            is_general=categorization['is_general'],
+            user_id=user_id,
+            contract_id=contract_id
+        )
+        
+        # Add project_id to filter if provided
+        if project_id:
+            if metadata_filter is None:
+                metadata_filter = {}
+            metadata_filter["project_id"] = {"$eq": project_id}
+        
+        print(f"Metadata Filter: {metadata_filter}")
+        
+        # Step 4: Create query embedding
+        print("\n--- Step 3: Semantic Search ---")
+        query_embedding = create_query_embedding(query)
+        
+        # Step 5: Query Pinecone (same as oneclick_retrieval.py)
+        namespace = f"{user_id}-namespace"
+        print(f"Searching in namespace: {namespace}")
+        
+        results = self.index.query(
+            namespace=namespace,
+            vector=query_embedding,
+            top_k=top_k,
+            filter=metadata_filter,
+            include_metadata=True
+        )
+        
+        print(f"Found {len(results.matches) if hasattr(results, 'matches') else 0} matches")
+        
+        # Step 6: Process results (same format as oneclick_retrieval.py)
+        matches = []
+        if hasattr(results, 'matches') and len(results.matches) > 0:
+            for i, match in enumerate(results.matches):
+                print(f"\nMatch {i+1}:")
+                print(f"  Score: {match.score:.4f}")
+                print(f"  Section: {match.metadata.get('section_heading', 'N/A')}")
+                print(f"  Category: {match.metadata.get('section_category', 'N/A')}")
+                
+                matches.append({
+                    "id": match.id,
+                    "score": round(match.score, 4),
+                    "contract_id": match.metadata.get("contract_id"),
+                    "contract_file": match.metadata.get("contract_file"),
+                    "project_id": match.metadata.get("project_id"),
+                    "project_name": match.metadata.get("project_name"),
+                    "section_heading": match.metadata.get("section_heading", ""),
+                    "section_category": match.metadata.get("section_category", "OTHER"),
+                    "text": match.metadata.get("chunk_text", ""),
+                    "uploaded_at": match.metadata.get("uploaded_at")
+                })
+        
+        print("=" * 80)
+        
+        return {
+            "query": query,
+            "total_results": len(matches),
+            "matches": matches,
+            "filter": metadata_filter,
+            "top_k": top_k,
+            "namespace": namespace,
+            "categorization": categorization
+        }
+    
     def get_context_for_llm(self, search_results: Dict) -> str:
         """
         Format search results as context for LLM
@@ -249,36 +383,3 @@ class ContractSearch:
             )
         
         return "\n---\n\n".join(context_parts)
-
-
-# Example usage
-if __name__ == "__main__":
-    # Example: Search for royalty information
-    search = ContractSearch(region="US")
-    
-    # Search within a project
-    results = search.search_project(
-        query="What are the royalty percentage splits?",
-        user_id="test-user-123",
-        project_id="test-project-456",
-        top_k=5
-    )
-    
-    print("\n" + "=" * 80)
-    print("SEARCH RESULTS")
-    print("=" * 80)
-    
-    for i, match in enumerate(results["matches"], 1):
-        print(f"\nResult #{i}")
-        print(f"  Score: {match['score']}")
-        print(f"  Contract: {match['contract_file']}")
-        print(f"  Project: {match['project_name']}")
-        print(f"  Content Preview: {match['text'][:200]}...")
-        print("-" * 80)
-    
-    # Get formatted context for LLM
-    context = search.get_context_for_llm(results)
-    print("\n" + "=" * 80)
-    print("FORMATTED CONTEXT FOR LLM")
-    print("=" * 80)
-    print(context[:500] + "..." if len(context) > 500 else context)

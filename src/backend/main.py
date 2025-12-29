@@ -12,8 +12,16 @@ import tempfile
 from dotenv import load_dotenv
 import sys
 from pathlib import Path
+
+# Add the backend directory to Python path for module resolution
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 from vector_search.contract_chatbot import ContractChatbot
 from vector_search.contract_ingestion import ContractIngestion
+from vector_search.contract_search import ContractSearch
+from vector_search.helpers import calculate_royalty_payments, save_royalty_payments_to_excel
 
 # Load environment variables
 load_dotenv()
@@ -619,3 +627,184 @@ async def zoe_ask_question(request: ZoeAskRequest):
     except Exception as e:
         print(f"Error in Zoe chatbot: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
+
+# --- OneClick Royalty Calculation Endpoints ---
+
+class OneClickRoyaltyRequest(BaseModel):
+    contract_id: str
+    user_id: str
+    project_id: str
+    royalty_statement_file_id: str
+
+class RoyaltyPaymentResponse(BaseModel):
+    song_title: str
+    party_name: str
+    role: str
+    royalty_type: str
+    percentage: float
+    total_royalty: float
+    amount_to_pay: float
+    terms: Optional[str] = None
+
+class OneClickRoyaltyResponse(BaseModel):
+    status: str
+    total_payments: int
+    payments: List[RoyaltyPaymentResponse]
+    excel_file_url: Optional[str] = None
+    message: str
+
+@app.post("/oneclick/calculate-royalties", response_model=OneClickRoyaltyResponse)
+async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
+    """
+    OneClick Royalty Calculation:
+    1. Retrieve publishing royalty splits from selected contract using vector search
+    2. Download royalty statement from Supabase
+    3. Calculate payments using royalty_calculator.py methods
+    4. Save results to Excel and upload to Supabase
+    5. Return payment breakdown
+    
+    Args:
+        request: Contains contract_id, user_id, project_id, and royalty_statement_file_id
+        
+    Returns:
+        Payment breakdown and Excel file URL
+    """
+    try:
+        print(f"\n{'='*80}")
+        print("ONECLICK ROYALTY CALCULATION")
+        print(f"{'='*80}")
+        print(f"Contract ID: {request.contract_id}")
+        print(f"User ID: {request.user_id}")
+        print(f"Project ID: {request.project_id}")
+        print(f"Royalty Statement File ID: {request.royalty_statement_file_id}")
+        
+        # Step 1: Query contract for publishing royalty splits using smart_search
+        print("\n--- Step 1: Retrieving Publishing Royalty Splits ---")
+        contract_search = ContractSearch(region="US")
+        
+        # Use smart_search to find publishing royalty information
+        query = "What are the publishing royalty percentage splits for streaming? List all parties and their percentages."
+        search_results = contract_search.smart_search(
+            query=query,
+            user_id=request.user_id,
+            project_id=request.project_id,
+            contract_id=request.contract_id,
+            top_k=5
+        )
+        
+        if not search_results["matches"] or len(search_results["matches"]) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="No publishing royalty information found in the selected contract"
+            )
+        
+        print(f"Found {len(search_results['matches'])} relevant contract sections")
+        
+        # Step 2: Download royalty statement from Supabase
+        print("\n--- Step 2: Downloading Royalty Statement ---")
+        statement_res = supabase.table("project_files").select("*").eq("id", request.royalty_statement_file_id).execute()
+        
+        if not statement_res.data:
+            raise HTTPException(status_code=404, detail="Royalty statement file not found")
+        
+        statement_file = statement_res.data[0]
+        file_path = statement_file["file_path"]
+        
+        # Download file from Supabase storage
+        file_data = supabase.storage.from_("project-files").download(file_path)
+        
+        # Detect file extension from original filename
+        original_filename = statement_file['file_name']
+        file_extension = Path(original_filename).suffix.lower()
+        
+        # Default to .xlsx if no extension found
+        if not file_extension or file_extension not in ['.csv', '.xlsx', '.xls']:
+            file_extension = '.xlsx'
+        
+        # Save to temporary file with correct extension
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
+            tmp_statement.write(file_data)
+            statement_path = tmp_statement.name
+        
+        print(f"Downloaded royalty statement: {statement_file['file_name']} (detected as {file_extension})")
+        
+        # Step 3: Get contract file for parsing
+        print("\n--- Step 3: Downloading Contract File ---")
+        contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
+        
+        if not contract_res.data:
+            raise HTTPException(status_code=404, detail="Contract file not found")
+        
+        contract_file = contract_res.data[0]
+        contract_file_path = contract_file["file_path"]
+        
+        # Download contract from Supabase storage
+        contract_data = supabase.storage.from_("project-files").download(contract_file_path)
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
+            tmp_contract.write(contract_data)
+            contract_path = tmp_contract.name
+        
+        print(f"Downloaded contract: {contract_file['file_name']}")
+        
+        try:
+            # Step 4: Calculate payments using helper function
+            print("\n--- Step 4: Calculating Royalty Payments ---")
+            
+            # Use helper function from helpers.py
+            payments = calculate_royalty_payments(
+                contract_path=contract_path,
+                statement_path=statement_path,
+                user_id=request.user_id,
+                contract_id=request.contract_id
+            )
+            
+            if not payments or len(payments) == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No payments could be calculated. Please verify the contract and royalty statement contain matching songs."
+                )
+            
+            print(f"Calculated {len(payments)} payments")
+            
+            # Step 5: Format response (payments are already dictionaries from helper)
+            payment_responses = []
+            for payment in payments:
+                payment_responses.append(RoyaltyPaymentResponse(
+                    song_title=payment['song_title'],
+                    party_name=payment['party_name'],
+                    role=payment['role'],
+                    royalty_type=payment['royalty_type'],
+                    percentage=payment['percentage'],
+                    total_royalty=payment['total_royalty'],
+                    amount_to_pay=payment['amount_to_pay'],
+                    terms=payment.get('terms')
+                ))
+            
+            print(f"\n{'='*80}")
+            print("CALCULATION COMPLETE")
+            print(f"{'='*80}\n")
+            
+            return OneClickRoyaltyResponse(
+                status="success",
+                total_payments=len(payments),
+                payments=payment_responses,
+                excel_file_url=None,
+                message=f"Successfully calculated {len(payments)} royalty payments"
+            )
+            
+        finally:
+            # Clean up temporary files
+            if os.path.exists(contract_path):
+                os.unlink(contract_path)
+            if os.path.exists(statement_path):
+                os.unlink(statement_path)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in OneClick royalty calculation: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to calculate royalties: {str(e)}")
