@@ -332,6 +332,7 @@ class ContractSearch:
             for i, match in enumerate(results.matches):
                 print(f"\nMatch {i+1}:")
                 print(f"  Score: {match.score:.4f}")
+                print(f"  Chunk ID: {match.id}")
                 print(f"  Section: {match.metadata.get('section_heading', 'N/A')}")
                 print(f"  Category: {match.metadata.get('section_category', 'N/A')}")
                 

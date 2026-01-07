@@ -90,7 +90,7 @@ Rules:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=500
+            max_completion_tokens=500
         )
         
         result_text = response.choices[0].message.content.strip()
@@ -101,7 +101,25 @@ Rules:
         elif "```" in result_text:
             result_text = result_text.split("```")[1].split("```")[0].strip()
         
-        result = json.loads(result_text)
+        # Clean potential leading/trailing non-json characters if not in code block
+        if not result_text.startswith("{"):
+             start_idx = result_text.find("{")
+             if start_idx != -1:
+                 result_text = result_text[start_idx:]
+        if not result_text.endswith("}"):
+             end_idx = result_text.rfind("}")
+             if end_idx != -1:
+                 result_text = result_text[:end_idx+1]
+
+        try:
+            result = json.loads(result_text)
+        except json.JSONDecodeError:
+            # Try to fix common JSON errors (like single quotes)
+            try:
+                import ast
+                result = ast.literal_eval(result_text)
+            except:
+                 raise ValueError(f"Could not parse JSON: {result_text}")
         
         # Validate categories
         valid_categories = [cat for cat in result.get("categories", []) if cat in SECTION_CATEGORIES]

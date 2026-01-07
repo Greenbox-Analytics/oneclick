@@ -165,7 +165,7 @@ Return a clear, concise answer based only on the information provided in the con
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1000
+                max_completion_tokens=1000
             )
             
             answer = response.choices[0].message.content

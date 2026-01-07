@@ -15,6 +15,7 @@ Usage:
 import os
 import json
 import csv
+import time
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -451,21 +452,27 @@ class RoyaltyCalculator:
         print("ROYALTY PAYMENT CALCULATION")
         print("="*80)
         
+        total_start = time.time()
+
         # Step 1: Parse contract from Pinecone
         print("\n📄 Step 1: Extracting contract data from Pinecone...")
+        t0 = time.time()
         contract_data = self.contract_parser.parse_contract(
             path=contract_path,
             user_id=user_id,
             contract_id=contract_id
         )
+        print(f"⏱️  Step 1 took: {time.time() - t0:.2f}s")
         
         # Step 2: Read royalty statement
         print("\n💵 Step 2: Reading royalty statement...")
+        t0 = time.time()
         song_totals = self.read_royalty_statement(
             statement_path, 
             title_column, 
             payable_column
         )
+        print(f"⏱️  Step 2 took: {time.time() - t0:.2f}s")
         
         # Step 3: Calculate payments
         print("\n🔍 DEBUG CHECK — Contract vs Statement")
@@ -476,11 +483,15 @@ class RoyaltyCalculator:
         for s in list(song_totals.keys())[:10]:
             print(f"   → {s}")
         
+        t0 = time.time()
         payments = self._calculate_payments_from_data(
             contract_data,
             song_totals
         )
+        print(f"⏱️  Step 3 took: {time.time() - t0:.2f}s")
         
+        print(f"\n✅ Total calculation process took: {time.time() - total_start:.2f}s")
+
         return payments
     
     def calculate_payments_from_contracts(

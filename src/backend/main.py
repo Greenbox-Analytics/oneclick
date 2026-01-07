@@ -264,60 +264,6 @@ async def upload_file(
         print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/calculate", response_model=RoyaltyResults)
-async def calculate_royalties(
-    contract_files: List[str] = Form(...), # List of file paths or IDs
-    royalty_files: List[str] = Form(...)   # List of file paths or IDs
-):
-    """
-    Mock calculation endpoint. 
-    In the future, this will:
-    1. Download the files from Supabase.
-    2. Parse the Excel/CSV royalty statement.
-    3. Apply contract logic.
-    4. Return real results.
-    """
-    
-    # Mock processing delay
-    time.sleep(1) 
-    
-    # Returning the dummy data structure
-    return {
-        "songTitle": "Midnight Dreams",
-        "totalContributors": 4,
-        "totalRevenue": 125000.00,
-        "breakdown": [
-            {
-                "songName": "Midnight Dreams",
-                "contributorName": "Luna Rivers",
-                "role": "Artist",
-                "royaltyPercentage": 45.0,
-                "amount": 56250.00
-            },
-            {
-                "songName": "Midnight Dreams",
-                "contributorName": "Alex Martinez",
-                "role": "Producer",
-                "royaltyPercentage": 30.0,
-                "amount": 37500.00
-            },
-            {
-                "songName": "Midnight Dreams",
-                "contributorName": "Sarah Chen",
-                "role": "Songwriter",
-                "royaltyPercentage": 20.0,
-                "amount": 25000.00
-            },
-            {
-                "songName": "Midnight Dreams",
-                "contributorName": "Mike Johnson",
-                "role": "Featured Artist",
-                "royaltyPercentage": 5.0,
-                "amount": 6250.00
-            }
-        ]
-    }
-
 # --- Zoe AI Chatbot Endpoints ---
 
 @app.get("/projects")
@@ -657,7 +603,7 @@ class OneClickRoyaltyResponse(BaseModel):
 async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
     """
     OneClick Royalty Calculation:
-    1. Retrieve publishing royalty splits from selected contract using vector search
+    1. Retrieve streamingroyalty splits from selected contract using vector search
     2. Download royalty statement from Supabase
     3. Calculate payments using royalty_calculator.py methods
     4. Save results to Excel and upload to Supabase
@@ -678,30 +624,8 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         print(f"Project ID: {request.project_id}")
         print(f"Royalty Statement File ID: {request.royalty_statement_file_id}")
         
-        # Step 1: Query contract for publishing royalty splits using smart_search
-        print("\n--- Step 1: Retrieving Publishing Royalty Splits ---")
-        contract_search = ContractSearch(region="US")
-        
-        # Use smart_search to find publishing royalty information
-        query = "What are the publishing royalty percentage splits for streaming? List all parties and their percentages."
-        search_results = contract_search.smart_search(
-            query=query,
-            user_id=request.user_id,
-            project_id=request.project_id,
-            contract_id=request.contract_id,
-            top_k=5
-        )
-        
-        if not search_results["matches"] or len(search_results["matches"]) == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="No publishing royalty information found in the selected contract"
-            )
-        
-        print(f"Found {len(search_results['matches'])} relevant contract sections")
-        
         # Step 2: Download royalty statement from Supabase
-        print("\n--- Step 2: Downloading Royalty Statement ---")
+        print("\n--- Step 1: Downloading Royalty Statement ---")
         statement_res = supabase.table("project_files").select("*").eq("id", request.royalty_statement_file_id).execute()
         
         if not statement_res.data:
@@ -729,7 +653,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         print(f"Downloaded royalty statement: {statement_file['file_name']} (detected as {file_extension})")
         
         # Step 3: Get contract file for parsing
-        print("\n--- Step 3: Downloading Contract File ---")
+        print("\n--- Step 2: Downloading Contract File ---")
         contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
         
         if not contract_res.data:
@@ -750,7 +674,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         
         try:
             # Step 4: Calculate payments using helper function
-            print("\n--- Step 4: Calculating Royalty Payments ---")
+            print("\n--- Step 3: Calculating Royalty Payments ---")
             
             # Use helper function from helpers.py
             payments = calculate_royalty_payments(
