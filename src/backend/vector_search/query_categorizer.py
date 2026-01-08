@@ -29,14 +29,53 @@ SECTION_CATEGORIES = {
     "OTHER": "General contract terms, miscellaneous clauses"
 }
 
+# Keyword mappings for fast categorization (no LLM needed)
+CATEGORY_KEYWORDS = {
+    "ROYALTY_CALCULATIONS": [
+        "royalty", "royalties", "revenue", "split", "splits", "percentage", 
+        "compensation", "payment", "streaming", "net revenue", "gross revenue",
+        "share", "shares", "paid", "pay", "earnings"
+    ],
+    "PUBLISHING_RIGHTS": [
+        "publishing", "songwriter", "composition", "mechanical", "sync rights",
+        "publishing rights", "writer", "composer"
+    ],
+    "PERFORMANCE_RIGHTS": [
+        "performance", "live", "production services", "concert", "show",
+        "performing rights", "PRO", "ASCAP", "BMI", "SOCAN"
+    ],
+    "COPYRIGHT": [
+        "copyright", "intellectual property", "IP rights", "copyrighted",
+        "ownership of copyright"
+    ],
+    "TERMINATION": [
+        "termination", "terminate", "term", "duration", "end date", 
+        "expiration", "expire", "cancel"
+    ],
+    "MASTER_RIGHTS": [
+        "master", "master rights", "master recording", "sound recording",
+        "masters", "recording rights"
+    ],
+    "OWNERSHIP_RIGHTS": [
+        "ownership", "synchronization", "sync", "licensing", "license",
+        "owns", "owned by", "rights granted"
+    ],
+    "ACCOUNTING_AND_CREDIT": [
+        "accounting", "credit", "promotion", "audit", "statement",
+        "credited as", "promotional"
+    ],
+}
 
-def categorize_query(query: str, openai_client: Optional[OpenAI] = None) -> Dict:
+
+def categorize_query_fast(query: str) -> Dict:
     """
-    Categorize a user query to determine which contract sections are relevant.
+    Fast keyword-based query categorization (no LLM calls).
+    
+    This is much faster than LLM-based categorization and works well
+    for common, predictable queries like those used in OneClick.
     
     Args:
         query (str): The user's question about the contract
-        openai_client (OpenAI, optional): OpenAI client instance
         
     Returns:
         Dict: {
@@ -45,6 +84,69 @@ def categorize_query(query: str, openai_client: Optional[OpenAI] = None) -> Dict
             "confidence": str - "high", "medium", or "low"
         }
     """
+    query_lower = query.lower()
+    matched_categories = []
+    
+    # Check each category's keywords
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        if any(keyword in query_lower for keyword in keywords):
+            matched_categories.append(category)
+    
+    # Determine if it's a general query
+    general_indicators = [
+        "summarize", "summary", "overview", "all", "everything",
+        "entire", "whole contract", "obligations", "terms and conditions"
+    ]
+    is_general = any(indicator in query_lower for indicator in general_indicators)
+    
+    # If no categories matched, treat as general or OTHER
+    if not matched_categories:
+        if is_general:
+            return {
+                "categories": list(SECTION_CATEGORIES.keys()),
+                "is_general": True,
+                "confidence": "high",
+                "reasoning": "General query detected via keywords"
+            }
+        else:
+            matched_categories = ["OTHER"]
+    
+    # Determine confidence based on number of matches
+    if len(matched_categories) == 1:
+        confidence = "high"
+    elif len(matched_categories) <= 3:
+        confidence = "medium"
+    else:
+        confidence = "low"
+    
+    return {
+        "categories": matched_categories,
+        "is_general": is_general,
+        "confidence": confidence,
+        "reasoning": f"Keyword-based categorization: {len(matched_categories)} categories matched"
+    }
+
+
+def categorize_query(query: str, openai_client: Optional[OpenAI] = None, use_llm: bool = True) -> Dict:
+    """
+    Categorize a user query to determine which contract sections are relevant.
+    
+    Args:
+        query (str): The user's question about the contract
+        openai_client (OpenAI, optional): OpenAI client instance
+        use_llm (bool): If False, uses fast keyword matching instead of LLM (default: True)
+        
+    Returns:
+        Dict: {
+            "categories": List[str] - Relevant section categories,
+            "is_general": bool - Whether query requires searching all sections,
+            "confidence": str - "high", "medium", or "low"
+        }
+    """
+    # Use fast keyword-based categorization if requested
+    if not use_llm:
+        return categorize_query_fast(query)
+    
     if openai_client is None:
         openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
     

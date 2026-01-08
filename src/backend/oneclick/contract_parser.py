@@ -12,6 +12,7 @@ from openai import OpenAI
 from pathlib import Path
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add backend directory to path to allow imports from vector_search
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -94,7 +95,7 @@ class MusicContractParser:
         )
         self.index = pc.Index(INDEX_NAME)
 
-    def parse_contract(self, path: str, user_id: str = None, contract_id: str = None) -> ContractData:
+    def parse_contract(self, path: str, user_id: str = None, contract_id: str = None, use_parallel: bool = True) -> ContractData:
         """
         Parse contract by querying Pinecone for relevant sections.
         
@@ -105,6 +106,7 @@ class MusicContractParser:
             path: Contract file path (not used, kept for compatibility)
             user_id: User ID for Pinecone namespace filtering
             contract_id: Contract ID for filtering specific contract
+            use_parallel: If True, runs extractions in parallel (default: True)
             
         Returns:
             ContractData with extracted information
@@ -119,23 +121,56 @@ class MusicContractParser:
         print(f"📄 Extracting contract data from Pinecone")
         print(f"   User ID: {user_id}")
         print(f"   Contract ID: {contract_id}")
+        print(f"   Mode: {'Parallel' if use_parallel else 'Sequential'}")
 
-        # Extract structured elements
-        t0 = time.time()
-        parties = self._extract_parties(user_id, contract_id)
-        print(f"   ⏱️  Parties extraction took: {time.time() - t0:.2f}s")
+        if use_parallel:
+            # Run all extractions in parallel
+            parties = []
+            works = []
+            royalty_shares = []
+            summary = ""
+            
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                # Submit all tasks
+                future_to_task = {
+                    executor.submit(self._extract_parties, user_id, contract_id): "parties",
+                    executor.submit(self._extract_works, user_id, contract_id): "works",
+                    executor.submit(self._extract_royalties, user_id, contract_id): "royalties",
+                    executor.submit(self._extract_summary, user_id, contract_id): "summary"
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_task):
+                    task_name = future_to_task[future]
+                    try:
+                        result = future.result()
+                        if task_name == "parties":
+                            parties = result
+                        elif task_name == "works":
+                            works = result
+                        elif task_name == "royalties":
+                            royalty_shares = result
+                        elif task_name == "summary":
+                            summary = result
+                    except Exception as e:
+                        print(f"   ⚠️ Error in {task_name} extraction: {e}")
+        else:
+            # Sequential execution (original behavior)
+            t0 = time.time()
+            parties = self._extract_parties(user_id, contract_id)
+            print(f"   ⏱️  Parties extraction took: {time.time() - t0:.2f}s")
 
-        t0 = time.time()
-        works = self._extract_works(user_id, contract_id)
-        print(f"   ⏱️  Works extraction took: {time.time() - t0:.2f}s")
+            t0 = time.time()
+            works = self._extract_works(user_id, contract_id)
+            print(f"   ⏱️  Works extraction took: {time.time() - t0:.2f}s")
 
-        t0 = time.time()
-        royalty_shares = self._extract_royalties(user_id, contract_id)
-        print(f"   ⏱️  Royalties extraction took: {time.time() - t0:.2f}s")
+            t0 = time.time()
+            royalty_shares = self._extract_royalties(user_id, contract_id)
+            print(f"   ⏱️  Royalties extraction took: {time.time() - t0:.2f}s")
 
-        t0 = time.time()
-        summary = self._extract_summary(user_id, contract_id)
-        print(f"   ⏱️  Summary extraction took: {time.time() - t0:.2f}s")
+            t0 = time.time()
+            summary = self._extract_summary(user_id, contract_id)
+            print(f"   ⏱️  Summary extraction took: {time.time() - t0:.2f}s")
 
         total_time = time.time() - start_time
         print(f"✅ Extraction complete in {total_time:.2f}s")
@@ -148,7 +183,7 @@ class MusicContractParser:
             contract_summary=summary
         )
 
-    def _query_pinecone(self, query: str, user_id: str, contract_id: str, top_k: int = 5) -> str:
+    def _query_pinecone(self, query: str, user_id: str, contract_id: str, top_k: int = 5, use_fast_categorization: bool = True) -> str:
         """
         Query Pinecone and return concatenated context.
         
@@ -157,17 +192,19 @@ class MusicContractParser:
             user_id: User ID for namespace
             contract_id: Contract ID for filtering
             top_k: Number of results to retrieve
+            use_fast_categorization: If True, uses fast keyword matching instead of LLM (default: True)
             
         Returns:
             Concatenated text from top results
         """
         print(f"\n   🧠 Categorizing query: '{query}'")
         
-        # 1. Categorize the query
+        # 1. Categorize the query (use fast keyword-based categorization by default)
         t_cat = time.time()
-        categorization = categorize_query(query, self.openai_client)
+        categorization = categorize_query(query, self.openai_client, use_llm=not use_fast_categorization)
         print(f"      → Categories: {categorization.get('categories')}")
         print(f"      → Confidence: {categorization.get('confidence')}")
+        print(f"      → Method: {'Keyword-based (fast)' if use_fast_categorization else 'LLM-based'}")
         print(f"      ⏱️  Categorization took: {time.time() - t_cat:.2f}s")
 
         # 2. Build metadata filter
