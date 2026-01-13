@@ -132,12 +132,18 @@ def read_root():
     return {"message": "Msanii AI Backend is running"}
 
 @app.get("/artists")
-async def get_artists():
+async def get_artists(user_id: Optional[str] = None):
     """
-    Fetch all artists.
+    Fetch artists. If user_id is provided, filter by that user's artists only.
     """
     try:
-        response = supabase.table("artists").select("*").execute()
+        query = supabase.table("artists").select("*")
+        
+        # Filter by user_id if provided
+        if user_id:
+            query = query.eq("user_id", user_id)
+        
+        response = query.execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

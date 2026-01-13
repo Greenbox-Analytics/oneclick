@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Music, AlertCircle, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useAuth } from "@/contexts/AuthContext";
 
 // Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -18,6 +19,7 @@ interface Artist {
 
 const OneClick = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   
   // State for fetched artists
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -30,23 +32,29 @@ const OneClick = () => {
 
   // Fetch artists from backend on component mount
   useEffect(() => {
-    fetch(`${API_URL}/artists`)
-      .then((res) => {
+    const fetchArtists = async () => {
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_URL}/artists?user_id=${user.id}`);
         if (!res.ok) {
           throw new Error("Failed to fetch artists");
         }
-        return res.json();
-      })
-      .then((data) => {
+        const data = await res.json();
         setArtists(data);
         setIsLoading(false);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists. Please check your backend connection.");
         setIsLoading(false);
-      });
-  }, []);
+      }
+    };
+
+    fetchArtists();
+  }, [user]);
 
   // This lets us select/deselect a single artist (only one artist can be selected at a time)
   const handleArtistToggle = (artistId: string) => {
