@@ -528,7 +528,7 @@ async def zoe_ask_question(request: ZoeAskRequest):
     
     Rules:
     1. Always filters by user_id and project_id
-    2. If contract_ids are provided, filters by specific contracts and uses top_k=3
+    2. If contract_ids are provided, filters by specific contracts and uses top_k=8
     3. If no contract_ids, searches all contracts in project with top_k=8
     4. Only answers if highest similarity ≥ 0.75
     5. Returns answer with source citations
@@ -537,21 +537,17 @@ async def zoe_ask_question(request: ZoeAskRequest):
         # Get Zoe chatbot instance
         chatbot = get_zoe_chatbot()
         
-        # Determine top_k based on whether specific contracts are selected
-        # If specific contracts selected: top_k=3 (focused search)
-        # If project-wide search: top_k=8 (broader search)
-        top_k = 3 if request.contract_ids and len(request.contract_ids) > 0 else 8
+        # Use top_k=8 for both project-wide and multi-contract searches
+        top_k = 8
         
         # Ask the question
         if request.contract_ids and len(request.contract_ids) > 0:
-            # Contract-specific question(s)
-            # For multiple contracts, we'll query each and combine results
-            # For now, use the first contract_id (can be enhanced to handle multiple)
-            result = chatbot.ask_contract(
+            # Multiple contracts selected - search across all of them
+            result = chatbot.ask_multiple_contracts(
                 query=request.query,
                 user_id=request.user_id,
                 project_id=request.project_id,
-                contract_id=request.contract_ids[0],  # Use first contract for now
+                contract_ids=request.contract_ids,
                 top_k=top_k
             )
         else:
