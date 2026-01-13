@@ -159,7 +159,7 @@ const OneClickDocuments = () => {
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          <Button variant="outline" onClick={() => navigate("/oneclick")}>
+          <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Artist Selection
           </Button>

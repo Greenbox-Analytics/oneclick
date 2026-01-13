@@ -8,10 +8,12 @@ import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 
 const NewArtist = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [formData, setFormData] = useState({
@@ -33,6 +35,16 @@ const NewArtist = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!user) {
+      toast({
+        title: "Error",
+        description: "You must be logged in to create an artist",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     setIsLoading(true);
 
     const { data, error } = await supabase
@@ -43,6 +55,7 @@ const NewArtist = () => {
         bio: "",
         genres: formData.genre.split(',').map(g => g.trim()).filter(Boolean),
         avatar_url: avatarPreview || "",
+        user_id: user.id,
       })
       .select()
       .single();

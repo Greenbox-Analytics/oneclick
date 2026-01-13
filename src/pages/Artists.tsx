@@ -17,6 +17,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Artist {
   id: string;
@@ -29,6 +30,7 @@ interface Artist {
 const Artists = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -36,19 +38,32 @@ const Artists = () => {
 
   useEffect(() => {
     const fetchArtists = async () => {
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
+
+      // RLS policies will automatically filter by user_id
       const { data, error } = await supabase
         .from('artists')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (!error && data) {
+      if (error) {
+        console.error('Error fetching artists:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load artists",
+          variant: "destructive",
+        });
+      } else if (data) {
         setArtists(data);
       }
       setIsLoading(false);
     };
 
     fetchArtists();
-  }, []);
+  }, [user, toast]);
 
   const handleDeleteArtist = async () => {
     if (!artistToDelete) return;
