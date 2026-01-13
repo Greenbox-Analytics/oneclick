@@ -5,12 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
-import { Upload, FileText, CheckCircle, XCircle, Loader2 } from "lucide-react";
-import { useAuth } from "@/contexts/AuthContext";
+import { Upload, FileText, CheckCircle, XCircle, Loader2, FileSpreadsheet } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
-
-interface ContractUploadModalProps {
+interface RoyaltyStatementUploadModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
@@ -20,18 +19,16 @@ interface ContractUploadModalProps {
 interface UploadResult {
   filename: string;
   status: "success" | "error" | "uploading";
-  contract_id?: string;
-  total_chunks?: number;
   error?: string;
 }
 
-export const ContractUploadModal = ({
+export const RoyaltyStatementUploadModal = ({
   open,
   onOpenChange,
   projectId,
   onUploadComplete,
-}: ContractUploadModalProps) => {
-  const { user } = useAuth();
+}: RoyaltyStatementUploadModalProps) => {
+  const { toast } = useToast();
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
@@ -40,22 +37,25 @@ export const ContractUploadModal = ({
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const files = Array.from(e.target.files);
-      const pdfFiles = files.filter((file) => file.name.toLowerCase().endsWith(".pdf"));
+      const validFiles = files.filter((file) => {
+        const ext = file.name.toLowerCase();
+        return ext.endsWith(".xlsx") || ext.endsWith(".csv");
+      });
       
-      if (pdfFiles.length !== files.length) {
-        setError("Only PDF files are supported. Non-PDF files were filtered out.");
+      if (validFiles.length !== files.length) {
+        setError("Only XLSX and CSV files are supported. Non-supported files were filtered out.");
       } else {
         setError("");
       }
       
-      setSelectedFiles(pdfFiles);
+      setSelectedFiles(validFiles);
       setUploadResults([]);
     }
   };
 
   const handleUpload = async () => {
-    if (!selectedFiles.length || !user) {
-      setError("Please select at least one PDF file");
+    if (!selectedFiles.length) {
+      setError("Please select at least one XLSX or CSV file");
       return;
     }
 
@@ -72,23 +72,35 @@ export const ContractUploadModal = ({
     // Upload files one by one
     for (let i = 0; i < selectedFiles.length; i++) {
       const file = selectedFiles[i];
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("project_id", projectId);
-      formData.append("user_id", user.id);
 
       try {
-        const response = await fetch(`${API_URL}/contracts/upload`, {
-          method: "POST",
-          body: formData,
-        });
+        // Upload to Supabase storage
+        const filePath = `${projectId}/royalty_statement/${Date.now()}_${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from('project-files')
+          .upload(filePath, file);
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || "Upload failed");
-        }
+        if (uploadError) throw uploadError;
 
-        const result = await response.json();
+        // Get public URL
+        const { data: urlData } = supabase.storage
+          .from('project-files')
+          .getPublicUrl(filePath);
+
+        // Create database record
+        const { error: dbError } = await supabase
+          .from('project_files')
+          .insert({
+            project_id: projectId,
+            file_name: file.name,
+            file_url: urlData.publicUrl,
+            file_path: filePath,
+            folder_category: 'royalty_statement',
+            file_size: file.size,
+            file_type: file.type,
+          });
+
+        if (dbError) throw dbError;
 
         // Update result for this file
         setUploadResults((prev) =>
@@ -97,8 +109,6 @@ export const ContractUploadModal = ({
               ? {
                   filename: file.name,
                   status: "success",
-                  contract_id: result.contract_id,
-                  total_chunks: result.total_chunks,
                 }
               : r
           )
@@ -125,6 +135,15 @@ export const ContractUploadModal = ({
     
     // Call completion callback when uploads finish
     onUploadComplete?.();
+    
+    // Show success toast
+    const successCount = uploadResults.filter((r) => r.status === "success").length;
+    if (successCount > 0) {
+      toast({
+        title: "Success",
+        description: `${successCount} file${successCount > 1 ? 's' : ''} uploaded successfully`,
+      });
+    }
   };
 
   const handleClose = () => {
@@ -138,7 +157,6 @@ export const ContractUploadModal = ({
 
   const successCount = uploadResults.filter((r) => r.status === "success").length;
   const errorCount = uploadResults.filter((r) => r.status === "error").length;
-  const uploadingCount = uploadResults.filter((r) => r.status === "uploading").length;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -146,27 +164,27 @@ export const ContractUploadModal = ({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="w-5 h-5" />
-            Upload Contracts
+            Upload Royalty Statements
           </DialogTitle>
           <DialogDescription>
-            Upload one or multiple PDF contract files. Each will be processed and indexed for AI search.
+            Upload one or multiple XLSX or CSV royalty statement files.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
           {/* File Input */}
           <div className="space-y-2">
-            <Label htmlFor="contract-files">Select PDF Files</Label>
+            <Label htmlFor="royalty-files">Select XLSX or CSV Files</Label>
             <div className="flex items-center justify-center gap-2 mb-3">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-md">
-                <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                <span className="text-xs font-medium text-blue-700 dark:text-blue-300">PDF only</span>
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                <span className="text-xs font-medium text-green-700 dark:text-green-300">XLSX or CSV only</span>
               </div>
             </div>
             <Input
-              id="contract-files"
+              id="royalty-files"
               type="file"
-              accept=".pdf"
+              accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
               multiple
               onChange={handleFileSelect}
               disabled={uploading}
@@ -220,19 +238,19 @@ export const ContractUploadModal = ({
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        <FileSpreadsheet className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                         <p className="text-sm font-medium truncate">{result.filename}</p>
                       </div>
 
                       {result.status === "uploading" && (
                         <p className="text-xs text-muted-foreground mt-1">
-                          Processing...
+                          Uploading...
                         </p>
                       )}
 
-                      {result.status === "success" && result.total_chunks && (
+                      {result.status === "success" && (
                         <p className="text-xs text-green-600 mt-1">
-                          ✓ Uploaded successfully ({result.total_chunks} chunks created)
+                          ✓ Uploaded successfully
                         </p>
                       )}
 
@@ -281,12 +299,12 @@ export const ContractUploadModal = ({
                 {uploading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Processing & Chunking...
+                    Uploading...
                   </>
                 ) : (
                   <>
                     <Upload className="w-4 h-4 mr-2" />
-                    Upload & Process {selectedFiles.length > 0 && `(${selectedFiles.length})`}
+                    Upload {selectedFiles.length > 0 && `(${selectedFiles.length})`}
                   </>
                 )}
               </Button>

@@ -88,16 +88,18 @@ const Zoe = () => {
   const selectedArtistName = artists.find((a) => a.id === selectedArtist)?.name;
   const selectedProjectName = projects.find((p) => p.id === selectedProject)?.name;
 
-  // Fetch artists on mount
+  // Fetch artists on mount - filter by logged in user
   useEffect(() => {
-    fetch(`${API_URL}/artists`)
+    if (!user) return;
+    
+    fetch(`${API_URL}/artists?user_id=${user.id}`)
       .then((res) => res.json())
       .then((data) => setArtists(data))
       .catch((err) => {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists");
       });
-  }, []);
+  }, [user]);
 
   // Fetch projects when artist is selected
   useEffect(() => {
@@ -523,36 +525,6 @@ const Zoe = () => {
                         }`}
                       >
                         <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
-                        
-                        {message.confidence && message.role === "assistant" && (
-                          <div className="mt-3 pt-3 border-t border-border/50">
-                            <Badge
-                              variant={
-                                message.confidence === "high"
-                                  ? "default"
-                                  : message.confidence === "low"
-                                  ? "secondary"
-                                  : "destructive"
-                              }
-                              className="text-xs"
-                            >
-                              {message.confidence} confidence
-                            </Badge>
-                          </div>
-                        )}
-                        
-                        {message.sources && message.sources.length > 0 && (
-                          <div className="mt-3 pt-3 border-t border-border/50">
-                            <p className="text-xs font-medium mb-2">Sources:</p>
-                            <div className="space-y-1">
-                              {message.sources.slice(0, 3).map((source, idx) => (
-                                <p key={idx} className="text-xs text-muted-foreground">
-                                  • {source.contract_file} (Page {source.page_number}) - Score: {source.score.toFixed(2)}
-                                </p>
-                              ))}
-                            </div>
-                          </div>
-                        )}
                       </div>
 
                       {message.role === "user" && (

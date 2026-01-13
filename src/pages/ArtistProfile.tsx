@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Music, Upload, FileText, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2, Folder, Plus } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ContractUploadModal } from "@/components/ContractUploadModal";
+import { RoyaltyStatementUploadModal } from "@/components/RoyaltyStatementUploadModal";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   AlertDialog,
@@ -57,6 +58,8 @@ const ArtistProfile = () => {
   const [fileToDelete, setFileToDelete] = useState<any>(null);
   const [contractUploadModalOpen, setContractUploadModalOpen] = useState(false);
   const [contractUploadProjectId, setContractUploadProjectId] = useState<string>("");
+  const [royaltyStatementUploadModalOpen, setRoyaltyStatementUploadModalOpen] = useState(false);
+  const [royaltyStatementUploadProjectId, setRoyaltyStatementUploadProjectId] = useState<string>("");
 
   const [formData, setFormData] = useState({
     name: "",
@@ -219,6 +222,18 @@ const ArtistProfile = () => {
     // Refresh project files after upload
     if (contractUploadProjectId) {
       fetchProjectFiles(contractUploadProjectId);
+    }
+  };
+
+  const handleRoyaltyStatementUploadClick = (projectId: string) => {
+    setRoyaltyStatementUploadProjectId(projectId);
+    setRoyaltyStatementUploadModalOpen(true);
+  };
+
+  const handleRoyaltyStatementUploadComplete = () => {
+    // Refresh project files after upload
+    if (royaltyStatementUploadProjectId) {
+      fetchProjectFiles(royaltyStatementUploadProjectId);
     }
   };
 
@@ -1331,6 +1346,8 @@ const ArtistProfile = () => {
                                         e.stopPropagation();
                                         if (folder.category === 'contract') {
                                           handleContractUploadClick(project.id);
+                                        } else if (folder.category === 'royalty_statement') {
+                                          handleRoyaltyStatementUploadClick(project.id);
                                         } else {
                                           document.getElementById(`upload-${project.id}-${folder.category}`)?.click();
                                         }
@@ -1484,6 +1501,16 @@ const ArtistProfile = () => {
           onOpenChange={setContractUploadModalOpen}
           projectId={contractUploadProjectId}
           onUploadComplete={handleContractUploadComplete}
+        />
+      )}
+
+      {/* Royalty Statement Upload Modal */}
+      {royaltyStatementUploadProjectId && (
+        <RoyaltyStatementUploadModal
+          open={royaltyStatementUploadModalOpen}
+          onOpenChange={setRoyaltyStatementUploadModalOpen}
+          projectId={royaltyStatementUploadProjectId}
+          onUploadComplete={handleRoyaltyStatementUploadComplete}
         />
       )}
     </div>

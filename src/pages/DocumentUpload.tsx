@@ -403,12 +403,17 @@ const DocumentUpload = () => {
                   <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
                     <FileSignature className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
                     <p className="text-foreground font-medium mb-2 text-sm">Upload Contract</p>
-                    <p className="text-muted-foreground mb-4 text-xs">PDF or Word DOCX files only</p>
+                    <div className="flex items-center justify-center gap-2 mb-4">
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-md">
+                        <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                        <span className="text-xs font-medium text-blue-700 dark:text-blue-300">PDF accepted</span>
+                      </div>
+                    </div>
                     <Input
                       id="contract-upload"
                       type="file"
                       multiple
-                      accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      accept=".pdf,application/pdf"
                       onChange={handleContractFileChange}
                       className="hidden"
                     />
@@ -541,12 +546,17 @@ const DocumentUpload = () => {
                   <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
                     <Receipt className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
                     <p className="text-foreground font-medium mb-2 text-sm">Upload Royalty Statement</p>
-                    <p className="text-muted-foreground mb-4 text-xs">Excel or CSV files only</p>
+                    <div className="flex items-center justify-center gap-2 mb-4">
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                        <span className="text-xs font-medium text-green-700 dark:text-green-300">XLSX or CSV only</span>
+                      </div>
+                    </div>
                     <Input
                       id="royalty-upload"
                       type="file"
                       multiple
-                      accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                      accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
                       onChange={handleRoyaltyStatementFileChange}
                       className="hidden"
                     />
