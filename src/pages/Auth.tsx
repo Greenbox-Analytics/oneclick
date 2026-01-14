@@ -90,7 +90,7 @@ const Auth = () => {
       </div>
       
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
+        <div className="text-center mb-8 cursor-pointer" onClick={() => navigate("/")}>
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-xl bg-primary/10 mb-4 p-3">
             <Music className="w-full h-full object-contain" />
           </div>

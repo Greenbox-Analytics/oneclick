@@ -226,13 +226,13 @@ export const ContractUploadModal = ({
 
                       {result.status === "uploading" && (
                         <p className="text-xs text-muted-foreground mt-1">
-                          Processing...
+                          Uploading...
                         </p>
                       )}
 
                       {result.status === "success" && result.total_chunks && (
                         <p className="text-xs text-green-600 mt-1">
-                          ✓ Uploaded successfully ({result.total_chunks} chunks created)
+                          ✓ Uploaded successfully
                         </p>
                       )}
 
@@ -281,12 +281,12 @@ export const ContractUploadModal = ({
                 {uploading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Processing & Chunking...
+                    Uploading...
                   </>
                 ) : (
                   <>
                     <Upload className="w-4 h-4 mr-2" />
-                    Upload & Process {selectedFiles.length > 0 && `(${selectedFiles.length})`}
+                    Upload {selectedFiles.length > 0 && `(${selectedFiles.length})`}
                   </>
                 )}
               </Button>

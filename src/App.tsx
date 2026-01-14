@@ -15,7 +15,6 @@ import Tools from "./pages/Tools";
 import OneClick from "./pages/OneClick";
 import OneClickDocuments from "./pages/OneClickDocuments";
 import Zoe from "./pages/Zoe";
-import DocumentUpload from "./pages/DocumentUpload";
 import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 

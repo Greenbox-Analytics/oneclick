@@ -99,10 +99,10 @@ const Artists = () => {
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div 
             className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/")}
+            onClick={() => navigate("/dashboard")}
           >
-            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center p-1.5">
-              <Music className="w-full h-full object-contain" />
+            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center p-1.5">
+              <Music className="w-full h-full text-primary-foreground" />
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
