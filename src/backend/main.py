@@ -604,8 +604,13 @@ class OneClickRoyaltyResponse(BaseModel):
     excel_file_url: Optional[str] = None
     message: str
 
-@app.post("/oneclick/calculate-royalties-stream")
-async def oneclick_calculate_royalties_stream(request: OneClickRoyaltyRequest):
+@app.get("/oneclick/calculate-royalties-stream")
+async def oneclick_calculate_royalties_stream(
+    contract_id: str,
+    user_id: str,
+    project_id: str,
+    royalty_statement_file_id: str
+):
     """
     OneClick Royalty Calculation with Server-Sent Events (SSE) for real-time progress updates.
     
@@ -624,13 +629,13 @@ async def oneclick_calculate_royalties_stream(request: OneClickRoyaltyRequest):
     async def generate_progress():
         try:
             # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0, 'stage': 'starting'})}\n\n"
             await asyncio.sleep(0.1)
             
             # Step 1: Download royalty statement
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
             
-            statement_res = supabase.table("project_files").select("*").eq("id", request.royalty_statement_file_id).execute()
+            statement_res = supabase.table("project_files").select("*").eq("id", royalty_statement_file_id).execute()
             if not statement_res.data:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Royalty statement file not found'})}\n\n"
                 return
@@ -646,13 +651,13 @@ async def oneclick_calculate_royalties_stream(request: OneClickRoyaltyRequest):
                 tmp_statement.write(file_data)
                 statement_path = tmp_statement.name
             
-            msg = f"Downloaded {statement_file['file_name']}"
-            yield f"data: {json.dumps({'type': 'status', 'message': msg, 'progress': 20})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Royalty statement downloaded', 'progress': 20, 'stage': 'downloading'})}\n\n"
+            await asyncio.sleep(0.1)
             
             # Step 2: Download contract
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25, 'stage': 'downloading'})}\n\n"
             
-            contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
+            contract_res = supabase.table("project_files").select("*").eq("id", contract_id).execute()
             if not contract_res.data:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Contract file not found'})}\n\n"
                 return
@@ -664,38 +669,42 @@ async def oneclick_calculate_royalties_stream(request: OneClickRoyaltyRequest):
                 tmp_contract.write(contract_data)
                 contract_path = tmp_contract.name
             
-            msg = f"Downloaded {contract_file['file_name']}"
-            yield f"data: {json.dumps({'type': 'status', 'message': msg, 'progress': 30})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Contract downloaded', 'progress': 30, 'stage': 'downloading'})}\n\n"
+            await asyncio.sleep(0.1)
             
             # Step 3: Extract contract data with progress updates
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contract...', 'progress': 35})}\n\n"
-            await asyncio.sleep(0.1)
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contract...', 'progress': 35, 'stage': 'extracting_parties'})}\n\n"
+            await asyncio.sleep(0.5)
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contract...', 'progress': 50})}\n\n"
-            await asyncio.sleep(0.1)
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contract...', 'progress': 50, 'stage': 'extracting_works'})}\n\n"
+            await asyncio.sleep(0.5)
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting royalty splits...', 'progress': 65})}\n\n"
-            await asyncio.sleep(0.1)
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting royalty splits...', 'progress': 65, 'stage': 'extracting_royalty'})}\n\n"
+            await asyncio.sleep(0.5)
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+            await asyncio.sleep(0.3)
             
             try:
                 # Calculate payments
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
+                
                 payments = calculate_royalty_payments(
                     contract_path=contract_path,
                     statement_path=statement_path,
-                    user_id=request.user_id,
-                    contract_id=request.contract_id
+                    user_id=user_id,
+                    contract_id=contract_id
                 )
                 
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 85})}\n\n"
-                await asyncio.sleep(0.1)
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 95})}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
+                await asyncio.sleep(0.3)
                 
                 if not payments or len(payments) == 0:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
                     return
+                
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
+                await asyncio.sleep(0.2)
                 
                 # Send final results
                 payment_responses = []
@@ -717,7 +726,8 @@ async def oneclick_calculate_royalties_stream(request: OneClickRoyaltyRequest):
                     'total_payments': len(payments),
                     'payments': payment_responses,
                     'message': f'Successfully calculated {len(payments)} royalty payments',
-                    'progress': 100
+                    'progress': 100,
+                    'stage': 'complete'
                 }
                 
                 yield f"data: {json.dumps(result)}\n\n"
@@ -730,7 +740,10 @@ async def oneclick_calculate_royalties_stream(request: OneClickRoyaltyRequest):
                     os.unlink(statement_path)
                     
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            import traceback
+            error_detail = str(e)
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': error_detail})}\n\n"
     
     return StreamingResponse(generate_progress(), media_type="text/event-stream")
 

@@ -97,6 +97,12 @@ const OneClickDocuments = () => {
   const [isLoadingArtist, setIsLoadingArtist] = useState(true);
   const [isLoadingProjectFiles, setIsLoadingProjectFiles] = useState(false);
 
+  // Progress tracking state for SSE
+  const [calculationProgress, setCalculationProgress] = useState(0);
+  const [calculationStage, setCalculationStage] = useState("");
+  const [calculationMessage, setCalculationMessage] = useState("");
+  const [showProgressModal, setShowProgressModal] = useState(false);
+
   // Ref for chart download (only the chart content, not the entire card)
   const chartContentRef = useRef<HTMLDivElement>(null);
 
@@ -292,36 +298,96 @@ const OneClickDocuments = () => {
              throw new Error("Could not determine contract or statement to process.");
         }
 
-        // 3. Call Calculate Endpoint
-        const calcRes = await fetch(`${API_URL}/oneclick/calculate-royalties`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                contract_id: finalContractId,
-                user_id: user.id,
-                project_id: finalProjectId,
-                royalty_statement_file_id: finalStatementId
+        // 3. Show progress modal and start SSE connection
+        setShowProgressModal(true);
+        setCalculationProgress(0);
+        setCalculationStage("starting");
+        setCalculationMessage("Starting calculation...");
+
+        // Build request body
+        const requestBody = {
+            contract_id: finalContractId,
+            user_id: user.id,
+            project_id: finalProjectId,
+            royalty_statement_file_id: finalStatementId
+        };
+
+        // Use EventSource for SSE
+        const eventSource = new EventSource(
+            `${API_URL}/oneclick/calculate-royalties-stream?` + 
+            new URLSearchParams({
+                contract_id: requestBody.contract_id,
+                user_id: requestBody.user_id,
+                project_id: requestBody.project_id,
+                royalty_statement_file_id: requestBody.royalty_statement_file_id
             })
-        });
+        );
 
-        if (!calcRes.ok) {
-            const errData = await calcRes.json();
-            throw new Error(errData.detail || "Calculation failed");
-        }
+        // Set timeout for 2 minutes
+        const timeout = setTimeout(() => {
+            eventSource.close();
+            setShowProgressModal(false);
+            setError("Calculation timed out. Please try again.");
+            toast.error("Calculation timed out");
+            setIsUploading(false);
+        }, 120000);
 
-        const result: CalculationResult = await calcRes.json();
-        setCalculationResult(result);
-        toast.success("Royalties calculated successfully!");
+        eventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'status') {
+                    setCalculationProgress(data.progress || 0);
+                    setCalculationStage(data.stage || "");
+                    setCalculationMessage(data.message || "");
+                } else if (data.type === 'complete') {
+                    clearTimeout(timeout);
+                    eventSource.close();
+                    
+                    // Set results
+                    const result: CalculationResult = {
+                        status: data.status,
+                        total_payments: data.total_payments,
+                        payments: data.payments,
+                        message: data.message
+                    };
+                    
+                    setCalculationResult(result);
+                    setShowProgressModal(false);
+                    toast.success("Royalties calculated successfully!");
+                    
+                    // Clear uploaded files from state
+                    setContractFiles([]);
+                    setRoyaltyStatementFiles([]);
+                    setIsUploading(false);
+                } else if (data.type === 'error') {
+                    clearTimeout(timeout);
+                    eventSource.close();
+                    setShowProgressModal(false);
+                    setError(data.message || "An error occurred");
+                    toast.error(data.message || "Calculation failed");
+                    setIsUploading(false);
+                }
+            } catch (err) {
+                console.error("Error parsing SSE data:", err);
+            }
+        };
 
-        // Clear uploaded files from state
-        setContractFiles([]);
-        setRoyaltyStatementFiles([]);
+        eventSource.onerror = (err) => {
+            console.error("EventSource error:", err);
+            clearTimeout(timeout);
+            eventSource.close();
+            setShowProgressModal(false);
+            setError("Connection error. Please try again.");
+            toast.error("Connection error during calculation");
+            setIsUploading(false);
+        };
 
     } catch (error: any) {
         console.error("Error:", error);
         setError(error.message || "An error occurred.");
         toast.error(error.message || "An error occurred during processing.");
-    } finally {
+        setShowProgressModal(false);
         setIsUploading(false);
     }
   };
@@ -733,6 +799,114 @@ const OneClickDocuments = () => {
                 <AlertTitle>Error</AlertTitle>
                 <AlertDescription>{error}</AlertDescription>
             </Alert>
+        )}
+
+        {/* Inline Progress Display */}
+        {showProgressModal && (
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="text-center">Calculating Royalties</CardTitle>
+              <CardDescription className="text-center">
+                Please wait while we process your documents
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6 py-4">
+              {/* Circular Progress */}
+              <div className="flex flex-col items-center justify-center">
+                <div className="relative w-32 h-32">
+                  {/* Background circle */}
+                  <svg className="w-32 h-32 transform -rotate-90">
+                    <circle
+                      cx="64"
+                      cy="64"
+                      r="56"
+                      stroke="currentColor"
+                      strokeWidth="8"
+                      fill="none"
+                      className="text-muted"
+                    />
+                    {/* Progress circle */}
+                    <circle
+                      cx="64"
+                      cy="64"
+                      r="56"
+                      stroke="currentColor"
+                      strokeWidth="8"
+                      fill="none"
+                      strokeDasharray={`${2 * Math.PI * 56}`}
+                      strokeDashoffset={`${2 * Math.PI * 56 * (1 - calculationProgress / 100)}`}
+                      className="text-primary transition-all duration-500 ease-out"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                  {/* Percentage text */}
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-2xl font-bold text-foreground">{Math.round(calculationProgress)}%</span>
+                  </div>
+                </div>
+                
+                {/* Current stage message */}
+                <p className="mt-4 text-sm font-medium text-center text-muted-foreground">
+                  {calculationMessage}
+                </p>
+              </div>
+
+              {/* Stage indicators */}
+              <div className="space-y-3">
+                {[
+                  { id: 'downloading', label: 'Downloading files', icon: FileText },
+                  { id: 'extracting', label: 'Extracting data', icon: FileText },
+                  { id: 'calculating', label: 'Calculating payments', icon: DollarSign },
+                ].map((stageItem) => {
+                  const getStageStatus = (stageId: string) => {
+                    if (calculationStage.includes('download')) {
+                      if (stageId === 'downloading') return 'active';
+                      return 'pending';
+                    } else if (calculationStage.includes('extract') || calculationStage.includes('parties') || calculationStage.includes('works') || calculationStage.includes('royalty') || calculationStage.includes('summary')) {
+                      if (stageId === 'downloading') return 'complete';
+                      if (stageId === 'extracting') return 'active';
+                      return 'pending';
+                    } else if (calculationStage.includes('processing') || calculationStage.includes('calculating')) {
+                      if (stageId === 'downloading' || stageId === 'extracting') return 'complete';
+                      if (stageId === 'calculating') return 'active';
+                      return 'pending';
+                    }
+                    return 'pending';
+                  };
+                  
+                  const status = getStageStatus(stageItem.id);
+                  const Icon = stageItem.icon;
+                  
+                  return (
+                    <div key={stageItem.id} className="flex items-center gap-3">
+                      <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${
+                        status === 'complete' 
+                          ? 'bg-primary text-primary-foreground' 
+                          : status === 'active'
+                          ? 'bg-primary/20 text-primary'
+                          : 'bg-muted text-muted-foreground'
+                      }`}>
+                        {status === 'complete' ? (
+                          <CheckCircle2 className="w-4 h-4" />
+                        ) : status === 'active' ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Icon className="w-4 h-4" />
+                        )}
+                      </div>
+                      <span className={`text-sm ${
+                        status === 'complete' || status === 'active'
+                          ? 'text-foreground font-medium'
+                          : 'text-muted-foreground'
+                      }`}>
+                        {stageItem.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {calculationResult && (

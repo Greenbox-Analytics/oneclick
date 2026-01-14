@@ -41,7 +41,7 @@ openai_client = OpenAI(
 
 # Configuration
 EMBEDDING_MODEL = "text-embedding-3-small"
-LLM_MODEL = "gpt-5-mini"
+LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")
 INDEX_NAME = "test-3-small-index"
 
 

@@ -15,6 +15,7 @@ load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
+OPENAI_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")
 
 # Define available contract section categories
 SECTION_CATEGORIES = {
@@ -187,7 +188,7 @@ Rules:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-5-mini",
+            model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
