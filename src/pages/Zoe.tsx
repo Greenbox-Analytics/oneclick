@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Send, Bot, User, AlertCircle, Upload, Trash2, ChevronDown } from "lucide-react";
+import { ArrowLeft, Send, Bot, User, AlertCircle, Upload, Trash2, ChevronDown, Music } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -88,16 +88,18 @@ const Zoe = () => {
   const selectedArtistName = artists.find((a) => a.id === selectedArtist)?.name;
   const selectedProjectName = projects.find((p) => p.id === selectedProject)?.name;
 
-  // Fetch artists on mount
+  // Fetch artists on mount - filter by logged in user
   useEffect(() => {
-    fetch(`${API_URL}/artists`)
+    if (!user) return;
+    
+    fetch(`${API_URL}/artists?user_id=${user.id}`)
       .then((res) => res.json())
       .then((data) => setArtists(data))
       .catch((err) => {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists");
       });
-  }, []);
+  }, [user]);
 
   // Fetch projects when artist is selected
   useEffect(() => {
@@ -278,14 +280,11 @@ const Zoe = () => {
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/20">
       <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 sticky top-0 z-10">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center shadow">
-              <Bot className="w-5 h-5 text-primary-foreground" />
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate("/dashboard")}>
+            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
+              <Music className="w-6 h-6 text-primary-foreground" />
             </div>
-            <div>
-              <h1 className="text-xl font-semibold text-foreground">Zoe AI Assistant</h1>
-              <p className="text-[11px] text-muted-foreground">Contract Intelligence</p>
-            </div>
+            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <Button variant="outline" onClick={() => navigate("/tools")} className="gap-2">
             <ArrowLeft className="w-4 h-4" />
@@ -294,9 +293,14 @@ const Zoe = () => {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-4 max-w-5xl">
+      <main className="container mx-auto px-4 py-4 max-w-4xl">
+        <div className="mb-4">
+          <h2 className="text-3xl font-bold text-foreground mb-2">Zoe AI Assistant</h2>
+          <p className="text-muted-foreground">Contract Intelligence</p>
+        </div>
+
         {/* Chat Interface */}
-        <Card className="flex flex-col shadow border" style={{ height: 'calc(100vh - 140px)' }}>
+        <Card className="flex flex-col shadow border" style={{ height: 'calc(90vh - 140px)' }}>
           {/* Header with Context Selection */}
           <CardHeader className="border-b bg-muted/20 py-3">
             <div className="flex items-center justify-between gap-3">
@@ -523,36 +527,6 @@ const Zoe = () => {
                         }`}
                       >
                         <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
-                        
-                        {message.confidence && message.role === "assistant" && (
-                          <div className="mt-3 pt-3 border-t border-border/50">
-                            <Badge
-                              variant={
-                                message.confidence === "high"
-                                  ? "default"
-                                  : message.confidence === "low"
-                                  ? "secondary"
-                                  : "destructive"
-                              }
-                              className="text-xs"
-                            >
-                              {message.confidence} confidence
-                            </Badge>
-                          </div>
-                        )}
-                        
-                        {message.sources && message.sources.length > 0 && (
-                          <div className="mt-3 pt-3 border-t border-border/50">
-                            <p className="text-xs font-medium mb-2">Sources:</p>
-                            <div className="space-y-1">
-                              {message.sources.slice(0, 3).map((source, idx) => (
-                                <p key={idx} className="text-xs text-muted-foreground">
-                                  • {source.contract_file} (Page {source.page_number}) - Score: {source.score.toFixed(2)}
-                                </p>
-                              ))}
-                            </div>
-                          </div>
-                        )}
                       </div>
 
                       {message.role === "user" && (

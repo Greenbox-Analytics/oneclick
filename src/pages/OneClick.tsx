@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Music, AlertCircle, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useAuth } from "@/contexts/AuthContext";
 
 // Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -18,6 +19,7 @@ interface Artist {
 
 const OneClick = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   
   // State for fetched artists
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -30,23 +32,29 @@ const OneClick = () => {
 
   // Fetch artists from backend on component mount
   useEffect(() => {
-    fetch(`${API_URL}/artists`)
-      .then((res) => {
+    const fetchArtists = async () => {
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_URL}/artists?user_id=${user.id}`);
         if (!res.ok) {
           throw new Error("Failed to fetch artists");
         }
-        return res.json();
-      })
-      .then((data) => {
+        const data = await res.json();
         setArtists(data);
         setIsLoading(false);
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists. Please check your backend connection.");
         setIsLoading(false);
-      });
-  }, []);
+      }
+    };
+
+    fetchArtists();
+  }, [user]);
 
   // This lets us select/deselect a single artist (only one artist can be selected at a time)
   const handleArtistToggle = (artistId: string) => {
@@ -74,7 +82,7 @@ const OneClick = () => {
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate("/dashboard")}>
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
               <Music className="w-6 h-6 text-primary-foreground" />
             </div>

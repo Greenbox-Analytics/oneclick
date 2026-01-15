@@ -1,18 +1,96 @@
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Music } from "lucide-react";
+import { Music, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 const Profile = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [isLoading, setIsLoading] = useState(false);
+  const [formData, setFormData] = useState({
+    full_name: "",
+    email: "",
+    company: "",
+    phone: "",
+  });
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (!user) return;
+
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.id)
+          .single();
+
+        if (error) throw error;
+
+        if (data) {
+          setFormData({
+            full_name: data.full_name || "",
+            email: user.email || "", // Email usually comes from auth user
+            company: data.company || "",
+            phone: data.phone || "",
+          });
+        }
+      } catch (error) {
+        console.error("Error fetching profile:", error);
+      }
+    };
+
+    fetchProfile();
+  }, [user]);
+
+  const handleSave = async () => {
+    if (!user) return;
+    setIsLoading(true);
+
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .upsert({
+          id: user.id,
+          full_name: formData.full_name,
+          company: formData.company,
+          phone: formData.phone,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: "Profile updated successfully.",
+      });
+    } catch (error: any) {
+      console.error("Error updating profile:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update profile.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div 
+            className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" 
+            onClick={() => navigate("/dashboard")}
+          >
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
               <Music className="w-6 h-6 text-primary-foreground" />
             </div>
@@ -38,22 +116,54 @@ const Profile = () => {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="name">Full Name</Label>
-              <Input id="name" defaultValue="John Doe" />
+              <Input 
+                id="name" 
+                value={formData.full_name} 
+                onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
+                placeholder="John Doe"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" defaultValue="john@example.com" />
+              <Input 
+                id="email" 
+                type="email" 
+                value={formData.email} 
+                disabled 
+                className="bg-muted"
+              />
+              <p className="text-xs text-muted-foreground">Email cannot be changed</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="company">Company</Label>
-              <Input id="company" defaultValue="Independent Management" />
+              <Input 
+                id="company" 
+                value={formData.company} 
+                onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+                placeholder="Independent Management"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="phone">Phone</Label>
-              <Input id="phone" type="tel" defaultValue="+1 (555) 123-4567" />
+              <Input 
+                id="phone" 
+                type="tel" 
+                value={formData.phone} 
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                placeholder="+1 (555) 123-4567"
+              />
             </div>
             <div className="pt-4">
-              <Button>Save Changes</Button>
+              <Button onClick={handleSave} disabled={isLoading}>
+                {isLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Changes"
+                )}
+              </Button>
             </div>
           </CardContent>
         </Card>

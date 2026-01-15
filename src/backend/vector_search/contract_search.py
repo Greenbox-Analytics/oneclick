@@ -244,6 +244,107 @@ class ContractSearch:
             top_k=top_k
         )
     
+    def search_multiple_contracts(self,
+                                  query: str,
+                                  user_id: str,
+                                  project_id: str,
+                                  contract_ids: List[str],
+                                  top_k: int = DEFAULT_TOP_K) -> Dict:
+        """
+        Search within multiple specific contracts.
+        Uses Pinecone's $in operator to filter by multiple contract IDs.
+        
+        Args:
+            query: Search query text
+            user_id: UUID of the user
+            project_id: UUID of the project
+            contract_ids: List of contract UUIDs to search
+            top_k: Number of results to return
+            
+        Returns:
+            Dict with search results
+        """
+        print("\n" + "=" * 80)
+        print("MULTI-CONTRACT SEMANTIC SEARCH")
+        print("=" * 80)
+        print(f"Query: {query}")
+        print(f"User ID: {user_id}")
+        print(f"Project ID: {project_id}")
+        print(f"Contract IDs: {contract_ids}")
+        print(f"Number of contracts: {len(contract_ids)}")
+        print(f"Top K: {top_k}")
+        print("-" * 80)
+        
+        # Build metadata filter with $in operator for multiple contracts
+        filter_dict = {
+            "user_id": user_id,
+            "project_id": project_id
+        }
+        
+        # Use $in operator for multiple contract IDs (similar to section_categories)
+        if len(contract_ids) == 1:
+            filter_dict["contract_id"] = contract_ids[0]
+        else:
+            filter_dict["contract_id"] = {"$in": contract_ids}
+        
+        # Create query embedding
+        print("Creating query embedding...")
+        query_embedding = create_query_embedding(query)
+        
+        # Perform search
+        namespace = f"{user_id}-namespace"
+        
+        print(f"Searching in namespace: {namespace}")
+        print(f"Filter: {filter_dict}")
+        
+        results = self.index.query(
+            namespace=namespace,
+            vector=query_embedding,
+            top_k=top_k,
+            filter=filter_dict,
+            include_metadata=True
+        )
+        
+        # Process results
+        matches = []
+        if hasattr(results, 'matches') and len(results.matches) > 0:
+            for match in results.matches:
+                matches.append({
+                    "id": match.id,
+                    "score": round(match.score, 4),
+                    "contract_id": match.metadata.get("contract_id"),
+                    "contract_file": match.metadata.get("contract_file"),
+                    "project_id": match.metadata.get("project_id"),
+                    "project_name": match.metadata.get("project_name"),
+                    "section_heading": match.metadata.get("section_heading", ""),
+                    "section_category": match.metadata.get("section_category", "OTHER"),
+                    "text": match.metadata.get("chunk_text", ""),
+                    "uploaded_at": match.metadata.get("uploaded_at")
+                })
+        
+        # Print results summary
+        print(f"\nFound {len(matches)} results across {len(contract_ids)} contracts")
+        if matches:
+            print(f"Top score: {matches[0]['score']}")
+            print(f"Lowest score: {matches[-1]['score']}")
+            # Show distribution across contracts
+            contract_distribution = {}
+            for match in matches:
+                contract_file = match['contract_file']
+                contract_distribution[contract_file] = contract_distribution.get(contract_file, 0) + 1
+            print(f"Results per contract: {contract_distribution}")
+        print("=" * 80)
+        
+        return {
+            "query": query,
+            "total_results": len(matches),
+            "matches": matches,
+            "filter": filter_dict,
+            "top_k": top_k,
+            "namespace": namespace,
+            "contracts_searched": len(contract_ids)
+        }
+    
     def smart_search(self,
                     query: str,
                     user_id: str,
@@ -332,6 +433,7 @@ class ContractSearch:
             for i, match in enumerate(results.matches):
                 print(f"\nMatch {i+1}:")
                 print(f"  Score: {match.score:.4f}")
+                print(f"  Chunk ID: {match.id}")
                 print(f"  Section: {match.metadata.get('section_heading', 'N/A')}")
                 print(f"  Category: {match.metadata.get('section_category', 'N/A')}")
                 

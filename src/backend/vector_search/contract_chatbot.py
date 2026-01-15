@@ -33,7 +33,7 @@ openai_client = OpenAI(
 )
 
 # Configuration
-DEFAULT_LLM_MODEL = "gpt-5-mini"  # Updated to stable model
+DEFAULT_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")  # Updated to stable model
 MIN_SIMILARITY_THRESHOLD = 0.30
 DEFAULT_TOP_K = 8
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
@@ -165,7 +165,7 @@ Return a clear, concise answer based only on the information provided in the con
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=1000
+                max_completion_tokens=1000
             )
             
             answer = response.choices[0].message.content
@@ -421,6 +421,87 @@ Return a clear, concise answer based only on the information provided in the con
             contract_id=contract_id,
             top_k=top_k
         )
+    
+    def ask_multiple_contracts(self,
+                              query: str,
+                              user_id: str,
+                              project_id: str,
+                              contract_ids: List[str],
+                              top_k: int = DEFAULT_TOP_K) -> Dict:
+        """
+        Ask a question about multiple specific contracts using smart retrieval.
+        Searches across all selected contracts similar to project-wide search.
+        
+        Args:
+            query: User's question
+            user_id: UUID of the user
+            project_id: UUID of the project
+            contract_ids: List of contract UUIDs to search
+            top_k: Number of search results to retrieve
+            
+        Returns:
+            Dict with answer and metadata
+        """
+        print("\n" + "=" * 80)
+        print("MULTI-CONTRACT CHATBOT")
+        print("=" * 80)
+        print(f"Question: {query}")
+        print(f"User ID: {user_id}")
+        print(f"Project ID: {project_id}")
+        print(f"Contract IDs: {contract_ids}")
+        print(f"Number of contracts: {len(contract_ids)}")
+        print("-" * 80)
+        
+        # Perform smart search with multiple contract IDs filter
+        search_results = self.search_engine.search_multiple_contracts(
+            query=query,
+            user_id=user_id,
+            project_id=project_id,
+            contract_ids=contract_ids,
+            top_k=top_k
+        )
+        
+        # Check if we have results
+        if not search_results["matches"]:
+            return {
+                "query": query,
+                "answer": "I don't know based on the available documents.",
+                "confidence": "low",
+                "reason": "No relevant documents found",
+                "sources": [],
+                "search_results_count": 0
+            }
+        
+        # Format context
+        context = self._format_context(search_results)
+        
+        # Generate answer
+        result = self._generate_answer(query, context, search_results)
+        
+        # Add query and search metadata
+        result["query"] = query
+        result["search_results_count"] = search_results["total_results"]
+        result["filter"] = search_results["filter"]
+        
+        # Store in conversation history
+        self.conversation_history.append({
+            "query": query,
+            "answer": result["answer"],
+            "confidence": result["confidence"],
+            "timestamp": search_results["matches"][0]["uploaded_at"] if search_results["matches"] else None
+        })
+        
+        print("\n" + "=" * 80)
+        print("MULTI-CONTRACT ANSWER GENERATED")
+        print("=" * 80)
+        print(f"Confidence: {result['confidence']}")
+        if result.get('highest_score'):
+            print(f"Highest Similarity Score: {result['highest_score']}")
+        print(f"Sources Used: {len(result['sources'])}")
+        print(f"Contracts Searched: {len(contract_ids)}")
+        print("=" * 80)
+        
+        return result
     
     def get_conversation_history(self) -> List[Dict]:
         """

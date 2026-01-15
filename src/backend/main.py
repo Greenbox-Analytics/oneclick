@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from supabase import create_client, Client
 from pydantic import BaseModel
 from typing import List, Optional, Dict
@@ -12,6 +13,8 @@ import tempfile
 from dotenv import load_dotenv
 import sys
 from pathlib import Path
+import json
+import asyncio
 
 # Add the backend directory to Python path for module resolution
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -129,12 +132,18 @@ def read_root():
     return {"message": "Msanii AI Backend is running"}
 
 @app.get("/artists")
-async def get_artists():
+async def get_artists(user_id: Optional[str] = None):
     """
-    Fetch all artists.
+    Fetch artists. If user_id is provided, filter by that user's artists only.
     """
     try:
-        response = supabase.table("artists").select("*").execute()
+        query = supabase.table("artists").select("*")
+        
+        # Filter by user_id if provided
+        if user_id:
+            query = query.eq("user_id", user_id)
+        
+        response = query.execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -263,60 +272,6 @@ async def upload_file(
     except Exception as e:
         print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/calculate", response_model=RoyaltyResults)
-async def calculate_royalties(
-    contract_files: List[str] = Form(...), # List of file paths or IDs
-    royalty_files: List[str] = Form(...)   # List of file paths or IDs
-):
-    """
-    Mock calculation endpoint. 
-    In the future, this will:
-    1. Download the files from Supabase.
-    2. Parse the Excel/CSV royalty statement.
-    3. Apply contract logic.
-    4. Return real results.
-    """
-    
-    # Mock processing delay
-    time.sleep(1) 
-    
-    # Returning the dummy data structure
-    return {
-        "songTitle": "Midnight Dreams",
-        "totalContributors": 4,
-        "totalRevenue": 125000.00,
-        "breakdown": [
-            {
-                "songName": "Midnight Dreams",
-                "contributorName": "Luna Rivers",
-                "role": "Artist",
-                "royaltyPercentage": 45.0,
-                "amount": 56250.00
-            },
-            {
-                "songName": "Midnight Dreams",
-                "contributorName": "Alex Martinez",
-                "role": "Producer",
-                "royaltyPercentage": 30.0,
-                "amount": 37500.00
-            },
-            {
-                "songName": "Midnight Dreams",
-                "contributorName": "Sarah Chen",
-                "role": "Songwriter",
-                "royaltyPercentage": 20.0,
-                "amount": 25000.00
-            },
-            {
-                "songName": "Midnight Dreams",
-                "contributorName": "Mike Johnson",
-                "role": "Featured Artist",
-                "royaltyPercentage": 5.0,
-                "amount": 6250.00
-            }
-        ]
-    }
 
 # --- Zoe AI Chatbot Endpoints ---
 
@@ -573,7 +528,7 @@ async def zoe_ask_question(request: ZoeAskRequest):
     
     Rules:
     1. Always filters by user_id and project_id
-    2. If contract_ids are provided, filters by specific contracts and uses top_k=3
+    2. If contract_ids are provided, filters by specific contracts and uses top_k=8
     3. If no contract_ids, searches all contracts in project with top_k=8
     4. Only answers if highest similarity ≥ 0.75
     5. Returns answer with source citations
@@ -582,21 +537,17 @@ async def zoe_ask_question(request: ZoeAskRequest):
         # Get Zoe chatbot instance
         chatbot = get_zoe_chatbot()
         
-        # Determine top_k based on whether specific contracts are selected
-        # If specific contracts selected: top_k=3 (focused search)
-        # If project-wide search: top_k=8 (broader search)
-        top_k = 3 if request.contract_ids and len(request.contract_ids) > 0 else 8
+        # Use top_k=8 for both project-wide and multi-contract searches
+        top_k = 8
         
         # Ask the question
         if request.contract_ids and len(request.contract_ids) > 0:
-            # Contract-specific question(s)
-            # For multiple contracts, we'll query each and combine results
-            # For now, use the first contract_id (can be enhanced to handle multiple)
-            result = chatbot.ask_contract(
+            # Multiple contracts selected - search across all of them
+            result = chatbot.ask_multiple_contracts(
                 query=request.query,
                 user_id=request.user_id,
                 project_id=request.project_id,
-                contract_id=request.contract_ids[0],  # Use first contract for now
+                contract_ids=request.contract_ids,
                 top_k=top_k
             )
         else:
@@ -653,11 +604,154 @@ class OneClickRoyaltyResponse(BaseModel):
     excel_file_url: Optional[str] = None
     message: str
 
+@app.get("/oneclick/calculate-royalties-stream")
+async def oneclick_calculate_royalties_stream(
+    contract_id: str,
+    user_id: str,
+    project_id: str,
+    royalty_statement_file_id: str
+):
+    """
+    OneClick Royalty Calculation with Server-Sent Events (SSE) for real-time progress updates.
+    
+    This endpoint streams progress updates to the client as the calculation proceeds:
+    - Downloading files
+    - Extracting contract data (parties, works, royalties, summary)
+    - Processing royalty statement
+    - Calculating payments
+    
+    Args:
+        request: Contains contract_id, user_id, project_id, and royalty_statement_file_id
+        
+    Returns:
+        SSE stream with progress updates and final results
+    """
+    async def generate_progress():
+        try:
+            # Send initial status
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0, 'stage': 'starting'})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            # Step 1: Download royalty statement
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
+            
+            statement_res = supabase.table("project_files").select("*").eq("id", royalty_statement_file_id).execute()
+            if not statement_res.data:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Royalty statement file not found'})}\n\n"
+                return
+            
+            statement_file = statement_res.data[0]
+            file_data = supabase.storage.from_("project-files").download(statement_file["file_path"])
+            
+            file_extension = Path(statement_file['file_name']).suffix.lower()
+            if not file_extension or file_extension not in ['.csv', '.xlsx', '.xls']:
+                file_extension = '.xlsx'
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
+                tmp_statement.write(file_data)
+                statement_path = tmp_statement.name
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Royalty statement downloaded', 'progress': 20, 'stage': 'downloading'})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            # Step 2: Download contract
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25, 'stage': 'downloading'})}\n\n"
+            
+            contract_res = supabase.table("project_files").select("*").eq("id", contract_id).execute()
+            if not contract_res.data:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Contract file not found'})}\n\n"
+                return
+            
+            contract_file = contract_res.data[0]
+            contract_data = supabase.storage.from_("project-files").download(contract_file["file_path"])
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
+                tmp_contract.write(contract_data)
+                contract_path = tmp_contract.name
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Contract downloaded', 'progress': 30, 'stage': 'downloading'})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            # Step 3: Extract contract data with progress updates
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contract...', 'progress': 35, 'stage': 'extracting_parties'})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contract...', 'progress': 50, 'stage': 'extracting_works'})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting royalty splits...', 'progress': 65, 'stage': 'extracting_royalty'})}\n\n"
+            await asyncio.sleep(0.5)
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+            await asyncio.sleep(0.3)
+            
+            try:
+                # Calculate payments
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
+                
+                payments = calculate_royalty_payments(
+                    contract_path=contract_path,
+                    statement_path=statement_path,
+                    user_id=user_id,
+                    contract_id=contract_id
+                )
+                
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
+                await asyncio.sleep(0.3)
+                
+                if not payments or len(payments) == 0:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
+                    return
+                
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
+                await asyncio.sleep(0.2)
+                
+                # Send final results
+                payment_responses = []
+                for payment in payments:
+                    payment_responses.append({
+                        'song_title': payment['song_title'],
+                        'party_name': payment['party_name'],
+                        'role': payment['role'],
+                        'royalty_type': payment['royalty_type'],
+                        'percentage': payment['percentage'],
+                        'total_royalty': payment['total_royalty'],
+                        'amount_to_pay': payment['amount_to_pay'],
+                        'terms': payment.get('terms')
+                    })
+                
+                result = {
+                    'type': 'complete',
+                    'status': 'success',
+                    'total_payments': len(payments),
+                    'payments': payment_responses,
+                    'message': f'Successfully calculated {len(payments)} royalty payments',
+                    'progress': 100,
+                    'stage': 'complete'
+                }
+                
+                yield f"data: {json.dumps(result)}\n\n"
+                
+            finally:
+                # Clean up temporary files
+                if os.path.exists(contract_path):
+                    os.unlink(contract_path)
+                if os.path.exists(statement_path):
+                    os.unlink(statement_path)
+                    
+        except Exception as e:
+            import traceback
+            error_detail = str(e)
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': error_detail})}\n\n"
+    
+    return StreamingResponse(generate_progress(), media_type="text/event-stream")
+
 @app.post("/oneclick/calculate-royalties", response_model=OneClickRoyaltyResponse)
 async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
     """
     OneClick Royalty Calculation:
-    1. Retrieve publishing royalty splits from selected contract using vector search
+    1. Retrieve streamingroyalty splits from selected contract using vector search
     2. Download royalty statement from Supabase
     3. Calculate payments using royalty_calculator.py methods
     4. Save results to Excel and upload to Supabase
@@ -678,30 +772,8 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         print(f"Project ID: {request.project_id}")
         print(f"Royalty Statement File ID: {request.royalty_statement_file_id}")
         
-        # Step 1: Query contract for publishing royalty splits using smart_search
-        print("\n--- Step 1: Retrieving Publishing Royalty Splits ---")
-        contract_search = ContractSearch(region="US")
-        
-        # Use smart_search to find publishing royalty information
-        query = "What are the publishing royalty percentage splits for streaming? List all parties and their percentages."
-        search_results = contract_search.smart_search(
-            query=query,
-            user_id=request.user_id,
-            project_id=request.project_id,
-            contract_id=request.contract_id,
-            top_k=5
-        )
-        
-        if not search_results["matches"] or len(search_results["matches"]) == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="No publishing royalty information found in the selected contract"
-            )
-        
-        print(f"Found {len(search_results['matches'])} relevant contract sections")
-        
         # Step 2: Download royalty statement from Supabase
-        print("\n--- Step 2: Downloading Royalty Statement ---")
+        print("\n--- Step 1: Downloading Royalty Statement ---")
         statement_res = supabase.table("project_files").select("*").eq("id", request.royalty_statement_file_id).execute()
         
         if not statement_res.data:
@@ -729,7 +801,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         print(f"Downloaded royalty statement: {statement_file['file_name']} (detected as {file_extension})")
         
         # Step 3: Get contract file for parsing
-        print("\n--- Step 3: Downloading Contract File ---")
+        print("\n--- Step 2: Downloading Contract File ---")
         contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
         
         if not contract_res.data:
@@ -750,7 +822,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         
         try:
             # Step 4: Calculate payments using helper function
-            print("\n--- Step 4: Calculating Royalty Payments ---")
+            print("\n--- Step 3: Calculating Royalty Payments ---")
             
             # Use helper function from helpers.py
             payments = calculate_royalty_payments(
