@@ -1,0 +1,155 @@
+================================================================================
+ONECLICK ROYALTY CALCULATION
+================================================================================
+Contract ID: 365f1524-2d09-49f3-befd-7b8a0bd11eaf
+User ID: 7c4d973a-b2d4-4e76-899c-085772fe4a60
+Project ID: 9eaa6fbe-66f2-483d-9ec7-7e9411471c20
+Royalty Statement File ID: 3c00f9f3-8aa2-40c1-9d86-53df241d67e8
+
+--- Step 1: Downloading Royalty Statement ---
+Downloaded royalty statement: Royalty Statement Scenario 2 - Sheet1.csv (detected as .csv)
+
+--- Step 2: Downloading Contract File ---
+Downloaded contract: Scenario 3 'Home' - Romes_Yash Contract.pdf
+
+--- Step 3: Calculating Royalty Payments ---
+
+================================================================================
+ROYALTY PAYMENT CALCULATION
+================================================================================
+
+📄 Step 1: Extracting contract data from Pinecone...
+📄 Extracting contract data from Pinecone
+   User ID: 7c4d973a-b2d4-4e76-899c-085772fe4a60
+   Contract ID: 365f1524-2d09-49f3-befd-7b8a0bd11eaf
+
+   🧠 Categorizing query: 'List only the specific named legal entities or individuals who are parties to this agreement (e.g., Artist, Label, Producer). Do not list generic roles or unnamed parties.'
+      → Categories: ['OTHER']
+      → Confidence: high
+      → Method: Keyword-based (fast)
+      ⏱️  Categorization took: 0.00s
+      ⏱️  Embedding creation took: 0.60s
+      → Using filter: {'contract_id': {'$eq': '365f1524-2d09-49f3-befd-7b8a0bd11eaf'}, 'section_category': {'$eq': 'OTHER'}}
+      ⏱️  Pinecone query took: 0.26s
+   🔍 Retrieving chunks for: 'List only the specific named legal entities or individuals who are parties to this agreement (e.g., Artist, Label, Producer). Do not list generic roles or unnamed parties.'
+      Chunk 1: ID=b6ce9087e03816ab4c7eeb672fc3c9590dfadb1357537ecf8a37d21db447b239 | Score=0.3312 | Section='8. ORIGINALITY AND NON-PLAGIARISM:' | Category='OTHER'
+      Chunk 2: ID=84282cf9639be6a2d62080508df8f747ccf33c8afe9f8c28a51874f276200e37 | Score=0.3235 | Section='8. ORIGINALITY AND NON-PLAGIARISM:' | Category='OTHER'
+      Chunk 3: ID=37586674240ffe18ed14f77ca6a1c50a28a3528dfd19bffcbf03ddb915ad37af | Score=0.3198 | Section='8. ORIGINALITY AND NON-PLAGIARISM:' | Category='OTHER'
+      Chunk 4: ID=ad003911bbe09a9660816782c169e3dfecbe8c091c985e7395a0528b9a240c8b | Score=0.3142 | Section='13. MODIFICATION:' | Category='OTHER'
+      Chunk 5: ID=1d413605d441048a9d6791886b71f3cc3d34cd86a3ddbf01dc04115367350148 | Score=0.3018 | Section='12. ENTIRE AGREEMENT:' | Category='OTHER'
+      ⏱️  LLM response took: 2.94s
+👥 Extracted 2 parties
+   1. Yash Khapre (writer)
+   2. Romes Isaiah (artist)
+   ⏱️  Parties extraction took: 3.80s
+
+   🧠 Categorizing query: 'What is the specific musical work, song, or master recording being licensed or transferred in this agreement?'
+      → Categories: ['MASTER_RIGHTS', 'OWNERSHIP_RIGHTS']
+      → Confidence: medium
+      → Method: Keyword-based (fast)
+      ⏱️  Categorization took: 0.00s
+      ⏱️  Embedding creation took: 0.75s
+      → Using filter: {'contract_id': {'$eq': '365f1524-2d09-49f3-befd-7b8a0bd11eaf'}, 'section_category': {'$in': ['MASTER_RIGHTS', 'OWNERSHIP_RIGHTS']}}
+      ⏱️  Pinecone query took: 0.12s
+   🔍 Retrieving chunks for: 'What is the specific musical work, song, or master recording being licensed or transferred in this agreement?'
+      Chunk 1: ID=376d13eb5e2588fdfe2e1c329815360dd488e8d074411686558f3a7334d17383 | Score=0.5267 | Section='3. OWNERSHIP OF WORKS:' | Category='OWNERSHIP_RIGHTS'
+      Chunk 2: ID=f92fdfb4b5278b5b097425fb3c820e59e2737c9914dcab2e6b867a236c33112b | Score=0.5203 | Section='3. OWNERSHIP OF WORKS:' | Category='OWNERSHIP_RIGHTS'
+      Chunk 3: ID=6b1346203691820f47b6613df4c140a3ac3c03a39c8562fc4807b79365e0db00 | Score=0.4809 | Section='1. MASTER RIGHTS:' | Category='MASTER_RIGHTS'
+      ⏱️  LLM response took: 3.09s
+🎵 Extracted 1 works
+   1. Home (song (master recording))
+   ⏱️  Works extraction took: 3.96s
+
+   🧠 Categorizing query: 'What are the explicit streaming royalty percentage splits defined in the contract? Only list parties with a specific numeric percentage.'
+      → Categories: ['ROYALTY_CALCULATIONS']
+      → Confidence: high
+      → Method: Keyword-based (fast)
+      ⏱️  Categorization took: 0.00s
+      ⏱️  Embedding creation took: 0.56s
+      → Using filter: {'contract_id': {'$eq': '365f1524-2d09-49f3-befd-7b8a0bd11eaf'}, 'section_category': {'$eq': 'ROYALTY_CALCULATIONS'}}
+      ⏱️  Pinecone query took: 0.11s
+   🔍 Retrieving chunks for: 'What are the explicit streaming royalty percentage splits defined in the contract? Only list parties with a specific numeric percentage.'
+      Chunk 1: ID=6861aeb93694d437225609e6b0bee8614e1398069c512e065065fa1a76a3c99c | Score=0.5293 | Section='4. REVENUE SHARE:' | Category='ROYALTY_CALCULATIONS'
+      Chunk 2: ID=dffe47550034f09733f9863d96013e6a8eeef43cff9c6303001c80d462d76fd7 | Score=0.4712 | Section='9. ACCOUNTING & PAYMENTS:' | Category='ROYALTY_CALCULATIONS'
+      Chunk 3: ID=46b9cb4730d194c8ab55b866b4d908d57178217200b72ecb42b62c004f8fec02 | Score=0.4417 | Section='9. ACCOUNTING & PAYMENTS:' | Category='ROYALTY_CALCULATIONS'
+      Chunk 4: ID=92d6d9d076534b8e38efcde9fe2e512f603a9b27dd5cdf0564d5fccc7d7a9832 | Score=0.4287 | Section='9. ACCOUNTING & PAYMENTS:' | Category='ROYALTY_CALCULATIONS'
+      Chunk 5: ID=1c9b99eb4c21f3fc7c0eea1058ccc31a40edb4ac6609e2ad2198a8a51f22b20e | Score=0.3880 | Section='9. ACCOUNTING & PAYMENTS:' | Category='ROYALTY_CALCULATIONS'
+      ⏱️  LLM response took: 5.99s
+💰 Extracted 2 royalty shares
+   1. Romes Isaiah | streaming/purchasing (net revenue) | 35.0% | Applies to net revenue from streaming and purchasing of "Home"; accounting based on distributor reports; no royalties payable to Writer until Artist actually receives/has credited payment; royalties paid quarterly (every 3 months) after release; amounts under CAD $100 carried forward.
+   2. Yash | streaming/purchasing (net revenue) | 5.0% | Applies to net revenue from streaming and purchasing of "Home"; accounting based on distributor reports; no royalties payable to Writer until Artist actually receives/has credited payment; royalties paid quarterly (every 3 months) after release; amounts under CAD $100 carried forward.
+   ⏱️  Royalties extraction took: 6.65s
+
+   🧠 Categorizing query: 'Provide a concise 2-3 paragraph summary of this music contract, including the main parties, terms, and royalty arrangements.'
+      → Categories: ['ROYALTY_CALCULATIONS', 'TERMINATION']
+      → Confidence: medium
+      → Method: Keyword-based (fast)
+      ⏱️  Categorization took: 0.00s
+      ⏱️  Embedding creation took: 0.49s
+      → Using filter: {'contract_id': {'$eq': '365f1524-2d09-49f3-befd-7b8a0bd11eaf'}}
+      ⏱️  Pinecone query took: 0.11s
+   🔍 Retrieving chunks for: 'Provide a concise 2-3 paragraph summary of this music contract, including the main parties, terms, and royalty arrangements.'
+      Chunk 1: ID=c01d17bbb86c5e57090d1a72aa4b76f6ed2e999a902bd87400542818debfc312 | Score=0.4802 | Section='7. COPYRIGHT:' | Category='COPYRIGHT'
+      Chunk 2: ID=46b9cb4730d194c8ab55b866b4d908d57178217200b72ecb42b62c004f8fec02 | Score=0.4610 | Section='9. ACCOUNTING & PAYMENTS:' | Category='ROYALTY_CALCULATIONS'
+      Chunk 3: ID=23172b1bc066b6ef5be0979a049c69085b5beee9e5077f6d2dd56c75ef9a3a0f | Score=0.4497 | Section='9. ACCOUNTING & PAYMENTS:' | Category='ROYALTY_CALCULATIONS'
+      Chunk 4: ID=1c9b99eb4c21f3fc7c0eea1058ccc31a40edb4ac6609e2ad2198a8a51f22b20e | Score=0.4329 | Section='9. ACCOUNTING & PAYMENTS:' | Category='ROYALTY_CALCULATIONS'
+      Chunk 5: ID=ecdad9cbf7e3c2a9b7af66ada17999e72841199f2dcbfdc47c04a25302a16e2d | Score=0.4276 | Section='2. PUBLISHING RIGHTS:' | Category='PUBLISHING_RIGHTS'
+      Chunk 6: ID=6861aeb93694d437225609e6b0bee8614e1398069c512e065065fa1a76a3c99c | Score=0.4242 | Section='4. REVENUE SHARE:' | Category='ROYALTY_CALCULATIONS'
+      Chunk 7: ID=75f6d884c7fae54ea4d183537569ccb9e581badfe691f03849e2b05b8f76b3a5 | Score=0.4241 | Section='7. COPYRIGHT:' | Category='COPYRIGHT'
+      Chunk 8: ID=08cb67c603376ec7b4d84440743f5955a407a15c69f58ff3d228ea5fba7e79aa | Score=0.4004 | Section='10. CREDIT AND PROMOTION:' | Category='ACCOUNTING_AND_CREDIT'
+      ⏱️  LLM response took: 9.21s
+🧾 Summary generated
+   ⏱️  Summary extraction took: 9.81s
+✅ Extraction complete in 24.22s
+   → 2 parties, 1 works, 2 shares
+⏱️  Step 1 took: 24.22s
+
+💵 Step 2: Reading royalty statement...
+
+📊 Reading royalty statement: tmp4pt5xqbn.csv
+   Found 27 columns: label, catalog no, release artist, release title, release type...
+   ✓ Auto-detected title column: 'release title'
+   ✓ Auto-detected payable column: 'net payable'
+   ✓ Processed 1095 rows (0 skipped)
+   ✓ Found 11 unique songs
+⏱️  Step 2 took: 0.01s
+
+🔍 DEBUG CHECK — Contract vs Statement
+Contract works:
+   → Home
+
+Statement songs:
+   → Like That
+   → Home
+   → Uncommitted
+   → Tell Me
+   → Back Seat
+   → Turn You Good
+   → Good Look
+   → Heaven Sent
+   → Syd's Song - Live
+   → Prove It
+
+💰 Step 3: Calculating payments...
+
+   Found 2 streaming royalty shares
+   Found 1 works to match
+
+   ✓ 'Home'
+      Matched to: 'Home'
+      Total royalties: $13.94
+         → Romes Isaiah (artist): 35.0% = $4.88
+         → Yash (unknown): 5.0% = $0.70
+
+   📊 Matching Summary:
+      ✓ Matched: 1/1 works
+
+   ✅ Calculated 2 total payments
+⏱️  Step 3 took: 0.00s
+
+✅ Total calculation process took: 24.23s
+Calculated 2 payments
+
+================================================================================
+CALCULATION COMPLETE
+================================================================================

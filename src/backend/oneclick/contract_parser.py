@@ -1,0 +1,422 @@
+"""
+Music Contract Parser - Pinecone-based extraction
+Extracts structured data (parties, works, royalty shares) from contracts already stored in Pinecone
+"""
+
+import os
+from dataclasses import dataclass
+from typing import List, Optional
+from dotenv import load_dotenv
+from pinecone import Pinecone
+from openai import OpenAI
+from pathlib import Path
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Add backend directory to path to allow imports from vector_search
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from vector_search.query_categorizer import categorize_query, build_metadata_filter
+
+load_dotenv()
+
+# Initialize clients
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
+
+if not PINECONE_API_KEY:
+    raise ValueError("PINECONE_API_KEY not found in .env file")
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY not found in .env file")
+
+pc = Pinecone(api_key=PINECONE_API_KEY)
+openai_client = OpenAI(
+    api_key=OPENAI_API_KEY,
+    base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None
+)
+
+# Configuration
+EMBEDDING_MODEL = "text-embedding-3-small"
+LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")
+INDEX_NAME = "test-3-small-index"
+
+
+# ---------------------------------------------------------------------------
+# Data Models
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Party:
+    name: str
+    role: str
+
+
+@dataclass
+class Work:
+    title: str
+    work_type: str = "song"
+
+
+@dataclass
+class RoyaltyShare:
+    party_name: str
+    royalty_type: str
+    percentage: float
+    terms: Optional[str] = None
+
+
+@dataclass
+class ContractData:
+    parties: List[Party]
+    works: List[Work]
+    royalty_shares: List[RoyaltyShare]
+    contract_summary: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Parser Class
+# ---------------------------------------------------------------------------
+
+class MusicContractParser:
+    """Extract structured data from contracts stored in Pinecone"""
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or OPENAI_API_KEY
+        if not self.api_key or not self.api_key.startswith("sk-"):
+            raise ValueError("Missing or invalid OpenAI API key.")
+
+        self.openai_client = OpenAI(
+            api_key=self.api_key,
+            base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None
+        )
+        self.index = pc.Index(INDEX_NAME)
+
+    def parse_contract(self, path: str, user_id: str = None, contract_id: str = None, use_parallel: bool = True) -> ContractData:
+        """
+        Parse contract by querying Pinecone for relevant sections.
+        
+        Note: This method signature is kept for compatibility with royalty_calculator.py
+        In practice, you should provide user_id and contract_id to query Pinecone.
+        
+        Args:
+            path: Contract file path (not used, kept for compatibility)
+            user_id: User ID for Pinecone namespace filtering
+            contract_id: Contract ID for filtering specific contract
+            use_parallel: If True, runs extractions in parallel (default: True)
+            
+        Returns:
+            ContractData with extracted information
+        """
+        if not user_id or not contract_id:
+            raise ValueError(
+                "user_id and contract_id are required to query Pinecone. "
+                "The contract must already be uploaded and indexed."
+            )
+
+        start_time = time.time()
+        print(f"📄 Extracting contract data from Pinecone")
+        print(f"   User ID: {user_id}")
+        print(f"   Contract ID: {contract_id}")
+        print(f"   Mode: {'Parallel' if use_parallel else 'Sequential'}")
+
+        if use_parallel:
+            # Run all extractions in parallel
+            parties = []
+            works = []
+            royalty_shares = []
+            summary = ""
+            
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                # Submit all tasks
+                future_to_task = {
+                    executor.submit(self._extract_parties, user_id, contract_id): "parties",
+                    executor.submit(self._extract_works, user_id, contract_id): "works",
+                    executor.submit(self._extract_royalties, user_id, contract_id): "royalties",
+                    executor.submit(self._extract_summary, user_id, contract_id): "summary"
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_task):
+                    task_name = future_to_task[future]
+                    try:
+                        result = future.result()
+                        if task_name == "parties":
+                            parties = result
+                        elif task_name == "works":
+                            works = result
+                        elif task_name == "royalties":
+                            royalty_shares = result
+                        elif task_name == "summary":
+                            summary = result
+                    except Exception as e:
+                        print(f"   ⚠️ Error in {task_name} extraction: {e}")
+        else:
+            # Sequential execution (original behavior)
+            t0 = time.time()
+            parties = self._extract_parties(user_id, contract_id)
+            print(f"   ⏱️  Parties extraction took: {time.time() - t0:.2f}s")
+
+            t0 = time.time()
+            works = self._extract_works(user_id, contract_id)
+            print(f"   ⏱️  Works extraction took: {time.time() - t0:.2f}s")
+
+            t0 = time.time()
+            royalty_shares = self._extract_royalties(user_id, contract_id)
+            print(f"   ⏱️  Royalties extraction took: {time.time() - t0:.2f}s")
+
+            t0 = time.time()
+            summary = self._extract_summary(user_id, contract_id)
+            print(f"   ⏱️  Summary extraction took: {time.time() - t0:.2f}s")
+
+        total_time = time.time() - start_time
+        print(f"✅ Extraction complete in {total_time:.2f}s")
+        print(f"   → {len(parties)} parties, {len(works)} works, {len(royalty_shares)} shares")
+
+        return ContractData(
+            parties=parties,
+            works=works,
+            royalty_shares=royalty_shares,
+            contract_summary=summary
+        )
+
+    def _query_pinecone(self, query: str, user_id: str, contract_id: str, top_k: int = 5, use_fast_categorization: bool = True) -> str:
+        """
+        Query Pinecone and return concatenated context.
+        
+        Args:
+            query: Search query
+            user_id: User ID for namespace
+            contract_id: Contract ID for filtering
+            top_k: Number of results to retrieve
+            use_fast_categorization: If True, uses fast keyword matching instead of LLM (default: True)
+            
+        Returns:
+            Concatenated text from top results
+        """
+        print(f"\n   🧠 Categorizing query: '{query}'")
+        
+        # 1. Categorize the query (use fast keyword-based categorization by default)
+        t_cat = time.time()
+        categorization = categorize_query(query, self.openai_client, use_llm=not use_fast_categorization)
+        print(f"      → Categories: {categorization.get('categories')}")
+        print(f"      → Confidence: {categorization.get('confidence')}")
+        print(f"      → Method: {'Keyword-based (fast)' if use_fast_categorization else 'LLM-based'}")
+        print(f"      ⏱️  Categorization took: {time.time() - t_cat:.2f}s")
+
+        # 2. Build metadata filter
+        filter_dict = build_metadata_filter(
+            categories=categorization.get('categories', []),
+            is_general=categorization.get('is_general', False),
+            user_id=None, # user_id is handled by namespace
+            contract_id=contract_id
+        )
+        
+        # Create query embedding
+        t_embed = time.time()
+        response = self.openai_client.embeddings.create(
+            model=EMBEDDING_MODEL,
+            input=[query]
+        )
+        query_embedding = response.data[0].embedding
+        print(f"      ⏱️  Embedding creation took: {time.time() - t_embed:.2f}s")
+
+        # Query Pinecone
+        namespace = f"{user_id}-namespace"
+        
+        print(f"      → Using filter: {filter_dict}")
+        
+        t_query = time.time()
+        try:
+            results = self.index.query(
+                namespace=namespace,
+                vector=query_embedding,
+                top_k=top_k,
+                filter=filter_dict,
+                include_metadata=True
+            )
+        except Exception as e:
+            print(f"      ⚠️ Error with filtered search: {e}. Falling back to broad search.")
+            # Fallback to simple contract_id filter if category search fails or returns nothing
+            results = self.index.query(
+                namespace=namespace,
+                vector=query_embedding,
+                top_k=top_k,
+                filter={"contract_id": contract_id},
+                include_metadata=True
+            )
+        print(f"      ⏱️  Pinecone query took: {time.time() - t_query:.2f}s")
+
+        # Concatenate results
+        context_parts = []
+        if hasattr(results, 'matches') and len(results.matches) > 0:
+            print(f"   🔍 Retrieving chunks for: '{query}'")
+            for i, match in enumerate(results.matches):
+                chunk_id = match.id
+                section = match.metadata.get("section_heading", "N/A")
+                category = match.metadata.get("section_category", "N/A")
+                score = match.score
+                print(f"      Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}' | Category='{category}'")
+                
+                text = match.metadata.get("chunk_text", "")
+                if text:
+                    context_parts.append(text)
+        else:
+            print("      ⚠️ No matches found with filters. Retrying without category filter.")
+            results = self.index.query(
+                namespace=namespace,
+                vector=query_embedding,
+                top_k=top_k,
+                filter={"contract_id": contract_id},
+                include_metadata=True
+            )
+            if hasattr(results, 'matches') and len(results.matches) > 0:
+                 for i, match in enumerate(results.matches):
+                    chunk_id = match.id
+                    section = match.metadata.get("section_heading", "N/A")
+                    score = match.score
+                    print(f"      Fallback Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}'")
+                    text = match.metadata.get("chunk_text", "")
+                    if text:
+                        context_parts.append(text)
+
+        return "\n\n".join(context_parts)
+
+    def _ask_llm(self, context: str, question: str, template: str) -> str:
+        """
+        Send context and question to LLM.
+        
+        Args:
+            context: Retrieved context from Pinecone
+            question: Question to ask
+            template: Prompt template
+            
+        Returns:
+            LLM response
+        """
+        prompt = template.format(context=context, question=question)
+        
+        t_llm = time.time()
+        response = self.openai_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        print(f"      ⏱️  LLM response took: {time.time() - t_llm:.2f}s")
+        
+        return response.choices[0].message.content.strip()
+
+    def _extract_parties(self, user_id: str, contract_id: str) -> List[Party]:
+        """Extract all parties/contributors from contract"""
+        question = "List only the specific named legal entities or individuals who are parties to this agreement (e.g., Artist, Label, Producer). Do not list generic roles or unnamed parties."
+        template = """You are a contract analyst. Use the context below to answer.
+
+Context:
+{context}
+
+Question:
+{question}
+
+List each party as: Name | Role
+Answer:
+"""
+        context = self._query_pinecone(question, user_id, contract_id, top_k=5)
+        result = self._ask_llm(context, question, template)
+        
+        parties = []
+        for line in result.splitlines():
+            if "|" in line:
+                parts = line.split("|", 1)
+                if len(parts) == 2:
+                    name, role = [x.strip() for x in parts]
+                    if name and role:
+                        parties.append(Party(name, role.lower()))
+        
+        print(f"👥 Extracted {len(parties)} parties")
+        for i, party in enumerate(parties):
+            print(f"   {i+1}. {party.name} ({party.role})")
+        return parties
+
+    def _extract_works(self, user_id: str, contract_id: str) -> List[Work]:
+        """Extract all songs/works from contract"""
+        question = "What is the specific musical work, song, or master recording being licensed or transferred in this agreement?"
+        template = """Context:
+{context}
+
+Question:
+{question}
+
+List each as: Title | Type (song, album, composition)
+Answer:
+"""
+        context = self._query_pinecone(question, user_id, contract_id, top_k=5)
+        result = self._ask_llm(context, question, template)
+        
+        works = []
+        for line in result.splitlines():
+            if "|" in line:
+                parts = line.split("|", 1)
+                if len(parts) == 2:
+                    title, typ = [x.strip() for x in parts]
+                    if title:
+                        works.append(Work(title, typ.lower() or "song"))
+        
+        print(f"🎵 Extracted {len(works)} works")
+        for i, work in enumerate(works):
+            print(f"   {i+1}. {work.title} ({work.work_type})")
+        return works
+
+    def _extract_royalties(self, user_id: str, contract_id: str) -> List[RoyaltyShare]:
+        """Extract royalty shares from contract"""
+        question = "What are the explicit streaming royalty percentage splits defined in the contract? Only list parties with a specific numeric percentage."
+        template = """Context:
+{context}
+
+Question:
+{question}
+
+List each as: Name | Royalty Type | Percentage | Terms
+Answer:
+"""
+        context = self._query_pinecone(question, user_id, contract_id, top_k=5)
+        result = self._ask_llm(context, question, template)
+        
+        shares = []
+        for line in result.splitlines():
+            if "|" in line:
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 3:
+                    name, typ, pct = parts[:3]
+                    terms = parts[3] if len(parts) > 3 else None
+                    try:
+                        pct_val = float(pct.replace("%", "").strip())
+                        shares.append(RoyaltyShare(name, typ.lower(), pct_val, terms))
+                    except ValueError:
+                        continue
+        
+        print(f"💰 Extracted {len(shares)} royalty shares")
+        for i, share in enumerate(shares):
+            print(f"   {i+1}. {share.party_name} | {share.royalty_type} | {share.percentage}%" + (f" | {share.terms}" if share.terms else ""))
+        return shares
+
+    def _extract_summary(self, user_id: str, contract_id: str) -> str:
+        """Generate contract summary"""
+        question = (
+            "Provide a concise 2-3 paragraph summary of this music contract, "
+            "including the main parties, terms, and royalty arrangements."
+        )
+        template = """Context:
+{context}
+
+Question:
+{question}
+
+Answer (2-3 paragraphs):
+"""
+        context = self._query_pinecone(question, user_id, contract_id, top_k=8)
+        result = self._ask_llm(context, question, template)
+        
+        print("🧾 Summary generated")
+        return result

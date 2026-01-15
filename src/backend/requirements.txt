@@ -5,5 +5,13 @@ pandas
 openpyxl
 python-multipart
 python-dotenv
-
-
+certifi
+pip-system-certs
+pinecone
+langchain
+langchain-community
+langchain-openai
+langchain-text-splitters
+pymupdf
+tiktoken
+openai

@@ -13,7 +13,8 @@ import ArtistProfile from "./pages/ArtistProfile";
 import NewArtist from "./pages/NewArtist";
 import Tools from "./pages/Tools";
 import OneClick from "./pages/OneClick";
-import DocumentUpload from "./pages/DocumentUpload";
+import OneClickDocuments from "./pages/OneClickDocuments";
+import Zoe from "./pages/Zoe";
 import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 
@@ -78,10 +79,18 @@ const App = () => (
               }
             />
             <Route
+              path="/tools/zoe"
+              element={
+                <ProtectedRoute>
+                  <Zoe />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/oneclick/:artistId/documents"
               element={
                 <ProtectedRoute>
-                  <DocumentUpload />
+                  <OneClickDocuments />
                 </ProtectedRoute>
               }
             />
