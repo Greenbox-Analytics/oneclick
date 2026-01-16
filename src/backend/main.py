@@ -31,10 +31,12 @@ load_dotenv()
 
 app = FastAPI()
 
-# Configure CORS
+# Configure CORS - support multiple origins from environment variable
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080"],  # Adjust this to match your frontend URL
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -130,6 +132,18 @@ def get_contract_ingestion():
 @app.get("/")
 def read_root():
     return {"message": "Msanii AI Backend is running"}
+
+@app.get("/health")
+def health_check():
+    """
+    Health check endpoint for Cloud Run and monitoring.
+    Returns 200 OK if the service is healthy.
+    """
+    return {
+        "status": "healthy",
+        "service": "msanii-backend",
+        "version": "1.0.0"
+    }
 
 @app.get("/artists")
 async def get_artists(user_id: Optional[str] = None):
