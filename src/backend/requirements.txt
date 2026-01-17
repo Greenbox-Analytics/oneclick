@@ -13,5 +13,6 @@ langchain-community
 langchain-openai
 langchain-text-splitters
 pymupdf
+pymupdf4llm
 tiktoken
 openai
