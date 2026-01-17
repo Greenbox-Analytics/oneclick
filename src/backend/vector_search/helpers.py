@@ -10,17 +10,29 @@ from openai import OpenAI
 # Load environment variables
 load_dotenv()
 
-# Initialize OpenAI client
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
-
-openai_client = OpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None
-)
-
 # Configuration
 EMBEDDING_MODEL = "text-embedding-3-small"
+
+# Global OpenAI client (lazy initialization)
+openai_client = None
+
+def get_openai_client() -> OpenAI:
+    """Get or create OpenAI client instance (lazy initialization)"""
+    global openai_client
+    if openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL")
+        
+        if not api_key:
+            raise RuntimeError(
+                "Missing required environment variable: OPENAI_API_KEY"
+            )
+        
+        openai_client = OpenAI(
+            api_key=api_key,
+            base_url=base_url if base_url else None
+        )
+    return openai_client
 
 # Section category keywords for classification
 SECTION_CATEGORIES = {
@@ -231,7 +243,8 @@ def create_embeddings(texts: List[str], model: str = EMBEDDING_MODEL) -> List[Li
         List of embedding vectors
     """
     print(f"Creating embeddings for {len(texts)} chunks...")
-    response = openai_client.embeddings.create(
+    client = get_openai_client()
+    response = client.embeddings.create(
         model=model,
         input=texts
     )
@@ -250,7 +263,8 @@ def create_query_embedding(query: str, model: str = EMBEDDING_MODEL) -> List[flo
     Returns:
         Embedding vector
     """
-    response = openai_client.embeddings.create(
+    client = get_openai_client()
+    response = client.embeddings.create(
         model=model,
         input=[query]
     )
@@ -332,7 +346,7 @@ def calculate_royalty_payments(
     from oneclick.royalty_calculator import RoyaltyCalculator
     
     # Initialize calculator
-    calculator = RoyaltyCalculator(api_key=api_key or OPENAI_API_KEY)
+    calculator = RoyaltyCalculator(api_key=api_key or os.getenv("OPENAI_API_KEY"))
     
     # Calculate payments
     payments = calculator.calculate_payments(
@@ -375,7 +389,7 @@ def save_royalty_payments_to_excel(
     from oneclick.royalty_calculator import RoyaltyCalculator, RoyaltyPayment
     
     # Initialize calculator
-    calculator = RoyaltyCalculator(api_key=api_key or OPENAI_API_KEY)
+    calculator = RoyaltyCalculator(api_key=api_key or os.getenv("OPENAI_API_KEY"))
     
     # Convert dictionaries back to RoyaltyPayment objects
     payment_objects = []
