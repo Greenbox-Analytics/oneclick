@@ -11,9 +11,14 @@ on:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  SERVICE_NAME: ${{ secrets.CLOUD_RUN_SERVICE_NAME }}
-  REGION: ${{ secrets.GCP_REGION }}
+  SERVICE_NAME: msanii-backend
+  REGION: northamerica-northeast2
   IMAGE_NAME: gcr.io/${{ secrets.GCP_PROJECT_ID }}/msanii-backend
+
+# Required for Workload Identity Federation
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   deploy:
@@ -24,12 +29,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
-        with:
-          service_account_key: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-          export_default_credentials: true
 
       - name: Configure Docker for GCR
         run: |
@@ -49,6 +57,7 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
+          # Check if service exists, if not it will be created automatically
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image ${{ env.IMAGE_NAME }}:${{ github.sha }} \
             --region ${{ env.REGION }} \
@@ -59,7 +68,8 @@ jobs:
             --cpu 1 \
             --timeout 300 \
             --max-instances 10 \
-            --min-instances 0
+            --min-instances 0 \
+            --set-env-vars ALLOWED_ORIGINS=http://localhost:8080
 
       - name: Get Cloud Run URL
         id: get-url
