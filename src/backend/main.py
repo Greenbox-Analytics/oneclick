@@ -42,17 +42,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Supabase Client
-url: str = os.getenv("VITE_SUPABASE_URL")
-key: str = os.getenv("VITE_SUPABASE_SECRET_KEY")
+# Initialize Supabase Client (lazy initialization to avoid startup failures)
+supabase: Client = None
 
-if not url or not key:
-    raise RuntimeError(
-        "Missing required environment variables: VITE_SUPABASE_URL and/or VITE_SUPABASE_SECRET_KEY. "
-        "Please create a .env file in the backend directory with these variables."
-    )
-
-supabase: Client = create_client(url, key)
+def get_supabase_client() -> Client:
+    """Get or create Supabase client instance"""
+    global supabase
+    if supabase is None:
+        url: str = os.getenv("VITE_SUPABASE_URL")
+        key: str = os.getenv("VITE_SUPABASE_SECRET_KEY")
+        
+        if not url or not key:
+            raise RuntimeError(
+                "Missing required environment variables: VITE_SUPABASE_URL and/or VITE_SUPABASE_SECRET_KEY"
+            )
+        
+        supabase = create_client(url, key)
+    return supabase
 
 # --- Data Models ---
 class RoyaltyBreakdown(BaseModel):
@@ -151,7 +157,7 @@ async def get_artists(user_id: Optional[str] = None):
     Fetch artists. If user_id is provided, filter by that user's artists only.
     """
     try:
-        query = supabase.table("artists").select("*")
+        query = get_supabase_client().table("artists").select("*")
         
         # Filter by user_id if provided
         if user_id:
@@ -169,7 +175,7 @@ async def get_projects(artist_id: str):
     """
     try:
         # artist_id is UUID in DB, but passed as string here
-        response = supabase.table("projects").select("*").eq("artist_id", artist_id).execute()
+        response = get_supabase_client().table("projects").select("*").eq("artist_id", artist_id).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -180,7 +186,7 @@ async def get_project_files(project_id: str):
     Fetch files associated with a specific project.
     """
     try:
-        response = supabase.table("project_files").select("*").eq("project_id", project_id).execute()
+        response = get_supabase_client().table("project_files").select("*").eq("project_id", project_id).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -194,7 +200,7 @@ async def get_artist_files_by_category(artist_id: str, category: str):
     """
     try:
         # 1. Get all project IDs for the artist
-        projects_res = supabase.table("projects").select("id").eq("artist_id", artist_id).execute()
+        projects_res = get_supabase_client().table("projects").select("id").eq("artist_id", artist_id).execute()
         project_ids = [p['id'] for p in projects_res.data]
         
         if not project_ids:
@@ -209,7 +215,7 @@ async def get_artist_files_by_category(artist_id: str, category: str):
         if category == 'other': db_category = 'other'
 
 
-        files_res = supabase.table("project_files").select("*").in_("project_id", project_ids).eq("folder_category", db_category).execute()
+        files_res = get_supabase_client().table("project_files").select("*").in_("project_id", project_ids).eq("folder_category", db_category).execute()
         return files_res.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -229,12 +235,12 @@ async def upload_file(
     try:
         if not project_id or project_id == "none" or project_id == "":
             # Check if a "General" project exists for this artist, if not create one
-            res = supabase.table("projects").select("id").eq("artist_id", artist_id).eq("name", "General Uploads").execute()
+            res = get_supabase_client().table("projects").select("id").eq("artist_id", artist_id).eq("name", "General Uploads").execute()
             if res.data:
                 project_id = res.data[0]['id']
             else:
                 # Create "General Uploads" project
-                new_proj = supabase.table("projects").insert({
+                new_proj = get_supabase_client().table("projects").insert({
                     "artist_id": artist_id,
                     "name": "General Uploads",
                     "description": "Container for files not assigned to a specific release"
@@ -260,10 +266,10 @@ async def upload_file(
         file_path = f"{artist_id}/{project_id}/{folder_category}/{timestamp}_{safe_filename}"
         
         # 1. Upload to Storage
-        storage_res = supabase.storage.from_("project-files").upload(file_path, file_content)
+        storage_res = get_supabase_client().storage.from_("project-files").upload(file_path, file_content)
         
         # Get public URL
-        file_url = supabase.storage.from_("project-files").get_public_url(file_path)
+        file_url = get_supabase_client().storage.from_("project-files").get_public_url(file_path)
         
         # 2. Insert into Database
         db_record = {
@@ -276,7 +282,7 @@ async def upload_file(
             "file_type": file.content_type
         }
         
-        db_res = supabase.table("project_files").insert(db_record).execute()
+        db_res = get_supabase_client().table("project_files").insert(db_record).execute()
         
         return {
             "status": "success", 
@@ -295,7 +301,7 @@ async def get_all_projects():
     Fetch all projects (for Zoe project selection).
     """
     try:
-        response = supabase.table("projects").select("*").execute()
+        response = get_supabase_client().table("projects").select("*").execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -306,7 +312,7 @@ async def get_artist_projects(artist_id: str):
     Fetch projects for a specific artist (for Zoe artist-based filtering).
     """
     try:
-        response = supabase.table("projects").select("*").eq("artist_id", artist_id).execute()
+        response = get_supabase_client().table("projects").select("*").eq("artist_id", artist_id).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -317,7 +323,7 @@ async def get_project_contracts(project_id: str):
     Fetch contracts (PDF files) for a specific project.
     """
     try:
-        response = supabase.table("project_files").select("*").eq("project_id", project_id).eq("folder_category", "contract").execute()
+        response = get_supabase_client().table("project_files").select("*").eq("project_id", project_id).eq("folder_category", "contract").execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -371,7 +377,7 @@ async def upload_contract(
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
         # Get project details
-        project_res = supabase.table("projects").select("name").eq("id", project_id).execute()
+        project_res = get_supabase_client().table("projects").select("name").eq("id", project_id).execute()
         if not project_res.data:
             raise HTTPException(status_code=404, detail="Project not found")
         
@@ -389,10 +395,10 @@ async def upload_contract(
         file_path = f"{user_id}/{project_id}/contract/{timestamp}_{safe_filename}"
         
         # 1. Upload to Supabase Storage
-        storage_res = supabase.storage.from_("project-files").upload(file_path, file_content)
+        storage_res = get_supabase_client().storage.from_("project-files").upload(file_path, file_content)
         
         # Get public URL
-        file_url = supabase.storage.from_("project-files").get_public_url(file_path)
+        file_url = get_supabase_client().storage.from_("project-files").get_public_url(file_path)
         
         # 2. Insert into Database
         db_record = {
@@ -405,7 +411,7 @@ async def upload_contract(
             "file_type": file.content_type
         }
         
-        db_res = supabase.table("project_files").insert(db_record).execute()
+        db_res = get_supabase_client().table("project_files").insert(db_record).execute()
         contract_id = db_res.data[0]["id"]
         
         # 3. Save PDF temporarily for processing
@@ -499,7 +505,7 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
     """
     try:
         # 1. Get contract details from database
-        contract_res = supabase.table("project_files").select("*").eq("id", contract_id).execute()
+        contract_res = get_supabase_client().table("project_files").select("*").eq("id", contract_id).execute()
         
         if not contract_res.data:
             raise HTTPException(status_code=404, detail="Contract not found")
@@ -516,12 +522,12 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
         # 3. Delete from Supabase Storage
         if contract.get("file_path"):
             try:
-                supabase.storage.from_("project-files").remove([contract["file_path"]])
+                get_supabase_client().storage.from_("project-files").remove([contract["file_path"]])
             except Exception as e:
                 print(f"Warning: Failed to delete file from storage: {e}")
         
         # 4. Delete from Database
-        supabase.table("project_files").delete().eq("id", contract_id).execute()
+        get_supabase_client().table("project_files").delete().eq("id", contract_id).execute()
         
         return ContractDeleteResponse(
             status="success",
@@ -649,13 +655,13 @@ async def oneclick_calculate_royalties_stream(
             # Step 1: Download royalty statement
             yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
             
-            statement_res = supabase.table("project_files").select("*").eq("id", royalty_statement_file_id).execute()
+            statement_res = get_supabase_client().table("project_files").select("*").eq("id", royalty_statement_file_id).execute()
             if not statement_res.data:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Royalty statement file not found'})}\n\n"
                 return
             
             statement_file = statement_res.data[0]
-            file_data = supabase.storage.from_("project-files").download(statement_file["file_path"])
+            file_data = get_supabase_client().storage.from_("project-files").download(statement_file["file_path"])
             
             file_extension = Path(statement_file['file_name']).suffix.lower()
             if not file_extension or file_extension not in ['.csv', '.xlsx', '.xls']:
@@ -671,13 +677,13 @@ async def oneclick_calculate_royalties_stream(
             # Step 2: Download contract
             yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25, 'stage': 'downloading'})}\n\n"
             
-            contract_res = supabase.table("project_files").select("*").eq("id", contract_id).execute()
+            contract_res = get_supabase_client().table("project_files").select("*").eq("id", contract_id).execute()
             if not contract_res.data:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Contract file not found'})}\n\n"
                 return
             
             contract_file = contract_res.data[0]
-            contract_data = supabase.storage.from_("project-files").download(contract_file["file_path"])
+            contract_data = get_supabase_client().storage.from_("project-files").download(contract_file["file_path"])
             
             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
                 tmp_contract.write(contract_data)
@@ -788,7 +794,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         
         # Step 2: Download royalty statement from Supabase
         print("\n--- Step 1: Downloading Royalty Statement ---")
-        statement_res = supabase.table("project_files").select("*").eq("id", request.royalty_statement_file_id).execute()
+        statement_res = get_supabase_client().table("project_files").select("*").eq("id", request.royalty_statement_file_id).execute()
         
         if not statement_res.data:
             raise HTTPException(status_code=404, detail="Royalty statement file not found")
@@ -797,7 +803,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         file_path = statement_file["file_path"]
         
         # Download file from Supabase storage
-        file_data = supabase.storage.from_("project-files").download(file_path)
+        file_data = get_supabase_client().storage.from_("project-files").download(file_path)
         
         # Detect file extension from original filename
         original_filename = statement_file['file_name']
@@ -816,7 +822,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         
         # Step 3: Get contract file for parsing
         print("\n--- Step 2: Downloading Contract File ---")
-        contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
+        contract_res = get_supabase_client().table("project_files").select("*").eq("id", request.contract_id).execute()
         
         if not contract_res.data:
             raise HTTPException(status_code=404, detail="Contract file not found")
@@ -825,7 +831,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         contract_file_path = contract_file["file_path"]
         
         # Download contract from Supabase storage
-        contract_data = supabase.storage.from_("project-files").download(contract_file_path)
+        contract_data = get_supabase_client().storage.from_("project-files").download(contract_file_path)
         
         # Save to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
