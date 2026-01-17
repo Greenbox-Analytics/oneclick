@@ -32,7 +32,7 @@ load_dotenv()
 app = FastAPI()
 
 # Configure CORS - support multiple origins from environment variable
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")
+ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")]
 
 app.add_middleware(
     CORSMiddleware,
