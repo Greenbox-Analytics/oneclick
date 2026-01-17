@@ -108,9 +108,9 @@ const OneClickDocuments = () => {
 
   // Fetch Artist Name
   useEffect(() => {
-    if (artistId) {
+    if (artistId && user) {
       setIsLoadingArtist(true);
-      fetch(`${API_URL}/artists`)
+      fetch(`${API_URL}/artists?user_id=${user.id}`)
         .then(res => res.json())
         .then((data: Artist[]) => {
           const artist = data.find(a => a.id === artistId);
@@ -122,7 +122,7 @@ const OneClickDocuments = () => {
           setIsLoadingArtist(false);
         });
     }
-  }, [artistId]);
+  }, [artistId, user]);
 
   // Fetch Projects on Mount
   useEffect(() => {
