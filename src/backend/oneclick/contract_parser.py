@@ -25,11 +25,14 @@ load_dotenv()
 
 # Initialize clients
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 if not PINECONE_API_KEY:
     raise ValueError("PINECONE_API_KEY not found in .env file")
+if not PINECONE_INDEX_NAME:
+    raise ValueError("PINECONE_INDEX_NAME not found in .env file")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env file")
     
@@ -43,7 +46,7 @@ openai_client = OpenAI(
 # Configuration
 EMBEDDING_MODEL = "text-embedding-3-small"
 LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")
-INDEX_NAME = "test-3-small-index"
+INDEX_NAME = PINECONE_INDEX_NAME
 
 
 # ---------------------------------------------------------------------------

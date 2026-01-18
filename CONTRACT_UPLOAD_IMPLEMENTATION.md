@@ -331,7 +331,7 @@ CREATE TABLE project_files (
 
 ### Pinecone Index
 
-**Index Name:** `test-3-small-index` (regional)
+**Index Name:** Configured via `PINECONE_INDEX_NAME` environment variable (e.g., `msanii-east`)
 
 **Namespace Format:** `{user_id}-namespace`
 
@@ -423,9 +423,26 @@ CREATE TABLE project_files (
 
 **Backend (.env):**
 ```
+# Pinecone Configuration
 PINECONE_API_KEY=your_pinecone_key
+PINECONE_INDEX_NAME=msanii-east  # Your Pinecone index name
+
+# OpenAI Configuration
 OPENAI_API_KEY=your_openai_key
 OPENAI_BASE_URL=https://api.openai.com/v1  # Optional
+OPENAI_LLM_MODEL=gpt-5-mini  # Optional, defaults to gpt-5-mini
+
+# Supabase Configuration
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_SECRET_KEY=your_supabase_secret_key
+```
+
+**Cloud Run Environment Variables:**
+```
+PINECONE_API_KEY=your_pinecone_key
+PINECONE_INDEX_NAME=msanii-east
+OPENAI_API_KEY=your_openai_key
+OPENAI_LLM_MODEL=gpt-5-mini
 VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_SECRET_KEY=your_supabase_secret_key
 ```
@@ -438,13 +455,9 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 CHUNK_SIZE = 1024  # Character-based chunk size
 CHUNK_OVERLAP = 154  # Character overlap
 BATCH_SIZE = 20
-
-REGIONAL_INDEXES = {
-    "US": "test-3-small-index",
-    "EU": "test-3-small-index",
-    "UK": "test-3-small-index"
-}
 ```
+
+**Note:** The index name is now configured via the `PINECONE_INDEX_NAME` environment variable instead of hardcoded regional indexes. This provides flexibility to use any Pinecone index without code changes.
 
 ---
 
