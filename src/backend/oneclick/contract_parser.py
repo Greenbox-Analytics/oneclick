@@ -32,6 +32,7 @@ if not PINECONE_API_KEY:
     raise ValueError("PINECONE_API_KEY not found in .env file")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env file")
+    
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 openai_client = OpenAI(

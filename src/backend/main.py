@@ -5,7 +5,6 @@ from supabase import create_client, Client
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import os
-import pandas as pd
 import io
 import uuid
 import time
@@ -24,7 +23,7 @@ if str(BACKEND_DIR) not in sys.path:
 from vector_search.contract_chatbot import ContractChatbot
 from vector_search.contract_ingestion import ContractIngestion
 from vector_search.contract_search import ContractSearch
-from vector_search.helpers import calculate_royalty_payments, save_royalty_payments_to_excel
+from vector_search.helpers import calculate_royalty_payments
 
 # Load environment variables
 load_dotenv()
