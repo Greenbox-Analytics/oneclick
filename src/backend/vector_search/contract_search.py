@@ -23,11 +23,14 @@ load_dotenv()
 
 # Initialize clients
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 if not PINECONE_API_KEY:
     raise ValueError("PINECONE_API_KEY not found in .env file")
+if not PINECONE_INDEX_NAME:
+    raise ValueError("PINECONE_INDEX_NAME not found in .env file")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env file")
 
@@ -41,13 +44,6 @@ openai_client = OpenAI(
 EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_TOP_K = 8
 MIN_SIMILARITY_THRESHOLD = 0.50
-
-# Regional index mapping
-REGIONAL_INDEXES = {
-    "US": "test-3-small-index",
-    "EU": "test-3-small-index",
-    "UK": "test-3-small-index"
-}
 
 # Valid section categories (must match contract_ingestion.py)
 VALID_SECTION_CATEGORIES = [
@@ -66,18 +62,13 @@ VALID_SECTION_CATEGORIES = [
 class ContractSearch:
     """Handles semantic search over contract embeddings"""
     
-    def __init__(self, region: str = "US"):
+    def __init__(self):
         """
         Initialize the contract search handler
         
-        Args:
-            region: Region code (US, EU, UK) - determines which index to use
+        Uses PINECONE_INDEX_NAME from environment variables
         """
-        if region not in REGIONAL_INDEXES:
-            raise ValueError(f"Invalid region: {region}. Must be one of {list(REGIONAL_INDEXES.keys())}")
-        
-        self.region = region
-        self.index_name = REGIONAL_INDEXES[region]
+        self.index_name = PINECONE_INDEX_NAME
         self.index = pc.Index(self.index_name)
     
     def search(self,

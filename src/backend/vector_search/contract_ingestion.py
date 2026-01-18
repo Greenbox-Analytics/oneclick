@@ -33,9 +33,13 @@ load_dotenv()
 
 # Initialize clients
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 
 if not PINECONE_API_KEY:
     raise ValueError("PINECONE_API_KEY not found in .env file")
+
+if not PINECONE_INDEX_NAME:
+    raise ValueError("PINECONE_INDEX_NAME not found in .env file")
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
@@ -44,29 +48,17 @@ CHUNK_SIZE = 524  # Token-based chunk size (optimized for contract sections)
 CHUNK_OVERLAP = 100  # Token overlap for context continuity
 BATCH_SIZE = 20
 
-# Regional index mapping
-REGIONAL_INDEXES = {
-    "US": "test-3-small-index",
-    "EU": "test-3-small-index",
-    "UK": "test-3-small-index"
-}
-
 
 class ContractIngestion:
     """Handles contract PDF ingestion with intelligent section-based chunking and vector storage"""
     
-    def __init__(self, region: str = "US"):
+    def __init__(self):
         """
         Initialize the contract ingestion handler
         
-        Args:
-            region: Region code (US, EU, UK) - determines which index to use
+        Uses PINECONE_INDEX_NAME from environment variables
         """
-        if region not in REGIONAL_INDEXES:
-            raise ValueError(f"Invalid region: {region}. Must be one of {list(REGIONAL_INDEXES.keys())}")
-        
-        self.region = region
-        self.index_name = REGIONAL_INDEXES[region]
+        self.index_name = PINECONE_INDEX_NAME
         self.index = pc.Index(self.index_name)
         
         # Initialize RecursiveCharacterTextSplitter for section chunking
@@ -214,7 +206,6 @@ class ContractIngestion:
             "category_distribution": category_counts,
             "namespace": namespace,
             "index": self.index_name,
-            "region": self.region,
             "chunk_size": CHUNK_SIZE,
             "chunk_overlap": CHUNK_OVERLAP
         }
@@ -331,7 +322,7 @@ class ContractIngestion:
 # Example usage
 if __name__ == "__main__":
     # Example: Ingest a sample contract
-    ingestion = ContractIngestion(region="US")
+    ingestion = ContractIngestion()
     
     # Sample data (replace with actual values)
     sample_pdf = Path(__file__).parent.parent / "sample_docs" / "Scenario 2 ' Home' - Romes_Lebron Contract.pdf"

@@ -123,14 +123,14 @@ def get_zoe_chatbot():
     """Get or create Zoe chatbot instance"""
     global zoe_chatbot
     if zoe_chatbot is None:
-        zoe_chatbot = ContractChatbot(region="US")
+        zoe_chatbot = ContractChatbot()
     return zoe_chatbot
 
 def get_contract_ingestion():
     """Get or create contract ingestion instance"""
     global contract_ingestion
     if contract_ingestion is None:
-        contract_ingestion = ContractIngestion(region="US")
+        contract_ingestion = ContractIngestion()
     return contract_ingestion
 
 # --- Endpoints ---

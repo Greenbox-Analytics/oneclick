@@ -42,17 +42,15 @@ MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 class ContractChatbot:
     """RAG-based chatbot for contract Q&A"""
     
-    def __init__(self, region: str = "US", llm_model: str = DEFAULT_LLM_MODEL):
+    def __init__(self, llm_model: str = DEFAULT_LLM_MODEL):
         """
         Initialize the contract chatbot
         
         Args:
-            region: Region code (US, EU, UK)
             llm_model: LLM model to use for answer generation
         """
-        self.region = region
         self.llm_model = llm_model
-        self.search_engine = ContractSearch(region=region)
+        self.search_engine = ContractSearch()
         self.conversation_history = []
     
     def _check_similarity_threshold(self, search_results: Dict) -> bool:
@@ -520,7 +518,7 @@ Return a clear, concise answer based only on the information provided in the con
 # Example usage
 if __name__ == "__main__":
     # Initialize chatbot
-    chatbot = ContractChatbot(region="US")
+    chatbot = ContractChatbot()
     
     # Example 1: Ask about a project
     print("\n" + "=" * 80)
