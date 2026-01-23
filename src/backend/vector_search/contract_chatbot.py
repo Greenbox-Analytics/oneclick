@@ -8,14 +8,137 @@ Features:
 - Similarity threshold enforcement (≥0.50)
 - LLM-powered answer generation with grounding
 - Support for project-level and contract-level queries
-- Conversation history tracking
+- Session-based conversation history with memory retention
 """
 
 import os
+import uuid
+import time
 from typing import List, Dict, Optional
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime
 from dotenv import load_dotenv
 from openai import OpenAI
 from vector_search.contract_search import ContractSearch
+
+
+@dataclass
+class ChatMessage:
+    """Represents a single chat message"""
+    role: str  # "user" or "assistant"
+    content: str
+    timestamp: datetime = field(default_factory=datetime.now)
+    metadata: Dict = field(default_factory=dict)
+
+
+class InMemoryChatMessageHistory:
+    """
+    In-memory storage for chat message history per session.
+    Provides efficient retrieval and automatic cleanup of old sessions.
+    """
+    
+    def __init__(self, max_messages_per_session: int = 20, session_ttl_seconds: int = 3600):
+        """
+        Initialize the chat message history.
+        
+        Args:
+            max_messages_per_session: Maximum number of messages to keep per session
+            session_ttl_seconds: Time-to-live for inactive sessions (default: 1 hour)
+        """
+        self._sessions: Dict[str, List[ChatMessage]] = defaultdict(list)
+        self._session_timestamps: Dict[str, float] = {}
+        self.max_messages = max_messages_per_session
+        self.session_ttl = session_ttl_seconds
+    
+    def add_message(self, session_id: str, role: str, content: str, metadata: Dict = None) -> None:
+        """
+        Add a message to the session history.
+        
+        Args:
+            session_id: Unique session identifier
+            role: Message role ("user" or "assistant")
+            content: Message content
+            metadata: Optional metadata (sources, confidence, etc.)
+        """
+        message = ChatMessage(
+            role=role,
+            content=content,
+            timestamp=datetime.now(),
+            metadata=metadata or {}
+        )
+        
+        self._sessions[session_id].append(message)
+        self._session_timestamps[session_id] = time.time()
+        
+        # Trim to max messages (keep most recent)
+        if len(self._sessions[session_id]) > self.max_messages:
+            self._sessions[session_id] = self._sessions[session_id][-self.max_messages:]
+    
+    def get_messages(self, session_id: str, limit: Optional[int] = None) -> List[ChatMessage]:
+        """
+        Get messages for a session.
+        
+        Args:
+            session_id: Unique session identifier
+            limit: Maximum number of messages to return (most recent)
+            
+        Returns:
+            List of ChatMessage objects
+        """
+        messages = self._sessions.get(session_id, [])
+        if limit and len(messages) > limit:
+            return messages[-limit:]
+        return messages
+    
+    def get_messages_for_llm(self, session_id: str, limit: int = 10) -> List[Dict]:
+        """
+        Get messages formatted for OpenAI API.
+        
+        Args:
+            session_id: Unique session identifier
+            limit: Maximum number of message pairs to include
+            
+        Returns:
+            List of message dicts with 'role' and 'content'
+        """
+        messages = self.get_messages(session_id, limit=limit * 2)  # user + assistant pairs
+        return [{"role": msg.role, "content": msg.content} for msg in messages]
+    
+    def clear_session(self, session_id: str) -> None:
+        """Clear all messages for a session."""
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+        if session_id in self._session_timestamps:
+            del self._session_timestamps[session_id]
+    
+    def cleanup_expired_sessions(self) -> int:
+        """
+        Remove expired sessions based on TTL.
+        
+        Returns:
+            Number of sessions cleaned up
+        """
+        current_time = time.time()
+        expired = [
+            sid for sid, ts in self._session_timestamps.items()
+            if current_time - ts > self.session_ttl
+        ]
+        for sid in expired:
+            self.clear_session(sid)
+        return len(expired)
+    
+    def get_session_count(self) -> int:
+        """Get number of active sessions."""
+        return len(self._sessions)
+    
+    def session_exists(self, session_id: str) -> bool:
+        """Check if a session exists."""
+        return session_id in self._sessions
+
+
+# Global conversation memory instance
+_conversation_memory = InMemoryChatMessageHistory(max_messages_per_session=20, session_ttl_seconds=3600)
 
 # Load environment variables
 load_dotenv()
@@ -40,7 +163,18 @@ MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
 
 class ContractChatbot:
-    """RAG-based chatbot for contract Q&A"""
+    """RAG-based chatbot for contract Q&A with session-based memory"""
+    
+    # Conversational patterns that don't require document search
+    CONVERSATIONAL_PATTERNS = [
+        "hello", "hi", "hey", "greetings", "good morning", "good afternoon", 
+        "good evening", "howdy", "what's up", "whats up", "sup",
+        "how are you", "how's it going", "hows it going",
+        "thanks", "thank you", "thx", "appreciated",
+        "bye", "goodbye", "see you", "later", "cya",
+        "help", "what can you do", "who are you", "what are you",
+        "nice", "great", "awesome", "cool", "ok", "okay", "sure", "yes", "no",
+    ]
     
     def __init__(self, llm_model: str = DEFAULT_LLM_MODEL):
         """
@@ -51,7 +185,100 @@ class ContractChatbot:
         """
         self.llm_model = llm_model
         self.search_engine = ContractSearch()
-        self.conversation_history = []
+        self.memory = _conversation_memory  # Use global memory instance
+    
+    def _is_conversational_query(self, query: str) -> bool:
+        """
+        Check if the query is a conversational message (greeting, thanks, etc.)
+        that doesn't require document search.
+        
+        Args:
+            query: User's message
+            
+        Returns:
+            True if it's a conversational query
+        """
+        query_lower = query.lower().strip()
+        # Remove punctuation for matching
+        query_clean = ''.join(c for c in query_lower if c.isalnum() or c.isspace())
+        
+        # Check for exact or partial matches
+        for pattern in self.CONVERSATIONAL_PATTERNS:
+            if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
+                return True
+            # Also check if the entire query is just the pattern with punctuation
+            if pattern in query_clean and len(query_clean) < len(pattern) + 10:
+                return True
+        
+        return False
+    
+    def _handle_conversational_query(self, query: str, session_id: Optional[str] = None) -> Dict:
+        """
+        Handle conversational queries with a friendly response.
+        
+        Args:
+            query: User's conversational message
+            session_id: Session ID for memory
+            
+        Returns:
+            Dict with response
+        """
+        query_lower = query.lower().strip()
+        
+        # Track if we should show quick action buttons
+        show_quick_actions = False
+        
+        # Generate appropriate response based on query type
+        if any(g in query_lower for g in ["hello", "hi", "hey", "greetings", "howdy", "good morning", "good afternoon", "good evening"]):
+            response = "Hello! I'm Zoe, your contract analysis assistant. How can I help you today?"
+            show_quick_actions = True
+        elif any(g in query_lower for g in ["how are you", "how's it going", "hows it going", "what's up", "whats up"]):
+            response = "I'm doing well, thanks! What would you like to know about your contracts?"
+            show_quick_actions = True
+        elif any(g in query_lower for g in ["thanks", "thank you", "thx", "appreciated"]):
+            response = "You're welcome! Is there anything else you'd like to know?"
+        elif any(g in query_lower for g in ["bye", "goodbye", "see you", "later", "cya"]):
+            response = "Goodbye! Feel free to come back anytime."
+        elif any(g in query_lower for g in ["help", "what can you do", "who are you", "what are you"]):
+            response = "I'm Zoe, your AI contract assistant. Here are some things I can help with:"
+            show_quick_actions = True
+        else:
+            response = "I'm here to help! What would you like to know about your contracts?"
+            show_quick_actions = True
+        
+        # Store in memory
+        self._add_to_memory(session_id, "user", query)
+        self._add_to_memory(session_id, "assistant", response)
+        
+        return {
+            "query": query,
+            "answer": response,
+            "confidence": "conversational",
+            "sources": [],
+            "search_results_count": 0,
+            "session_id": session_id,
+            "show_quick_actions": show_quick_actions
+        }
+    
+    def _get_conversation_context(self, session_id: Optional[str], max_turns: int = 5) -> List[Dict]:
+        """
+        Get conversation history for context.
+        
+        Args:
+            session_id: Session identifier
+            max_turns: Maximum conversation turns to include
+            
+        Returns:
+            List of message dicts for LLM
+        """
+        if not session_id:
+            return []
+        return self.memory.get_messages_for_llm(session_id, limit=max_turns)
+    
+    def _add_to_memory(self, session_id: Optional[str], role: str, content: str, metadata: Dict = None) -> None:
+        """Add a message to session memory."""
+        if session_id:
+            self.memory.add_message(session_id, role, content, metadata)
     
     def _check_similarity_threshold(self, search_results: Dict) -> bool:
         """
@@ -116,14 +343,15 @@ Your answers should be:
         
         return "\n\n".join(context_parts)
     
-    def _generate_answer(self, query: str, context: str, search_results: Dict) -> Dict:
+    def _generate_answer(self, query: str, context: str, search_results: Dict, session_id: Optional[str] = None) -> Dict:
         """
-        Generate answer using LLM with the same approach as oneclick_retrieval.py.
+        Generate answer using LLM with conversation history for context.
         
         Args:
             query: User's question
             context: Formatted context from search results
             search_results: Original search results
+            session_id: Session ID for conversation history
             
         Returns:
             Dict with answer and metadata
@@ -139,30 +367,66 @@ Your answers should be:
                 "sources": []
             }
         
-        # Use the same prompts as oneclick_retrieval.py
+        # System prompt with strict focus on the question asked
         system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
 Your task is to answer questions about contract documents based on the provided context.
-Be precise and only include information that is explicitly stated in the provided context."""
 
-        user_prompt = f"""Based on the following contract contracts, answer this question:
+CRITICAL RULES:
+1. Answer ONLY the specific question asked - nothing more, nothing less
+2. Do NOT automatically add comparisons, summaries, or extra information unless explicitly requested
+3. Do NOT reference or compare to previous topics in the conversation unless the user asks for it
+4. Be precise and only include information that is explicitly stated in the provided context
+5. If you cannot answer based on the documents, say so clearly
+
+CONVERSATION AWARENESS:
+- Use conversation history ONLY to understand pronouns and references (e.g., "this contract" = the one just discussed)
+- Do NOT proactively bring up or compare to previous topics
+- If the current question relates to a previous topic in a way the user might find helpful, suggest it as a follow-up question instead of automatically including it
+
+FOLLOW-UP SUGGESTIONS:
+After answering the user's question, if the conversation history suggests a relevant follow-up the user might want to ask, end your response with a brief suggestion in this format:
+"Would you like me to [specific action based on context]?"
+
+Examples of good follow-up suggestions based on context:
+- If user discussed Contract A before and now asks about Contract B: "Would you like me to compare this to the previous contract we discussed?"
+- If user asked about streaming royalty splits: "Would you like me to break down the payment terms as well?"
+- If user asked about one party: "Would you like me to show the terms for the other parties?"
+
+Only suggest a follow-up if it's genuinely relevant to the conversation flow. If no follow-up makes sense, don't add one."""
+
+        # Build messages list with conversation history
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Add conversation history for context
+        conversation_history = self._get_conversation_context(session_id, max_turns=5)
+        if conversation_history:
+            # Add a context separator
+            messages.append({
+                "role": "system", 
+                "content": "Previous conversation for context (use ONLY for understanding references, NOT for adding unsolicited comparisons):"
+            })
+            messages.extend(conversation_history)
+        
+        # Add current query with contract context
+        user_prompt = f"""Based on the following contract documents, answer this question:
 
 {query}
 
-Contract contracts:
+Contract documents:
 {context}
 
-Return a clear, concise answer based only on the information provided in the contracts."""
+Remember: Answer ONLY what was asked. If a comparison or additional context might be helpful, suggest it as a follow-up question instead of including it automatically."""
         
-        # Call LLM (same as oneclick_retrieval.py)
+        messages.append({"role": "user", "content": user_prompt})
+        
+        # Call LLM
         print(f"\nGenerating answer using {self.llm_model}...")
+        print(f"Conversation history: {len(conversation_history)} messages included")
         
         try:
             response = openai_client.chat.completions.create(
                 model=self.llm_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
+                messages=messages,
                 max_completion_tokens=1000
             )
             
@@ -283,15 +547,18 @@ Return a clear, concise answer based only on the information provided in the con
                   user_id: str,
                   project_id: Optional[str] = None,
                   contract_id: Optional[str] = None,
-                  top_k: Optional[int] = None) -> Dict:
+                  top_k: Optional[int] = None,
+                  session_id: Optional[str] = None) -> Dict:
         """
         Ask a question using smart retrieval with automatic query categorization.
         
         This method automatically:
-        1. Categorizes the query to determine relevant contract sections
-        2. Adjusts top_k based on query type (general vs specific)
-        3. Filters search to relevant sections for better precision
-        4. Generates a grounded answer based on retrieved context
+        1. Checks for conversational queries (greetings, thanks, etc.)
+        2. Categorizes the query to determine relevant contract sections
+        3. Adjusts top_k based on query type (general vs specific)
+        4. Filters search to relevant sections for better precision
+        5. Generates a grounded answer based on retrieved context
+        6. Maintains conversation history for follow-up questions
         
         Args:
             query: User's question
@@ -299,6 +566,7 @@ Return a clear, concise answer based only on the information provided in the con
             project_id: UUID of the project (optional)
             contract_id: UUID of specific contract (optional)
             top_k: Number of search results (auto-adjusted if None)
+            session_id: Session ID for conversation memory
             
         Returns:
             Dict with answer, sources, categorization, and metadata
@@ -308,11 +576,20 @@ Return a clear, concise answer based only on the information provided in the con
         print("=" * 80)
         print(f"Question: {query}")
         print(f"User ID: {user_id}")
+        print(f"Session ID: {session_id}")
         if project_id:
             print(f"Project ID: {project_id}")
         if contract_id:
             print(f"Contract ID: {contract_id}")
         print("-" * 80)
+        
+        # Check for conversational queries first (greetings, thanks, etc.)
+        if self._is_conversational_query(query):
+            print("Detected conversational query - handling without document search")
+            return self._handle_conversational_query(query, session_id)
+        
+        # Store user message in memory
+        self._add_to_memory(session_id, "user", query)
         
         # Step 1: Perform smart search with auto-categorization
         search_results = self.search_engine.smart_search(
@@ -325,36 +602,37 @@ Return a clear, concise answer based only on the information provided in the con
         
         # Step 2: Check if we have results
         if not search_results["matches"]:
+            no_result_answer = "I don't know based on the available documents."
+            self._add_to_memory(session_id, "assistant", no_result_answer)
             return {
                 "query": query,
-                "answer": "I don't know based on the available documents.",
+                "answer": no_result_answer,
                 "confidence": "low",
                 "reason": "No relevant documents found",
                 "sources": [],
                 "search_results_count": 0,
-                "categorization": search_results.get("categorization", {})
+                "categorization": search_results.get("categorization", {}),
+                "session_id": session_id
             }
         
         # Step 3: Format context
         context = self._format_context(search_results)
         
-        # Step 4: Generate answer
-        result = self._generate_answer(query, context, search_results)
+        # Step 4: Generate answer with conversation history
+        result = self._generate_answer(query, context, search_results, session_id)
         
-        # Step 5: Add query and search metadata
+        # Step 5: Store assistant response in memory
+        self._add_to_memory(session_id, "assistant", result["answer"], {
+            "confidence": result["confidence"],
+            "sources": result.get("sources", [])
+        })
+        
+        # Step 6: Add query and search metadata
         result["query"] = query
         result["search_results_count"] = search_results["total_results"]
         result["filter"] = search_results["filter"]
         result["categorization"] = search_results.get("categorization", {})
-        
-        # Step 6: Store in conversation history
-        self.conversation_history.append({
-            "query": query,
-            "answer": result["answer"],
-            "confidence": result["confidence"],
-            "categorization": result.get("categorization", {}),
-            "timestamp": search_results["matches"][0]["uploaded_at"] if search_results["matches"] else None
-        })
+        result["session_id"] = session_id
         
         print("\n" + "=" * 80)
         print("SMART ANSWER GENERATED")
@@ -373,7 +651,8 @@ Return a clear, concise answer based only on the information provided in the con
                    query: str,
                    user_id: str,
                    project_id: str,
-                   top_k: int = DEFAULT_TOP_K) -> Dict:
+                   top_k: int = DEFAULT_TOP_K,
+                   session_id: Optional[str] = None) -> Dict:
         """
         Ask a question about a specific project's contracts using smart retrieval.
         
@@ -382,6 +661,7 @@ Return a clear, concise answer based only on the information provided in the con
             user_id: UUID of the user
             project_id: UUID of the project
             top_k: Number of search results to retrieve
+            session_id: Session ID for conversation memory
             
         Returns:
             Dict with answer and metadata
@@ -390,7 +670,8 @@ Return a clear, concise answer based only on the information provided in the con
             query=query,
             user_id=user_id,
             project_id=project_id,
-            top_k=top_k
+            top_k=top_k,
+            session_id=session_id
         )
     
     def ask_contract(self,
@@ -398,7 +679,8 @@ Return a clear, concise answer based only on the information provided in the con
                     user_id: str,
                     project_id: str,
                     contract_id: str,
-                    top_k: int = DEFAULT_TOP_K) -> Dict:
+                    top_k: int = DEFAULT_TOP_K,
+                    session_id: Optional[str] = None) -> Dict:
         """
         Ask a question about a specific contract using smart retrieval.
         
@@ -408,6 +690,7 @@ Return a clear, concise answer based only on the information provided in the con
             project_id: UUID of the project
             contract_id: UUID of the contract
             top_k: Number of search results to retrieve
+            session_id: Session ID for conversation memory
             
         Returns:
             Dict with answer and metadata
@@ -417,7 +700,8 @@ Return a clear, concise answer based only on the information provided in the con
             user_id=user_id,
             project_id=project_id,
             contract_id=contract_id,
-            top_k=top_k
+            top_k=top_k,
+            session_id=session_id
         )
     
     def ask_multiple_contracts(self,
@@ -425,7 +709,8 @@ Return a clear, concise answer based only on the information provided in the con
                               user_id: str,
                               project_id: str,
                               contract_ids: List[str],
-                              top_k: int = DEFAULT_TOP_K) -> Dict:
+                              top_k: int = DEFAULT_TOP_K,
+                              session_id: Optional[str] = None) -> Dict:
         """
         Ask a question about multiple specific contracts using smart retrieval.
         Searches across all selected contracts similar to project-wide search.
@@ -436,6 +721,7 @@ Return a clear, concise answer based only on the information provided in the con
             project_id: UUID of the project
             contract_ids: List of contract UUIDs to search
             top_k: Number of search results to retrieve
+            session_id: Session ID for conversation memory
             
         Returns:
             Dict with answer and metadata
@@ -446,9 +732,18 @@ Return a clear, concise answer based only on the information provided in the con
         print(f"Question: {query}")
         print(f"User ID: {user_id}")
         print(f"Project ID: {project_id}")
+        print(f"Session ID: {session_id}")
         print(f"Contract IDs: {contract_ids}")
         print(f"Number of contracts: {len(contract_ids)}")
         print("-" * 80)
+        
+        # Check for conversational queries first (greetings, thanks, etc.)
+        if self._is_conversational_query(query):
+            print("Detected conversational query - handling without document search")
+            return self._handle_conversational_query(query, session_id)
+        
+        # Store user message in memory
+        self._add_to_memory(session_id, "user", query)
         
         # Perform smart search with multiple contract IDs filter
         search_results = self.search_engine.search_multiple_contracts(
@@ -461,33 +756,35 @@ Return a clear, concise answer based only on the information provided in the con
         
         # Check if we have results
         if not search_results["matches"]:
+            no_result_answer = "I don't know based on the available documents."
+            self._add_to_memory(session_id, "assistant", no_result_answer)
             return {
                 "query": query,
-                "answer": "I don't know based on the available documents.",
+                "answer": no_result_answer,
                 "confidence": "low",
                 "reason": "No relevant documents found",
                 "sources": [],
-                "search_results_count": 0
+                "search_results_count": 0,
+                "session_id": session_id
             }
         
         # Format context
         context = self._format_context(search_results)
         
-        # Generate answer
-        result = self._generate_answer(query, context, search_results)
+        # Generate answer with conversation history
+        result = self._generate_answer(query, context, search_results, session_id)
+        
+        # Store assistant response in memory
+        self._add_to_memory(session_id, "assistant", result["answer"], {
+            "confidence": result["confidence"],
+            "sources": result.get("sources", [])
+        })
         
         # Add query and search metadata
         result["query"] = query
         result["search_results_count"] = search_results["total_results"]
         result["filter"] = search_results["filter"]
-        
-        # Store in conversation history
-        self.conversation_history.append({
-            "query": query,
-            "answer": result["answer"],
-            "confidence": result["confidence"],
-            "timestamp": search_results["matches"][0]["uploaded_at"] if search_results["matches"] else None
-        })
+        result["session_id"] = session_id
         
         print("\n" + "=" * 80)
         print("MULTI-CONTRACT ANSWER GENERATED")
@@ -501,24 +798,41 @@ Return a clear, concise answer based only on the information provided in the con
         
         return result
     
-    def get_conversation_history(self) -> List[Dict]:
-        """
-        Get conversation history
-        
-        Returns:
-            List of conversation turns
-        """
-        return self.conversation_history
+    def clear_session(self, session_id: str) -> None:
+        """Clear conversation history for a session."""
+        self.memory.clear_session(session_id)
     
-    def clear_history(self):
-        """Clear conversation history"""
-        self.conversation_history = []
+    def get_session_history(self, session_id: str) -> List[Dict]:
+        """
+        Get conversation history for a session.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            List of message dictionaries
+        """
+        messages = self.memory.get_messages(session_id)
+        return [
+            {
+                "role": msg.role,
+                "content": msg.content,
+                "timestamp": msg.timestamp.isoformat(),
+                "metadata": msg.metadata
+            }
+            for msg in messages
+        ]
 
 
 # Example usage
 if __name__ == "__main__":
     # Initialize chatbot
     chatbot = ContractChatbot()
+    
+    # Create a session for conversation memory demo
+    import uuid
+    session_id = str(uuid.uuid4())
+    print(f"\nSession ID: {session_id}")
     
     # Example 1: Ask about a project
     print("\n" + "=" * 80)
@@ -528,7 +842,8 @@ if __name__ == "__main__":
     result1 = chatbot.ask_project(
         query="What are the royalty percentage splits in this project?",
         user_id="test-user-123",
-        project_id="test-project-456"
+        project_id="test-project-456",
+        session_id=session_id
     )
     
     print("\nQUESTION:", result1["query"])
@@ -536,19 +851,19 @@ if __name__ == "__main__":
     print(result1["answer"])
     print("\nCONFIDENCE:", result1["confidence"])
     print("\nSOURCES:")
-    for source in result1["sources"]:
-        print(f"  - {source['contract_file']} (Page {source['page_number']}, Score: {source['score']})")
+    for source in result1.get("sources", []):
+        print(f"  - {source['contract_file']} (Score: {source['score']})")
     
-    # Example 2: Ask about a specific contract
+    # Example 2: Follow-up question (uses conversation memory)
     print("\n\n" + "=" * 80)
-    print("EXAMPLE 2: Contract-specific question")
+    print("EXAMPLE 2: Follow-up question (with conversation memory)")
     print("=" * 80)
     
-    result2 = chatbot.ask_contract(
-        query="What is the term length of this contract?",
+    result2 = chatbot.ask_project(
+        query="What about the payment terms?",
         user_id="test-user-123",
         project_id="test-project-456",
-        contract_id="test-contract-789"
+        session_id=session_id  # Same session for context
     )
     
     print("\nQUESTION:", result2["query"])
@@ -556,18 +871,10 @@ if __name__ == "__main__":
     print(result2["answer"])
     print("\nCONFIDENCE:", result2["confidence"])
     
-    # Example 3: Question with no relevant information
+    # Show conversation history
     print("\n\n" + "=" * 80)
-    print("EXAMPLE 3: Question with no relevant information")
+    print("CONVERSATION HISTORY")
     print("=" * 80)
-    
-    result3 = chatbot.ask_project(
-        query="What is the weather like today?",
-        user_id="test-user-123",
-        project_id="test-project-456"
-    )
-    
-    print("\nQUESTION:", result3["query"])
-    print("\nANSWER:")
-    print(result3["answer"])
-    print("\nCONFIDENCE:", result3["confidence"])
+    history = chatbot.get_session_history(session_id)
+    for msg in history:
+        print(f"[{msg['role'].upper()}]: {msg['content'][:100]}...")

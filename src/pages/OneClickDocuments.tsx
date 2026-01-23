@@ -89,9 +89,14 @@ const OneClickDocuments = () => {
   const [existingContracts, setExistingContracts] = useState<ArtistFile[]>([]);
   const [existingRoyaltyStatements, setExistingRoyaltyStatements] = useState<ArtistFile[]>([]);
   
-  // UI State
-  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  // UI State - Separate project selection for each card
+  const [selectedContractProject, setSelectedContractProject] = useState<string | null>(null);
+  const [selectedRoyaltyStatementProject, setSelectedRoyaltyStatementProject] = useState<string | null>(null);
   const [newContractProjectId, setNewContractProjectId] = useState<string>("");
+  
+  // Tab state to maintain which tab is active in each card
+  const [contractTabValue, setContractTabValue] = useState<string>("upload");
+  const [royaltyStatementTabValue, setRoyaltyStatementTabValue] = useState<string>("upload");
 
   const [artistName, setArtistName] = useState<string>("");
   const [isLoadingArtist, setIsLoadingArtist] = useState(true);
@@ -140,39 +145,55 @@ const OneClickDocuments = () => {
     }
   }, [artistId]);
 
-  // Fetch Contracts and Royalty Statements when Project Selected
+  // Fetch Contracts when Contract Project Selected
   useEffect(() => {
-    if (selectedProject) {
-      // Clear previous selections when changing projects
+    if (selectedContractProject) {
+      // Clear previous contract selections when changing projects
       setSelectedExistingContracts([]);
-      setSelectedExistingRoyaltyStatements([]);
       
       setIsLoadingProjectFiles(true);
-      fetch(`${API_URL}/files/${selectedProject}`)
+      fetch(`${API_URL}/files/${selectedContractProject}`)
         .then(res => res.json())
         .then((data: ArtistFile[]) => {
             // Filter contracts
             const contracts = data.filter(f => f.folder_category === 'contract');
             setExistingContracts(contracts);
-            
-            // Filter royalty statements
-            const statements = data.filter(f => f.folder_category === 'royalty_statement');
-            setExistingRoyaltyStatements(statements);
-            
             setIsLoadingProjectFiles(false);
         })
         .catch(err => {
-          console.error("Error fetching project files:", err);
+          console.error("Error fetching contract files:", err);
           setIsLoadingProjectFiles(false);
         });
     } else {
         setExistingContracts([]);
-        setExistingRoyaltyStatements([]);
         setSelectedExistingContracts([]);
-        setSelectedExistingRoyaltyStatements([]);
-        setIsLoadingProjectFiles(false);
     }
-  }, [selectedProject]);
+  }, [selectedContractProject]);
+
+  // Fetch Royalty Statements when Royalty Statement Project Selected
+  useEffect(() => {
+    if (selectedRoyaltyStatementProject) {
+      // Clear previous royalty statement selections when changing projects
+      setSelectedExistingRoyaltyStatements([]);
+      
+      setIsLoadingProjectFiles(true);
+      fetch(`${API_URL}/files/${selectedRoyaltyStatementProject}`)
+        .then(res => res.json())
+        .then((data: ArtistFile[]) => {
+            // Filter royalty statements
+            const statements = data.filter(f => f.folder_category === 'royalty_statement');
+            setExistingRoyaltyStatements(statements);
+            setIsLoadingProjectFiles(false);
+        })
+        .catch(err => {
+          console.error("Error fetching royalty statement files:", err);
+          setIsLoadingProjectFiles(false);
+        });
+    } else {
+        setExistingRoyaltyStatements([]);
+        setSelectedExistingRoyaltyStatements([]);
+    }
+  }, [selectedRoyaltyStatementProject]);
 
   const handleContractFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -520,7 +541,7 @@ const OneClickDocuments = () => {
               <CardDescription>Upload artist contract documents</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Tabs defaultValue="upload" className="w-full">
+              <Tabs value={contractTabValue} onValueChange={setContractTabValue} className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="upload">Upload New</TabsTrigger>
                   <TabsTrigger value="existing">Select Existing</TabsTrigger>
@@ -591,12 +612,12 @@ const OneClickDocuments = () => {
                 </TabsContent>
 
                 <TabsContent value="existing" className="space-y-4 mt-4">
-                  {!selectedProject ? (
+                  {!selectedContractProject ? (
                     <div className="space-y-4">
                       <p className="text-sm font-medium text-foreground">Select a Project:</p>
                       <div className="grid gap-3">
                         {projects.length > 0 ? projects.map((project) => (
-                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedProject(project.id)}>
+                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedContractProject(project.id)}>
                             <Folder className="w-5 h-5 text-primary" />
                             <span className="font-medium text-foreground">{project.name}</span>
                           </div>
@@ -609,9 +630,9 @@ const OneClickDocuments = () => {
                     <div className="space-y-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm font-medium text-foreground">
-                          Contracts in {projects.find(p => p.id === selectedProject)?.name}:
+                          Contracts in {projects.find(p => p.id === selectedContractProject)?.name}:
                         </p>
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedProject(null)} className="text-xs h-8">
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedContractProject(null)} className="text-xs h-8">
                           Change Project
                         </Button>
                       </div>
@@ -662,7 +683,7 @@ const OneClickDocuments = () => {
               <CardDescription>Upload royalty statement documents</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Tabs defaultValue="upload" className="w-full">
+              <Tabs value={royaltyStatementTabValue} onValueChange={setRoyaltyStatementTabValue} className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="upload">Upload New</TabsTrigger>
                   <TabsTrigger value="existing">Select Existing</TabsTrigger>
@@ -710,12 +731,12 @@ const OneClickDocuments = () => {
                 </TabsContent>
 
                 <TabsContent value="existing" className="space-y-4 mt-4">
-                  {!selectedProject ? (
+                  {!selectedRoyaltyStatementProject ? (
                     <div className="space-y-4">
                       <p className="text-sm font-medium text-foreground">Select a Project:</p>
                       <div className="grid gap-3">
                         {projects.length > 0 ? projects.map((project) => (
-                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedProject(project.id)}>
+                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedRoyaltyStatementProject(project.id)}>
                             <Folder className="w-5 h-5 text-primary" />
                             <span className="font-medium text-foreground">{project.name}</span>
                           </div>
@@ -728,9 +749,9 @@ const OneClickDocuments = () => {
                     <div className="space-y-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm font-medium text-foreground">
-                          Royalty Statements in {projects.find(p => p.id === selectedProject)?.name}:
+                          Royalty Statements in {projects.find(p => p.id === selectedRoyaltyStatementProject)?.name}:
                         </p>
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedProject(null)} className="text-xs h-8">
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedRoyaltyStatementProject(null)} className="text-xs h-8">
                           Change Project
                         </Button>
                       </div>

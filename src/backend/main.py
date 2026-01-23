@@ -79,6 +79,7 @@ class ZoeAskRequest(BaseModel):
     project_id: str
     contract_ids: Optional[List[str]] = None  # Changed to support multiple contracts
     user_id: str
+    session_id: Optional[str] = None  # Session ID for conversation memory
 
 class ZoeSource(BaseModel):
     contract_file: str
@@ -113,6 +114,8 @@ class ZoeAskResponse(BaseModel):
     sources: List[ZoeSource]
     search_results_count: int
     highest_score: Optional[float] = None
+    session_id: Optional[str] = None  # Return session ID for frontend tracking
+    show_quick_actions: Optional[bool] = None  # Show quick action buttons in response
 
 # Initialize Zoe chatbot and contract ingestion (singletons)
 zoe_chatbot = None
@@ -551,6 +554,7 @@ async def zoe_ask_question(request: ZoeAskRequest):
     3. If no contract_ids, searches all contracts in project with top_k=8
     4. Only answers if highest similarity ≥ 0.75
     5. Returns answer with source citations
+    6. Maintains conversation history per session for context-aware responses
     """
     try:
         # Get Zoe chatbot instance
@@ -558,6 +562,9 @@ async def zoe_ask_question(request: ZoeAskRequest):
         
         # Use top_k=8 for both project-wide and multi-contract searches
         top_k = 8
+        
+        # Generate session_id if not provided (for new conversations)
+        session_id = request.session_id or str(uuid.uuid4())
         
         # Ask the question
         if request.contract_ids and len(request.contract_ids) > 0:
@@ -567,7 +574,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 user_id=request.user_id,
                 project_id=request.project_id,
                 contract_ids=request.contract_ids,
-                top_k=top_k
+                top_k=top_k,
+                session_id=session_id
             )
         else:
             # Project-wide question
@@ -575,7 +583,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 query=request.query,
                 user_id=request.user_id,
                 project_id=request.project_id,
-                top_k=top_k
+                top_k=top_k,
+                session_id=session_id
             )
         
         # Format response - filter out sources with missing required fields
@@ -591,12 +600,44 @@ async def zoe_ask_question(request: ZoeAskRequest):
             confidence=result["confidence"],
             sources=valid_sources,
             search_results_count=result.get("search_results_count", 0),
-            highest_score=result.get("highest_score")
+            highest_score=result.get("highest_score"),
+            session_id=session_id,
+            show_quick_actions=result.get("show_quick_actions", False)
         )
         
     except Exception as e:
         print(f"Error in Zoe chatbot: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
+
+
+@app.delete("/zoe/session/{session_id}")
+async def zoe_clear_session(session_id: str):
+    """
+    Clear conversation history for a session.
+    Use this when starting a new conversation or switching projects.
+    """
+    try:
+        chatbot = get_zoe_chatbot()
+        chatbot.clear_session(session_id)
+        return {"message": "Session cleared successfully", "session_id": session_id}
+    except Exception as e:
+        print(f"Error clearing session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear session: {str(e)}")
+
+
+@app.get("/zoe/session/{session_id}/history")
+async def zoe_get_session_history(session_id: str):
+    """
+    Get conversation history for a session.
+    Useful for restoring chat state or debugging.
+    """
+    try:
+        chatbot = get_zoe_chatbot()
+        history = chatbot.get_session_history(session_id)
+        return {"session_id": session_id, "messages": history, "count": len(history)}
+    except Exception as e:
+        print(f"Error getting session history: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get session history: {str(e)}")
 
 # --- OneClick Royalty Calculation Endpoints ---
 

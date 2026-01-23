@@ -53,6 +53,7 @@ interface Message {
     score: number;
   }>;
   timestamp: string;
+  showQuickActions?: boolean;
 }
 
 const Zoe = () => {
@@ -78,6 +79,7 @@ const Zoe = () => {
   const [inputMessage, setInputMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID());
 
   // Upload/Delete state
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
@@ -135,10 +137,13 @@ const Zoe = () => {
 
   useEffect(() => {
     fetchContracts();
-    // Reset UI when switching projects
+    // Reset UI and session when switching projects
     if (selectedProject) {
       setContextOpen(true);
       setContractsOpen(true);
+      // Start a new session for the new project context
+      setSessionId(crypto.randomUUID());
+      setMessages([]); // Clear previous conversation
     } else {
       setContextOpen(true);
       setContractsOpen(false);
@@ -223,7 +228,7 @@ const Zoe = () => {
     setError("");
 
     try {
-      // Call backend chatbot API
+      // Call backend chatbot API with session_id for conversation memory
       const response = await fetch(`${API_URL}/zoe/ask`, {
         method: "POST",
         headers: {
@@ -234,6 +239,7 @@ const Zoe = () => {
           project_id: selectedProject,
           contract_ids: selectedContracts.length > 0 ? selectedContracts : null,
           user_id: user.id,
+          session_id: sessionId,
         }),
       });
 
@@ -243,12 +249,18 @@ const Zoe = () => {
 
       const data = await response.json();
 
+      // Update session_id from response if provided (for new sessions)
+      if (data.session_id && data.session_id !== sessionId) {
+        setSessionId(data.session_id);
+      }
+
       const assistantMessage: Message = {
         role: "assistant",
         content: data.answer,
         confidence: data.confidence,
         sources: data.sources,
         timestamp: new Date().toISOString(),
+        showQuickActions: data.show_quick_actions,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -257,6 +269,85 @@ const Zoe = () => {
       setError("Failed to get response from Zoe. Please try again.");
       
       // Add error message to chat
+      const errorMessage: Message = {
+        role: "assistant",
+        content: "I'm sorry, I encountered an error. Please try again.",
+        confidence: "error",
+        timestamp: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle quick action button clicks
+  const handleQuickAction = (question: string) => {
+    setInputMessage(question);
+    // Use setTimeout to ensure state is updated before sending
+    setTimeout(() => {
+      const syntheticEvent = { key: "Enter", shiftKey: false, preventDefault: () => {} } as React.KeyboardEvent;
+      // Directly trigger the send with the question
+      sendMessageWithQuery(question);
+    }, 0);
+  };
+
+  // Helper to send a specific query (used by quick actions)
+  const sendMessageWithQuery = async (query: string) => {
+    if (!query.trim() || !selectedProject || !user) {
+      return;
+    }
+
+    const userMessage: Message = {
+      role: "user",
+      content: query,
+      timestamp: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setInputMessage("");
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_URL}/zoe/ask`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: query,
+          project_id: selectedProject,
+          contract_ids: selectedContracts.length > 0 ? selectedContracts : null,
+          user_id: user.id,
+          session_id: sessionId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to get response from Zoe");
+      }
+
+      const data = await response.json();
+
+      if (data.session_id && data.session_id !== sessionId) {
+        setSessionId(data.session_id);
+      }
+
+      const assistantMessage: Message = {
+        role: "assistant",
+        content: data.answer,
+        confidence: data.confidence,
+        sources: data.sources,
+        timestamp: new Date().toISOString(),
+        showQuickActions: data.show_quick_actions,
+      };
+
+      setMessages((prev) => [...prev, assistantMessage]);
+    } catch (err) {
+      console.error("Error sending message:", err);
+      setError("Failed to get response from Zoe. Please try again.");
+      
       const errorMessage: Message = {
         role: "assistant",
         content: "I'm sorry, I encountered an error. Please try again.",
@@ -500,10 +591,45 @@ const Zoe = () => {
                 {messages.length === 0 ? (
                   <div className="text-center py-12 text-muted-foreground">
                     <Bot className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p className="text-base font-medium mb-2">No messages yet</p>
-                    <p className="text-sm">
-                      Select a project and start asking questions about your contracts
+                    <p className="text-base font-medium mb-2">Hi, I'm Zoe!</p>
+                    <p className="text-sm mb-6">
+                      {selectedProject 
+                        ? "What would you like to know about your contracts?"
+                        : "Select a project to start asking questions"}
                     </p>
+                    
+                    {/* Quick Action Buttons */}
+                    {selectedProject && (
+                      <div className="flex flex-wrap justify-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleQuickAction("What are the streaming royalty splits in this contract?")}
+                          disabled={isLoading}
+                          className="text-xs"
+                        >
+                          💰 Streaming Royalty Splits
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleQuickAction("Who are the parties involved in this contract?")}
+                          disabled={isLoading}
+                          className="text-xs"
+                        >
+                          👥 Involved Parties
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleQuickAction("What are the payment terms in this contract?")}
+                          disabled={isLoading}
+                          className="text-xs"
+                        >
+                          📅 Payment Terms
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   messages.map((message, index) => (
@@ -527,6 +653,39 @@ const Zoe = () => {
                         }`}
                       >
                         <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                        
+                        {/* Quick Action Buttons in greeting responses */}
+                        {message.role === "assistant" && message.showQuickActions && (
+                          <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-border/50">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleQuickAction("What are the royalty splits in this contract?")}
+                              disabled={isLoading}
+                              className="text-xs h-7"
+                            >
+                              💰 Royalty Splits
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleQuickAction("Who are the parties involved in this contract?")}
+                              disabled={isLoading}
+                              className="text-xs h-7"
+                            >
+                              👥 Involved Parties
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleQuickAction("What are the payment terms in this contract?")}
+                              disabled={isLoading}
+                              className="text-xs h-7"
+                            >
+                              📅 Payment Terms
+                            </Button>
+                          </div>
+                        )}
                       </div>
 
                       {message.role === "user" && (
