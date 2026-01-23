@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Send, Bot, User, AlertCircle, Upload, Trash2, ChevronDown, Music } from "lucide-react";
+import { ArrowLeft, Send, Bot, User, AlertCircle, Upload, Trash2, ChevronDown, Music, Plus, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -21,7 +21,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useToast } from "@/hooks/use-toast";
 
 // Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -60,6 +70,7 @@ const Zoe = () => {
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { user } = useAuth();
+  const { toast } = useToast();
 
   // State for artists, projects and contracts
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -68,6 +79,11 @@ const Zoe = () => {
   const [selectedArtist, setSelectedArtist] = useState<string>("");
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [selectedContracts, setSelectedContracts] = useState<string[]>([]);
+
+  // Create Project State
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [newProjectNameInput, setNewProjectNameInput] = useState("");
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
 
   // Collapsible UI state
   const [contextOpen, setContextOpen] = useState<boolean>(true);
@@ -159,9 +175,9 @@ const Zoe = () => {
   useEffect(() => {
     const prev = prevContractsCountRef.current;
     if (prev === 0 && selectedContracts.length > 0) {
-      setContractsOpen(false);
+      // setContractsOpen(false);
       // Also collapse the whole context to maximize chat
-      setContextOpen(false);
+      // setContextOpen(false);
     }
     prevContractsCountRef.current = selectedContracts.length;
   }, [selectedContracts]);
@@ -169,6 +185,44 @@ const Zoe = () => {
   const handleUploadComplete = () => {
     // Refresh contracts list after upload
     fetchContracts();
+  };
+
+  const handleCreateProject = async () => {
+    if (!selectedArtist || !newProjectNameInput.trim()) return;
+    
+    setIsCreatingProject(true);
+    try {
+        const response = await fetch(`${API_URL}/projects`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                artist_id: selectedArtist,
+                name: newProjectNameInput,
+                description: "Created via Zoe"
+            })
+        });
+        
+        if (!response.ok) throw new Error("Failed to create project");
+        
+        const newProject = await response.json();
+        setProjects([newProject, ...projects]);
+        setSelectedProject(newProject.id); // Auto-select
+        setNewProjectNameInput("");
+        setIsCreateProjectOpen(false);
+        toast({
+          title: "Success",
+          description: "Project created successfully",
+        });
+    } catch (err) {
+        console.error("Error creating project:", err);
+        toast({
+          title: "Error",
+          description: "Failed to create project",
+          variant: "destructive",
+        });
+    } finally {
+        setIsCreatingProject(false);
+    }
   };
 
   const handleDeleteClick = (contract: Contract) => {
@@ -451,18 +505,30 @@ const Zoe = () => {
                       <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
                         Project
                       </label>
-                      <Select value={selectedProject} onValueChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }} disabled={!selectedArtist}>
-                        <SelectTrigger className="h-9">
-                          <SelectValue placeholder="Choose a project" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {projects.map((project) => (
-                            <SelectItem key={project.id} value={project.id}>
-                              {project.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center gap-2">
+                        <Select value={selectedProject} onValueChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }} disabled={!selectedArtist}>
+                          <SelectTrigger className="h-9 flex-1">
+                            <SelectValue placeholder="Choose a project" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {projects.map((project) => (
+                              <SelectItem key={project.id} value={project.id}>
+                                {project.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-9 w-9 flex-shrink-0"
+                          onClick={() => setIsCreateProjectOpen(true)}
+                          disabled={!selectedArtist}
+                          title="Create New Project"
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   </div>
 
@@ -760,6 +826,47 @@ const Zoe = () => {
           onUploadComplete={handleUploadComplete}
         />
       )}
+
+      {/* Create Project Dialog */}
+      <Dialog open={isCreateProjectOpen} onOpenChange={setIsCreateProjectOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Create New Project</DialogTitle>
+            <DialogDescription>
+              Create a new project to organize your files.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="name" className="text-right">
+                Name
+              </Label>
+              <Input
+                id="name"
+                value={newProjectNameInput}
+                onChange={(e) => setNewProjectNameInput(e.target.value)}
+                className="col-span-3"
+                placeholder="e.g. Summer 2024 Release"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCreateProjectOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateProject} disabled={isCreatingProject || !newProjectNameInput.trim()}>
+              {isCreatingProject ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Project"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
