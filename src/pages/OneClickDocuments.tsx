@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 // Icons from lucide-react for visual elements
-import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle } from "lucide-react";
+import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus } from "lucide-react";
 // React Router hooks for navigation and getting URL parameters
 import { useNavigate, useParams } from "react-router-dom";
 // Recharts for pie chart
@@ -21,6 +21,8 @@ import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { toPng } from 'html-to-image';
 
 
@@ -92,6 +94,7 @@ const OneClickDocuments = () => {
   // UI State
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [newContractProjectId, setNewContractProjectId] = useState<string>("");
+  const [newRoyaltyStatementProjectId, setNewRoyaltyStatementProjectId] = useState<string>("");
 
   const [artistName, setArtistName] = useState<string>("");
   const [isLoadingArtist, setIsLoadingArtist] = useState(true);
@@ -102,6 +105,13 @@ const OneClickDocuments = () => {
   const [calculationStage, setCalculationStage] = useState("");
   const [calculationMessage, setCalculationMessage] = useState("");
   const [showProgressModal, setShowProgressModal] = useState(false);
+  const [contractSearchTerm, setContractSearchTerm] = useState("");
+  const [royaltySearchTerm, setRoyaltySearchTerm] = useState("");
+
+  // Create Project State
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [newProjectNameInput, setNewProjectNameInput] = useState("");
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
 
   // Ref for chart download (only the chart content, not the entire card)
   const chartContentRef = useRef<HTMLDivElement>(null);
@@ -192,6 +202,38 @@ const OneClickDocuments = () => {
     setRoyaltyStatementFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleCreateProject = async () => {
+    if (!artistId || !newProjectNameInput.trim()) return;
+    
+    setIsCreatingProject(true);
+    try {
+        const response = await fetch(`${API_URL}/projects`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                artist_id: artistId,
+                name: newProjectNameInput,
+                description: "Created via OneClick"
+            })
+        });
+        
+        if (!response.ok) throw new Error("Failed to create project");
+        
+        const newProject = await response.json();
+        setProjects([newProject, ...projects]);
+        setNewContractProjectId(newProject.id); // Auto-select for contract
+        setNewRoyaltyStatementProjectId(newProject.id); // Auto-select for royalty statement
+        setNewProjectNameInput("");
+        setIsCreateProjectOpen(false);
+        toast.success("Project created successfully");
+    } catch (err) {
+        console.error("Error creating project:", err);
+        toast.error("Failed to create project");
+    } finally {
+        setIsCreatingProject(false);
+    }
+  };
+
   // Toggle selection store ID instead of file_path for easier backend processing with existing endpoints
   const handleToggleExistingContract = (fileId: string) => {
     setSelectedExistingContracts(prev =>
@@ -278,8 +320,9 @@ const OneClickDocuments = () => {
              formData.append("file", royaltyStatementFiles[0]);
              formData.append("artist_id", artistId);
              formData.append("category", "royalty_statement");
-             // Associate with contract's project if available
-             if (finalProjectId) formData.append("project_id", finalProjectId);
+             // Associate with explicitly selected project, or contract's project if available
+             const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
+             if (targetProjectId) formData.append("project_id", targetProjectId);
              
              const uploadRes = await fetch(`${API_URL}/upload`, {
                  method: "POST",
@@ -559,16 +602,26 @@ const OneClickDocuments = () => {
                           Save to Project (Required)
                         </label>
                       </div>
-                      <Select value={newContractProjectId} onValueChange={setNewContractProjectId}>
-                        <SelectTrigger id="project-select" className="w-full">
-                          <SelectValue placeholder="Select a project..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {projects.map((project) => (
-                            <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center gap-2 w-full">
+                        <Select value={newContractProjectId} onValueChange={setNewContractProjectId}>
+                          <SelectTrigger id="project-select" className="w-full">
+                            <SelectValue placeholder="Select a project..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {projects.map((project) => (
+                              <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setIsCreateProjectOpen(true)}
+                          title="Create New Project"
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
                       <p className="text-xs text-muted-foreground">Select a project to save the contract.</p>
                     </div>
                   )}
@@ -616,31 +669,50 @@ const OneClickDocuments = () => {
                         </Button>
                       </div>
                       
+                      <div className="relative">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search contracts..."
+                          value={contractSearchTerm}
+                          onChange={(e) => setContractSearchTerm(e.target.value)}
+                          className="pl-8"
+                        />
+                      </div>
+
                       {isLoadingProjectFiles ? (
                         <div className="text-center py-8">
                           <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
                           <p className="text-sm text-muted-foreground">Loading contracts...</p>
                         </div>
                       ) : existingContracts.length > 0 ? (
-                        <div className="space-y-2">
-                          {existingContracts.map((contract) => (
-                            <div key={contract.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                              <div className="flex items-center gap-3 flex-1">
-                                <Checkbox
-                                  id={`existing-contract-${contract.id}`}
-                                  checked={selectedExistingContracts.includes(contract.id)}
-                                  onCheckedChange={() => handleToggleExistingContract(contract.id)}
-                                />
-                                <label htmlFor={`existing-contract-${contract.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
-                                  <FileText className="w-4 h-4 text-primary" />
-                                  <div>
-                                    <p className="text-sm font-medium text-foreground">{contract.file_name}</p>
-                                    <p className="text-xs text-muted-foreground">{new Date(contract.created_at).toLocaleDateString()}</p>
-                                  </div>
-                                </label>
+                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                          {existingContracts
+                            .filter(contract => 
+                              contract.file_name.toLowerCase().includes(contractSearchTerm.toLowerCase())
+                            )
+                            .map((contract) => (
+                              <div key={contract.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <Checkbox
+                                    id={`existing-contract-${contract.id}`}
+                                    checked={selectedExistingContracts.includes(contract.id)}
+                                    onCheckedChange={() => handleToggleExistingContract(contract.id)}
+                                  />
+                                  <label htmlFor={`existing-contract-${contract.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
+                                    <FileText className="w-4 h-4 text-primary" />
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{contract.file_name}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(contract.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                  </label>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))}
+                          {existingContracts.filter(contract => 
+                            contract.file_name.toLowerCase().includes(contractSearchTerm.toLowerCase())
+                          ).length === 0 && (
+                             <p className="text-sm text-muted-foreground text-center py-4">No matching contracts found.</p>
+                          )}
                         </div>
                       ) : (
                         <p className="text-sm text-muted-foreground text-center py-4">No contracts found in this project.</p>
@@ -692,6 +764,39 @@ const OneClickDocuments = () => {
                       </Button>
                     </label>
                   </div>
+
+                  {royaltyStatementFiles.length > 0 && (
+                    <div className="space-y-2 pt-2 border-t border-border">
+                      <div className="flex items-center gap-2">
+                        <Folder className="w-4 h-4 text-muted-foreground" />
+                        <label htmlFor="royalty-project-select" className="text-sm font-medium text-foreground">
+                          Save to Project (Optional)
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2 w-full">
+                        <Select value={newRoyaltyStatementProjectId} onValueChange={setNewRoyaltyStatementProjectId}>
+                          <SelectTrigger id="royalty-project-select" className="w-full">
+                            <SelectValue placeholder="Select a project..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {projects.map((project) => (
+                              <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setIsCreateProjectOpen(true)}
+                          title="Create New Project"
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Select a project to save the royalty statement.</p>
+                    </div>
+                  )}
+
                   {royaltyStatementFiles.length > 0 && (
                     <div className="space-y-2 mt-4">
                       {royaltyStatementFiles.map((file, index) => (
@@ -735,31 +840,50 @@ const OneClickDocuments = () => {
                         </Button>
                       </div>
                       
+                      <div className="relative">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search royalty statements..."
+                          value={royaltySearchTerm}
+                          onChange={(e) => setRoyaltySearchTerm(e.target.value)}
+                          className="pl-8"
+                        />
+                      </div>
+                      
                       {isLoadingProjectFiles ? (
                         <div className="text-center py-8">
                           <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
                           <p className="text-sm text-muted-foreground">Loading royalty statements...</p>
                         </div>
                       ) : existingRoyaltyStatements.length > 0 ? (
-                        <div className="space-y-2">
-                          {existingRoyaltyStatements.map((statement) => (
-                            <div key={statement.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                              <div className="flex items-center gap-3 flex-1">
-                                <Checkbox
-                                  id={`existing-royalty-${statement.id}`}
-                                  checked={selectedExistingRoyaltyStatements.includes(statement.id)}
-                                  onCheckedChange={() => handleToggleExistingRoyaltyStatement(statement.id)}
-                                />
-                                <label htmlFor={`existing-royalty-${statement.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
-                                  <FileText className="w-4 h-4 text-primary" />
-                                  <div>
-                                    <p className="text-sm font-medium text-foreground">{statement.file_name}</p>
-                                    <p className="text-xs text-muted-foreground">{new Date(statement.created_at).toLocaleDateString()}</p>
-                                  </div>
-                                </label>
+                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                          {existingRoyaltyStatements
+                            .filter(statement => 
+                              statement.file_name.toLowerCase().includes(royaltySearchTerm.toLowerCase())
+                            )
+                            .map((statement) => (
+                              <div key={statement.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <Checkbox
+                                    id={`existing-royalty-${statement.id}`}
+                                    checked={selectedExistingRoyaltyStatements.includes(statement.id)}
+                                    onCheckedChange={() => handleToggleExistingRoyaltyStatement(statement.id)}
+                                  />
+                                  <label htmlFor={`existing-royalty-${statement.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
+                                    <FileText className="w-4 h-4 text-primary" />
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{statement.file_name}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(statement.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                  </label>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))}
+                          {existingRoyaltyStatements.filter(statement => 
+                            statement.file_name.toLowerCase().includes(royaltySearchTerm.toLowerCase())
+                          ).length === 0 && (
+                             <p className="text-sm text-muted-foreground text-center py-4">No matching royalty statements found.</p>
+                          )}
                         </div>
                       ) : (
                         <p className="text-sm text-muted-foreground text-center py-4">No royalty statements found in this project.</p>
@@ -908,6 +1032,47 @@ const OneClickDocuments = () => {
             </CardContent>
           </Card>
         )}
+
+        {/* Create Project Dialog */}
+        <Dialog open={isCreateProjectOpen} onOpenChange={setIsCreateProjectOpen}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Create New Project</DialogTitle>
+              <DialogDescription>
+                Create a new project to organize your files.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="name" className="text-right">
+                  Name
+                </Label>
+                <Input
+                  id="name"
+                  value={newProjectNameInput}
+                  onChange={(e) => setNewProjectNameInput(e.target.value)}
+                  className="col-span-3"
+                  placeholder="e.g. Summer 2024 Release"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsCreateProjectOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleCreateProject} disabled={isCreatingProject || !newProjectNameInput.trim()}>
+                {isCreatingProject ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  "Create Project"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {calculationResult && (
           <div className="mt-8 space-y-6">

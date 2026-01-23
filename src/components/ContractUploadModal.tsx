@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { Upload, FileText, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
 
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
@@ -69,6 +70,8 @@ export const ContractUploadModal = ({
     }));
     setUploadResults(initialResults);
 
+    let localSuccessCount = 0;
+
     // Upload files one by one
     for (let i = 0; i < selectedFiles.length; i++) {
       const file = selectedFiles[i];
@@ -89,6 +92,7 @@ export const ContractUploadModal = ({
         }
 
         const result = await response.json();
+        localSuccessCount++;
 
         // Update result for this file
         setUploadResults((prev) =>
@@ -123,8 +127,11 @@ export const ContractUploadModal = ({
 
     setUploading(false);
     
-    // Call completion callback when uploads finish
-    onUploadComplete?.();
+    // Only close/notify if at least one file succeeded
+    if (localSuccessCount > 0) {
+      toast.success(`Successfully uploaded ${localSuccessCount} file${localSuccessCount !== 1 ? 's' : ''}`);
+      onUploadComplete?.();
+    }
   };
 
   const handleClose = () => {
@@ -219,9 +226,9 @@ export const ContractUploadModal = ({
                     )}
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                        <p className="text-sm font-medium truncate">{result.filename}</p>
+                      <div className="flex items-start gap-2">
+                        <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
+                        <p className="text-sm font-medium break-words">{result.filename}</p>
                       </div>
 
                       {result.status === "uploading" && (

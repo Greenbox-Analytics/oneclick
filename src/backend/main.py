@@ -160,6 +160,26 @@ async def get_projects(artist_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class ProjectCreateRequest(BaseModel):
+    artist_id: str
+    name: str
+    description: Optional[str] = None
+
+@app.post("/projects")
+async def create_project(project: ProjectCreateRequest):
+    """
+    Create a new project for an artist.
+    """
+    try:
+        res = supabase.table("projects").insert({
+            "artist_id": project.artist_id,
+            "name": project.name,
+            "description": project.description
+        }).execute()
+        return res.data[0]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/files/{project_id}")
 async def get_project_files(project_id: str):
     """
@@ -627,6 +647,10 @@ async def oneclick_calculate_royalties_stream(
         SSE stream with progress updates and final results
     """
     async def generate_progress():
+        # Initialize paths to None for safe cleanup
+        contract_path = None
+        statement_path = None
+
         try:
             # Send initial status
             yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0, 'stage': 'starting'})}\n\n"
@@ -685,65 +709,71 @@ async def oneclick_calculate_royalties_stream(
             yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
             await asyncio.sleep(0.3)
             
-            try:
-                # Calculate payments
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
-                
-                payments = calculate_royalty_payments(
-                    contract_path=contract_path,
-                    statement_path=statement_path,
-                    user_id=user_id,
-                    contract_id=contract_id
-                )
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
-                await asyncio.sleep(0.3)
-                
-                if not payments or len(payments) == 0:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
-                    return
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
-                await asyncio.sleep(0.2)
-                
-                # Send final results
-                payment_responses = []
-                for payment in payments:
-                    payment_responses.append({
-                        'song_title': payment['song_title'],
-                        'party_name': payment['party_name'],
-                        'role': payment['role'],
-                        'royalty_type': payment['royalty_type'],
-                        'percentage': payment['percentage'],
-                        'total_royalty': payment['total_royalty'],
-                        'amount_to_pay': payment['amount_to_pay'],
-                        'terms': payment.get('terms')
-                    })
-                
-                result = {
-                    'type': 'complete',
-                    'status': 'success',
-                    'total_payments': len(payments),
-                    'payments': payment_responses,
-                    'message': f'Successfully calculated {len(payments)} royalty payments',
-                    'progress': 100,
-                    'stage': 'complete'
-                }
-                
-                yield f"data: {json.dumps(result)}\n\n"
-                
-            finally:
-                # Clean up temporary files
-                if os.path.exists(contract_path):
-                    os.unlink(contract_path)
-                if os.path.exists(statement_path):
-                    os.unlink(statement_path)
+            # Calculate payments
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
+            
+            payments = calculate_royalty_payments(
+                contract_path=contract_path,
+                statement_path=statement_path,
+                user_id=user_id,
+                contract_id=contract_id
+            )
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
+            await asyncio.sleep(0.3)
+            
+            if not payments or len(payments) == 0:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
+                return
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
+            await asyncio.sleep(0.2)
+            
+            # Send final results
+            payment_responses = []
+            for payment in payments:
+                payment_responses.append({
+                    'song_title': payment['song_title'],
+                    'party_name': payment['party_name'],
+                    'role': payment['role'],
+                    'royalty_type': payment['royalty_type'],
+                    'percentage': payment['percentage'],
+                    'total_royalty': payment['total_royalty'],
+                    'amount_to_pay': payment['amount_to_pay'],
+                    'terms': payment.get('terms')
+                })
+            
+            result = {
+                'type': 'complete',
+                'status': 'success',
+                'total_payments': len(payments),
+                'payments': payment_responses,
+                'message': f'Successfully calculated {len(payments)} royalty payments',
+                'progress': 100,
+                'stage': 'complete'
+            }
+            
+            yield f"data: {json.dumps(result)}\n\n"
                     
         except Exception as e:
             import traceback
             error_detail = str(e)
             traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'message': error_detail})}\n\n"
+            
+        finally:
+            # Clean up temporary files safely
+            if contract_path and os.path.exists(contract_path):
+                try:
+                    os.unlink(contract_path)
+                except Exception:
+                    pass
+            
+            if statement_path and os.path.exists(statement_path):
+                try:
+                    os.unlink(statement_path)
+                except Exception:
+                    pass
     
     return StreamingResponse(generate_progress(), media_type="text/event-stream")
 
