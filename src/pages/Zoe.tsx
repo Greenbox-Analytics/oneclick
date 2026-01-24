@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Send, Bot, User, AlertCircle, Upload, Trash2, ChevronDown, Music, Plus, Loader2 } from "lucide-react";
+import { ArrowLeft, Send, Bot, User, AlertCircle, Upload, Trash2, ChevronDown, Music, Plus, Loader2, PanelLeftClose, PanelLeft, FileText, FolderOpen, Users, GripVertical, Paperclip } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -32,6 +32,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 
 // Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -86,9 +87,12 @@ const Zoe = () => {
   const [isCreatingProject, setIsCreatingProject] = useState(false);
 
   // Collapsible UI state
-  const [contextOpen, setContextOpen] = useState<boolean>(true);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(288); // 288px = w-72
+  const [isResizing, setIsResizing] = useState<boolean>(false);
   const [contractsOpen, setContractsOpen] = useState<boolean>(false);
   const prevContractsCountRef = useRef<number>(0);
+  const sidebarRef = useRef<HTMLDivElement>(null);
   
   // Chat state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -155,13 +159,11 @@ const Zoe = () => {
     fetchContracts();
     // Reset UI and session when switching projects
     if (selectedProject) {
-      setContextOpen(true);
       setContractsOpen(true);
       // Start a new session for the new project context
       setSessionId(crypto.randomUUID());
       setMessages([]); // Clear previous conversation
     } else {
-      setContextOpen(true);
       setContractsOpen(false);
     }
   }, [selectedProject]);
@@ -421,258 +423,315 @@ const Zoe = () => {
     }
   };
 
+  // Sidebar resize handlers
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const newWidth = e.clientX;
+      // Constrain width between 220px and 480px
+      if (newWidth >= 220 && newWidth <= 480) {
+        setSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted/20">
-      <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 sticky top-0 z-10">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate("/dashboard")}>
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-6 h-6 text-primary-foreground" />
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
+      {/* Header */}
+      <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 flex-shrink-0 z-10">
+        <div className="px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="h-9 w-9"
+            >
+              {sidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeft className="h-5 w-5" />}
+            </Button>
+            <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate("/dashboard")}>
+              <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
+                <Music className="w-5 h-5 text-primary-foreground" />
+              </div>
+              <div className="hidden sm:block">
+                <h1 className="text-lg font-bold text-foreground leading-none">Zoe AI</h1>
+                <p className="text-xs text-muted-foreground">Contract Intelligence</p>
+              </div>
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          <Button variant="outline" onClick={() => navigate("/tools")} className="gap-2">
-            <ArrowLeft className="w-4 h-4" />
-            Back to Tools
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Context summary badge - visible when sidebar is closed */}
+            {!sidebarOpen && selectedProject && (
+              <Badge variant="secondary" className="hidden sm:flex items-center gap-1.5 text-xs">
+                <span className="max-w-[100px] truncate">{selectedArtistName}</span>
+                <span className="text-muted-foreground">•</span>
+                <span className="max-w-[100px] truncate">{selectedProjectName}</span>
+                {selectedContracts.length > 0 && (
+                  <>
+                    <span className="text-muted-foreground">•</span>
+                    <span>{selectedContracts.length} contracts</span>
+                  </>
+                )}
+              </Badge>
+            )}
+            <Button variant="outline" onClick={() => navigate("/tools")} size="sm" className="gap-2">
+              <ArrowLeft className="w-4 h-4" />
+              <span className="hidden sm:inline">Back to Tools</span>
+            </Button>
+          </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-4 max-w-4xl">
-        <div className="mb-4">
-          <h2 className="text-3xl font-bold text-foreground mb-2">Zoe AI Assistant</h2>
-          <p className="text-muted-foreground">Contract Intelligence</p>
-        </div>
-
-        {/* Chat Interface */}
-        <Card className="flex flex-col shadow border" style={{ height: 'calc(90vh - 140px)' }}>
-          {/* Header with Context Selection */}
-          <CardHeader className="border-b bg-muted/20 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Bot className="w-5 h-5 text-primary" />
-                  Ask Zoe
-                </CardTitle>
-                <CardDescription className="mt-0.5 text-xs">
-                  Ask about royalty splits, payment terms, contract duration, and more
-                </CardDescription>
+      {/* Main Content Area */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Collapsible & Resizable Sidebar */}
+        <aside
+          ref={sidebarRef}
+          className={cn(
+            "border-r border-border bg-muted/30 flex-shrink-0 overflow-hidden relative",
+            !isResizing && "transition-all duration-300 ease-in-out",
+            !sidebarOpen && "!w-0"
+          )}
+          style={{ width: sidebarOpen ? sidebarWidth : 0 }}
+        >
+          <div className="h-full flex flex-col" style={{ width: sidebarWidth }}>
+            {/* Resize Handle */}
+            <div
+              className={cn(
+                "absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 z-10 group",
+                isResizing && "bg-primary/30"
+              )}
+              onMouseDown={handleMouseDown}
+            >
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <GripVertical className="w-3 h-3 text-muted-foreground" />
               </div>
-              {/* Context summary + toggle */}
-              <Collapsible open={contextOpen} onOpenChange={setContextOpen}>
-                <div className="flex items-center gap-2">
-                  <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{selectedArtistName || 'No artist'}</span>
-                    <span>•</span>
-                    <span>{selectedProjectName || 'No project'}</span>
-                    <span>•</span>
-                    <span>
-                      {selectedContracts.length > 0
-                        ? `${selectedContracts.length} selected`
-                        : 'All contracts'}
-                    </span>
-                  </div>
-                  <CollapsibleTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-8 px-3">
-                      Context
-                      <ChevronDown className={`ml-1 h-4 w-4 transition-transform ${contextOpen ? 'rotate-180' : ''}`} />
-                    </Button>
-                  </CollapsibleTrigger>
-                </div>
-                <CollapsibleContent className="mt-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {/* Artist */}
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                        Artist
-                      </label>
-                      <Select value={selectedArtist} onValueChange={(v) => { setSelectedArtist(v); setSelectedProject(''); setSelectedContracts([]); }}>
-                        <SelectTrigger className="h-9">
-                          <SelectValue placeholder="Choose an artist" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {artists.map((artist) => (
-                            <SelectItem key={artist.id} value={artist.id}>
-                              {artist.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Project */}
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                        Project
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <Select value={selectedProject} onValueChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }} disabled={!selectedArtist}>
-                          <SelectTrigger className="h-9 flex-1">
-                            <SelectValue placeholder="Choose a project" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {projects.map((project) => (
-                              <SelectItem key={project.id} value={project.id}>
-                                {project.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-9 w-9 flex-shrink-0"
-                          onClick={() => setIsCreateProjectOpen(true)}
-                          disabled={!selectedArtist}
-                          title="Create New Project"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Contracts dropdown */}
-                  {selectedProject && (
-                    <div className="mt-3">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                          Contracts {contracts.length > 0 && `(${contracts.length})`}
-                        </label>
-                        <div className="flex items-center gap-2">
-                          {selectedContracts.length > 0 && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs"
-                              onClick={() => setSelectedContracts([])}
-                            >
-                              Clear
-                            </Button>
-                          )}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setUploadModalOpen(true)}
-                            className="h-7 text-xs"
-                          >
-                            <Upload className="w-3 h-3 mr-1" />
-                            Upload
-                          </Button>
-                        </div>
-                      </div>
-
-                      {/* Collapsible dropdown trigger */}
-                      <Collapsible open={contractsOpen} onOpenChange={setContractsOpen}>
-                        <CollapsibleTrigger asChild>
-                          <Button variant="secondary" className="w-full justify-between mt-2">
-                            {selectedContracts.length > 0
-                              ? `${selectedContracts.length} selected`
-                              : "Select contracts (optional)"}
-                            <ChevronDown className={`ml-2 h-4 w-4 transition-transform ${contractsOpen ? 'rotate-180' : ''}`} />
-                          </Button>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent>
-                          <div className="bg-muted/50 rounded-lg p-3 mt-2 max-h-40 overflow-y-auto">
-                            {contracts.length > 0 ? (
-                              <div className="space-y-2">
-                                {contracts.map((contract) => (
-                                  <div key={contract.id} className="flex items-center justify-between gap-2 group">
-                                    <div className="flex items-center space-x-2 flex-1 min-w-0">
-                                      <Checkbox
-                                        id={contract.id}
-                                        checked={selectedContracts.includes(contract.id)}
-                                        onCheckedChange={(checked) => {
-                                          if (checked) {
-                                            setSelectedContracts([...selectedContracts, contract.id]);
-                                          } else {
-                                            setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
-                                          }
-                                        }}
-                                      />
-                                      <label
-                                        htmlFor={contract.id}
-                                        className="text-sm font-medium leading-none cursor-pointer truncate"
-                                      >
-                                        {contract.file_name}
-                                      </label>
-                                    </div>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => handleDeleteClick(contract)}
-                                      className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    >
-                                      <Trash2 className="w-3 h-3 text-destructive" />
-                                    </Button>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="bg-background/50 rounded-md p-4 text-center">
-                                <p className="text-sm text-muted-foreground mb-2">No contracts uploaded yet</p>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setUploadModalOpen(true)}
-                                >
-                                  <Upload className="w-3 h-3 mr-1" />
-                                  Upload First Contract
-                                </Button>
-                              </div>
-                            )}
-                          </div>
-                        </CollapsibleContent>
-                      </Collapsible>
-
-                      {selectedContracts.length > 0 && (
-                        <div className="flex items-center gap-2 mt-2">
-                          <Badge variant="secondary" className="text-xs">
-                            {selectedContracts.length} contract{selectedContracts.length > 1 ? 's' : ''} selected
-                          </Badge>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </CollapsibleContent>
-              </Collapsible>
             </div>
+            <ScrollArea className="flex-1">
+              <div className="p-4 space-y-6">
+                {/* Artist Selection */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    <Users className="w-3.5 h-3.5" />
+                    Artist
+                  </div>
+                  <Select value={selectedArtist} onValueChange={(v) => { setSelectedArtist(v); setSelectedProject(''); setSelectedContracts([]); }}>
+                    <SelectTrigger className="w-full bg-background">
+                      <SelectValue placeholder="Select artist..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {artists.map((artist) => (
+                        <SelectItem key={artist.id} value={artist.id}>
+                          {artist.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            {/* Search scope badge (always visible) */}
-            {selectedProject && (
-              <div className="pt-2">
-                <Badge variant="outline" className="text-xs">
-                  {selectedContracts.length > 0 
-                    ? `🎯 Searching ${selectedContracts.length} specific contract${selectedContracts.length > 1 ? 's' : ''}`
-                    : `📁 Searching all contracts in project`}
-                </Badge>
+                {/* Project Selection */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    Project
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Select value={selectedProject} onValueChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }} disabled={!selectedArtist}>
+                      <SelectTrigger className="flex-1 bg-background">
+                        <SelectValue placeholder="Select project..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {projects.map((project) => (
+                          <SelectItem key={project.id} value={project.id}>
+                            {project.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 flex-shrink-0"
+                      onClick={() => setIsCreateProjectOpen(true)}
+                      disabled={!selectedArtist}
+                      title="Create New Project"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Contracts Section */}
+                {selectedProject && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        <FileText className="w-3.5 h-3.5" />
+                        Contracts {contracts.length > 0 && `(${contracts.length})`}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setUploadModalOpen(true)}
+                        className="h-7 text-xs px-2"
+                      >
+                        <Upload className="w-3 h-3 mr-1" />
+                        Upload
+                      </Button>
+                    </div>
+
+                    {/* Collapsible contracts list */}
+                    <Collapsible open={contractsOpen} onOpenChange={setContractsOpen}>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="secondary" size="sm" className="w-full justify-between h-9">
+                          {selectedContracts.length > 0
+                            ? `${selectedContracts.length} selected`
+                            : "All contracts"}
+                          <ChevronDown className={cn("ml-2 h-4 w-4 transition-transform", contractsOpen && "rotate-180")} />
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <div className="bg-background rounded-lg border mt-2 max-h-48 overflow-y-auto">
+                          {contracts.length > 0 ? (
+                            <div className="p-2 space-y-1">
+                              {selectedContracts.length > 0 && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="w-full h-7 text-xs justify-start text-muted-foreground hover:text-foreground"
+                                  onClick={() => setSelectedContracts([])}
+                                >
+                                  Clear selection
+                                </Button>
+                              )}
+                              {contracts.map((contract) => (
+                                <div key={contract.id} className="flex items-center justify-between gap-2 group px-2 py-1.5 rounded hover:bg-muted/50">
+                                  <div className="flex items-center space-x-2 flex-1 min-w-0">
+                                    <Checkbox
+                                      id={contract.id}
+                                      checked={selectedContracts.includes(contract.id)}
+                                      onCheckedChange={(checked) => {
+                                        if (checked) {
+                                          setSelectedContracts([...selectedContracts, contract.id]);
+                                        } else {
+                                          setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
+                                        }
+                                      }}
+                                    />
+                                    <label
+                                      htmlFor={contract.id}
+                                      className="text-xs font-medium leading-none cursor-pointer truncate"
+                                    >
+                                      {contract.file_name}
+                                    </label>
+                                  </div>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleDeleteClick(contract)}
+                                    className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
+                                    <Trash2 className="w-3 h-3 text-destructive" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="p-4 text-center">
+                              <p className="text-xs text-muted-foreground mb-2">No contracts yet</p>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setUploadModalOpen(true)}
+                                className="h-7 text-xs"
+                              >
+                                <Upload className="w-3 h-3 mr-1" />
+                                Upload First
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+
+                    {/* Search scope indicator */}
+                    <Badge variant="outline" className="w-full justify-center text-xs py-1.5">
+                      {selectedContracts.length > 0 
+                        ? `🎯 Searching ${selectedContracts.length} contract${selectedContracts.length > 1 ? 's' : ''}`
+                        : `📁 All project contracts`}
+                    </Badge>
+                  </div>
+                )}
+
+                {/* Empty state when no project */}
+                {!selectedProject && selectedArtist && (
+                  <div className="rounded-lg border border-dashed border-muted-foreground/25 p-4 text-center">
+                    <FolderOpen className="w-8 h-8 mx-auto mb-2 text-muted-foreground/50" />
+                    <p className="text-xs text-muted-foreground">Select a project to view contracts</p>
+                  </div>
+                )}
+
+                {!selectedArtist && (
+                  <div className="rounded-lg border border-dashed border-muted-foreground/25 p-4 text-center">
+                    <Users className="w-8 h-8 mx-auto mb-2 text-muted-foreground/50" />
+                    <p className="text-xs text-muted-foreground">Select an artist to get started</p>
+                  </div>
+                )}
               </div>
-            )}
-          </CardHeader>
+            </ScrollArea>
+          </div>
+        </aside>
 
-          <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
-            {/* Messages Area */}
-            <ScrollArea className="flex-1 px-5">
-              <div className="space-y-4 py-4">
+        {/* Chat Area */}
+        <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Chat Messages */}
+          <ScrollArea className="flex-1">
+            <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
+              <div className="space-y-4">
                 {messages.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <Bot className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p className="text-base font-medium mb-2">Hi, I'm Zoe!</p>
-                    <p className="text-sm mb-6">
+                  <div className="text-center py-16">
+                    <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                      <Bot className="w-8 h-8 text-primary" />
+                    </div>
+                    <h3 className="text-xl font-semibold mb-2">Hi, I'm Zoe!</h3>
+                    <p className="text-muted-foreground mb-8 max-w-md mx-auto">
                       {selectedProject 
-                        ? "What would you like to know about your contracts?"
-                        : "Select a project to start asking questions"}
+                        ? "I can help you understand your contracts. Ask me about royalty splits, payment terms, or any contract details."
+                        : "Select an artist and project from the sidebar to start asking questions about your contracts."}
                     </p>
                     
                     {/* Quick Action Buttons */}
                     {selectedProject && (
-                      <div className="flex flex-wrap justify-center gap-2">
+                      <div className="flex flex-wrap justify-center gap-2 max-w-lg mx-auto">
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => handleQuickAction("What are the streaming royalty splits in this contract?")}
                           disabled={isLoading}
-                          className="text-xs"
+                          className="text-sm"
                         >
                           💰 Streaming Royalty Splits
                         </Button>
@@ -681,7 +740,7 @@ const Zoe = () => {
                           size="sm"
                           onClick={() => handleQuickAction("Who are the parties involved in this contract?")}
                           disabled={isLoading}
-                          className="text-xs"
+                          className="text-sm"
                         >
                           👥 Involved Parties
                         </Button>
@@ -690,7 +749,7 @@ const Zoe = () => {
                           size="sm"
                           onClick={() => handleQuickAction("What are the payment terms in this contract?")}
                           disabled={isLoading}
-                          className="text-xs"
+                          className="text-sm"
                         >
                           📅 Payment Terms
                         </Button>
@@ -701,22 +760,24 @@ const Zoe = () => {
                   messages.map((message, index) => (
                     <div
                       key={index}
-                      className={`flex gap-3 ${
+                      className={cn(
+                        "flex gap-3",
                         message.role === "user" ? "justify-end" : "justify-start"
-                      }`}
+                      )}
                     >
                       {message.role === "assistant" && (
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                          <Bot className="w-5 h-5 text-primary" />
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-1">
+                          <Bot className="w-4 h-4 text-primary" />
                         </div>
                       )}
                       
                       <div
-                        className={`max-w-[80%] rounded-lg p-3 sm:p-4 ${
+                        className={cn(
+                          "max-w-[85%] rounded-2xl px-4 py-3",
                           message.role === "user"
                             ? "bg-primary text-primary-foreground"
                             : "bg-muted"
-                        }`}
+                        )}
                       >
                         <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
                         
@@ -755,8 +816,8 @@ const Zoe = () => {
                       </div>
 
                       {message.role === "user" && (
-                        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-                          <User className="w-5 h-5 text-primary-foreground" />
+                        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0 mt-1">
+                          <User className="w-4 h-4 text-primary-foreground" />
                         </div>
                       )}
                     </div>
@@ -765,21 +826,26 @@ const Zoe = () => {
                 
                 {isLoading && (
                   <div className="flex gap-3 justify-start">
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                      <Bot className="w-5 h-5 text-primary animate-pulse" />
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-1">
+                      <Bot className="w-4 h-4 text-primary animate-pulse" />
                     </div>
-                    <div className="bg-muted rounded-lg p-3 sm:p-4">
-                      <p className="text-sm text-muted-foreground">Thinking...</p>
+                    <div className="bg-muted rounded-2xl px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                        <p className="text-sm text-muted-foreground">Thinking...</p>
+                      </div>
                     </div>
                   </div>
                 )}
                 
                 <div ref={messagesEndRef} />
               </div>
-            </ScrollArea>
+            </div>
+          </ScrollArea>
 
-            {/* Input Area */}
-            <div className="border-t border-border p-4">
+          {/* Input Area */}
+          <div className="border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex-shrink-0">
+            <div className="max-w-3xl mx-auto p-4">
               {error && (
                 <Alert variant="destructive" className="mb-4">
                   <AlertCircle className="h-4 w-4" />
@@ -788,34 +854,46 @@ const Zoe = () => {
                 </Alert>
               )}
               
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setUploadModalOpen(true)}
+                  disabled={!selectedProject}
+                  className="h-10 w-10 rounded-full flex-shrink-0 text-muted-foreground hover:text-foreground"
+                  title="Upload contract"
+                >
+                  <Paperclip className="w-5 h-5" />
+                </Button>
                 <Input
                   placeholder={
                     selectedProject
                       ? "Ask a question about your contracts..."
-                      : "Please select a project first"
+                      : "Select a project to start chatting..."
                   }
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
                   onKeyPress={handleKeyPress}
                   disabled={!selectedProject || isLoading}
-                  className="flex-1"
+                  className="flex-1 h-11 rounded-full px-4 bg-muted/50 border-muted"
                 />
                 <Button
                   onClick={handleSendMessage}
                   disabled={!selectedProject || !inputMessage.trim() || isLoading}
+                  size="icon"
+                  className="h-11 w-11 rounded-full flex-shrink-0"
                 >
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
               
-              <p className="text-[11px] text-muted-foreground mt-2">
-                Zoe only answers based on your uploaded contracts, using no outside knowledge.
+              <p className="text-[11px] text-center text-muted-foreground mt-2">
+                Zoe only answers based on your uploaded contracts
               </p>
             </div>
-          </CardContent>
-        </Card>
-      </main>
+          </div>
+        </main>
+      </div>
 
       {/* Upload Modal */}
       {selectedProject && (
