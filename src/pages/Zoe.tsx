@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -267,8 +268,14 @@ const Zoe = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || !selectedProject || !user) {
-      setError("Please select a project and enter a message");
+    if (!inputMessage.trim() || !user) {
+      setError("Please enter a message");
+      return;
+    }
+    
+    // Need at least an artist selected
+    if (!selectedArtist) {
+      setError("Please select an artist first");
       return;
     }
 
@@ -292,10 +299,11 @@ const Zoe = () => {
         },
         body: JSON.stringify({
           query: inputMessage,
-          project_id: selectedProject,
+          project_id: selectedProject || null,
           contract_ids: selectedContracts.length > 0 ? selectedContracts : null,
           user_id: user.id,
           session_id: sessionId,
+          artist_id: selectedArtist,
         }),
       });
 
@@ -350,7 +358,7 @@ const Zoe = () => {
 
   // Helper to send a specific query (used by quick actions)
   const sendMessageWithQuery = async (query: string) => {
-    if (!query.trim() || !selectedProject || !user) {
+    if (!query.trim() || !selectedArtist || !user) {
       return;
     }
 
@@ -377,6 +385,7 @@ const Zoe = () => {
           contract_ids: selectedContracts.length > 0 ? selectedContracts : null,
           user_id: user.id,
           session_id: sessionId,
+          artist_id: selectedArtist,
         }),
       });
 
@@ -478,7 +487,6 @@ const Zoe = () => {
               </div>
               <div className="hidden sm:block">
                 <h1 className="text-lg font-bold text-foreground leading-none">Zoe AI</h1>
-                <p className="text-xs text-muted-foreground">Contract Intelligence</p>
               </div>
             </div>
           </div>
@@ -718,41 +726,67 @@ const Zoe = () => {
                     </div>
                     <h3 className="text-xl font-semibold mb-2">Hi, I'm Zoe!</h3>
                     <p className="text-muted-foreground mb-8 max-w-md mx-auto">
-                      {selectedProject 
-                        ? "I can help you understand your contracts. Ask me about royalty splits, payment terms, or any contract details."
-                        : "Select an artist and project from the sidebar to start asking questions about your contracts."}
+                      {!selectedArtist 
+                        ? "Select an artist from the sidebar to start asking questions."
+                        : selectedProject 
+                          ? "I can help you understand your contracts and artist info. Ask me about royalty splits, payment terms, or artist details."
+                          : `I can tell you about ${selectedArtistName || 'the artist'}. Select a project to also ask about contracts.`}
                     </p>
                     
                     {/* Quick Action Buttons */}
-                    {selectedProject && (
+                    {selectedArtist && (
                       <div className="flex flex-wrap justify-center gap-2 max-w-lg mx-auto">
+                        {/* Artist quick actions - always available when artist selected */}
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleQuickAction("What are the streaming royalty splits in this contract?")}
+                          onClick={() => handleQuickAction(`What are ${selectedArtistName || 'the artist'}'s social media links?`)}
                           disabled={isLoading}
                           className="text-sm"
                         >
-                          💰 Streaming Royalty Splits
+                          📱 Social Media
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleQuickAction("Who are the parties involved in this contract?")}
+                          onClick={() => handleQuickAction(`Tell me about ${selectedArtistName || 'the artist'}`)}
                           disabled={isLoading}
                           className="text-sm"
                         >
-                          👥 Involved Parties
+                          🎤 Artist Overview
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleQuickAction("What are the payment terms in this contract?")}
+                          onClick={() => handleQuickAction(`What is ${selectedArtistName || 'the artist'}'s bio`)}
                           disabled={isLoading}
                           className="text-sm"
                         >
-                          📅 Payment Terms
+                          📄 Artist Bio
                         </Button>
+                        {/* Contract quick actions - only when project selected */}
+                        {selectedProject && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleQuickAction("What are the streaming royalty splits in this contract?")}
+                              disabled={isLoading}
+                              className="text-sm"
+                            >
+                              💰 Royalty Splits
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleQuickAction("What are the payment terms in this contract?")}
+                              disabled={isLoading}
+                              className="text-sm"
+                            >
+                              📅 Payment Terms
+                            </Button>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -779,7 +813,9 @@ const Zoe = () => {
                             : "bg-muted"
                         )}
                       >
-                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
+                          <ReactMarkdown>{message.content}</ReactMarkdown>
+                        </div>
                         
                         {/* Quick Action Buttons in greeting responses */}
                         {message.role === "assistant" && message.showQuickActions && (
@@ -867,19 +903,21 @@ const Zoe = () => {
                 </Button>
                 <Input
                   placeholder={
-                    selectedProject
-                      ? "Ask a question about your contracts..."
-                      : "Select a project to start chatting..."
+                    !selectedArtist
+                      ? "Select an artist to start chatting..."
+                      : selectedProject
+                        ? "Ask about contracts or artist info..."
+                        : "Ask about the artist (select a project for contract questions)..."
                   }
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  disabled={!selectedProject || isLoading}
+                  disabled={!selectedArtist || isLoading}
                   className="flex-1 h-11 rounded-full px-4 bg-muted/50 border-muted"
                 />
                 <Button
                   onClick={handleSendMessage}
-                  disabled={!selectedProject || !inputMessage.trim() || isLoading}
+                  disabled={!selectedArtist || !inputMessage.trim() || isLoading}
                   size="icon"
                   className="h-11 w-11 rounded-full flex-shrink-0"
                 >
@@ -888,7 +926,7 @@ const Zoe = () => {
               </div>
               
               <p className="text-[11px] text-center text-muted-foreground mt-2">
-                Zoe only answers based on your uploaded contracts
+                Zoe answers based on your artist profile and uploaded contracts
               </p>
             </div>
           </div>

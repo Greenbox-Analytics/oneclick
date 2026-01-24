@@ -76,10 +76,11 @@ class RoyaltyResults(BaseModel):
 # Zoe Chatbot Models
 class ZoeAskRequest(BaseModel):
     query: str
-    project_id: str
+    project_id: Optional[str] = None  # Optional - not needed for artist-only queries
     contract_ids: Optional[List[str]] = None  # Changed to support multiple contracts
     user_id: str
     session_id: Optional[str] = None  # Session ID for conversation memory
+    artist_id: Optional[str] = None  # Artist ID for artist-related queries
 
 class ZoeSource(BaseModel):
     contract_file: str
@@ -166,6 +167,17 @@ async def get_artists(user_id: Optional[str] = None):
             query = query.eq("user_id", user_id)
         
         response = query.execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/artists/{artist_id}")
+async def get_artist_by_id(artist_id: str):
+    """
+    Fetch a single artist by ID with all their details.
+    """
+    try:
+        response = get_supabase_client().table("artists").select("*").eq("id", artist_id).single().execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -566,7 +578,7 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
 @app.post("/zoe/ask", response_model=ZoeAskResponse)
 async def zoe_ask_question(request: ZoeAskRequest):
     """
-    Zoe AI Chatbot endpoint - Ask questions about contracts.
+    Zoe AI Chatbot endpoint - Ask questions about contracts and artists.
     
     Rules:
     1. Always filters by user_id and project_id
@@ -575,6 +587,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
     4. Only answers if highest similarity ≥ 0.75
     5. Returns answer with source citations
     6. Maintains conversation history per session for context-aware responses
+    7. If artist_id is provided, can also answer questions about the artist
+    8. If no project_id but artist_id is provided, can answer artist-related questions only
     """
     try:
         # Get Zoe chatbot instance
@@ -586,8 +600,24 @@ async def zoe_ask_question(request: ZoeAskRequest):
         # Generate session_id if not provided (for new conversations)
         session_id = request.session_id or str(uuid.uuid4())
         
-        # Ask the question
-        if request.contract_ids and len(request.contract_ids) > 0:
+        # Fetch artist data if artist_id is provided
+        artist_data = None
+        if request.artist_id:
+            try:
+                artist_response = get_supabase_client().table("artists").select("*").eq("id", request.artist_id).single().execute()
+                artist_data = artist_response.data
+            except Exception as e:
+                print(f"Warning: Could not fetch artist data: {e}")
+        
+        # Handle case where no project is selected (artist-only queries)
+        if not request.project_id:
+            result = chatbot.ask_without_project(
+                query=request.query,
+                user_id=request.user_id,
+                session_id=session_id,
+                artist_data=artist_data
+            )
+        elif request.contract_ids and len(request.contract_ids) > 0:
             # Multiple contracts selected - search across all of them
             result = chatbot.ask_multiple_contracts(
                 query=request.query,
@@ -595,7 +625,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 project_id=request.project_id,
                 contract_ids=request.contract_ids,
                 top_k=top_k,
-                session_id=session_id
+                session_id=session_id,
+                artist_data=artist_data
             )
         else:
             # Project-wide question
@@ -604,7 +635,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 user_id=request.user_id,
                 project_id=request.project_id,
                 top_k=top_k,
-                session_id=session_id
+                session_id=session_id,
+                artist_data=artist_data
             )
         
         # Format response - filter out sources with missing required fields

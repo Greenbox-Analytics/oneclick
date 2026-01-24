@@ -260,6 +260,193 @@ class ContractChatbot:
             "show_quick_actions": show_quick_actions
         }
     
+    def _classify_query(self, query: str) -> str:
+        """
+        Use LLM to classify whether a query is about artist info or contracts.
+        
+        Args:
+            query: User's question
+            
+        Returns:
+            "artist" if query is about artist profile/info
+            "contract" if query is about contracts/agreements
+        """
+        system_prompt = """You are a query classifier. Determine if the user's question is about:
+
+1. ARTIST - Questions about the artist's profile, bio, social media, streaming links, genres, contact info, EPK, press kit, etc.
+   Examples: "What's the artist's bio?", "What are their social media links?", "What genre do they make?", "What's their Spotify?"
+
+2. CONTRACT - Questions about contracts, agreements, royalties, payment terms, splits, advances, legal terms, parties, clauses, etc.
+   Examples: "What are the royalty splits?", "Who are the parties?", "What's the advance amount?", "When does the contract end?"
+
+Respond with ONLY one word: either "artist" or "contract"."""
+
+        try:
+            response = openai_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query}
+                ],
+                max_completion_tokens=10
+            )
+            
+            classification = response.choices[0].message.content.strip().lower()
+            
+            # Ensure we get a valid response
+            if "artist" in classification:
+                return "artist"
+            else:
+                return "contract"
+                
+        except Exception as e:
+            print(f"Error classifying query: {e}")
+            # Default to contract if classification fails
+            return "contract"
+    
+    def _handle_artist_query(self, query: str, artist_data: Dict, session_id: Optional[str] = None) -> Dict:
+        """
+        Handle artist-related queries using artist data.
+        
+        Args:
+            query: User's question about the artist
+            artist_data: Artist information from database
+            session_id: Session ID for memory
+            
+        Returns:
+            Dict with response
+        """
+        # Store user message in memory
+        self._add_to_memory(session_id, "user", query)
+        
+        # Format artist data as context for LLM
+        artist_context = self._format_artist_context(artist_data)
+        
+        # Generate answer using LLM
+        system_prompt = """You are a helpful assistant providing concise, direct information about an artist. 
+Answer the user's question based on the artist profile information provided.
+
+CRITICAL RULES:
+1. Answer ONLY with the exact information from the provided artist data
+2. Be direct and concise - do NOT add extra commentary, interpretation, or embellishment
+3. Do NOT infer or add information not explicitly stated in the artist data
+4. If asked for a specific piece of information (like bio), provide ONLY that information
+5. Keep responses brief - typically 1-2 sentences unless the data itself is longer
+6. Format links as plain URLs when mentioning them
+7. If information is not available, simply say so
+
+Examples:
+- If asked "What's the artist's bio?" and bio is "House DJ" → Answer: "House DJ"
+- If asked "What's their genre?" and genre is "Electronic" → Answer: "Electronic"
+- If asked "What are their socials?" → List only the available social media links"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"""Based on the following artist profile, answer this question:
+
+{query}
+
+Artist Profile:
+{artist_context}"""}
+        ]
+        
+        try:
+            response = openai_client.chat.completions.create(
+                model=self.llm_model,
+                messages=messages,
+                max_completion_tokens=500
+            )
+            
+            answer = response.choices[0].message.content
+            
+        except Exception as e:
+            print(f"Error generating artist answer: {e}")
+            answer = f"I have information about {artist_data.get('name', 'the artist')}, but encountered an error. Please try again."
+        
+        # Store assistant response in memory
+        self._add_to_memory(session_id, "assistant", answer)
+        
+        return {
+            "query": query,
+            "answer": answer,
+            "confidence": "artist_data",
+            "sources": [],
+            "search_results_count": 0,
+            "session_id": session_id,
+            "show_quick_actions": False
+        }
+    
+    def _format_artist_context(self, artist_data: Dict) -> str:
+        """
+        Format artist data as context string for LLM.
+        
+        Args:
+            artist_data: Artist information dictionary
+            
+        Returns:
+            Formatted string with artist details
+        """
+        parts = []
+        
+        if artist_data.get("name"):
+            parts.append(f"Name: {artist_data['name']}")
+        
+        if artist_data.get("email"):
+            parts.append(f"Email: {artist_data['email']}")
+        
+        if artist_data.get("bio"):
+            parts.append(f"Bio: {artist_data['bio']}")
+        
+        if artist_data.get("genres"):
+            genres = artist_data["genres"]
+            if isinstance(genres, list):
+                parts.append(f"Genres: {', '.join(genres)}")
+            else:
+                parts.append(f"Genres: {genres}")
+        
+        # Social media links
+        socials = []
+        if artist_data.get("social_instagram"):
+            socials.append(f"Instagram: {artist_data['social_instagram']}")
+        if artist_data.get("social_tiktok"):
+            socials.append(f"TikTok: {artist_data['social_tiktok']}")
+        if artist_data.get("social_youtube"):
+            socials.append(f"YouTube: {artist_data['social_youtube']}")
+        if socials:
+            parts.append("Social Media:\n  " + "\n  ".join(socials))
+        
+        # DSP links
+        dsps = []
+        if artist_data.get("dsp_spotify"):
+            dsps.append(f"Spotify: {artist_data['dsp_spotify']}")
+        if artist_data.get("dsp_apple_music"):
+            dsps.append(f"Apple Music: {artist_data['dsp_apple_music']}")
+        if artist_data.get("dsp_soundcloud"):
+            dsps.append(f"SoundCloud: {artist_data['dsp_soundcloud']}")
+        if dsps:
+            parts.append("Streaming Platforms:\n  " + "\n  ".join(dsps))
+        
+        # Additional links
+        additional = []
+        if artist_data.get("additional_epk"):
+            additional.append(f"EPK: {artist_data['additional_epk']}")
+        if artist_data.get("additional_press_kit"):
+            additional.append(f"Press Kit: {artist_data['additional_press_kit']}")
+        if artist_data.get("additional_linktree"):
+            additional.append(f"Linktree: {artist_data['additional_linktree']}")
+        if additional:
+            parts.append("Additional Links:\n  " + "\n  ".join(additional))
+        
+        # Custom links
+        if artist_data.get("custom_links"):
+            custom = artist_data["custom_links"]
+            if isinstance(custom, list) and custom:
+                custom_parts = [f"{link.get('label', 'Link')}: {link.get('url', '')}" for link in custom if link.get('url')]
+                if custom_parts:
+                    parts.append("Other Links:\n  " + "\n  ".join(custom_parts))
+        
+        return "\n\n".join(parts) if parts else "No artist information available."
+    
     def _get_conversation_context(self, session_id: Optional[str], max_turns: int = 5) -> List[Dict]:
         """
         Get conversation history for context.
@@ -548,17 +735,19 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
                   project_id: Optional[str] = None,
                   contract_id: Optional[str] = None,
                   top_k: Optional[int] = None,
-                  session_id: Optional[str] = None) -> Dict:
+                  session_id: Optional[str] = None,
+                  artist_data: Optional[Dict] = None) -> Dict:
         """
         Ask a question using smart retrieval with automatic query categorization.
         
         This method automatically:
         1. Checks for conversational queries (greetings, thanks, etc.)
-        2. Categorizes the query to determine relevant contract sections
-        3. Adjusts top_k based on query type (general vs specific)
-        4. Filters search to relevant sections for better precision
-        5. Generates a grounded answer based on retrieved context
-        6. Maintains conversation history for follow-up questions
+        2. Checks for artist-related queries and answers from artist data
+        3. Categorizes the query to determine relevant contract sections
+        4. Adjusts top_k based on query type (general vs specific)
+        5. Filters search to relevant sections for better precision
+        6. Generates a grounded answer based on retrieved context
+        7. Maintains conversation history for follow-up questions
         
         Args:
             query: User's question
@@ -567,6 +756,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             contract_id: UUID of specific contract (optional)
             top_k: Number of search results (auto-adjusted if None)
             session_id: Session ID for conversation memory
+            artist_data: Optional artist information for artist-related queries
             
         Returns:
             Dict with answer, sources, categorization, and metadata
@@ -577,6 +767,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
         print(f"Question: {query}")
         print(f"User ID: {user_id}")
         print(f"Session ID: {session_id}")
+        print(f"Artist data available: {artist_data is not None}")
         if project_id:
             print(f"Project ID: {project_id}")
         if contract_id:
@@ -588,10 +779,50 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             print("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
         
+        # Step 1: Classify the query - is it about artist or contracts?
+        query_type = self._classify_query(query)
+        print(f"Query classified as: {query_type}")
+        
+        # Step 2: Route based on classification
+        if query_type == "artist":
+            # Artist query - use artist data
+            if artist_data:
+                print("Handling as artist query - using artist data")
+                return self._handle_artist_query(query, artist_data, session_id)
+            else:
+                # No artist data available
+                self._add_to_memory(session_id, "user", query)
+                response = "I don't have artist information available. Please select an artist from the sidebar."
+                self._add_to_memory(session_id, "assistant", response)
+                return {
+                    "query": query,
+                    "answer": response,
+                    "confidence": "needs_artist",
+                    "sources": [],
+                    "search_results_count": 0,
+                    "session_id": session_id,
+                    "show_quick_actions": True
+                }
+        
+        # Contract query - need a project to search
+        if not project_id:
+            self._add_to_memory(session_id, "user", query)
+            response = "To answer questions about contracts, I need you to select a project first. Please choose a project from the sidebar."
+            self._add_to_memory(session_id, "assistant", response)
+            return {
+                "query": query,
+                "answer": response,
+                "confidence": "needs_project",
+                "sources": [],
+                "search_results_count": 0,
+                "session_id": session_id,
+                "show_quick_actions": True
+            }
+        
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
         
-        # Step 1: Perform smart search with auto-categorization
+        # Step 3: Query Pinecone for contract data
         search_results = self.search_engine.smart_search(
             query=query,
             user_id=user_id,
@@ -600,7 +831,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             top_k=top_k
         )
         
-        # Step 2: Check if we have results
+        # Step 4: If no results, return low confidence
         if not search_results["matches"]:
             no_result_answer = "I don't know based on the available documents."
             self._add_to_memory(session_id, "assistant", no_result_answer)
@@ -647,12 +878,83 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
         
         return result
     
+    def ask_without_project(self,
+                           query: str,
+                           user_id: str,
+                           session_id: Optional[str] = None,
+                           artist_data: Optional[Dict] = None) -> Dict:
+        """
+        Handle queries when no project is selected.
+        Can answer artist-related queries or prompt to select a project for contract queries.
+        
+        Args:
+            query: User's question
+            user_id: UUID of the user
+            session_id: Session ID for conversation memory
+            artist_data: Optional artist information for artist-related queries
+            
+        Returns:
+            Dict with answer and metadata
+        """
+        print("\n" + "=" * 80)
+        print("CHATBOT (No Project Selected)")
+        print("=" * 80)
+        print(f"Question: {query}")
+        print(f"User ID: {user_id}")
+        print(f"Session ID: {session_id}")
+        print(f"Artist data available: {artist_data is not None}")
+        print("-" * 80)
+        
+        # Check for conversational queries first
+        if self._is_conversational_query(query):
+            print("Detected conversational query - handling without document search")
+            return self._handle_conversational_query(query, session_id)
+        
+        # Classify the query - is it about artist or contracts?
+        query_type = self._classify_query(query)
+        print(f"Query classified as: {query_type}")
+        
+        if query_type == "artist":
+            # Artist query - use artist data if available
+            if artist_data:
+                print("Handling as artist query - using artist data")
+                return self._handle_artist_query(query, artist_data, session_id)
+            else:
+                # No artist data available
+                self._add_to_memory(session_id, "user", query)
+                response = "I don't have artist information available. Please select an artist from the sidebar."
+                self._add_to_memory(session_id, "assistant", response)
+                return {
+                    "query": query,
+                    "answer": response,
+                    "confidence": "needs_artist",
+                    "sources": [],
+                    "search_results_count": 0,
+                    "session_id": session_id,
+                    "show_quick_actions": True
+                }
+        else:
+            # Contract query but no project selected - prompt to select project
+            self._add_to_memory(session_id, "user", query)
+            response = "To answer questions about contracts, I need you to select a project first. Please choose a project from the sidebar."
+            self._add_to_memory(session_id, "assistant", response)
+            return {
+                "query": query,
+                "answer": response,
+                "confidence": "needs_project",
+                "sources": [],
+                "search_results_count": 0,
+                "session_id": session_id,
+                "show_quick_actions": True
+            }
+    
     def ask_project(self,
                    query: str,
                    user_id: str,
                    project_id: str,
                    top_k: int = DEFAULT_TOP_K,
-                   session_id: Optional[str] = None) -> Dict:
+                   session_id: Optional[str] = None,
+                   artist_data: Optional[Dict] = None) -> Dict:
         """
         Ask a question about a specific project's contracts using smart retrieval.
         
@@ -662,6 +964,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             project_id: UUID of the project
             top_k: Number of search results to retrieve
             session_id: Session ID for conversation memory
+            artist_data: Optional artist information for artist-related queries
             
         Returns:
             Dict with answer and metadata
@@ -671,7 +974,8 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             user_id=user_id,
             project_id=project_id,
             top_k=top_k,
-            session_id=session_id
+            session_id=session_id,
+            artist_data=artist_data
         )
     
     def ask_contract(self,
@@ -710,7 +1014,8 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
                               project_id: str,
                               contract_ids: List[str],
                               top_k: int = DEFAULT_TOP_K,
-                              session_id: Optional[str] = None) -> Dict:
+                              session_id: Optional[str] = None,
+                              artist_data: Optional[Dict] = None) -> Dict:
         """
         Ask a question about multiple specific contracts using smart retrieval.
         Searches across all selected contracts similar to project-wide search.
@@ -722,6 +1027,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             contract_ids: List of contract UUIDs to search
             top_k: Number of search results to retrieve
             session_id: Session ID for conversation memory
+            artist_data: Optional artist information for artist-related queries
             
         Returns:
             Dict with answer and metadata
@@ -735,6 +1041,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
         print(f"Session ID: {session_id}")
         print(f"Contract IDs: {contract_ids}")
         print(f"Number of contracts: {len(contract_ids)}")
+        print(f"Artist data available: {artist_data is not None}")
         print("-" * 80)
         
         # Check for conversational queries first (greetings, thanks, etc.)
@@ -742,10 +1049,35 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             print("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
         
+        # Step 1: Classify the query - is it about artist or contracts?
+        query_type = self._classify_query(query)
+        print(f"Query classified as: {query_type}")
+        
+        # Step 2: Route based on classification
+        if query_type == "artist":
+            # Artist query - use artist data
+            if artist_data:
+                print("Handling as artist query - using artist data")
+                return self._handle_artist_query(query, artist_data, session_id)
+            else:
+                # No artist data available
+                self._add_to_memory(session_id, "user", query)
+                response = "I don't have artist information available. Please select an artist from the sidebar."
+                self._add_to_memory(session_id, "assistant", response)
+                return {
+                    "query": query,
+                    "answer": response,
+                    "confidence": "needs_artist",
+                    "sources": [],
+                    "search_results_count": 0,
+                    "session_id": session_id,
+                    "show_quick_actions": True
+                }
+        
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
         
-        # Perform smart search with multiple contract IDs filter
+        # Step 3: Query Pinecone for contract data
         search_results = self.search_engine.search_multiple_contracts(
             query=query,
             user_id=user_id,
@@ -754,7 +1086,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             top_k=top_k
         )
         
-        # Check if we have results
+        # Step 4: If no results, return low confidence
         if not search_results["matches"]:
             no_result_answer = "I don't know based on the available documents."
             self._add_to_memory(session_id, "assistant", no_result_answer)
