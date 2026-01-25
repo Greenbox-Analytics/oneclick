@@ -73,6 +73,43 @@ class RoyaltyResults(BaseModel):
     totalRevenue: float
     breakdown: List[RoyaltyBreakdown]
 
+# Conversation Context Models
+class ExtractedContractData(BaseModel):
+    royalty_splits: Optional[List[Dict]] = None
+    payment_terms: Optional[str] = None
+    parties: Optional[List[str]] = None
+    advances: Optional[str] = None
+    term_length: Optional[str] = None
+
+class ContractDiscussed(BaseModel):
+    id: str
+    name: str
+    data_extracted: Optional[ExtractedContractData] = None
+
+class ContextSwitch(BaseModel):
+    timestamp: str
+    type: str  # 'artist' | 'project' | 'contract'
+    from_value: Optional[str] = None  # Using from_value since 'from' is reserved
+    to: str
+
+    class Config:
+        # Allow 'from' as an alias in incoming JSON
+        populate_by_name = True
+
+    @classmethod
+    def model_validate(cls, obj, *args, **kwargs):
+        # Handle 'from' field from frontend
+        if isinstance(obj, dict) and 'from' in obj:
+            obj = {**obj, 'from_value': obj.pop('from')}
+        return super().model_validate(obj, *args, **kwargs)
+
+class ConversationContext(BaseModel):
+    session_id: str
+    artist: Optional[Dict[str, str]] = None
+    project: Optional[Dict[str, str]] = None
+    contracts_discussed: List[ContractDiscussed] = []
+    context_switches: List[ContextSwitch] = []
+
 # Zoe Chatbot Models
 class ZoeAskRequest(BaseModel):
     query: str
@@ -81,6 +118,7 @@ class ZoeAskRequest(BaseModel):
     user_id: str
     session_id: Optional[str] = None  # Session ID for conversation memory
     artist_id: Optional[str] = None  # Artist ID for artist-related queries
+    context: Optional[ConversationContext] = None  # Conversation context for structured tracking
 
 class ZoeSource(BaseModel):
     contract_file: str
@@ -117,6 +155,7 @@ class ZoeAskResponse(BaseModel):
     highest_score: Optional[float] = None
     session_id: Optional[str] = None  # Return session ID for frontend tracking
     show_quick_actions: Optional[bool] = None  # Show quick action buttons in response
+    answered_from: Optional[str] = None  # Indicates if answered from context vs document search
 
 # Initialize Zoe chatbot and contract ingestion (singletons)
 zoe_chatbot = None
@@ -609,13 +648,22 @@ async def zoe_ask_question(request: ZoeAskRequest):
             except Exception as e:
                 print(f"Warning: Could not fetch artist data: {e}")
         
+        # Convert context to dict for chatbot methods
+        context_dict = None
+        if request.context:
+            context_dict = request.context.model_dump()
+            print(f"[Context] Received context with {len(context_dict.get('contracts_discussed', []))} contracts discussed")
+            for c in context_dict.get('contracts_discussed', []):
+                print(f"[Context]   - {c.get('name')}: {c.get('data_extracted', {})}")
+        
         # Handle case where no project is selected (artist-only queries)
         if not request.project_id:
             result = chatbot.ask_without_project(
                 query=request.query,
                 user_id=request.user_id,
                 session_id=session_id,
-                artist_data=artist_data
+                artist_data=artist_data,
+                context=context_dict
             )
         elif request.contract_ids and len(request.contract_ids) > 0:
             # Multiple contracts selected - search across all of them
@@ -626,7 +674,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 contract_ids=request.contract_ids,
                 top_k=top_k,
                 session_id=session_id,
-                artist_data=artist_data
+                artist_data=artist_data,
+                context=context_dict
             )
         else:
             # Project-wide question
@@ -636,7 +685,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 project_id=request.project_id,
                 top_k=top_k,
                 session_id=session_id,
-                artist_data=artist_data
+                artist_data=artist_data,
+                context=context_dict
             )
         
         # Format response - filter out sources with missing required fields
@@ -654,7 +704,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
             search_results_count=result.get("search_results_count", 0),
             highest_score=result.get("highest_score"),
             session_id=session_id,
-            show_quick_actions=result.get("show_quick_actions", False)
+            show_quick_actions=result.get("show_quick_actions", False),
+            answered_from=result.get("answered_from")
         )
         
     except Exception as e:

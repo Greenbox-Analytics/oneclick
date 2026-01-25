@@ -467,6 +467,174 @@ Artist Profile:
         if session_id:
             self.memory.add_message(session_id, role, content, metadata)
     
+    def _can_answer_from_context(self, query: str, context: Optional[Dict]) -> bool:
+        """
+        Determine if query can be answered from conversation context
+        without searching documents.
+        
+        Args:
+            query: User's question
+            context: Conversation context from frontend
+            
+        Returns:
+            True if the question can be answered from context alone
+        """
+        if not context:
+            print("[Context] No context provided, cannot answer from context")
+            return False
+        
+        contracts_discussed = context.get('contracts_discussed', [])
+        print(f"[Context] Checking if can answer from context. Contracts discussed: {len(contracts_discussed)}")
+        
+        query_lower = query.lower()
+        
+        # Comparison questions require data from multiple contracts
+        comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between', 
+                               'which one', 'both contracts', 'either contract']
+        if any(kw in query_lower for kw in comparison_keywords):
+            # Check if we have extracted data for at least 2 contracts
+            contracts_with_data = [c for c in contracts_discussed 
+                                   if c.get('data_extracted') and 
+                                   any(v for v in c['data_extracted'].values() if v)]
+            print(f"[Context] Comparison query detected. Contracts with data: {len(contracts_with_data)}")
+            for c in contracts_with_data:
+                print(f"[Context]   - {c.get('name')}: {c.get('data_extracted')}")
+            return len(contracts_with_data) >= 2
+        
+        # Summary/recap questions about the conversation
+        summary_keywords = ['summarize', 'summary', 'what did we discuss', 'recap', 
+                           'what have we talked about', 'what do we know']
+        if any(kw in query_lower for kw in summary_keywords):
+            return len(contracts_discussed) > 0
+        
+        # "Earlier you mentioned" or "you said" type follow-ups
+        followup_keywords = ['you said', 'you mentioned', 'earlier', 'previously', 
+                            'before you said', 'we discussed']
+        if any(kw in query_lower for kw in followup_keywords):
+            return len(contracts_discussed) > 0
+        
+        return False
+    
+    def _answer_from_context(self, query: str, context: Dict, session_id: Optional[str] = None) -> Dict:
+        """
+        Answer question using structured context and conversation history.
+        Used when the answer can be derived from previously extracted data.
+        
+        Args:
+            query: User's question
+            context: Conversation context containing discussed contracts and extracted data
+            session_id: Session ID for memory
+            
+        Returns:
+            Dict with answer and metadata
+        """
+        print(f"[Context] _answer_from_context called with query: {query}")
+        
+        # Build context summary for LLM
+        context_summary = self._format_context_for_llm(context)
+        print(f"[Context] Formatted context summary:\n{context_summary}")
+        
+        # Get conversation history
+        history = self._get_conversation_context(session_id, max_turns=10)
+        print(f"[Context] Conversation history: {len(history)} messages")
+        
+        system_prompt = """You are answering a follow-up question using information from the conversation context.
+
+The user is asking about information that was previously discussed in this conversation. 
+Use the structured context and conversation history to provide a comprehensive answer.
+
+You can compare, summarize, or analyze the information provided without needing to search documents again.
+
+RULES:
+1. Base your answer ONLY on the provided context and conversation history
+2. If comparing contracts, clearly distinguish between them
+3. Be specific about which contract each piece of information came from
+4. If information is incomplete, acknowledge what you don't have
+5. Format comparisons in a clear, readable way (consider using bullet points or tables)"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+        # Add conversation history first, then the current query with context
+        messages.extend(history)
+        messages.append({"role": "user", "content": f"Context:\n{context_summary}\n\nQuestion: {query}"})
+        
+        try:
+            response = openai_client.chat.completions.create(
+                model=self.llm_model,
+                messages=messages,
+                max_completion_tokens=1000
+            )
+            
+            answer = response.choices[0].message.content
+            
+            # Handle None response
+            if answer is None:
+                answer = "I couldn't generate a response. Please try rephrasing your question."
+            
+        except Exception as e:
+            print(f"Error generating context-based answer: {e}")
+            answer = "I encountered an error while processing your question. Please try again."
+        
+        # Store in memory
+        self._add_to_memory(session_id, "user", query)
+        self._add_to_memory(session_id, "assistant", answer)
+        
+        return {
+            "query": query,
+            "answer": answer,
+            "confidence": "context_based",
+            "sources": [],
+            "search_results_count": 0,
+            "answered_from": "conversation_context",
+            "session_id": session_id
+        }
+    
+    def _format_context_for_llm(self, context: Dict) -> str:
+        """
+        Format structured conversation context as readable text for LLM.
+        
+        Args:
+            context: Conversation context dictionary
+            
+        Returns:
+            Formatted string with context details
+        """
+        parts = []
+        
+        if context.get('artist'):
+            parts.append(f"Current Artist: {context['artist'].get('name', 'Unknown')}")
+        
+        if context.get('project'):
+            parts.append(f"Current Project: {context['project'].get('name', 'Unknown')}")
+        
+        if context.get('contracts_discussed'):
+            parts.append("\nContracts Discussed:")
+            for contract in context['contracts_discussed']:
+                parts.append(f"\n📄 {contract.get('name', 'Unknown Contract')}")
+                data_extracted = contract.get('data_extracted', {})
+                if data_extracted:
+                    for key, value in data_extracted.items():
+                        if value:  # Only include non-empty values
+                            if isinstance(value, list):
+                                parts.append(f"  • {key.replace('_', ' ').title()}:")
+                                for item in value:
+                                    if isinstance(item, dict):
+                                        item_str = ", ".join(f"{k}: {v}" for k, v in item.items())
+                                        parts.append(f"    - {item_str}")
+                                    else:
+                                        parts.append(f"    - {item}")
+                            else:
+                                parts.append(f"  • {key.replace('_', ' ').title()}: {value}")
+        
+        if context.get('context_switches'):
+            recent_switches = context['context_switches'][-3:]  # Last 3 switches
+            if recent_switches:
+                parts.append("\nRecent Context Changes:")
+                for switch in recent_switches:
+                    from_val = switch.get('from_value') or switch.get('from', 'None')
+                    parts.append(f"  • {switch['type'].title()}: {from_val} → {switch['to']}")
+        
+        return "\n".join(parts) if parts else "No context available."
+
     def _check_similarity_threshold(self, search_results: Dict) -> bool:
         """
         Check if highest similarity score meets threshold
@@ -736,18 +904,20 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
                   contract_id: Optional[str] = None,
                   top_k: Optional[int] = None,
                   session_id: Optional[str] = None,
-                  artist_data: Optional[Dict] = None) -> Dict:
+                  artist_data: Optional[Dict] = None,
+                  context: Optional[Dict] = None) -> Dict:
         """
         Ask a question using smart retrieval with automatic query categorization.
         
         This method automatically:
-        1. Checks for conversational queries (greetings, thanks, etc.)
-        2. Checks for artist-related queries and answers from artist data
-        3. Categorizes the query to determine relevant contract sections
-        4. Adjusts top_k based on query type (general vs specific)
-        5. Filters search to relevant sections for better precision
-        6. Generates a grounded answer based on retrieved context
-        7. Maintains conversation history for follow-up questions
+        1. Checks if question can be answered from conversation context
+        2. Checks for conversational queries (greetings, thanks, etc.)
+        3. Checks for artist-related queries and answers from artist data
+        4. Categorizes the query to determine relevant contract sections
+        5. Adjusts top_k based on query type (general vs specific)
+        6. Filters search to relevant sections for better precision
+        7. Generates a grounded answer based on retrieved context
+        8. Maintains conversation history for follow-up questions
         
         Args:
             query: User's question
@@ -757,24 +927,31 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             top_k: Number of search results (auto-adjusted if None)
             session_id: Session ID for conversation memory
             artist_data: Optional artist information for artist-related queries
+            context: Optional conversation context for context-based answering
             
         Returns:
             Dict with answer, sources, categorization, and metadata
         """
         print("\n" + "=" * 80)
         print("SMART CONTRACT CHATBOT (with Query Categorization)")
-        print("=" * 80)
+        print("="  * 80)
         print(f"Question: {query}")
         print(f"User ID: {user_id}")
         print(f"Session ID: {session_id}")
         print(f"Artist data available: {artist_data is not None}")
+        print(f"Context available: {context is not None}")
         if project_id:
             print(f"Project ID: {project_id}")
         if contract_id:
             print(f"Contract ID: {contract_id}")
         print("-" * 80)
         
-        # Check for conversational queries first (greetings, thanks, etc.)
+        # Check if we can answer from conversation context first
+        if self._can_answer_from_context(query, context):
+            print("Detected context-based query - answering from conversation context")
+            return self._answer_from_context(query, context, session_id)
+        
+        # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
             print("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
@@ -882,7 +1059,8 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
                            query: str,
                            user_id: str,
                            session_id: Optional[str] = None,
-                           artist_data: Optional[Dict] = None) -> Dict:
+                           artist_data: Optional[Dict] = None,
+                           context: Optional[Dict] = None) -> Dict:
         """
         Handle queries when no project is selected.
         Can answer artist-related queries or prompt to select a project for contract queries.
@@ -892,6 +1070,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             user_id: UUID of the user
             session_id: Session ID for conversation memory
             artist_data: Optional artist information for artist-related queries
+            context: Optional conversation context for context-based answering
             
         Returns:
             Dict with answer and metadata
@@ -903,9 +1082,15 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
         print(f"User ID: {user_id}")
         print(f"Session ID: {session_id}")
         print(f"Artist data available: {artist_data is not None}")
+        print(f"Context available: {context is not None}")
         print("-" * 80)
         
-        # Check for conversational queries first
+        # Check if we can answer from conversation context first
+        if self._can_answer_from_context(query, context):
+            print("Detected context-based query - answering from conversation context")
+            return self._answer_from_context(query, context, session_id)
+        
+        # Check for conversational queries
         if self._is_conversational_query(query):
             print("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
@@ -954,7 +1139,8 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
                    project_id: str,
                    top_k: int = DEFAULT_TOP_K,
                    session_id: Optional[str] = None,
-                   artist_data: Optional[Dict] = None) -> Dict:
+                   artist_data: Optional[Dict] = None,
+                   context: Optional[Dict] = None) -> Dict:
         """
         Ask a question about a specific project's contracts using smart retrieval.
         
@@ -965,6 +1151,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             top_k: Number of search results to retrieve
             session_id: Session ID for conversation memory
             artist_data: Optional artist information for artist-related queries
+            context: Optional conversation context for context-based answering
             
         Returns:
             Dict with answer and metadata
@@ -975,7 +1162,8 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             project_id=project_id,
             top_k=top_k,
             session_id=session_id,
-            artist_data=artist_data
+            artist_data=artist_data,
+            context=context
         )
     
     def ask_contract(self,
@@ -1015,7 +1203,8 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
                               contract_ids: List[str],
                               top_k: int = DEFAULT_TOP_K,
                               session_id: Optional[str] = None,
-                              artist_data: Optional[Dict] = None) -> Dict:
+                              artist_data: Optional[Dict] = None,
+                              context: Optional[Dict] = None) -> Dict:
         """
         Ask a question about multiple specific contracts using smart retrieval.
         Searches across all selected contracts similar to project-wide search.
@@ -1028,6 +1217,7 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             top_k: Number of search results to retrieve
             session_id: Session ID for conversation memory
             artist_data: Optional artist information for artist-related queries
+            context: Optional conversation context for context-based answering
             
         Returns:
             Dict with answer and metadata
@@ -1042,9 +1232,15 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
         print(f"Contract IDs: {contract_ids}")
         print(f"Number of contracts: {len(contract_ids)}")
         print(f"Artist data available: {artist_data is not None}")
+        print(f"Context available: {context is not None}")
         print("-" * 80)
         
-        # Check for conversational queries first (greetings, thanks, etc.)
+        # Check if we can answer from conversation context first
+        if self._can_answer_from_context(query, context):
+            print("Detected context-based query - answering from conversation context")
+            return self._answer_from_context(query, context, session_id)
+        
+        # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
             print("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)

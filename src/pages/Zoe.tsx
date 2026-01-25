@@ -68,6 +68,37 @@ interface Message {
   showQuickActions?: boolean;
 }
 
+// Conversation context for structured tracking
+interface ExtractedContractData {
+  royalty_splits?: Array<{ party: string; percentage: number }>;
+  payment_terms?: string;
+  parties?: string[];
+  advances?: string;
+  term_length?: string;
+  [key: string]: unknown;
+}
+
+interface ContractDiscussed {
+  id: string;
+  name: string;
+  data_extracted: ExtractedContractData;
+}
+
+interface ContextSwitch {
+  timestamp: string;
+  type: 'artist' | 'project' | 'contract';
+  from: string;
+  to: string;
+}
+
+interface ConversationContext {
+  session_id: string;
+  artist: { id: string; name: string } | null;
+  project: { id: string; name: string } | null;
+  contracts_discussed: ContractDiscussed[];
+  context_switches: ContextSwitch[];
+}
+
 const Zoe = () => {
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -101,6 +132,15 @@ const Zoe = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID());
+
+  // Conversation context for structured tracking
+  const [conversationContext, setConversationContext] = useState<ConversationContext>({
+    session_id: sessionId,
+    artist: null,
+    project: null,
+    contracts_discussed: [],
+    context_switches: []
+  });
 
   // Upload/Delete state
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
@@ -168,6 +208,88 @@ const Zoe = () => {
       setContractsOpen(false);
     }
   }, [selectedProject]);
+
+  // Track artist context changes
+  useEffect(() => {
+    if (selectedArtist && selectedArtistName) {
+      setConversationContext(prev => {
+        const contextSwitches = prev.artist && prev.artist.id !== selectedArtist
+          ? [...prev.context_switches, {
+              timestamp: new Date().toISOString(),
+              type: 'artist' as const,
+              from: prev.artist.name,
+              to: selectedArtistName
+            }]
+          : prev.context_switches;
+        
+        return {
+          ...prev,
+          session_id: sessionId,
+          artist: { id: selectedArtist, name: selectedArtistName },
+          context_switches: contextSwitches
+        };
+      });
+    }
+  }, [selectedArtist, selectedArtistName, sessionId]);
+
+  // Track project context changes
+  useEffect(() => {
+    if (selectedProject && selectedProjectName) {
+      setConversationContext(prev => {
+        const contextSwitches = prev.project && prev.project.id !== selectedProject
+          ? [...prev.context_switches, {
+              timestamp: new Date().toISOString(),
+              type: 'project' as const,
+              from: prev.project.name,
+              to: selectedProjectName
+            }]
+          : prev.context_switches;
+        
+        return {
+          ...prev,
+          session_id: sessionId,
+          project: { id: selectedProject, name: selectedProjectName },
+          contracts_discussed: [], // Reset on project change
+          context_switches: contextSwitches
+        };
+      });
+    } else if (!selectedProject) {
+      setConversationContext(prev => ({
+        ...prev,
+        project: null,
+        contracts_discussed: []
+      }));
+    }
+  }, [selectedProject, selectedProjectName, sessionId]);
+
+  // Track contract selection changes for context
+  useEffect(() => {
+    if (selectedContracts.length > 0) {
+      const selectedContractNames = selectedContracts.map(id => {
+        const contract = contracts.find(c => c.id === id);
+        return contract?.file_name || id;
+      });
+      
+      // Add newly selected contracts to contracts_discussed if not already present
+      setConversationContext(prev => {
+        const existingIds = prev.contracts_discussed.map(c => c.id);
+        const newContracts = selectedContracts
+          .filter(id => !existingIds.includes(id))
+          .map(id => ({
+            id,
+            name: contracts.find(c => c.id === id)?.file_name || id,
+            data_extracted: {}
+          }));
+        
+        if (newContracts.length === 0) return prev;
+        
+        return {
+          ...prev,
+          contracts_discussed: [...prev.contracts_discussed, ...newContracts]
+        };
+      });
+    }
+  }, [selectedContracts, contracts]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -267,6 +389,115 @@ const Zoe = () => {
     }
   };
 
+  // Extract structured data from assistant responses to update context
+  const extractDataFromAnswer = (answer: string, query: string, sources?: Message['sources']): ExtractedContractData => {
+    const extracted: ExtractedContractData = {};
+    const queryLower = query.toLowerCase();
+    const answerLower = answer.toLowerCase();
+    
+    // Extract royalty splits if discussing royalties
+    if (queryLower.includes('royalty') || queryLower.includes('split') || queryLower.includes('percentage') || 
+        queryLower.includes('streaming') || queryLower.includes('revenue')) {
+      // Match patterns like "Name: 35%" or "Name: 35% of net revenue"
+      const splitMatches = answer.match(/([A-Za-z\s]+):\s*(\d+(?:\.\d+)?)\s*%/g);
+      console.log('[Context] Attempting to extract splits from answer, matches:', splitMatches);
+      if (splitMatches) {
+        extracted.royalty_splits = splitMatches.map(match => {
+          const parts = match.match(/([A-Za-z\s]+):\s*(\d+(?:\.\d+)?)\s*%/);
+          if (parts) {
+            return { party: parts[1].trim(), percentage: parseFloat(parts[2]) };
+          }
+          return null;
+        }).filter((s): s is { party: string; percentage: number } => s !== null);
+        console.log('[Context] Extracted royalty_splits:', extracted.royalty_splits);
+      }
+    }
+    
+    // Extract parties/signatories
+    if (queryLower.includes('parties') || queryLower.includes('who signed') || queryLower.includes('signatories')) {
+      // Simple extraction - look for quoted names or bullet points
+      const partyMatches = answer.match(/"([^"]+)"|•\s*([^\n]+)/g);
+      if (partyMatches) {
+        extracted.parties = partyMatches.map(m => m.replace(/["•]/g, '').trim());
+      }
+    }
+    
+    // Extract payment terms
+    if (queryLower.includes('payment') || queryLower.includes('terms') || queryLower.includes('advance')) {
+      // Store a summary of payment-related answer
+      if (answer.length > 0 && answer.length < 500) {
+        extracted.payment_terms = answer;
+      }
+    }
+    
+    // Extract term length
+    if (queryLower.includes('term') || queryLower.includes('duration') || queryLower.includes('how long')) {
+      const termMatch = answer.match(/(\d+)\s*(year|month|day)s?/i);
+      if (termMatch) {
+        extracted.term_length = `${termMatch[1]} ${termMatch[2]}${parseInt(termMatch[1]) > 1 ? 's' : ''}`;
+      }
+    }
+    
+    return extracted;
+  };
+
+  // Update conversation context with extracted data from response
+  const updateContextWithExtractedData = (
+    answer: string, 
+    query: string, 
+    sources?: Message['sources'],
+    answeredFrom?: string
+  ) => {
+    console.log('[Context] updateContextWithExtractedData called with sources:', sources);
+    if (!sources || sources.length === 0) {
+      console.log('[Context] No sources provided, skipping context update');
+      return;
+    }
+    
+    const extracted = extractDataFromAnswer(answer, query, sources);
+    console.log('[Context] Extracted data:', extracted);
+    if (Object.keys(extracted).length === 0) {
+      console.log('[Context] No data extracted, skipping context update');
+      return;
+    }
+    
+    // Get unique contract files from sources
+    const contractFiles = [...new Set(sources.map(s => s.contract_file))];
+    console.log('[Context] Contract files from sources:', contractFiles);
+    
+    setConversationContext(prev => {
+      const updatedContracts = [...prev.contracts_discussed];
+      
+      contractFiles.forEach(fileName => {
+        const existingIndex = updatedContracts.findIndex(c => c.name === fileName);
+        if (existingIndex >= 0) {
+          // Merge extracted data with existing
+          updatedContracts[existingIndex] = {
+            ...updatedContracts[existingIndex],
+            data_extracted: {
+              ...updatedContracts[existingIndex].data_extracted,
+              ...extracted
+            }
+          };
+        } else {
+          // Add new contract with extracted data
+          updatedContracts.push({
+            id: fileName, // Use filename as ID if we don't have the actual ID
+            name: fileName,
+            data_extracted: extracted
+          });
+        }
+      });
+      
+      console.log('[Context] Updated contracts_discussed:', updatedContracts);
+      
+      return {
+        ...prev,
+        contracts_discussed: updatedContracts
+      };
+    });
+  };
+
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || !user) {
       setError("Please enter a message");
@@ -304,6 +535,7 @@ const Zoe = () => {
           user_id: user.id,
           session_id: sessionId,
           artist_id: selectedArtist,
+          context: conversationContext, // Send conversation context
         }),
       });
 
@@ -328,6 +560,14 @@ const Zoe = () => {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+      
+      // Extract and store data from the response in context
+      updateContextWithExtractedData(
+        data.answer, 
+        inputMessage, 
+        data.sources,
+        data.answered_from
+      );
     } catch (err) {
       console.error("Error sending message:", err);
       setError("Failed to get response from Zoe. Please try again.");
@@ -386,6 +626,7 @@ const Zoe = () => {
           user_id: user.id,
           session_id: sessionId,
           artist_id: selectedArtist,
+          context: conversationContext, // Send conversation context
         }),
       });
 
@@ -409,6 +650,14 @@ const Zoe = () => {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+      
+      // Extract and store data from the response in context
+      updateContextWithExtractedData(
+        data.answer,
+        query,
+        data.sources,
+        data.answered_from
+      );
     } catch (err) {
       console.error("Error sending message:", err);
       setError("Failed to get response from Zoe. Please try again.");
