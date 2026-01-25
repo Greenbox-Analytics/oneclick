@@ -111,30 +111,6 @@ class InMemoryChatMessageHistory:
             del self._sessions[session_id]
         if session_id in self._session_timestamps:
             del self._session_timestamps[session_id]
-    
-    def cleanup_expired_sessions(self) -> int:
-        """
-        Remove expired sessions based on TTL.
-        
-        Returns:
-            Number of sessions cleaned up
-        """
-        current_time = time.time()
-        expired = [
-            sid for sid, ts in self._session_timestamps.items()
-            if current_time - ts > self.session_ttl
-        ]
-        for sid in expired:
-            self.clear_session(sid)
-        return len(expired)
-    
-    def get_session_count(self) -> int:
-        """Get number of active sessions."""
-        return len(self._sessions)
-    
-    def session_exists(self, session_id: str) -> bool:
-        """Check if a session exists."""
-        return session_id in self._sessions
 
 
 # Global conversation memory instance
@@ -817,86 +793,6 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
                 "sources": []
             }
     
-    def ask(self,
-            query: str,
-            user_id: str,
-            project_id: Optional[str] = None,
-            contract_id: Optional[str] = None,
-            top_k: int = DEFAULT_TOP_K) -> Dict:
-        """
-        Ask a question about contracts
-        
-        Args:
-            query: User's question
-            user_id: UUID of the user
-            project_id: UUID of the project (optional)
-            contract_id: UUID of specific contract (optional)
-            top_k: Number of search results to retrieve
-            
-        Returns:
-            Dict with answer, sources, and metadata
-        """
-        print("\n" + "=" * 80)
-        print("CONTRACT CHATBOT")
-        print("=" * 80)
-        print(f"Question: {query}")
-        print(f"User ID: {user_id}")
-        if project_id:
-            print(f"Project ID: {project_id}")
-        if contract_id:
-            print(f"Contract ID: {contract_id}")
-        print("-" * 80)
-        
-        # Step 1: Perform semantic search
-        search_results = self.search_engine.search(
-            query=query,
-            user_id=user_id,
-            project_id=project_id,
-            contract_id=contract_id,
-            top_k=top_k
-        )
-        
-        # Step 2: Check if we have results
-        if not search_results["matches"]:
-            return {
-                "query": query,
-                "answer": "I don't know based on the available documents.",
-                "confidence": "low",
-                "reason": "No relevant documents found",
-                "sources": [],
-                "search_results_count": 0
-            }
-        
-        # Step 3: Format context
-        context = self._format_context(search_results)
-        
-        # Step 4: Generate answer
-        result = self._generate_answer(query, context, search_results)
-        
-        # Step 5: Add query and search metadata
-        result["query"] = query
-        result["search_results_count"] = search_results["total_results"]
-        result["filter"] = search_results["filter"]
-        
-        # Step 6: Store in conversation history
-        self.conversation_history.append({
-            "query": query,
-            "answer": result["answer"],
-            "confidence": result["confidence"],
-            "timestamp": search_results["matches"][0]["uploaded_at"] if search_results["matches"] else None
-        })
-        
-        print("\n" + "=" * 80)
-        print("ANSWER GENERATED")
-        print("=" * 80)
-        print(f"Confidence: {result['confidence']}")
-        if result.get('highest_score'):
-            print(f"Highest Similarity Score: {result['highest_score']}")
-        print(f"Sources Used: {len(result['sources'])}")
-        print("=" * 80)
-        
-        return result
-    
     def smart_ask(self,
                   query: str,
                   user_id: str,
@@ -1164,36 +1060,6 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             session_id=session_id,
             artist_data=artist_data,
             context=context
-        )
-    
-    def ask_contract(self,
-                    query: str,
-                    user_id: str,
-                    project_id: str,
-                    contract_id: str,
-                    top_k: int = DEFAULT_TOP_K,
-                    session_id: Optional[str] = None) -> Dict:
-        """
-        Ask a question about a specific contract using smart retrieval.
-        
-        Args:
-            query: User's question
-            user_id: UUID of the user
-            project_id: UUID of the project
-            contract_id: UUID of the contract
-            top_k: Number of search results to retrieve
-            session_id: Session ID for conversation memory
-            
-        Returns:
-            Dict with answer and metadata
-        """
-        return self.smart_ask(
-            query=query,
-            user_id=user_id,
-            project_id=project_id,
-            contract_id=contract_id,
-            top_k=top_k,
-            session_id=session_id
         )
     
     def ask_multiple_contracts(self,
