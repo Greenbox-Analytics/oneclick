@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,7 +23,7 @@ const OneClick = () => {
   
   // State for fetched artists
   const [artists, setArtists] = useState<Artist[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const hasFetchedRef = useRef(false);
 
   // State tracks artist user has selected and errors
   // Changed to string[] because Supabase IDs are UUIDs (strings)
@@ -32,28 +32,17 @@ const OneClick = () => {
 
   // Fetch artists from backend on component mount
   useEffect(() => {
-    const fetchArtists = async () => {
-      if (!user) {
-        setIsLoading(false);
-        return;
-      }
-
-      try {
-        const res = await fetch(`${API_URL}/artists?user_id=${user.id}`);
-        if (!res.ok) {
-          throw new Error("Failed to fetch artists");
-        }
-        const data = await res.json();
-        setArtists(data);
-        setIsLoading(false);
-      } catch (err) {
+    if (!user || hasFetchedRef.current) return;
+    
+    hasFetchedRef.current = true;
+    
+    fetch(`${API_URL}/artists?user_id=${user.id}`)
+      .then((res) => res.json())
+      .then((data) => setArtists(data))
+      .catch((err) => {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists. Please check your backend connection.");
-        setIsLoading(false);
-      }
-    };
-
-    fetchArtists();
+      });
   }, [user]);
 
   // This lets us select/deselect a single artist (only one artist can be selected at a time)
@@ -108,9 +97,7 @@ const OneClick = () => {
               <CardDescription>Choose artists to include in the royalty calculation</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {isLoading ? (
-                <div className="text-center py-4 text-muted-foreground">Loading artists...</div>
-              ) : artists.length === 0 ? (
+              {artists.length === 0 ? (
                 <div className="text-center py-4 text-muted-foreground">
                   No artists found. Please add an artist first.
                 </div>
