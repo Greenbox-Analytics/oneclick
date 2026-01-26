@@ -393,20 +393,34 @@ class RoyaltyCalculator:
             # Merge royalty shares with conflict resolution
             for share in contract.royalty_shares:
                 norm_name = normalize_name(share.party_name)
-                key = (norm_name, share.royalty_type.lower().strip())
                 
-                if key not in seen_shares:
-                    seen_shares[key] = share
-                    merged_royalty_shares.append(share)
-                else:
-                    # If duplicate with different percentage, keep higher one
-                    existing = seen_shares[key]
-                    if share.percentage > existing.percentage:
-                        print(f"      ⚠️  Conflict: {share.party_name} has {existing.percentage}% and {share.percentage}% - keeping higher")
-                        # Replace in list
-                        idx_to_replace = merged_royalty_shares.index(existing)
-                        merged_royalty_shares[idx_to_replace] = share
-                        seen_shares[key] = share
+                # Check for existing share with same name AND similar type
+                existing_share_for_party = None
+                
+                # Determine if current share is streaming-related
+                is_streaming_share = 'streaming' in share.royalty_type.lower() or 'digital' in share.royalty_type.lower()
+                
+                for existing in merged_royalty_shares:
+                    if normalize_name(existing.party_name) == norm_name:
+                        # Check if percentages match
+                        if abs(existing.percentage - share.percentage) < 0.01:
+                             # CRITICAL: Only consider it a duplicate if the royalty TYPE is also similar.
+                             # If one is "Publishing" and one is "Streaming", they are different entitlements
+                             # even if they have the same percentage (e.g. 50% Pub / 50% Master).
+                             
+                             is_existing_streaming = 'streaming' in existing.royalty_type.lower() or 'digital' in existing.royalty_type.lower()
+                             
+                             # If both are streaming or both are NOT streaming (e.g. both publishing), likely a duplicate
+                             if is_streaming_share == is_existing_streaming:
+                                 existing_share_for_party = existing
+                                 break
+                
+                if existing_share_for_party:
+                    print(f"      ℹ️  Duplicate share found for {share.party_name} ({share.percentage}%) - skipping")
+                    continue
+
+                # If no exact duplicate found, add it
+                merged_royalty_shares.append(share)
         
         # Combine summaries
         merged_summary = "\n\n".join([s for s in summaries if s.strip()])
@@ -494,6 +508,79 @@ class RoyaltyCalculator:
 
         return payments
     
+    def calculate_payments_from_contract_ids(
+        self,
+        contract_ids: List[str],
+        user_id: str,
+        statement_path: str,
+        title_column: Optional[str] = None,
+        payable_column: Optional[str] = None
+    ) -> List[RoyaltyPayment]:
+        """
+        Parse multiple contracts from Pinecone in PARALLEL, merge their data, and calculate payments.
+        
+        Args:
+            contract_ids: List of contract IDs to query from Pinecone
+            user_id: User ID for Pinecone namespace
+            statement_path: Path to the royalty statement file
+            title_column: Optional column name for song titles
+            payable_column: Optional column name for payable amounts
+            
+        Returns:
+            List of RoyaltyPayment objects with combined results
+        """
+        print("\n" + "="*80)
+        print(f"MULTI-CONTRACT ROYALTY CALCULATION ({len(contract_ids)} contracts)")
+        print("="*80)
+        
+        # Step 1: Parse all contracts in PARALLEL
+        print(f"\n📄 Step 1: Parsing {len(contract_ids)} contracts from Pinecone (Parallel)...")
+        all_contracts_data = []
+        
+        # Use ThreadPoolExecutor for parallel processing
+        # We limit max_workers to avoid hitting API rate limits too hard
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            # Submit all tasks
+            future_to_cid = {
+                executor.submit(self.contract_parser.parse_contract, path=None, user_id=user_id, contract_id=cid): cid 
+                for cid in contract_ids
+            }
+            
+            # Process results as they complete
+            for i, future in enumerate(as_completed(future_to_cid), 1):
+                cid = future_to_cid[future]
+                try:
+                    # print(f"   ...Finished processing a contract...")
+                    data = future.result()
+                    all_contracts_data.append(data)
+                    print(f"   ✓ Contract parsed successfully ({len(data.parties)} parties, {len(data.works)} works)")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to parse contract {cid}: {e}")
+        
+        if not all_contracts_data:
+            raise ValueError("❌ No valid contracts could be parsed. Please check your files.")
+        
+        # Step 2: Merge contracts
+        merged_data = self.merge_contracts(all_contracts_data)
+        
+        # Step 3: Read royalty statement
+        print("\n💵 Step 2: Reading royalty statement...")
+        song_totals = self.read_royalty_statement(
+            statement_path,
+            title_column,
+            payable_column
+        )
+        
+        # Step 4: Calculate payments
+        payments = self._calculate_payments_from_data(
+            merged_data,
+            song_totals
+        )
+        
+        return payments
+
     def calculate_payments_from_contracts(
         self,
         contract_paths: List[str],

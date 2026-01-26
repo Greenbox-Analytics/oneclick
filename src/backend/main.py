@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from supabase import create_client, Client
@@ -602,7 +602,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
 # --- OneClick Royalty Calculation Endpoints ---
 
 class OneClickRoyaltyRequest(BaseModel):
-    contract_id: str
+    contract_id: Optional[str] = None
+    contract_ids: Optional[List[str]] = None
     user_id: str
     project_id: str
     royalty_statement_file_id: str
@@ -626,10 +627,11 @@ class OneClickRoyaltyResponse(BaseModel):
 
 @app.get("/oneclick/calculate-royalties-stream")
 async def oneclick_calculate_royalties_stream(
-    contract_id: str,
     user_id: str,
     project_id: str,
-    royalty_statement_file_id: str
+    royalty_statement_file_id: str,
+    contract_id: Optional[str] = None,
+    contract_ids: Optional[List[str]] = Query(None)
 ):
     """
     OneClick Royalty Calculation with Server-Sent Events (SSE) for real-time progress updates.
@@ -641,7 +643,11 @@ async def oneclick_calculate_royalties_stream(
     - Calculating payments
     
     Args:
-        request: Contains contract_id, user_id, project_id, and royalty_statement_file_id
+        contract_id: Single contract ID (optional)
+        contract_ids: List of contract IDs (optional)
+        user_id: User ID
+        project_id: Project ID
+        royalty_statement_file_id: Royalty Statement File ID
         
     Returns:
         SSE stream with progress updates and final results
@@ -655,6 +661,17 @@ async def oneclick_calculate_royalties_stream(
             # Send initial status
             yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0, 'stage': 'starting'})}\n\n"
             await asyncio.sleep(0.1)
+            
+            # Determine contracts to process
+            target_contract_ids = []
+            if contract_ids:
+                target_contract_ids = contract_ids
+            elif contract_id:
+                target_contract_ids = [contract_id]
+            
+            if not target_contract_ids:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No contracts specified'})}\n\n"
+                return
             
             # Step 1: Download royalty statement
             yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
@@ -679,34 +696,43 @@ async def oneclick_calculate_royalties_stream(
             await asyncio.sleep(0.1)
             
             # Step 2: Download contract
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25, 'stage': 'downloading'})}\n\n"
-            
-            contract_res = supabase.table("project_files").select("*").eq("id", contract_id).execute()
-            if not contract_res.data:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Contract file not found'})}\n\n"
-                return
-            
-            contract_file = contract_res.data[0]
-            contract_data = supabase.storage.from_("project-files").download(contract_file["file_path"])
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
-                tmp_contract.write(contract_data)
-                contract_path = tmp_contract.name
-            
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Contract downloaded', 'progress': 30, 'stage': 'downloading'})}\n\n"
+            # Only download if single contract legacy mode, otherwise skip (Pinecone used)
+            if len(target_contract_ids) == 1 and contract_id:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25, 'stage': 'downloading'})}\n\n"
+                
+                contract_res = supabase.table("project_files").select("*").eq("id", target_contract_ids[0]).execute()
+                if not contract_res.data:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Contract file not found'})}\n\n"
+                    return
+                
+                contract_file = contract_res.data[0]
+                contract_data = supabase.storage.from_("project-files").download(contract_file["file_path"])
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
+                    tmp_contract.write(contract_data)
+                    contract_path = tmp_contract.name
+                
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Contract downloaded', 'progress': 30, 'stage': 'downloading'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Preparing {len(target_contract_ids)} contracts...', 'progress': 30, 'stage': 'downloading'})}\n\n"
+
             await asyncio.sleep(0.1)
             
             # Step 3: Extract contract data with progress updates
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contract...', 'progress': 35, 'stage': 'extracting_parties'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contracts...', 'progress': 35, 'stage': 'extracting_parties'})}\n\n"
             await asyncio.sleep(0.5)
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contract...', 'progress': 50, 'stage': 'extracting_works'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contracts...', 'progress': 50, 'stage': 'extracting_works'})}\n\n"
             await asyncio.sleep(0.5)
             
             yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting royalty splits...', 'progress': 65, 'stage': 'extracting_royalty'})}\n\n"
             await asyncio.sleep(0.5)
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+            if len(target_contract_ids) > 1:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Merging contract data...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+
             await asyncio.sleep(0.3)
             
             # Calculate payments
@@ -716,7 +742,8 @@ async def oneclick_calculate_royalties_stream(
                 contract_path=contract_path,
                 statement_path=statement_path,
                 user_id=user_id,
-                contract_id=contract_id
+                contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
+                contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None
             )
             
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
@@ -781,14 +808,14 @@ async def oneclick_calculate_royalties_stream(
 async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
     """
     OneClick Royalty Calculation:
-    1. Retrieve streamingroyalty splits from selected contract using vector search
+    1. Retrieve streamingroyalty splits from selected contract(s) using vector search
     2. Download royalty statement from Supabase
     3. Calculate payments using royalty_calculator.py methods
     4. Save results to Excel and upload to Supabase
     5. Return payment breakdown
     
     Args:
-        request: Contains contract_id, user_id, project_id, and royalty_statement_file_id
+        request: Contains contract_id(s), user_id, project_id, and royalty_statement_file_id
         
     Returns:
         Payment breakdown and Excel file URL
@@ -798,9 +825,20 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         print("ONECLICK ROYALTY CALCULATION")
         print(f"{'='*80}")
         print(f"Contract ID: {request.contract_id}")
+        print(f"Contract IDs: {request.contract_ids}")
         print(f"User ID: {request.user_id}")
         print(f"Project ID: {request.project_id}")
         print(f"Royalty Statement File ID: {request.royalty_statement_file_id}")
+        
+        # Determine contracts to process
+        target_contract_ids = []
+        if request.contract_ids:
+            target_contract_ids = request.contract_ids
+        elif request.contract_id:
+            target_contract_ids = [request.contract_id]
+            
+        if not target_contract_ids:
+            raise HTTPException(status_code=400, detail="No contracts specified")
         
         # Step 2: Download royalty statement from Supabase
         print("\n--- Step 1: Downloading Royalty Statement ---")
@@ -830,25 +868,29 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         
         print(f"Downloaded royalty statement: {statement_file['file_name']} (detected as {file_extension})")
         
-        # Step 3: Get contract file for parsing
-        print("\n--- Step 2: Downloading Contract File ---")
-        contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
-        
-        if not contract_res.data:
-            raise HTTPException(status_code=404, detail="Contract file not found")
-        
-        contract_file = contract_res.data[0]
-        contract_file_path = contract_file["file_path"]
-        
-        # Download contract from Supabase storage
-        contract_data = supabase.storage.from_("project-files").download(contract_file_path)
-        
-        # Save to temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
-            tmp_contract.write(contract_data)
-            contract_path = tmp_contract.name
-        
-        print(f"Downloaded contract: {contract_file['file_name']}")
+        # Step 3: Get contract file for parsing (Legacy/Single mode only)
+        contract_path = None
+        if len(target_contract_ids) == 1 and request.contract_id:
+            print("\n--- Step 2: Downloading Contract File ---")
+            contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
+            
+            if not contract_res.data:
+                raise HTTPException(status_code=404, detail="Contract file not found")
+            
+            contract_file = contract_res.data[0]
+            contract_file_path = contract_file["file_path"]
+            
+            # Download contract from Supabase storage
+            contract_data = supabase.storage.from_("project-files").download(contract_file_path)
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
+                tmp_contract.write(contract_data)
+                contract_path = tmp_contract.name
+            
+            print(f"Downloaded contract: {contract_file['file_name']}")
+        else:
+            print(f"\n--- Step 2: Preparing {len(target_contract_ids)} contracts (Pinecone) ---")
         
         try:
             # Step 4: Calculate payments using helper function
@@ -859,7 +901,8 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
                 contract_path=contract_path,
                 statement_path=statement_path,
                 user_id=request.user_id,
-                contract_id=request.contract_id
+                contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
+                contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None
             )
             
             if not payments or len(payments) == 0:
@@ -898,7 +941,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
             
         finally:
             # Clean up temporary files
-            if os.path.exists(contract_path):
+            if contract_path and os.path.exists(contract_path):
                 os.unlink(contract_path)
             if os.path.exists(statement_path):
                 os.unlink(statement_path)

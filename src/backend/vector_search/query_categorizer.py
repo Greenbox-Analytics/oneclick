@@ -35,7 +35,11 @@ CATEGORY_KEYWORDS = {
     "ROYALTY_CALCULATIONS": [
         "royalty", "royalties", "revenue", "split", "splits", "percentage", 
         "compensation", "payment", "streaming", "net revenue", "gross revenue",
-        "share", "shares", "paid", "pay", "earnings"
+        "share", "shares", "paid", "pay", "earnings", "master points",
+        "royalty participation", "revenue participation", "royalty share",
+        "net master revenue", "net master royalty", "gross master royalty",
+        "royalty percentage", "sound recording royalty splits", "producer royalties",
+        "master royalties", "points"
     ],
     "PUBLISHING_RIGHTS": [
         "publishing", "songwriter", "composition", "mechanical", "sync rights",
