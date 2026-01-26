@@ -74,8 +74,21 @@ class RoyaltyResults(BaseModel):
     breakdown: List[RoyaltyBreakdown]
 
 # Conversation Context Models
+class RoyaltySplitData(BaseModel):
+    party: str
+    percentage: float
+
+class RoyaltySplitsByType(BaseModel):
+    streaming: Optional[List[RoyaltySplitData]] = None
+    publishing: Optional[List[RoyaltySplitData]] = None
+    mechanical: Optional[List[RoyaltySplitData]] = None
+    sync: Optional[List[RoyaltySplitData]] = None
+    master: Optional[List[RoyaltySplitData]] = None
+    performance: Optional[List[RoyaltySplitData]] = None
+    general: Optional[List[RoyaltySplitData]] = None  # For unspecified royalty types
+
 class ExtractedContractData(BaseModel):
-    royalty_splits: Optional[List[Dict]] = None
+    royalty_splits: Optional[RoyaltySplitsByType] = None
     payment_terms: Optional[str] = None
     parties: Optional[List[str]] = None
     advances: Optional[str] = None
@@ -156,6 +169,9 @@ class ZoeAskResponse(BaseModel):
     session_id: Optional[str] = None  # Return session ID for frontend tracking
     show_quick_actions: Optional[bool] = None  # Show quick action buttons in response
     answered_from: Optional[str] = None  # Indicates if answered from context vs document search
+    extracted_data: Optional[ExtractedContractData] = None  # Server-side extracted structured data
+    pending_suggestion: Optional[str] = None  # Follow-up suggestion that can be answered from context
+    context_cleared: Optional[bool] = None  # True if context was cleared and user needs to refresh
 
 # Initialize Zoe chatbot and contract ingestion (singletons)
 zoe_chatbot = None
@@ -696,6 +712,11 @@ async def zoe_ask_question(request: ZoeAskRequest):
             if zoe_source is not None:
                 valid_sources.append(zoe_source)
         
+        # Convert extracted_data dict to ExtractedContractData if present
+        extracted_data = None
+        if result.get("extracted_data"):
+            extracted_data = ExtractedContractData(**result["extracted_data"])
+        
         return ZoeAskResponse(
             query=result["query"],
             answer=result["answer"],
@@ -705,7 +726,10 @@ async def zoe_ask_question(request: ZoeAskRequest):
             highest_score=result.get("highest_score"),
             session_id=session_id,
             show_quick_actions=result.get("show_quick_actions", False),
-            answered_from=result.get("answered_from")
+            answered_from=result.get("answered_from"),
+            extracted_data=extracted_data,
+            pending_suggestion=result.get("pending_suggestion"),
+            context_cleared=result.get("context_cleared")
         )
         
     except Exception as e:

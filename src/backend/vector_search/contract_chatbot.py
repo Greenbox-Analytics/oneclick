@@ -14,7 +14,10 @@ Features:
 import os
 import uuid
 import time
-from typing import List, Dict, Optional
+import json
+import hashlib
+import re
+from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -111,6 +114,42 @@ class InMemoryChatMessageHistory:
             del self._sessions[session_id]
         if session_id in self._session_timestamps:
             del self._session_timestamps[session_id]
+        if session_id in self._pending_suggestions:
+            del self._pending_suggestions[session_id]
+    
+    def set_pending_suggestion(self, session_id: str, suggestion: str, context_hash: str) -> None:
+        """
+        Store a pending suggestion for the session.
+        
+        Args:
+            session_id: Unique session identifier
+            suggestion: The suggested follow-up question/action
+            context_hash: Hash of contracts_discussed to detect context changes
+        """
+        if not hasattr(self, '_pending_suggestions'):
+            self._pending_suggestions: Dict[str, Dict] = {}
+        self._pending_suggestions[session_id] = {
+            'suggestion': suggestion,
+            'context_hash': context_hash,
+            'timestamp': time.time()
+        }
+    
+    def get_pending_suggestion(self, session_id: str) -> Optional[Dict]:
+        """
+        Get the pending suggestion for a session.
+        
+        Returns:
+            Dict with 'suggestion' and 'context_hash', or None if no pending suggestion
+        """
+        if not hasattr(self, '_pending_suggestions'):
+            self._pending_suggestions: Dict[str, Dict] = {}
+            return None
+        return self._pending_suggestions.get(session_id)
+    
+    def clear_pending_suggestion(self, session_id: str) -> None:
+        """Clear the pending suggestion for a session."""
+        if hasattr(self, '_pending_suggestions') and session_id in self._pending_suggestions:
+            del self._pending_suggestions[session_id]
 
 
 # Global conversation memory instance
@@ -149,7 +188,15 @@ class ContractChatbot:
         "thanks", "thank you", "thx", "appreciated",
         "bye", "goodbye", "see you", "later", "cya",
         "help", "what can you do", "who are you", "what are you",
-        "nice", "great", "awesome", "cool", "ok", "okay", "sure", "yes", "no",
+        "nice", "great", "awesome", "cool", "ok", "okay",
+    ]
+    
+    # Affirmative patterns that indicate user wants to proceed with a pending suggestion
+    AFFIRMATIVE_PATTERNS = [
+        "yes", "yeah", "yep", "yup", "sure", "please", "please do", 
+        "go ahead", "do it", "yes please", "sounds good", "that would be great",
+        "absolutely", "definitely", "of course", "ok", "okay", "alright",
+        "let's do it", "show me", "tell me", "i'd like that", "yes do that"
     ]
     
     def __init__(self, llm_model: str = DEFAULT_LLM_MODEL):
@@ -162,6 +209,158 @@ class ContractChatbot:
         self.llm_model = llm_model
         self.search_engine = ContractSearch()
         self.memory = _conversation_memory  # Use global memory instance
+    
+    def _is_affirmative_response(self, query: str) -> bool:
+        """
+        Check if the query is an affirmative response to a pending suggestion.
+        
+        Args:
+            query: User's message
+            
+        Returns:
+            True if it's an affirmative response
+        """
+        query_lower = query.lower().strip()
+        query_clean = ''.join(c for c in query_lower if c.isalnum() or c.isspace()).strip()
+        
+        for pattern in self.AFFIRMATIVE_PATTERNS:
+            if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
+                return True
+        
+        return False
+    
+    def _compute_context_hash(self, context: Optional[Dict]) -> str:
+        """
+        Compute a hash of the contracts discussed to detect context changes.
+        
+        Args:
+            context: Conversation context
+            
+        Returns:
+            Hash string of contract IDs
+        """
+        if not context:
+            return ""
+        
+        contracts_discussed = context.get('contracts_discussed', [])
+        contract_ids = sorted([c.get('id', '') for c in contracts_discussed])
+        return hashlib.md5(json.dumps(contract_ids).encode()).hexdigest()
+    
+    def _extract_structured_data(self, answer: str, query: str) -> Dict:
+        """
+        Extract structured data from the LLM answer using pattern matching.
+        This replaces client-side regex extraction with server-side extraction.
+        
+        Args:
+            answer: The LLM-generated answer
+            query: The original query (to determine what data to extract)
+            
+        Returns:
+            Dict with extracted data fields
+        """
+        extracted = {}
+        query_lower = query.lower()
+        
+        # Determine royalty type from query
+        royalty_type = self._detect_royalty_type(query_lower)
+        
+        # Extract royalty splits if discussing royalties/splits/percentages
+        if any(kw in query_lower for kw in ['royalty', 'split', 'percentage', 'share', '%']):
+            # Pattern: "Name: 35%" or "Name - 35%" or "Name (35%)"
+            split_patterns = [
+                r'([A-Za-z][A-Za-z\s\.\'-]+?):\s*(\d+(?:\.\d+)?)\s*%',
+                r'([A-Za-z][A-Za-z\s\.\'-]+?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*%',
+                r'([A-Za-z][A-Za-z\s\.\'-]+?)\s*\((\d+(?:\.\d+)?)\s*%\)',
+            ]
+            splits = []
+            for pattern in split_patterns:
+                matches = re.findall(pattern, answer)
+                for match in matches:
+                    party = match[0].strip()
+                    percentage = float(match[1])
+                    # Avoid duplicates
+                    if not any(s['party'].lower() == party.lower() for s in splits):
+                        splits.append({'party': party, 'percentage': percentage})
+            if splits:
+                # Store under the specific royalty type
+                extracted['royalty_splits'] = {royalty_type: splits}
+        
+        # Extract parties/signatories
+        if any(kw in query_lower for kw in ['parties', 'who signed', 'signatories', 'between']):
+            # Pattern: quoted names or bullet points
+            party_matches = re.findall(r'"([^"]+)"|•\s*([^\n•]+)|^\s*[-*]\s*([^\n]+)', answer, re.MULTILINE)
+            parties = []
+            for match in party_matches:
+                for group in match:
+                    if group and group.strip():
+                        parties.append(group.strip())
+            if parties:
+                extracted['parties'] = parties
+        
+        # Extract payment terms
+        if any(kw in query_lower for kw in ['payment', 'terms', 'net', 'days']):
+            if len(answer) > 0 and len(answer) < 500:
+                extracted['payment_terms'] = answer.strip()
+        
+        # Extract term length
+        if any(kw in query_lower for kw in ['term', 'duration', 'length', 'period', 'years', 'months']):
+            term_match = re.search(r'(\d+)\s*(year|month|day)s?', answer, re.IGNORECASE)
+            if term_match:
+                extracted['term_length'] = f"{term_match.group(1)} {term_match.group(2)}s"
+        
+        # Extract advances
+        if any(kw in query_lower for kw in ['advance', 'upfront', 'signing bonus']):
+            advance_match = re.search(r'\$[\d,]+(?:\.\d{2})?|\d+(?:,\d{3})*(?:\.\d{2})?\s*(?:dollars?|USD)?', answer)
+            if advance_match:
+                extracted['advances'] = advance_match.group(0)
+        
+        return extracted
+    
+    def _detect_royalty_type(self, query_lower: str) -> str:
+        """
+        Detect the type of royalty being discussed from the query.
+        
+        Args:
+            query_lower: Lowercase query string
+            
+        Returns:
+            Royalty type string (streaming, publishing, etc.)
+        """
+        royalty_types = {
+            'streaming': ['streaming', 'stream', 'spotify', 'apple music', 'dsp'],
+            'publishing': ['publishing', 'publish', 'songwriter', 'composition'],
+            'mechanical': ['mechanical', 'mechanicals'],
+            'sync': ['sync', 'synchronization', 'synch'],
+            'master': ['master', 'masters', 'recording'],
+            'performance': ['performance', 'performing', 'pro', 'ascap', 'bmi'],
+        }
+        
+        for royalty_type, keywords in royalty_types.items():
+            if any(kw in query_lower for kw in keywords):
+                return royalty_type
+        
+        return 'general'  # Default for unspecified royalty types
+    
+    def _extract_suggestion_from_answer(self, answer: str) -> Tuple[str, Optional[str]]:
+        """
+        Extract and separate a follow-up suggestion from the answer.
+        
+        Args:
+            answer: The full LLM answer
+            
+        Returns:
+            Tuple of (clean_answer, suggestion) where suggestion may be None
+        """
+        # Pattern to match "Would you like me to..." suggestions at the end
+        suggestion_pattern = r'\n*(?:Would you like (?:me to|to)?|Shall I|Should I|Do you want me to)\s*([^?]+\??)\s*$'
+        match = re.search(suggestion_pattern, answer, re.IGNORECASE)
+        
+        if match:
+            suggestion = match.group(0).strip()
+            clean_answer = answer[:match.start()].strip()
+            return clean_answer, suggestion
+        
+        return answer, None
     
     def _is_conversational_query(self, query: str) -> bool:
         """
@@ -443,58 +642,151 @@ Artist Profile:
         if session_id:
             self.memory.add_message(session_id, role, content, metadata)
     
-    def _can_answer_from_context(self, query: str, context: Optional[Dict]) -> bool:
+    def _should_use_context(self, query: str, context: Optional[Dict]) -> Tuple[bool, str]:
         """
-        Determine if query can be answered from conversation context
-        without searching documents.
+        Helper method to check if query should be answered from context.
+        Centralizes the context check logic and logging for both smart_ask and multi_contract_ask.
         
         Args:
             query: User's question
             context: Conversation context from frontend
             
         Returns:
-            True if the question can be answered from context alone
+            Tuple of (should_use_context: bool, reason: str)
+        """
+        can_answer, reason = self._can_answer_from_context(query, context)
+        print(f"[Context] Can answer from context: {can_answer}, reason: {reason}")
+        
+        # Log why we're falling through to document search
+        if not can_answer and reason.startswith("missing_"):
+            print(f"[Context] Missing data in context ({reason}) - will search documents")
+        
+        return can_answer, reason
+    
+    def _can_answer_from_context(self, query: str, context: Optional[Dict]) -> Tuple[bool, str]:
+        """
+        Determine if query can be answered from conversation context
+        without searching documents. Returns tuple for better debugging.
+        
+        Args:
+            query: User's question
+            context: Conversation context from frontend
+            
+        Returns:
+            Tuple of (can_answer: bool, reason: str)
         """
         if not context:
             print("[Context] No context provided, cannot answer from context")
-            return False
+            return False, "no_context"
         
         contracts_discussed = context.get('contracts_discussed', [])
         print(f"[Context] Checking if can answer from context. Contracts discussed: {len(contracts_discussed)}")
         
         query_lower = query.lower()
         
-        # Comparison questions require data from multiple contracts
-        comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between', 
-                               'which one', 'both contracts', 'either contract']
-        if any(kw in query_lower for kw in comparison_keywords):
-            # Check if we have extracted data for at least 2 contracts
-            contracts_with_data = [c for c in contracts_discussed 
-                                   if c.get('data_extracted') and 
-                                   any(v for v in c['data_extracted'].values() if v)]
-            print(f"[Context] Comparison query detected. Contracts with data: {len(contracts_with_data)}")
-            for c in contracts_with_data:
-                print(f"[Context]   - {c.get('name')}: {c.get('data_extracted')}")
-            return len(contracts_with_data) >= 2
-        
-        # Summary/recap questions about the conversation
+        # Summary/recap questions about the conversation - always use context
         summary_keywords = ['summarize', 'summary', 'what did we discuss', 'recap', 
-                           'what have we talked about', 'what do we know']
+                           'what have we talked about', 'what do we know', 'overview']
         if any(kw in query_lower for kw in summary_keywords):
-            return len(contracts_discussed) > 0
+            if len(contracts_discussed) > 0:
+                return True, "summary_request"
+            return False, "no_contracts_for_summary"
         
         # "Earlier you mentioned" or "you said" type follow-ups
         followup_keywords = ['you said', 'you mentioned', 'earlier', 'previously', 
-                            'before you said', 'we discussed']
+                            'before you said', 'we discussed', 'you told me']
         if any(kw in query_lower for kw in followup_keywords):
-            return len(contracts_discussed) > 0
+            if len(contracts_discussed) > 0:
+                return True, "followup_reference"
+            return False, "no_contracts_for_followup"
         
+        # Check if asking about royalties - need to verify we have the SPECIFIC type
+        royalty_keywords = ['royalty', 'split', 'percentage', 'share']
+        if any(kw in query_lower for kw in royalty_keywords):
+            royalty_type = self._detect_royalty_type(query_lower)
+            print(f"[Context] Query is about royalty type: {royalty_type}")
+            
+            # Check if we have this specific royalty type in context
+            has_required_type = False
+            for contract in contracts_discussed:
+                data = contract.get('data_extracted', {})
+                royalty_splits = data.get('royalty_splits', {})
+                
+                if isinstance(royalty_splits, dict):
+                    # New structure: {streaming: [...], publishing: [...]}
+                    if royalty_splits.get(royalty_type):
+                        has_required_type = True
+                        print(f"[Context] Found {royalty_type} splits in {contract.get('name')}")
+                        break
+                    # Also check 'general' as fallback
+                    if royalty_type == 'general' and any(royalty_splits.values()):
+                        has_required_type = True
+                        break
+                elif isinstance(royalty_splits, list) and len(royalty_splits) > 0:
+                    # Legacy structure: [{party, percentage}, ...]
+                    # Can only use if asking for 'general' or unspecified royalties
+                    if royalty_type == 'general':
+                        has_required_type = True
+                        print(f"[Context] Found legacy splits in {contract.get('name')}")
+                        break
+            
+            if has_required_type:
+                # Check for comparison or re-ask
+                comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between', 
+                                       'which one', 'both', 'all', 'total', 'across']
+                reask_indicators = ['again', 'remind me', 'what was', 'what were', 'tell me again']
+                
+                if any(kw in query_lower for kw in comparison_keywords):
+                    # Need multiple contracts with this data type
+                    contracts_with_type = sum(1 for c in contracts_discussed 
+                                              if self._contract_has_royalty_type(c, royalty_type))
+                    if contracts_with_type >= 2:
+                        return True, f"comparison_{royalty_type}"
+                    return False, f"need_more_contracts_for_{royalty_type}_comparison"
+                
+                if any(ind in query_lower for ind in reask_indicators):
+                    return True, f"reask_{royalty_type}"
+            
+            print(f"[Context] Missing {royalty_type} splits - need document lookup")
+            return False, f"missing_{royalty_type}_splits"
+        
+        # Check for other data types
+        other_data_checks = [
+            (['parties', 'who signed', 'signatories'], 'parties'),
+            (['payment', 'net', 'days'], 'payment_terms'),
+            (['term', 'duration', 'length', 'period'], 'term_length'),
+            (['advance', 'upfront', 'signing bonus'], 'advances'),
+        ]
+        
+        for keywords, field_name in other_data_checks:
+            if any(kw in query_lower for kw in keywords):
+                for contract in contracts_discussed:
+                    data = contract.get('data_extracted', {})
+                    if data.get(field_name):
+                        # Check for re-ask
+                        reask_indicators = ['again', 'remind me', 'what was', 'what were']
+                        if any(ind in query_lower for ind in reask_indicators):
+                            return True, f"reask_{field_name}"
+                return False, f"missing_{field_name}"
+        
+        return False, "no_matching_pattern"
+    
+    def _contract_has_royalty_type(self, contract: Dict, royalty_type: str) -> bool:
+        """Check if a contract has extracted data for a specific royalty type."""
+        data = contract.get('data_extracted', {})
+        royalty_splits = data.get('royalty_splits', {})
+        
+        if isinstance(royalty_splits, dict):
+            return bool(royalty_splits.get(royalty_type))
+        elif isinstance(royalty_splits, list) and royalty_type == 'general':
+            return len(royalty_splits) > 0
         return False
     
     def _answer_from_context(self, query: str, context: Dict, session_id: Optional[str] = None) -> Dict:
         """
         Answer question using structured context and conversation history.
         Used when the answer can be derived from previously extracted data.
+        May suggest context-only follow-ups based on available data.
         
         Args:
             query: User's question
@@ -514,19 +806,36 @@ Artist Profile:
         history = self._get_conversation_context(session_id, max_turns=10)
         print(f"[Context] Conversation history: {len(history)} messages")
         
-        system_prompt = """You are answering a follow-up question using information from the conversation context.
+        # Analyze what data is available for suggestions
+        available_data = self._get_available_data_types(context)
+        suggestion_guidance = self._build_suggestion_guidance(available_data)
+        
+        system_prompt = f"""You are answering a follow-up question using information from the conversation context.
 
 The user is asking about information that was previously discussed in this conversation. 
 Use the structured context and conversation history to provide a comprehensive answer.
 
-You can compare, summarize, or analyze the information provided without needing to search documents again.
+CRITICAL: You can compare, summarize, or analyze the information provided without needing to search documents again.
+
+CONTEXT-ONLY SUGGESTIONS:
+After answering, you MAY suggest ONE follow-up question, but ONLY if:
+1. The answer can be derived ENTIRELY from the provided context data
+2. It's genuinely relevant to what the user just asked
+3. It adds value (comparison, deeper analysis, related insight)
+
+Format suggestions as: "Would you like me to [specific action]?"
+
+{suggestion_guidance}
+
+If no context-only follow-up makes sense, don't suggest anything.
 
 RULES:
 1. Base your answer ONLY on the provided context and conversation history
 2. If comparing contracts, clearly distinguish between them
 3. Be specific about which contract each piece of information came from
 4. If information is incomplete, acknowledge what you don't have
-5. Format comparisons in a clear, readable way (consider using bullet points or tables)"""
+5. Format comparisons in a clear, readable way (use bullet points or tables)
+6. Only suggest follow-ups that can be answered from existing context data"""
 
         messages = [{"role": "system", "content": system_prompt}]
         # Add conversation history first, then the current query with context
@@ -550,9 +859,26 @@ RULES:
             print(f"Error generating context-based answer: {e}")
             answer = "I encountered an error while processing your question. Please try again."
         
+        # Extract any suggestion from the answer for tracking
+        clean_answer, suggestion = self._extract_suggestion_from_answer(answer)
+        
+        # Store pending suggestion if one was made
+        pending_suggestion = None
+        if suggestion and session_id:
+            context_hash = self._compute_context_hash(context)
+            # Extract the action from "Would you like me to X?"
+            action_match = re.search(r'(?:Would you like (?:me to|to)?|Shall I|Should I)\s*(.+?)\??$', suggestion, re.IGNORECASE)
+            if action_match:
+                pending_suggestion = action_match.group(1).strip()
+                self.memory.set_pending_suggestion(session_id, pending_suggestion, context_hash)
+                print(f"[Context] Stored pending suggestion: {pending_suggestion}")
+        
         # Store in memory
         self._add_to_memory(session_id, "user", query)
         self._add_to_memory(session_id, "assistant", answer)
+        
+        # Extract structured data from the answer
+        extracted_data = self._extract_structured_data(answer, query)
         
         return {
             "query": query,
@@ -561,8 +887,109 @@ RULES:
             "sources": [],
             "search_results_count": 0,
             "answered_from": "conversation_context",
-            "session_id": session_id
+            "session_id": session_id,
+            "extracted_data": extracted_data if extracted_data else None,
+            "pending_suggestion": pending_suggestion
         }
+    
+    def _get_available_data_types(self, context: Dict) -> Dict:
+        """
+        Analyze what types of data are available in the context.
+        
+        Args:
+            context: Conversation context
+            
+        Returns:
+            Dict with available data types per contract
+        """
+        available = {
+            'contracts': [],
+            'has_royalty_splits': False,
+            'has_parties': False,
+            'has_payment_terms': False,
+            'has_term_length': False,
+            'has_advances': False,
+            'multiple_contracts': False,
+            'multiple_data_types': False
+        }
+        
+        contracts_discussed = context.get('contracts_discussed', [])
+        data_types_found = set()
+        
+        for contract in contracts_discussed:
+            data = contract.get('data_extracted', {})
+            if not data:
+                continue
+                
+            contract_info = {'name': contract.get('name', 'Unknown'), 'data_types': []}
+            
+            if data.get('royalty_splits'):
+                available['has_royalty_splits'] = True
+                data_types_found.add('royalty_splits')
+                contract_info['data_types'].append('royalty_splits')
+            if data.get('parties'):
+                available['has_parties'] = True
+                data_types_found.add('parties')
+                contract_info['data_types'].append('parties')
+            if data.get('payment_terms'):
+                available['has_payment_terms'] = True
+                data_types_found.add('payment_terms')
+                contract_info['data_types'].append('payment_terms')
+            if data.get('term_length'):
+                available['has_term_length'] = True
+                data_types_found.add('term_length')
+                contract_info['data_types'].append('term_length')
+            if data.get('advances'):
+                available['has_advances'] = True
+                data_types_found.add('advances')
+                contract_info['data_types'].append('advances')
+            
+            if contract_info['data_types']:
+                available['contracts'].append(contract_info)
+        
+        available['multiple_contracts'] = len(available['contracts']) >= 2
+        available['multiple_data_types'] = len(data_types_found) >= 2
+        
+        return available
+    
+    def _build_suggestion_guidance(self, available_data: Dict) -> str:
+        """
+        Build guidance for the LLM about what suggestions are valid.
+        
+        Args:
+            available_data: Dict from _get_available_data_types
+            
+        Returns:
+            String guidance for the system prompt
+        """
+        valid_suggestions = []
+        invalid_note = ""
+        
+        if available_data['multiple_contracts']:
+            contract_names = [c['name'] for c in available_data['contracts']]
+            valid_suggestions.append(f"Compare data between contracts: {', '.join(contract_names)}")
+        
+        if available_data['multiple_data_types']:
+            if available_data['has_royalty_splits'] and available_data['has_payment_terms']:
+                valid_suggestions.append("Compare royalty splits with payment terms")
+            if available_data['has_royalty_splits']:
+                valid_suggestions.append("Calculate total percentages across categories")
+                valid_suggestions.append("Show all parties and their splits")
+        
+        if not valid_suggestions:
+            invalid_note = "\nNOTE: Limited context data available - avoid suggesting follow-ups."
+        
+        if valid_suggestions:
+            return f"""VALID context-only suggestions (data IS available):
+{chr(10).join('✅ ' + s for s in valid_suggestions)}
+
+INVALID suggestions (would require document lookup - DO NOT suggest these):
+❌ Anything about data not listed in the context above
+❌ "Check the payment terms" (unless payment_terms is in context)
+❌ "Find the advance amount" (unless advances is in context)
+❌ "See who else is in the contract" (unless parties is in context){invalid_note}"""
+        else:
+            return invalid_note
     
     def _format_context_for_llm(self, context: Dict) -> str:
         """
@@ -698,7 +1125,8 @@ Your answers should be:
                 "sources": []
             }
         
-        # System prompt with strict focus on the question asked
+        # System prompt with strict focus on the question asked - NO follow-up suggestions
+        # Suggestions are only made in _answer_from_context when we have context data
         system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
 Your task is to answer questions about contract documents based on the provided context.
 
@@ -708,22 +1136,17 @@ CRITICAL RULES:
 3. Do NOT reference or compare to previous topics in the conversation unless the user asks for it
 4. Be precise and only include information that is explicitly stated in the provided context
 5. If you cannot answer based on the documents, say so clearly
+6. Do NOT suggest follow-up questions - the system handles this separately based on extracted context
 
 CONVERSATION AWARENESS:
 - Use conversation history ONLY to understand pronouns and references (e.g., "this contract" = the one just discussed)
 - Do NOT proactively bring up or compare to previous topics
-- If the current question relates to a previous topic in a way the user might find helpful, suggest it as a follow-up question instead of automatically including it
 
-FOLLOW-UP SUGGESTIONS:
-After answering the user's question, if the conversation history suggests a relevant follow-up the user might want to ask, end your response with a brief suggestion in this format:
-"Would you like me to [specific action based on context]?"
-
-Examples of good follow-up suggestions based on context:
-- If user discussed Contract A before and now asks about Contract B: "Would you like me to compare this to the previous contract we discussed?"
-- If user asked about streaming royalty splits: "Would you like me to break down the payment terms as well?"
-- If user asked about one party: "Would you like me to show the terms for the other parties?"
-
-Only suggest a follow-up if it's genuinely relevant to the conversation flow. If no follow-up makes sense, don't add one."""
+Your answers should be:
+- Accurate and grounded in the provided text
+- Clear and concise
+- Properly cited with sources
+- Professional and helpful"""
 
         # Build messages list with conversation history
         messages = [{"role": "system", "content": system_prompt}]
@@ -746,7 +1169,7 @@ Only suggest a follow-up if it's genuinely relevant to the conversation flow. If
 Contract documents:
 {context}
 
-Remember: Answer ONLY what was asked. If a comparison or additional context might be helpful, suggest it as a follow-up question instead of including it automatically."""
+Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         
         messages.append({"role": "user", "content": user_prompt})
         
@@ -762,6 +1185,9 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             )
             
             answer = response.choices[0].message.content
+            
+            # Server-side extraction of structured data
+            extracted_data = self._extract_structured_data(answer, query) if answer else None
             
             # Extract sources from search results
             sources = [
@@ -781,7 +1207,8 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
                 "highest_score": search_results["matches"][0]["score"],
                 "threshold": MIN_SIMILARITY_THRESHOLD,
                 "sources": sources,
-                "model": self.llm_model
+                "model": self.llm_model,
+                "extracted_data": extracted_data if extracted_data else None
             }
             
         except Exception as e:
@@ -842,8 +1269,39 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
             print(f"Contract ID: {contract_id}")
         print("-" * 80)
         
+        # Check for affirmative response to pending suggestion first
+        if session_id and self._is_affirmative_response(query):
+            pending = self.memory.get_pending_suggestion(session_id)
+            if pending:
+                print("[Affirmative] Detected affirmative response with pending suggestion")
+                current_hash = self._compute_context_hash(context)
+                
+                # Validate context hasn't changed
+                if pending.get('context_hash') != current_hash:
+                    print("[Affirmative] Context hash mismatch - context was cleared")
+                    self.memory.clear_pending_suggestion(session_id)
+                    return {
+                        "query": query,
+                        "answer": "It looks like the conversation context was reset. Please refresh the page to start a new session, or ask your question again.",
+                        "confidence": "context_cleared",
+                        "sources": [],
+                        "search_results_count": 0,
+                        "session_id": session_id,
+                        "context_cleared": True
+                    }
+                
+                # Rewrite query to the pending suggestion and answer from context
+                suggestion = pending.get('suggestion', '')
+                print(f"[Affirmative] Rewriting query to: {suggestion}")
+                self.memory.clear_pending_suggestion(session_id)
+                
+                # Route to context-based answering with the suggestion as query
+                return self._answer_from_context(suggestion, context, session_id)
+        
         # Check if we can answer from conversation context first
-        if self._can_answer_from_context(query, context):
+        can_answer, reason = self._should_use_context(query, context)
+        
+        if can_answer:
             print("Detected context-based query - answering from conversation context")
             return self._answer_from_context(query, context, session_id)
         
@@ -1102,7 +1560,9 @@ Remember: Answer ONLY what was asked. If a comparison or additional context migh
         print("-" * 80)
         
         # Check if we can answer from conversation context first
-        if self._can_answer_from_context(query, context):
+        can_answer, reason = self._should_use_context(query, context)
+        
+        if can_answer:
             print("Detected context-based query - answering from conversation context")
             return self._answer_from_context(query, context, session_id)
         

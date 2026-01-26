@@ -69,8 +69,23 @@ interface Message {
 }
 
 // Conversation context for structured tracking
+interface RoyaltySplitData {
+  party: string;
+  percentage: number;
+}
+
+interface RoyaltySplitsByType {
+  streaming?: RoyaltySplitData[];
+  publishing?: RoyaltySplitData[];
+  mechanical?: RoyaltySplitData[];
+  sync?: RoyaltySplitData[];
+  master?: RoyaltySplitData[];
+  performance?: RoyaltySplitData[];
+  general?: RoyaltySplitData[];
+}
+
 interface ExtractedContractData {
-  royalty_splits?: Array<{ party: string; percentage: number }>;
+  royalty_splits?: RoyaltySplitsByType;
   payment_terms?: string;
   parties?: string[];
   advances?: string;
@@ -147,6 +162,9 @@ const Zoe = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [contractToDelete, setContractToDelete] = useState<Contract | null>(null);
   const [deleting, setDeleting] = useState(false);
+  
+  // Context cleared reload dialog
+  const [showReloadDialog, setShowReloadDialog] = useState(false);
 
   const selectedArtistName = artists.find((a) => a.id === selectedArtist)?.name;
   const selectedProjectName = projects.find((p) => p.id === selectedProject)?.name;
@@ -389,27 +407,53 @@ const Zoe = () => {
     }
   };
 
+  // Detect royalty type from query for categorization
+  const detectRoyaltyType = (queryLower: string): keyof RoyaltySplitsByType => {
+    const royaltyTypes: Record<keyof RoyaltySplitsByType, string[]> = {
+      streaming: ['streaming', 'stream', 'spotify', 'apple music', 'dsp'],
+      publishing: ['publishing', 'publish', 'songwriter', 'composition'],
+      mechanical: ['mechanical', 'mechanicals'],
+      sync: ['sync', 'synchronization', 'synch'],
+      master: ['master', 'masters', 'recording'],
+      performance: ['performance', 'performing', 'pro', 'ascap', 'bmi'],
+      general: ['royalty', 'royalties', 'split', 'splits', 'percentage'],
+    };
+    
+    for (const [royaltyType, keywords] of Object.entries(royaltyTypes)) {
+      if (keywords.some(kw => queryLower.includes(kw))) {
+        return royaltyType as keyof RoyaltySplitsByType;
+      }
+    }
+    return 'general';
+  };
+
   // Extract structured data from assistant responses to update context
+  // This now primarily uses server-provided extracted_data, with fallback to client-side extraction
   const extractDataFromAnswer = (answer: string, query: string, sources?: Message['sources']): ExtractedContractData => {
     const extracted: ExtractedContractData = {};
     const queryLower = query.toLowerCase();
-    const answerLower = answer.toLowerCase();
     
-    // Extract royalty splits if discussing royalties
+    // Extract royalty splits if discussing royalties (fallback for older responses)
     if (queryLower.includes('royalty') || queryLower.includes('split') || queryLower.includes('percentage') || 
-        queryLower.includes('streaming') || queryLower.includes('revenue')) {
+        queryLower.includes('streaming') || queryLower.includes('revenue') || queryLower.includes('publishing')) {
       // Match patterns like "Name: 35%" or "Name: 35% of net revenue"
       const splitMatches = answer.match(/([A-Za-z\s]+):\s*(\d+(?:\.\d+)?)\s*%/g);
-      console.log('[Context] Attempting to extract splits from answer, matches:', splitMatches);
+      console.log('[Context] Fallback extraction - attempting to extract splits from answer, matches:', splitMatches);
       if (splitMatches) {
-        extracted.royalty_splits = splitMatches.map(match => {
+        const splits = splitMatches.map(match => {
           const parts = match.match(/([A-Za-z\s]+):\s*(\d+(?:\.\d+)?)\s*%/);
           if (parts) {
             return { party: parts[1].trim(), percentage: parseFloat(parts[2]) };
           }
           return null;
-        }).filter((s): s is { party: string; percentage: number } => s !== null);
-        console.log('[Context] Extracted royalty_splits:', extracted.royalty_splits);
+        }).filter((s): s is RoyaltySplitData => s !== null);
+        
+        if (splits.length > 0) {
+          // Categorize by royalty type
+          const royaltyType = detectRoyaltyType(queryLower);
+          extracted.royalty_splits = { [royaltyType]: splits };
+          console.log(`[Context] Fallback extraction - extracted ${royaltyType} royalty_splits:`, splits);
+        }
       }
     }
     
@@ -442,20 +486,26 @@ const Zoe = () => {
   };
 
   // Update conversation context with extracted data from response
+  // Now prioritizes server-provided extracted_data over client-side extraction
   const updateContextWithExtractedData = (
     answer: string, 
     query: string, 
     sources?: Message['sources'],
-    answeredFrom?: string
+    answeredFrom?: string,
+    serverExtractedData?: ExtractedContractData
   ) => {
-    console.log('[Context] updateContextWithExtractedData called with sources:', sources);
+    console.log('[Context] updateContextWithExtractedData called with sources:', sources, 'serverExtractedData:', serverExtractedData);
     if (!sources || sources.length === 0) {
       console.log('[Context] No sources provided, skipping context update');
       return;
     }
     
-    const extracted = extractDataFromAnswer(answer, query, sources);
-    console.log('[Context] Extracted data:', extracted);
+    // Use server-provided data if available, otherwise fall back to client-side extraction
+    const extracted = serverExtractedData && Object.keys(serverExtractedData).length > 0 
+      ? serverExtractedData 
+      : extractDataFromAnswer(answer, query, sources);
+    
+    console.log('[Context] Using extracted data:', extracted, serverExtractedData ? '(from server)' : '(from client fallback)');
     if (Object.keys(extracted).length === 0) {
       console.log('[Context] No data extracted, skipping context update');
       return;
@@ -471,14 +521,25 @@ const Zoe = () => {
       contractFiles.forEach(fileName => {
         const existingIndex = updatedContracts.findIndex(c => c.name === fileName);
         if (existingIndex >= 0) {
-          // Merge extracted data with existing
+          const existingData = updatedContracts[existingIndex].data_extracted || {};
+          
+          // Deep merge royalty_splits to preserve different types (streaming, publishing, etc.)
+          const mergedRoyaltySplits: RoyaltySplitsByType = {
+            ...(existingData.royalty_splits || {}),
+            ...(extracted.royalty_splits || {})
+          };
+          
+          // Merge extracted data with existing, preserving typed royalty splits
           updatedContracts[existingIndex] = {
             ...updatedContracts[existingIndex],
             data_extracted: {
-              ...updatedContracts[existingIndex].data_extracted,
-              ...extracted
+              ...existingData,
+              ...extracted,
+              // Only include royalty_splits if there's any data
+              ...(Object.keys(mergedRoyaltySplits).length > 0 ? { royalty_splits: mergedRoyaltySplits } : {})
             }
           };
+          console.log('[Context] Merged royalty_splits for', fileName, ':', mergedRoyaltySplits);
         } else {
           // Add new contract with extracted data
           updatedContracts.push({
@@ -550,6 +611,13 @@ const Zoe = () => {
         setSessionId(data.session_id);
       }
 
+      // Handle context cleared scenario - show reload modal
+      if (data.context_cleared) {
+        setShowReloadDialog(true);
+        setIsLoading(false);
+        return;
+      }
+
       const assistantMessage: Message = {
         role: "assistant",
         content: data.answer,
@@ -562,11 +630,13 @@ const Zoe = () => {
       setMessages((prev) => [...prev, assistantMessage]);
       
       // Extract and store data from the response in context
+      // Use server-provided extracted_data if available
       updateContextWithExtractedData(
         data.answer, 
         inputMessage, 
         data.sources,
-        data.answered_from
+        data.answered_from,
+        data.extracted_data
       );
     } catch (err) {
       console.error("Error sending message:", err);
@@ -640,6 +710,13 @@ const Zoe = () => {
         setSessionId(data.session_id);
       }
 
+      // Handle context cleared scenario - show reload modal
+      if (data.context_cleared) {
+        setShowReloadDialog(true);
+        setIsLoading(false);
+        return;
+      }
+
       const assistantMessage: Message = {
         role: "assistant",
         content: data.answer,
@@ -652,11 +729,13 @@ const Zoe = () => {
       setMessages((prev) => [...prev, assistantMessage]);
       
       // Extract and store data from the response in context
+      // Use server-provided extracted_data if available
       updateContextWithExtractedData(
         data.answer,
         query,
         data.sources,
-        data.answered_from
+        data.answered_from,
+        data.extracted_data
       );
     } catch (err) {
       console.error("Error sending message:", err);
@@ -1251,6 +1330,23 @@ const Zoe = () => {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Context Cleared Reload Dialog */}
+      <AlertDialog open={showReloadDialog} onOpenChange={setShowReloadDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Session Reset Required</AlertDialogTitle>
+            <AlertDialogDescription>
+              The conversation context was reset. Please reload the page to start a fresh session with Zoe.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => window.location.reload()}>
+              Reload Page
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
