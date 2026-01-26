@@ -261,13 +261,11 @@ const OneClickDocuments = () => {
         return;
     }
 
-    // OneClick currently supports ONE contract and ONE statement at a time in the backend endpoint.
-    // We will take the first one available.
+    // OneClick currently supports multiple contracts but ONE statement at a time.
     
-    // Check if multiple files selected - warn user (or just use first)
-    if ((contractFiles.length + selectedExistingContracts.length) > 1 || 
-        (royaltyStatementFiles.length + selectedExistingRoyaltyStatements.length) > 1) {
-          toast.warning("Note: OneClick currently processes one contract and one statement at a time. Using the first selected.");
+    // Check if multiple statements selected - warn user (or just use first)
+    if ((royaltyStatementFiles.length + selectedExistingRoyaltyStatements.length) > 1) {
+          toast.warning("Note: OneClick currently processes one royalty statement at a time. Using the first selected.");
     }
 
     setIsUploading(true);
@@ -275,43 +273,51 @@ const OneClickDocuments = () => {
     setError("");
     
     try {
-        let finalContractId = "";
+        let finalContractIds: string[] = [];
         let finalStatementId = "";
         let finalProjectId = "";
 
-        // 1. Determine Contract ID
+        // 1. Determine Contract IDs
         if (contractFiles.length > 0) {
-            // Upload new contract
+            // Upload new contracts
             if (!newContractProjectId || newContractProjectId === "none") {
                  toast.error("Please select a project to save the new contract.");
                  throw new Error("You must select a project to save the new contract to.");
              }
 
-             const formData = new FormData();
-             formData.append("file", contractFiles[0]);
-             formData.append("project_id", newContractProjectId);
-             formData.append("user_id", user.id); 
-             
-             const uploadRes = await fetch(`${API_URL}/contracts/upload`, {
-                 method: "POST",
-                 body: formData
-             });
-             
-             if (!uploadRes.ok) {
-                 const errData = await uploadRes.json();
-                 throw new Error(errData.detail || "Failed to upload and process contract");
+             // Upload each file sequentially to ensure order and error handling
+             for (const file of contractFiles) {
+                 const formData = new FormData();
+                 formData.append("file", file);
+                 formData.append("project_id", newContractProjectId);
+                 formData.append("user_id", user.id); 
+                 
+                 const uploadRes = await fetch(`${API_URL}/contracts/upload`, {
+                     method: "POST",
+                     body: formData
+                 });
+                 
+                 if (!uploadRes.ok) {
+                     const errData = await uploadRes.json();
+                     throw new Error(errData.detail || `Failed to upload and process contract: ${file.name}`);
+                 }
+                 
+                 const uploadData = await uploadRes.json();
+                 finalContractIds.push(uploadData.contract_id);
              }
              
-             const uploadData = await uploadRes.json();
-             finalContractId = uploadData.contract_id;
              finalProjectId = newContractProjectId;
-             toast.success("Contract uploaded and processed successfully!");
+             toast.success(`${contractFiles.length} contract(s) uploaded and processed successfully!`);
 
-        } else if (selectedExistingContracts.length > 0) {
-            finalContractId = selectedExistingContracts[0];
-            // Find project ID for this contract
-            const contract = existingContracts.find(c => c.id === finalContractId);
-            if (contract) finalProjectId = contract.project_id;
+        }
+        
+        if (selectedExistingContracts.length > 0) {
+            finalContractIds = [...finalContractIds, ...selectedExistingContracts];
+            // Find project ID for this contract if not set
+            if (!finalProjectId) {
+                const contract = existingContracts.find(c => c.id === selectedExistingContracts[0]);
+                if (contract) finalProjectId = contract.project_id;
+            }
         }
 
         // 2. Determine Statement ID
@@ -337,8 +343,8 @@ const OneClickDocuments = () => {
             finalStatementId = selectedExistingRoyaltyStatements[0];
         }
 
-        if (!finalContractId || !finalStatementId) {
-             throw new Error("Could not determine contract or statement to process.");
+        if (finalContractIds.length === 0 || !finalStatementId) {
+             throw new Error("Could not determine contracts or statement to process.");
         }
 
         // 3. Show progress modal and start SSE connection
@@ -349,21 +355,24 @@ const OneClickDocuments = () => {
 
         // Build request body
         const requestBody = {
-            contract_id: finalContractId,
+            contract_ids: finalContractIds,
             user_id: user.id,
             project_id: finalProjectId,
             royalty_statement_file_id: finalStatementId
         };
 
         // Use EventSource for SSE
+        const queryParams = new URLSearchParams({
+            user_id: requestBody.user_id,
+            project_id: requestBody.project_id,
+            royalty_statement_file_id: requestBody.royalty_statement_file_id
+        });
+        
+        // Append each contract_id
+        finalContractIds.forEach(id => queryParams.append("contract_ids", id));
+
         const eventSource = new EventSource(
-            `${API_URL}/oneclick/calculate-royalties-stream?` + 
-            new URLSearchParams({
-                contract_id: requestBody.contract_id,
-                user_id: requestBody.user_id,
-                project_id: requestBody.project_id,
-                royalty_statement_file_id: requestBody.royalty_statement_file_id
-            })
+            `${API_URL}/oneclick/calculate-royalties-stream?` + queryParams.toString()
         );
 
         // Set timeout for 2 minutes
