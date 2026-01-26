@@ -317,7 +317,8 @@ def calculate_royalty_payments(
     statement_path: str,
     user_id: str,
     contract_id: str,
-    api_key: str = None
+    api_key: str = None,
+    contract_ids: List[str] = None
 ) -> List[Dict]:
     """
     Calculate royalty payments from a contract and royalty statement.
@@ -329,8 +330,9 @@ def calculate_royalty_payments(
         contract_path: Path to the contract PDF file (not used, kept for compatibility)
         statement_path: Path to the royalty statement Excel file
         user_id: User ID for querying Pinecone
-        contract_id: Contract ID for querying Pinecone
+        contract_id: Contract ID for querying Pinecone (single)
         api_key: Optional OpenAI API key (uses env var if not provided)
+        contract_ids: Optional list of contract IDs for multi-contract calculation
         
     Returns:
         List of payment dictionaries with keys:
@@ -349,12 +351,21 @@ def calculate_royalty_payments(
     calculator = RoyaltyCalculator(api_key=api_key or os.getenv("OPENAI_API_KEY"))
     
     # Calculate payments
-    payments = calculator.calculate_payments(
-        contract_path=contract_path,
-        statement_path=statement_path,
-        user_id=user_id,
-        contract_id=contract_id
-    )
+    if contract_ids and len(contract_ids) > 0:
+        # Multi-contract mode
+        payments = calculator.calculate_payments_from_contract_ids(
+            contract_ids=contract_ids,
+            user_id=user_id,
+            statement_path=statement_path
+        )
+    else:
+        # Single contract mode
+        payments = calculator.calculate_payments(
+            contract_path=contract_path,
+            statement_path=statement_path,
+            user_id=user_id,
+            contract_id=contract_id
+        )
     
     # Convert to dictionaries for easier JSON serialization
     payment_dicts = []
