@@ -4,8 +4,13 @@ Contains utility methods for song matching and normalization
 """
 
 import re
-from typing import Dict, Optional, Tuple
+import os
+from typing import Dict, Optional, Tuple, List
+from pinecone import Pinecone
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 
 def normalize_title(title: str) -> str:
     """
@@ -120,3 +125,65 @@ def normalize_name(name: str) -> str:
     # Remove extra whitespace
     clean = re.sub(r'\s+', ' ', clean)
     return clean
+
+def find_chunks_with_text(
+    search_term: str,
+    contract_id: str,
+    user_id: str,
+    index_name: str = "test-3-small-index",
+    top_k: int = 2000
+) -> List[Dict]:
+    """
+    Find all chunks in Pinecone namespace that contain a specific text string for a given contract.
+    
+    Args:
+        search_term: The text string to search for (case-insensitive)
+        contract_id: The contract ID to filter by
+        user_id: The user ID for the namespace
+        index_name: The Pinecone index name (default: "test-3-small-index")
+        top_k: Max number of chunks to retrieve for filtering (default: 2000)
+        
+    Returns:
+        List of dictionaries containing match details (id, score, text, section)
+    """
+    pinecone_api_key = os.getenv("PINECONE_API_KEY")
+    if not pinecone_api_key:
+        raise ValueError("PINECONE_API_KEY not found in .env file")
+
+    try:
+        # Initialize Pinecone
+        pc = Pinecone(api_key=pinecone_api_key)
+        index = pc.Index(index_name)
+        namespace = f"{user_id}-namespace"
+
+        # Create a dummy vector of the correct dimension (assuming 1536 for text-embedding-3-small)
+        dummy_vector = [0.0] * 1536 
+
+        # Query Pinecone
+        results = index.query(
+            namespace=namespace,
+            vector=dummy_vector,
+            filter={
+                "contract_id": {"$eq": contract_id}
+            },
+            top_k=top_k,
+            include_metadata=True
+        )
+
+        matches = []
+        for match in results.matches:
+            chunk_text = match.metadata.get("chunk_text", "")
+            # Case-insensitive check
+            if search_term.lower() in chunk_text.lower():
+                matches.append({
+                    "id": match.id,
+                    "score": match.score,
+                    "text": chunk_text,
+                    "section": match.metadata.get("section_heading", "N/A")
+                })
+        
+        return matches
+
+    except Exception as e:
+        print(f"Error querying Pinecone: {e}")
+        return []

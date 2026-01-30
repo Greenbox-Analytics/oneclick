@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from supabase import create_client, Client
@@ -73,12 +73,65 @@ class RoyaltyResults(BaseModel):
     totalRevenue: float
     breakdown: List[RoyaltyBreakdown]
 
+# Conversation Context Models
+class RoyaltySplitData(BaseModel):
+    party: str
+    percentage: float
+
+class RoyaltySplitsByType(BaseModel):
+    streaming: Optional[List[RoyaltySplitData]] = None
+    publishing: Optional[List[RoyaltySplitData]] = None
+    mechanical: Optional[List[RoyaltySplitData]] = None
+    sync: Optional[List[RoyaltySplitData]] = None
+    master: Optional[List[RoyaltySplitData]] = None
+    performance: Optional[List[RoyaltySplitData]] = None
+    general: Optional[List[RoyaltySplitData]] = None  # For unspecified royalty types
+
+class ExtractedContractData(BaseModel):
+    royalty_splits: Optional[RoyaltySplitsByType] = None
+    payment_terms: Optional[str] = None
+    parties: Optional[List[str]] = None
+    advances: Optional[str] = None
+    term_length: Optional[str] = None
+
+class ContractDiscussed(BaseModel):
+    id: str
+    name: str
+    data_extracted: Optional[ExtractedContractData] = None
+
+class ContextSwitch(BaseModel):
+    timestamp: str
+    type: str  # 'artist' | 'project' | 'contract'
+    from_value: Optional[str] = None  # Using from_value since 'from' is reserved
+    to: str
+
+    class Config:
+        # Allow 'from' as an alias in incoming JSON
+        populate_by_name = True
+
+    @classmethod
+    def model_validate(cls, obj, *args, **kwargs):
+        # Handle 'from' field from frontend
+        if isinstance(obj, dict) and 'from' in obj:
+            obj = {**obj, 'from_value': obj.pop('from')}
+        return super().model_validate(obj, *args, **kwargs)
+
+class ConversationContext(BaseModel):
+    session_id: str
+    artist: Optional[Dict[str, str]] = None
+    project: Optional[Dict[str, str]] = None
+    contracts_discussed: List[ContractDiscussed] = []
+    context_switches: List[ContextSwitch] = []
+
 # Zoe Chatbot Models
 class ZoeAskRequest(BaseModel):
     query: str
-    project_id: str
+    project_id: Optional[str] = None  # Optional - not needed for artist-only queries
     contract_ids: Optional[List[str]] = None  # Changed to support multiple contracts
     user_id: str
+    session_id: Optional[str] = None  # Session ID for conversation memory
+    artist_id: Optional[str] = None  # Artist ID for artist-related queries
+    context: Optional[ConversationContext] = None  # Conversation context for structured tracking
 
 class ZoeSource(BaseModel):
     contract_file: str
@@ -113,6 +166,12 @@ class ZoeAskResponse(BaseModel):
     sources: List[ZoeSource]
     search_results_count: int
     highest_score: Optional[float] = None
+    session_id: Optional[str] = None  # Return session ID for frontend tracking
+    show_quick_actions: Optional[bool] = None  # Show quick action buttons in response
+    answered_from: Optional[str] = None  # Indicates if answered from context vs document search
+    extracted_data: Optional[ExtractedContractData] = None  # Server-side extracted structured data
+    pending_suggestion: Optional[str] = None  # Follow-up suggestion that can be answered from context
+    context_cleared: Optional[bool] = None  # True if context was cleared and user needs to refresh
 
 # Initialize Zoe chatbot and contract ingestion (singletons)
 zoe_chatbot = None
@@ -167,6 +226,17 @@ async def get_artists(user_id: Optional[str] = None):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/artists/{artist_id}")
+async def get_artist_by_id(artist_id: str):
+    """
+    Fetch a single artist by ID with all their details.
+    """
+    try:
+        response = get_supabase_client().table("artists").select("*").eq("id", artist_id).single().execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/projects/{artist_id}")
 async def get_projects(artist_id: str):
     """
@@ -176,6 +246,26 @@ async def get_projects(artist_id: str):
         # artist_id is UUID in DB, but passed as string here
         response = get_supabase_client().table("projects").select("*").eq("artist_id", artist_id).execute()
         return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ProjectCreateRequest(BaseModel):
+    artist_id: str
+    name: str
+    description: Optional[str] = None
+
+@app.post("/projects")
+async def create_project(project: ProjectCreateRequest):
+    """
+    Create a new project for an artist.
+    """
+    try:
+        res = supabase.table("projects").insert({
+            "artist_id": project.artist_id,
+            "name": project.name,
+            "description": project.description
+        }).execute()
+        return res.data[0]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -543,7 +633,7 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
 @app.post("/zoe/ask", response_model=ZoeAskResponse)
 async def zoe_ask_question(request: ZoeAskRequest):
     """
-    Zoe AI Chatbot endpoint - Ask questions about contracts.
+    Zoe AI Chatbot endpoint - Ask questions about contracts and artists.
     
     Rules:
     1. Always filters by user_id and project_id
@@ -551,6 +641,9 @@ async def zoe_ask_question(request: ZoeAskRequest):
     3. If no contract_ids, searches all contracts in project with top_k=8
     4. Only answers if highest similarity ≥ 0.75
     5. Returns answer with source citations
+    6. Maintains conversation history per session for context-aware responses
+    7. If artist_id is provided, can also answer questions about the artist
+    8. If no project_id but artist_id is provided, can answer artist-related questions only
     """
     try:
         # Get Zoe chatbot instance
@@ -559,15 +652,46 @@ async def zoe_ask_question(request: ZoeAskRequest):
         # Use top_k=8 for both project-wide and multi-contract searches
         top_k = 8
         
-        # Ask the question
-        if request.contract_ids and len(request.contract_ids) > 0:
+        # Generate session_id if not provided (for new conversations)
+        session_id = request.session_id or str(uuid.uuid4())
+        
+        # Fetch artist data if artist_id is provided
+        artist_data = None
+        if request.artist_id:
+            try:
+                artist_response = get_supabase_client().table("artists").select("*").eq("id", request.artist_id).single().execute()
+                artist_data = artist_response.data
+            except Exception as e:
+                print(f"Warning: Could not fetch artist data: {e}")
+        
+        # Convert context to dict for chatbot methods
+        context_dict = None
+        if request.context:
+            context_dict = request.context.model_dump()
+            print(f"[Context] Received context with {len(context_dict.get('contracts_discussed', []))} contracts discussed")
+            for c in context_dict.get('contracts_discussed', []):
+                print(f"[Context]   - {c.get('name')}: {c.get('data_extracted', {})}")
+        
+        # Handle case where no project is selected (artist-only queries)
+        if not request.project_id:
+            result = chatbot.ask_without_project(
+                query=request.query,
+                user_id=request.user_id,
+                session_id=session_id,
+                artist_data=artist_data,
+                context=context_dict
+            )
+        elif request.contract_ids and len(request.contract_ids) > 0:
             # Multiple contracts selected - search across all of them
             result = chatbot.ask_multiple_contracts(
                 query=request.query,
                 user_id=request.user_id,
                 project_id=request.project_id,
                 contract_ids=request.contract_ids,
-                top_k=top_k
+                top_k=top_k,
+                session_id=session_id,
+                artist_data=artist_data,
+                context=context_dict
             )
         else:
             # Project-wide question
@@ -575,7 +699,10 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 query=request.query,
                 user_id=request.user_id,
                 project_id=request.project_id,
-                top_k=top_k
+                top_k=top_k,
+                session_id=session_id,
+                artist_data=artist_data,
+                context=context_dict
             )
         
         # Format response - filter out sources with missing required fields
@@ -585,23 +712,65 @@ async def zoe_ask_question(request: ZoeAskRequest):
             if zoe_source is not None:
                 valid_sources.append(zoe_source)
         
+        # Convert extracted_data dict to ExtractedContractData if present
+        extracted_data = None
+        if result.get("extracted_data"):
+            extracted_data = ExtractedContractData(**result["extracted_data"])
+        
         return ZoeAskResponse(
             query=result["query"],
             answer=result["answer"],
             confidence=result["confidence"],
             sources=valid_sources,
             search_results_count=result.get("search_results_count", 0),
-            highest_score=result.get("highest_score")
+            highest_score=result.get("highest_score"),
+            session_id=session_id,
+            show_quick_actions=result.get("show_quick_actions", False),
+            answered_from=result.get("answered_from"),
+            extracted_data=extracted_data,
+            pending_suggestion=result.get("pending_suggestion"),
+            context_cleared=result.get("context_cleared")
         )
         
     except Exception as e:
         print(f"Error in Zoe chatbot: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
 
+
+@app.delete("/zoe/session/{session_id}")
+async def zoe_clear_session(session_id: str):
+    """
+    Clear conversation history for a session.
+    Use this when starting a new conversation or switching projects.
+    """
+    try:
+        chatbot = get_zoe_chatbot()
+        chatbot.clear_session(session_id)
+        return {"message": "Session cleared successfully", "session_id": session_id}
+    except Exception as e:
+        print(f"Error clearing session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear session: {str(e)}")
+
+
+@app.get("/zoe/session/{session_id}/history")
+async def zoe_get_session_history(session_id: str):
+    """
+    Get conversation history for a session.
+    Useful for restoring chat state or debugging.
+    """
+    try:
+        chatbot = get_zoe_chatbot()
+        history = chatbot.get_session_history(session_id)
+        return {"session_id": session_id, "messages": history, "count": len(history)}
+    except Exception as e:
+        print(f"Error getting session history: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get session history: {str(e)}")
+
 # --- OneClick Royalty Calculation Endpoints ---
 
 class OneClickRoyaltyRequest(BaseModel):
-    contract_id: str
+    contract_id: Optional[str] = None
+    contract_ids: Optional[List[str]] = None
     user_id: str
     project_id: str
     royalty_statement_file_id: str
@@ -625,10 +794,11 @@ class OneClickRoyaltyResponse(BaseModel):
 
 @app.get("/oneclick/calculate-royalties-stream")
 async def oneclick_calculate_royalties_stream(
-    contract_id: str,
     user_id: str,
     project_id: str,
-    royalty_statement_file_id: str
+    royalty_statement_file_id: str,
+    contract_id: Optional[str] = None,
+    contract_ids: Optional[List[str]] = Query(None)
 ):
     """
     OneClick Royalty Calculation with Server-Sent Events (SSE) for real-time progress updates.
@@ -640,16 +810,35 @@ async def oneclick_calculate_royalties_stream(
     - Calculating payments
     
     Args:
-        request: Contains contract_id, user_id, project_id, and royalty_statement_file_id
+        contract_id: Single contract ID (optional)
+        contract_ids: List of contract IDs (optional)
+        user_id: User ID
+        project_id: Project ID
+        royalty_statement_file_id: Royalty Statement File ID
         
     Returns:
         SSE stream with progress updates and final results
     """
     async def generate_progress():
+        # Initialize paths to None for safe cleanup
+        contract_path = None
+        statement_path = None
+
         try:
             # Send initial status
             yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0, 'stage': 'starting'})}\n\n"
             await asyncio.sleep(0.1)
+            
+            # Determine contracts to process
+            target_contract_ids = []
+            if contract_ids:
+                target_contract_ids = contract_ids
+            elif contract_id:
+                target_contract_ids = [contract_id]
+            
+            if not target_contract_ids:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No contracts specified'})}\n\n"
+                return
             
             # Step 1: Download royalty statement
             yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
@@ -674,95 +863,111 @@ async def oneclick_calculate_royalties_stream(
             await asyncio.sleep(0.1)
             
             # Step 2: Download contract
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25, 'stage': 'downloading'})}\n\n"
-            
-            contract_res = get_supabase_client().table("project_files").select("*").eq("id", contract_id).execute()
-            if not contract_res.data:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Contract file not found'})}\n\n"
-                return
-            
-            contract_file = contract_res.data[0]
-            contract_data = get_supabase_client().storage.from_("project-files").download(contract_file["file_path"])
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
-                tmp_contract.write(contract_data)
-                contract_path = tmp_contract.name
-            
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Contract downloaded', 'progress': 30, 'stage': 'downloading'})}\n\n"
+            # Only download if single contract legacy mode, otherwise skip (Pinecone used)
+            if len(target_contract_ids) == 1 and contract_id:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25, 'stage': 'downloading'})}\n\n"
+                
+                contract_res = supabase.table("project_files").select("*").eq("id", target_contract_ids[0]).execute()
+                if not contract_res.data:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Contract file not found'})}\n\n"
+                    return
+                
+                contract_file = contract_res.data[0]
+                contract_data = supabase.storage.from_("project-files").download(contract_file["file_path"])
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
+                    tmp_contract.write(contract_data)
+                    contract_path = tmp_contract.name
+                
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Contract downloaded', 'progress': 30, 'stage': 'downloading'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Preparing {len(target_contract_ids)} contracts...', 'progress': 30, 'stage': 'downloading'})}\n\n"
+
             await asyncio.sleep(0.1)
             
             # Step 3: Extract contract data with progress updates
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contract...', 'progress': 35, 'stage': 'extracting_parties'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contracts...', 'progress': 35, 'stage': 'extracting_parties'})}\n\n"
             await asyncio.sleep(0.5)
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contract...', 'progress': 50, 'stage': 'extracting_works'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contracts...', 'progress': 50, 'stage': 'extracting_works'})}\n\n"
             await asyncio.sleep(0.5)
             
             yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting royalty splits...', 'progress': 65, 'stage': 'extracting_royalty'})}\n\n"
             await asyncio.sleep(0.5)
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+            if len(target_contract_ids) > 1:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Merging contract data...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+
             await asyncio.sleep(0.3)
             
-            try:
-                # Calculate payments
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
-                
-                payments = calculate_royalty_payments(
-                    contract_path=contract_path,
-                    statement_path=statement_path,
-                    user_id=user_id,
-                    contract_id=contract_id
-                )
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
-                await asyncio.sleep(0.3)
-                
-                if not payments or len(payments) == 0:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
-                    return
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
-                await asyncio.sleep(0.2)
-                
-                # Send final results
-                payment_responses = []
-                for payment in payments:
-                    payment_responses.append({
-                        'song_title': payment['song_title'],
-                        'party_name': payment['party_name'],
-                        'role': payment['role'],
-                        'royalty_type': payment['royalty_type'],
-                        'percentage': payment['percentage'],
-                        'total_royalty': payment['total_royalty'],
-                        'amount_to_pay': payment['amount_to_pay'],
-                        'terms': payment.get('terms')
-                    })
-                
-                result = {
-                    'type': 'complete',
-                    'status': 'success',
-                    'total_payments': len(payments),
-                    'payments': payment_responses,
-                    'message': f'Successfully calculated {len(payments)} royalty payments',
-                    'progress': 100,
-                    'stage': 'complete'
-                }
-                
-                yield f"data: {json.dumps(result)}\n\n"
-                
-            finally:
-                # Clean up temporary files
-                if os.path.exists(contract_path):
-                    os.unlink(contract_path)
-                if os.path.exists(statement_path):
-                    os.unlink(statement_path)
+            # Calculate payments
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
+            
+            payments = calculate_royalty_payments(
+                contract_path=contract_path,
+                statement_path=statement_path,
+                user_id=user_id,
+                contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
+                contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None
+            )
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
+            await asyncio.sleep(0.3)
+            
+            if not payments or len(payments) == 0:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
+                return
+            
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
+            await asyncio.sleep(0.2)
+            
+            # Send final results
+            payment_responses = []
+            for payment in payments:
+                payment_responses.append({
+                    'song_title': payment['song_title'],
+                    'party_name': payment['party_name'],
+                    'role': payment['role'],
+                    'royalty_type': payment['royalty_type'],
+                    'percentage': payment['percentage'],
+                    'total_royalty': payment['total_royalty'],
+                    'amount_to_pay': payment['amount_to_pay'],
+                    'terms': payment.get('terms')
+                })
+            
+            result = {
+                'type': 'complete',
+                'status': 'success',
+                'total_payments': len(payments),
+                'payments': payment_responses,
+                'message': f'Successfully calculated {len(payments)} royalty payments',
+                'progress': 100,
+                'stage': 'complete'
+            }
+            
+            yield f"data: {json.dumps(result)}\n\n"
                     
         except Exception as e:
             import traceback
             error_detail = str(e)
             traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'message': error_detail})}\n\n"
+            
+        finally:
+            # Clean up temporary files safely
+            if contract_path and os.path.exists(contract_path):
+                try:
+                    os.unlink(contract_path)
+                except Exception:
+                    pass
+            
+            if statement_path and os.path.exists(statement_path):
+                try:
+                    os.unlink(statement_path)
+                except Exception:
+                    pass
     
     return StreamingResponse(generate_progress(), media_type="text/event-stream")
 
@@ -770,14 +975,14 @@ async def oneclick_calculate_royalties_stream(
 async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
     """
     OneClick Royalty Calculation:
-    1. Retrieve streamingroyalty splits from selected contract using vector search
+    1. Retrieve streamingroyalty splits from selected contract(s) using vector search
     2. Download royalty statement from Supabase
     3. Calculate payments using royalty_calculator.py methods
     4. Save results to Excel and upload to Supabase
     5. Return payment breakdown
     
     Args:
-        request: Contains contract_id, user_id, project_id, and royalty_statement_file_id
+        request: Contains contract_id(s), user_id, project_id, and royalty_statement_file_id
         
     Returns:
         Payment breakdown and Excel file URL
@@ -787,9 +992,20 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         print("ONECLICK ROYALTY CALCULATION")
         print(f"{'='*80}")
         print(f"Contract ID: {request.contract_id}")
+        print(f"Contract IDs: {request.contract_ids}")
         print(f"User ID: {request.user_id}")
         print(f"Project ID: {request.project_id}")
         print(f"Royalty Statement File ID: {request.royalty_statement_file_id}")
+        
+        # Determine contracts to process
+        target_contract_ids = []
+        if request.contract_ids:
+            target_contract_ids = request.contract_ids
+        elif request.contract_id:
+            target_contract_ids = [request.contract_id]
+            
+        if not target_contract_ids:
+            raise HTTPException(status_code=400, detail="No contracts specified")
         
         # Step 2: Download royalty statement from Supabase
         print("\n--- Step 1: Downloading Royalty Statement ---")
@@ -819,25 +1035,29 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         
         print(f"Downloaded royalty statement: {statement_file['file_name']} (detected as {file_extension})")
         
-        # Step 3: Get contract file for parsing
-        print("\n--- Step 2: Downloading Contract File ---")
-        contract_res = get_supabase_client().table("project_files").select("*").eq("id", request.contract_id).execute()
-        
-        if not contract_res.data:
-            raise HTTPException(status_code=404, detail="Contract file not found")
-        
-        contract_file = contract_res.data[0]
-        contract_file_path = contract_file["file_path"]
-        
-        # Download contract from Supabase storage
-        contract_data = get_supabase_client().storage.from_("project-files").download(contract_file_path)
-        
-        # Save to temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
-            tmp_contract.write(contract_data)
-            contract_path = tmp_contract.name
-        
-        print(f"Downloaded contract: {contract_file['file_name']}")
+        # Step 3: Get contract file for parsing (Legacy/Single mode only)
+        contract_path = None
+        if len(target_contract_ids) == 1 and request.contract_id:
+            print("\n--- Step 2: Downloading Contract File ---")
+            contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
+            
+            if not contract_res.data:
+                raise HTTPException(status_code=404, detail="Contract file not found")
+            
+            contract_file = contract_res.data[0]
+            contract_file_path = contract_file["file_path"]
+            
+            # Download contract from Supabase storage
+            contract_data = supabase.storage.from_("project-files").download(contract_file_path)
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
+                tmp_contract.write(contract_data)
+                contract_path = tmp_contract.name
+            
+            print(f"Downloaded contract: {contract_file['file_name']}")
+        else:
+            print(f"\n--- Step 2: Preparing {len(target_contract_ids)} contracts (Pinecone) ---")
         
         try:
             # Step 4: Calculate payments using helper function
@@ -848,7 +1068,8 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
                 contract_path=contract_path,
                 statement_path=statement_path,
                 user_id=request.user_id,
-                contract_id=request.contract_id
+                contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
+                contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None
             )
             
             if not payments or len(payments) == 0:
@@ -887,7 +1108,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
             
         finally:
             # Clean up temporary files
-            if os.path.exists(contract_path):
+            if contract_path and os.path.exists(contract_path):
                 os.unlink(contract_path)
             if os.path.exists(statement_path):
                 os.unlink(statement_path)

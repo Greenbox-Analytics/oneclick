@@ -116,6 +116,8 @@ class MusicContractParser:
             ContractData with extracted information
         """
         if not user_id or not contract_id:
+            # If path is provided, try to assume it's legacy mode, but we really need user_id and contract_id for Pinecone
+            # For now, raise the error as before, but clarify the message
             raise ValueError(
                 "user_id and contract_id are required to query Pinecone. "
                 "The contract must already be uploaded and indexed."
@@ -128,22 +130,17 @@ class MusicContractParser:
         print(f"   Mode: {'Parallel' if use_parallel else 'Sequential'}")
 
         if use_parallel:
-            # Run all extractions in parallel
+            # 1. Extract parties and works FIRST in parallel
+            t0 = time.time()
             parties = []
             works = []
-            royalty_shares = []
-            summary = ""
             
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                # Submit all tasks
+            with ThreadPoolExecutor(max_workers=2) as executor:
                 future_to_task = {
                     executor.submit(self._extract_parties, user_id, contract_id): "parties",
-                    executor.submit(self._extract_works, user_id, contract_id): "works",
-                    executor.submit(self._extract_royalties, user_id, contract_id): "royalties",
-                    executor.submit(self._extract_summary, user_id, contract_id): "summary"
+                    executor.submit(self._extract_works, user_id, contract_id): "works"
                 }
                 
-                # Collect results as they complete
                 for future in as_completed(future_to_task):
                     task_name = future_to_task[future]
                     try:
@@ -152,14 +149,19 @@ class MusicContractParser:
                             parties = result
                         elif task_name == "works":
                             works = result
-                        elif task_name == "royalties":
-                            royalty_shares = result
-                        elif task_name == "summary":
-                            summary = result
                     except Exception as e:
                         print(f"   ⚠️ Error in {task_name} extraction: {e}")
+            
+            print(f"   ⏱️  Parties & Works extraction took: {time.time() - t0:.2f}s")
+
+            # 2. Extract royalties using parties context
+            t1 = time.time()
+            royalty_shares = self._extract_royalties(user_id, contract_id, parties)
+            print(f"   ⏱️  Royalties extraction took: {time.time() - t1:.2f}s")
+            
+            summary = ""
         else:
-            # Sequential execution (original behavior)
+            # Sequential execution
             t0 = time.time()
             parties = self._extract_parties(user_id, contract_id)
             print(f"   ⏱️  Parties extraction took: {time.time() - t0:.2f}s")
@@ -169,12 +171,39 @@ class MusicContractParser:
             print(f"   ⏱️  Works extraction took: {time.time() - t0:.2f}s")
 
             t0 = time.time()
-            royalty_shares = self._extract_royalties(user_id, contract_id)
+            royalty_shares = self._extract_royalties(user_id, contract_id, parties)
             print(f"   ⏱️  Royalties extraction took: {time.time() - t0:.2f}s")
+            
+            summary = ""
 
-            t0 = time.time()
-            summary = self._extract_summary(user_id, contract_id)
-            print(f"   ⏱️  Summary extraction took: {time.time() - t0:.2f}s")
+        # Reconcile royalty share names with extracted parties
+        from oneclick.helpers import normalize_name
+        
+        for share in royalty_shares:
+            share_name_norm = normalize_name(share.party_name)
+            best_match = None
+            
+            # 1. Exact normalized match
+            for party in parties:
+                if normalize_name(party.name) == share_name_norm:
+                    best_match = party
+                    break
+            
+            # 2. Partial match (if no exact match)
+            if not best_match:
+                for party in parties:
+                    party_norm = normalize_name(party.name)
+                    # Check if one name contains the other (e.g. "Kenji" in "Kenji Niyokindi")
+                    if share_name_norm in party_norm or party_norm in share_name_norm:
+                        best_match = party
+                        break
+            
+            # Update share name if a better match is found from the parties list
+            if best_match:
+                print(f"   🔄 Reconciling name: '{share.party_name}' -> '{best_match.name}'")
+                share.party_name = best_match.name
+                # If we want to attach the role, we might need to modify the RoyaltyShare dataclass or handle it downstream.
+                # For now, ensuring the name matches allows the frontend/calculator to look up the role from the parties list.
 
         total_time = time.time() - start_time
         print(f"✅ Extraction complete in {total_time:.2f}s")
@@ -314,7 +343,7 @@ class MusicContractParser:
 
     def _extract_parties(self, user_id: str, contract_id: str) -> List[Party]:
         """Extract all parties/contributors from contract"""
-        question = "List only the specific named legal entities or individuals who are parties to this agreement (e.g., Artist, Label, Producer). Do not list generic roles or unnamed parties."
+        question = "Identify all specific legal entities and individuals named as parties to this agreement. For each party, extract their full legal name AND the specific role or defined term assigned to them in the contract (e.g., 'Artist', 'Producer', 'Company', 'Licensor'). Do NOT list generic placeholders like 'The Artist', 'The Producer', or 'The Songwriter' as the name."
         template = """You are a contract analyst. Use the context below to answer.
 
 Context:
@@ -323,7 +352,15 @@ Context:
 Question:
 {question}
 
-List each party as: Name | Role
+Instructions:
+1. Look for the introductory paragraph or "Parties" section where the agreement is made "by and between".
+2. Extract the exact defined term used for each party (e.g., "hereinafter referred to as 'Artist'").
+3. If a party has no specific defined role, use a generic description based on their function (e.g., "Label", "Distributor").
+4. Ignore generic references like "third parties" or "licensees" unless a specific name is attached.
+
+List each party strictly in this format:
+Name | Role
+
 Answer:
 """
         context = self._query_pinecone(question, user_id, contract_id, top_k=5)
@@ -372,20 +409,46 @@ Answer:
             print(f"   {i+1}. {work.title} ({work.work_type})")
         return works
 
-    def _extract_royalties(self, user_id: str, contract_id: str) -> List[RoyaltyShare]:
+    def _extract_royalties(self, user_id: str, contract_id: str, parties: List[Party] = None) -> List[RoyaltyShare]:
         """Extract royalty shares from contract"""
-        question = "What are the explicit streaming royalty percentage splits defined in the contract? Only list parties with a specific numeric percentage."
+        
+        # Format known parties for context
+        parties_context = ""
+        if parties:
+            parties_list = [f"{p.name} ({p.role})" for p in parties]
+            parties_context = "\nKNOWN PARTIES & ROLES:\n" + "\n".join(parties_list) + "\n"
+            print(f"   ℹ️  Providing known parties context to LLM: {len(parties)} parties")
+            for p in parties:
+                print(f"      - {p.name} ({p.role})")
+
+        question = (
+            "What are the explicit royalty percentage splits defined in the contract? "
+            "Look for terms like 'master royalties', 'producer royalties', 'streaming', 'master points', "
+            "'royalty participation', 'revenue participation', 'net master revenue', or 'sound recording royalty splits'. "
+            "Note that 'master' or 'producer royalties' typically encompass streaming revenue. "
+            "Only list parties with a specific numeric percentage."
+        )
         template = """Context:
 {context}
 
+{parties_context}
+
 Question:
 {question}
+
+Instructions:
+1. Identify the percentage split for each party.
+2. If a royalty split refers to a generic role (e.g., 'Songwriter', 'Producer', 'Artist'), substitute it with the actual name from the KNOWN PARTIES list above.
+3. If the role is ambiguous or no matching name is found, keep the role name.
 
 List each as: Name | Royalty Type | Percentage | Terms
 Answer:
 """
         context = self._query_pinecone(question, user_id, contract_id, top_k=5)
-        result = self._ask_llm(context, question, template)
+        # Inject parties_context into template before formatting with context/question
+        full_template = template.replace("{parties_context}", parties_context)
+        
+        result = self._ask_llm(context, question, full_template)
         
         shares = []
         for line in result.splitlines():

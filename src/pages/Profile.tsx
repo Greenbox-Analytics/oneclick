@@ -17,6 +17,7 @@ const Profile = () => {
   const [formData, setFormData] = useState({
     full_name: "",
     email: "",
+    website: "",
     company: "",
     phone: "",
   });
@@ -38,6 +39,7 @@ const Profile = () => {
           setFormData({
             full_name: data.full_name || "",
             email: user.email || "", // Email usually comes from auth user
+            website: data.website || "",
             company: data.company || "",
             phone: data.phone || "",
           });
@@ -60,6 +62,7 @@ const Profile = () => {
         .upsert({
           id: user.id,
           full_name: formData.full_name,
+          website: formData.website,
           company: formData.company,
           phone: formData.phone,
           updated_at: new Date().toISOString(),
@@ -133,6 +136,16 @@ const Profile = () => {
                 className="bg-muted"
               />
               <p className="text-xs text-muted-foreground">Email cannot be changed</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="website">Website</Label>
+              <Input 
+                id="website" 
+                type="url"
+                value={formData.website} 
+                onChange={(e) => setFormData({ ...formData, website: e.target.value })}
+                placeholder="https://example.com"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="company">Company</Label>

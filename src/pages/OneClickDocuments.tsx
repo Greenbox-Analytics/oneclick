@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 // Icons from lucide-react for visual elements
-import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle } from "lucide-react";
+import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus } from "lucide-react";
 // React Router hooks for navigation and getting URL parameters
 import { useNavigate, useParams } from "react-router-dom";
 // Recharts for pie chart
@@ -21,6 +21,8 @@ import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { toPng } from 'html-to-image';
 
 
@@ -89,9 +91,15 @@ const OneClickDocuments = () => {
   const [existingContracts, setExistingContracts] = useState<ArtistFile[]>([]);
   const [existingRoyaltyStatements, setExistingRoyaltyStatements] = useState<ArtistFile[]>([]);
   
-  // UI State
-  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  // UI State - Separate project selection for each card
+  const [selectedContractProject, setSelectedContractProject] = useState<string | null>(null);
+  const [selectedRoyaltyStatementProject, setSelectedRoyaltyStatementProject] = useState<string | null>(null);
   const [newContractProjectId, setNewContractProjectId] = useState<string>("");
+  
+  // Tab state to maintain which tab is active in each card
+  const [contractTabValue, setContractTabValue] = useState<string>("upload");
+  const [royaltyStatementTabValue, setRoyaltyStatementTabValue] = useState<string>("upload");
+  const [newRoyaltyStatementProjectId, setNewRoyaltyStatementProjectId] = useState<string>("");
 
   const [artistName, setArtistName] = useState<string>("");
   const [isLoadingArtist, setIsLoadingArtist] = useState(true);
@@ -102,6 +110,13 @@ const OneClickDocuments = () => {
   const [calculationStage, setCalculationStage] = useState("");
   const [calculationMessage, setCalculationMessage] = useState("");
   const [showProgressModal, setShowProgressModal] = useState(false);
+  const [contractSearchTerm, setContractSearchTerm] = useState("");
+  const [royaltySearchTerm, setRoyaltySearchTerm] = useState("");
+
+  // Create Project State
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [newProjectNameInput, setNewProjectNameInput] = useState("");
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
 
   // Ref for chart download (only the chart content, not the entire card)
   const chartContentRef = useRef<HTMLDivElement>(null);
@@ -140,39 +155,55 @@ const OneClickDocuments = () => {
     }
   }, [artistId]);
 
-  // Fetch Contracts and Royalty Statements when Project Selected
+  // Fetch Contracts when Contract Project Selected
   useEffect(() => {
-    if (selectedProject) {
-      // Clear previous selections when changing projects
+    if (selectedContractProject) {
+      // Clear previous contract selections when changing projects
       setSelectedExistingContracts([]);
-      setSelectedExistingRoyaltyStatements([]);
       
       setIsLoadingProjectFiles(true);
-      fetch(`${API_URL}/files/${selectedProject}`)
+      fetch(`${API_URL}/files/${selectedContractProject}`)
         .then(res => res.json())
         .then((data: ArtistFile[]) => {
             // Filter contracts
             const contracts = data.filter(f => f.folder_category === 'contract');
             setExistingContracts(contracts);
-            
-            // Filter royalty statements
-            const statements = data.filter(f => f.folder_category === 'royalty_statement');
-            setExistingRoyaltyStatements(statements);
-            
             setIsLoadingProjectFiles(false);
         })
         .catch(err => {
-          console.error("Error fetching project files:", err);
+          console.error("Error fetching contract files:", err);
           setIsLoadingProjectFiles(false);
         });
     } else {
         setExistingContracts([]);
-        setExistingRoyaltyStatements([]);
         setSelectedExistingContracts([]);
-        setSelectedExistingRoyaltyStatements([]);
-        setIsLoadingProjectFiles(false);
     }
-  }, [selectedProject]);
+  }, [selectedContractProject]);
+
+  // Fetch Royalty Statements when Royalty Statement Project Selected
+  useEffect(() => {
+    if (selectedRoyaltyStatementProject) {
+      // Clear previous royalty statement selections when changing projects
+      setSelectedExistingRoyaltyStatements([]);
+      
+      setIsLoadingProjectFiles(true);
+      fetch(`${API_URL}/files/${selectedRoyaltyStatementProject}`)
+        .then(res => res.json())
+        .then((data: ArtistFile[]) => {
+            // Filter royalty statements
+            const statements = data.filter(f => f.folder_category === 'royalty_statement');
+            setExistingRoyaltyStatements(statements);
+            setIsLoadingProjectFiles(false);
+        })
+        .catch(err => {
+          console.error("Error fetching royalty statement files:", err);
+          setIsLoadingProjectFiles(false);
+        });
+    } else {
+        setExistingRoyaltyStatements([]);
+        setSelectedExistingRoyaltyStatements([]);
+    }
+  }, [selectedRoyaltyStatementProject]);
 
   const handleContractFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -190,6 +221,38 @@ const OneClickDocuments = () => {
 
   const handleRemoveRoyaltyStatementFile = (index: number) => {
     setRoyaltyStatementFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleCreateProject = async () => {
+    if (!artistId || !newProjectNameInput.trim()) return;
+    
+    setIsCreatingProject(true);
+    try {
+        const response = await fetch(`${API_URL}/projects`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                artist_id: artistId,
+                name: newProjectNameInput,
+                description: "Created via OneClick"
+            })
+        });
+        
+        if (!response.ok) throw new Error("Failed to create project");
+        
+        const newProject = await response.json();
+        setProjects([newProject, ...projects]);
+        setNewContractProjectId(newProject.id); // Auto-select for contract
+        setNewRoyaltyStatementProjectId(newProject.id); // Auto-select for royalty statement
+        setNewProjectNameInput("");
+        setIsCreateProjectOpen(false);
+        toast.success("Project created successfully");
+    } catch (err) {
+        console.error("Error creating project:", err);
+        toast.error("Failed to create project");
+    } finally {
+        setIsCreatingProject(false);
+    }
   };
 
   // Toggle selection store ID instead of file_path for easier backend processing with existing endpoints
@@ -219,13 +282,11 @@ const OneClickDocuments = () => {
         return;
     }
 
-    // OneClick currently supports ONE contract and ONE statement at a time in the backend endpoint.
-    // We will take the first one available.
+    // OneClick currently supports multiple contracts but ONE statement at a time.
     
-    // Check if multiple files selected - warn user (or just use first)
-    if ((contractFiles.length + selectedExistingContracts.length) > 1 || 
-        (royaltyStatementFiles.length + selectedExistingRoyaltyStatements.length) > 1) {
-          toast.warning("Note: OneClick currently processes one contract and one statement at a time. Using the first selected.");
+    // Check if multiple statements selected - warn user (or just use first)
+    if ((royaltyStatementFiles.length + selectedExistingRoyaltyStatements.length) > 1) {
+          toast.warning("Note: OneClick currently processes one royalty statement at a time. Using the first selected.");
     }
 
     setIsUploading(true);
@@ -233,43 +294,51 @@ const OneClickDocuments = () => {
     setError("");
     
     try {
-        let finalContractId = "";
+        let finalContractIds: string[] = [];
         let finalStatementId = "";
         let finalProjectId = "";
 
-        // 1. Determine Contract ID
+        // 1. Determine Contract IDs
         if (contractFiles.length > 0) {
-            // Upload new contract
+            // Upload new contracts
             if (!newContractProjectId || newContractProjectId === "none") {
                  toast.error("Please select a project to save the new contract.");
                  throw new Error("You must select a project to save the new contract to.");
              }
 
-             const formData = new FormData();
-             formData.append("file", contractFiles[0]);
-             formData.append("project_id", newContractProjectId);
-             formData.append("user_id", user.id); 
-             
-             const uploadRes = await fetch(`${API_URL}/contracts/upload`, {
-                 method: "POST",
-                 body: formData
-             });
-             
-             if (!uploadRes.ok) {
-                 const errData = await uploadRes.json();
-                 throw new Error(errData.detail || "Failed to upload and process contract");
+             // Upload each file sequentially to ensure order and error handling
+             for (const file of contractFiles) {
+                 const formData = new FormData();
+                 formData.append("file", file);
+                 formData.append("project_id", newContractProjectId);
+                 formData.append("user_id", user.id); 
+                 
+                 const uploadRes = await fetch(`${API_URL}/contracts/upload`, {
+                     method: "POST",
+                     body: formData
+                 });
+                 
+                 if (!uploadRes.ok) {
+                     const errData = await uploadRes.json();
+                     throw new Error(errData.detail || `Failed to upload and process contract: ${file.name}`);
+                 }
+                 
+                 const uploadData = await uploadRes.json();
+                 finalContractIds.push(uploadData.contract_id);
              }
              
-             const uploadData = await uploadRes.json();
-             finalContractId = uploadData.contract_id;
              finalProjectId = newContractProjectId;
-             toast.success("Contract uploaded and processed successfully!");
+             toast.success(`${contractFiles.length} contract(s) uploaded and processed successfully!`);
 
-        } else if (selectedExistingContracts.length > 0) {
-            finalContractId = selectedExistingContracts[0];
-            // Find project ID for this contract
-            const contract = existingContracts.find(c => c.id === finalContractId);
-            if (contract) finalProjectId = contract.project_id;
+        }
+        
+        if (selectedExistingContracts.length > 0) {
+            finalContractIds = [...finalContractIds, ...selectedExistingContracts];
+            // Find project ID for this contract if not set
+            if (!finalProjectId) {
+                const contract = existingContracts.find(c => c.id === selectedExistingContracts[0]);
+                if (contract) finalProjectId = contract.project_id;
+            }
         }
 
         // 2. Determine Statement ID
@@ -278,8 +347,9 @@ const OneClickDocuments = () => {
              formData.append("file", royaltyStatementFiles[0]);
              formData.append("artist_id", artistId);
              formData.append("category", "royalty_statement");
-             // Associate with contract's project if available
-             if (finalProjectId) formData.append("project_id", finalProjectId);
+             // Associate with explicitly selected project, or contract's project if available
+             const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
+             if (targetProjectId) formData.append("project_id", targetProjectId);
              
              const uploadRes = await fetch(`${API_URL}/upload`, {
                  method: "POST",
@@ -294,8 +364,8 @@ const OneClickDocuments = () => {
             finalStatementId = selectedExistingRoyaltyStatements[0];
         }
 
-        if (!finalContractId || !finalStatementId) {
-             throw new Error("Could not determine contract or statement to process.");
+        if (finalContractIds.length === 0 || !finalStatementId) {
+             throw new Error("Could not determine contracts or statement to process.");
         }
 
         // 3. Show progress modal and start SSE connection
@@ -306,21 +376,24 @@ const OneClickDocuments = () => {
 
         // Build request body
         const requestBody = {
-            contract_id: finalContractId,
+            contract_ids: finalContractIds,
             user_id: user.id,
             project_id: finalProjectId,
             royalty_statement_file_id: finalStatementId
         };
 
         // Use EventSource for SSE
+        const queryParams = new URLSearchParams({
+            user_id: requestBody.user_id,
+            project_id: requestBody.project_id,
+            royalty_statement_file_id: requestBody.royalty_statement_file_id
+        });
+        
+        // Append each contract_id
+        finalContractIds.forEach(id => queryParams.append("contract_ids", id));
+
         const eventSource = new EventSource(
-            `${API_URL}/oneclick/calculate-royalties-stream?` + 
-            new URLSearchParams({
-                contract_id: requestBody.contract_id,
-                user_id: requestBody.user_id,
-                project_id: requestBody.project_id,
-                royalty_statement_file_id: requestBody.royalty_statement_file_id
-            })
+            `${API_URL}/oneclick/calculate-royalties-stream?` + queryParams.toString()
         );
 
         // Set timeout for 2 minutes
@@ -520,7 +593,7 @@ const OneClickDocuments = () => {
               <CardDescription>Upload artist contract documents</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Tabs defaultValue="upload" className="w-full">
+              <Tabs value={contractTabValue} onValueChange={setContractTabValue} className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="upload">Upload New</TabsTrigger>
                   <TabsTrigger value="existing">Select Existing</TabsTrigger>
@@ -559,16 +632,26 @@ const OneClickDocuments = () => {
                           Save to Project (Required)
                         </label>
                       </div>
-                      <Select value={newContractProjectId} onValueChange={setNewContractProjectId}>
-                        <SelectTrigger id="project-select" className="w-full">
-                          <SelectValue placeholder="Select a project..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {projects.map((project) => (
-                            <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center gap-2 w-full">
+                        <Select value={newContractProjectId} onValueChange={setNewContractProjectId}>
+                          <SelectTrigger id="project-select" className="w-full">
+                            <SelectValue placeholder="Select a project..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {projects.map((project) => (
+                              <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setIsCreateProjectOpen(true)}
+                          title="Create New Project"
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
                       <p className="text-xs text-muted-foreground">Select a project to save the contract.</p>
                     </div>
                   )}
@@ -591,12 +674,12 @@ const OneClickDocuments = () => {
                 </TabsContent>
 
                 <TabsContent value="existing" className="space-y-4 mt-4">
-                  {!selectedProject ? (
+                  {!selectedContractProject ? (
                     <div className="space-y-4">
                       <p className="text-sm font-medium text-foreground">Select a Project:</p>
                       <div className="grid gap-3">
                         {projects.length > 0 ? projects.map((project) => (
-                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedProject(project.id)}>
+                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedContractProject(project.id)}>
                             <Folder className="w-5 h-5 text-primary" />
                             <span className="font-medium text-foreground">{project.name}</span>
                           </div>
@@ -609,38 +692,57 @@ const OneClickDocuments = () => {
                     <div className="space-y-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm font-medium text-foreground">
-                          Contracts in {projects.find(p => p.id === selectedProject)?.name}:
+                          Contracts in {projects.find(p => p.id === selectedContractProject)?.name}:
                         </p>
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedProject(null)} className="text-xs h-8">
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedContractProject(null)} className="text-xs h-8">
                           Change Project
                         </Button>
                       </div>
                       
+                      <div className="relative">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search contracts..."
+                          value={contractSearchTerm}
+                          onChange={(e) => setContractSearchTerm(e.target.value)}
+                          className="pl-8"
+                        />
+                      </div>
+
                       {isLoadingProjectFiles ? (
                         <div className="text-center py-8">
                           <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
                           <p className="text-sm text-muted-foreground">Loading contracts...</p>
                         </div>
                       ) : existingContracts.length > 0 ? (
-                        <div className="space-y-2">
-                          {existingContracts.map((contract) => (
-                            <div key={contract.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                              <div className="flex items-center gap-3 flex-1">
-                                <Checkbox
-                                  id={`existing-contract-${contract.id}`}
-                                  checked={selectedExistingContracts.includes(contract.id)}
-                                  onCheckedChange={() => handleToggleExistingContract(contract.id)}
-                                />
-                                <label htmlFor={`existing-contract-${contract.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
-                                  <FileText className="w-4 h-4 text-primary" />
-                                  <div>
-                                    <p className="text-sm font-medium text-foreground">{contract.file_name}</p>
-                                    <p className="text-xs text-muted-foreground">{new Date(contract.created_at).toLocaleDateString()}</p>
-                                  </div>
-                                </label>
+                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                          {existingContracts
+                            .filter(contract => 
+                              contract.file_name.toLowerCase().includes(contractSearchTerm.toLowerCase())
+                            )
+                            .map((contract) => (
+                              <div key={contract.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <Checkbox
+                                    id={`existing-contract-${contract.id}`}
+                                    checked={selectedExistingContracts.includes(contract.id)}
+                                    onCheckedChange={() => handleToggleExistingContract(contract.id)}
+                                  />
+                                  <label htmlFor={`existing-contract-${contract.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
+                                    <FileText className="w-4 h-4 text-primary" />
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{contract.file_name}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(contract.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                  </label>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))}
+                          {existingContracts.filter(contract => 
+                            contract.file_name.toLowerCase().includes(contractSearchTerm.toLowerCase())
+                          ).length === 0 && (
+                             <p className="text-sm text-muted-foreground text-center py-4">No matching contracts found.</p>
+                          )}
                         </div>
                       ) : (
                         <p className="text-sm text-muted-foreground text-center py-4">No contracts found in this project.</p>
@@ -662,7 +764,7 @@ const OneClickDocuments = () => {
               <CardDescription>Upload royalty statement documents</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Tabs defaultValue="upload" className="w-full">
+              <Tabs value={royaltyStatementTabValue} onValueChange={setRoyaltyStatementTabValue} className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="upload">Upload New</TabsTrigger>
                   <TabsTrigger value="existing">Select Existing</TabsTrigger>
@@ -692,6 +794,39 @@ const OneClickDocuments = () => {
                       </Button>
                     </label>
                   </div>
+
+                  {royaltyStatementFiles.length > 0 && (
+                    <div className="space-y-2 pt-2 border-t border-border">
+                      <div className="flex items-center gap-2">
+                        <Folder className="w-4 h-4 text-muted-foreground" />
+                        <label htmlFor="royalty-project-select" className="text-sm font-medium text-foreground">
+                          Save to Project (Optional)
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2 w-full">
+                        <Select value={newRoyaltyStatementProjectId} onValueChange={setNewRoyaltyStatementProjectId}>
+                          <SelectTrigger id="royalty-project-select" className="w-full">
+                            <SelectValue placeholder="Select a project..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {projects.map((project) => (
+                              <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setIsCreateProjectOpen(true)}
+                          title="Create New Project"
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Select a project to save the royalty statement.</p>
+                    </div>
+                  )}
+
                   {royaltyStatementFiles.length > 0 && (
                     <div className="space-y-2 mt-4">
                       {royaltyStatementFiles.map((file, index) => (
@@ -710,12 +845,12 @@ const OneClickDocuments = () => {
                 </TabsContent>
 
                 <TabsContent value="existing" className="space-y-4 mt-4">
-                  {!selectedProject ? (
+                  {!selectedRoyaltyStatementProject ? (
                     <div className="space-y-4">
                       <p className="text-sm font-medium text-foreground">Select a Project:</p>
                       <div className="grid gap-3">
                         {projects.length > 0 ? projects.map((project) => (
-                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedProject(project.id)}>
+                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedRoyaltyStatementProject(project.id)}>
                             <Folder className="w-5 h-5 text-primary" />
                             <span className="font-medium text-foreground">{project.name}</span>
                           </div>
@@ -728,11 +863,21 @@ const OneClickDocuments = () => {
                     <div className="space-y-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm font-medium text-foreground">
-                          Royalty Statements in {projects.find(p => p.id === selectedProject)?.name}:
+                          Royalty Statements in {projects.find(p => p.id === selectedRoyaltyStatementProject)?.name}:
                         </p>
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedProject(null)} className="text-xs h-8">
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedRoyaltyStatementProject(null)} className="text-xs h-8">
                           Change Project
                         </Button>
+                      </div>
+                      
+                      <div className="relative">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search royalty statements..."
+                          value={royaltySearchTerm}
+                          onChange={(e) => setRoyaltySearchTerm(e.target.value)}
+                          className="pl-8"
+                        />
                       </div>
                       
                       {isLoadingProjectFiles ? (
@@ -741,25 +886,34 @@ const OneClickDocuments = () => {
                           <p className="text-sm text-muted-foreground">Loading royalty statements...</p>
                         </div>
                       ) : existingRoyaltyStatements.length > 0 ? (
-                        <div className="space-y-2">
-                          {existingRoyaltyStatements.map((statement) => (
-                            <div key={statement.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                              <div className="flex items-center gap-3 flex-1">
-                                <Checkbox
-                                  id={`existing-royalty-${statement.id}`}
-                                  checked={selectedExistingRoyaltyStatements.includes(statement.id)}
-                                  onCheckedChange={() => handleToggleExistingRoyaltyStatement(statement.id)}
-                                />
-                                <label htmlFor={`existing-royalty-${statement.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
-                                  <FileText className="w-4 h-4 text-primary" />
-                                  <div>
-                                    <p className="text-sm font-medium text-foreground">{statement.file_name}</p>
-                                    <p className="text-xs text-muted-foreground">{new Date(statement.created_at).toLocaleDateString()}</p>
-                                  </div>
-                                </label>
+                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                          {existingRoyaltyStatements
+                            .filter(statement => 
+                              statement.file_name.toLowerCase().includes(royaltySearchTerm.toLowerCase())
+                            )
+                            .map((statement) => (
+                              <div key={statement.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <Checkbox
+                                    id={`existing-royalty-${statement.id}`}
+                                    checked={selectedExistingRoyaltyStatements.includes(statement.id)}
+                                    onCheckedChange={() => handleToggleExistingRoyaltyStatement(statement.id)}
+                                  />
+                                  <label htmlFor={`existing-royalty-${statement.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
+                                    <FileText className="w-4 h-4 text-primary" />
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{statement.file_name}</p>
+                                      <p className="text-xs text-muted-foreground">{new Date(statement.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                  </label>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))}
+                          {existingRoyaltyStatements.filter(statement => 
+                            statement.file_name.toLowerCase().includes(royaltySearchTerm.toLowerCase())
+                          ).length === 0 && (
+                             <p className="text-sm text-muted-foreground text-center py-4">No matching royalty statements found.</p>
+                          )}
                         </div>
                       ) : (
                         <p className="text-sm text-muted-foreground text-center py-4">No royalty statements found in this project.</p>
@@ -908,6 +1062,47 @@ const OneClickDocuments = () => {
             </CardContent>
           </Card>
         )}
+
+        {/* Create Project Dialog */}
+        <Dialog open={isCreateProjectOpen} onOpenChange={setIsCreateProjectOpen}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle>Create New Project</DialogTitle>
+              <DialogDescription>
+                Create a new project to organize your files.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="name" className="text-right">
+                  Name
+                </Label>
+                <Input
+                  id="name"
+                  value={newProjectNameInput}
+                  onChange={(e) => setNewProjectNameInput(e.target.value)}
+                  className="col-span-3"
+                  placeholder="e.g. Summer 2024 Release"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsCreateProjectOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleCreateProject} disabled={isCreatingProject || !newProjectNameInput.trim()}>
+                {isCreatingProject ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  "Create Project"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {calculationResult && (
           <div className="mt-8 space-y-6">

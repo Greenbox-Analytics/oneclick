@@ -389,7 +389,7 @@ const ArtistProfile = () => {
 
         toast({
           title: "Success",
-          description: "Contract and vector data deleted successfully",
+          description: "Contract deleted successfully",
         });
       } else {
         // For non-contract files, use the original deletion logic
@@ -1441,7 +1441,7 @@ const ArtistProfile = () => {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => window.open(file.file_url, '_blank')}
+                      onClick={() => handleFileView(file)}
                       title="View file"
                     >
                       <FileText className="w-4 h-4" />
