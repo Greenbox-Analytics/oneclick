@@ -17,6 +17,7 @@ import time
 import json
 import hashlib
 import re
+import logging
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -24,6 +25,11 @@ from datetime import datetime
 from dotenv import load_dotenv
 from openai import OpenAI
 from vector_search.contract_search import ContractSearch
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
 
 
 @dataclass
@@ -475,7 +481,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
                 return "contract"
                 
         except Exception as e:
-            print(f"Error classifying query: {e}")
+            logger.error(f"Error classifying query: {e}")
             # Default to contract if classification fails
             return "contract"
     
@@ -535,7 +541,7 @@ Artist Profile:
             answer = response.choices[0].message.content
             
         except Exception as e:
-            print(f"Error generating artist answer: {e}")
+            logger.error(f"Error generating artist answer: {e}")
             answer = f"I have information about {artist_data.get('name', 'the artist')}, but encountered an error. Please try again."
         
         # Store assistant response in memory
@@ -655,11 +661,11 @@ Artist Profile:
             Tuple of (should_use_context: bool, reason: str)
         """
         can_answer, reason = self._can_answer_from_context(query, context)
-        print(f"[Context] Can answer from context: {can_answer}, reason: {reason}")
+        logger.info(f"[Context] Can answer from context: {can_answer}, reason: {reason}")
         
         # Log why we're falling through to document search
         if not can_answer and reason.startswith("missing_"):
-            print(f"[Context] Missing data in context ({reason}) - will search documents")
+            logger.info(f"[Context] Missing data in context ({reason}) - will search documents")
         
         return can_answer, reason
     
@@ -676,11 +682,11 @@ Artist Profile:
             Tuple of (can_answer: bool, reason: str)
         """
         if not context:
-            print("[Context] No context provided, cannot answer from context")
+            logger.info("[Context] No context provided, cannot answer from context")
             return False, "no_context"
         
         contracts_discussed = context.get('contracts_discussed', [])
-        print(f"[Context] Checking if can answer from context. Contracts discussed: {len(contracts_discussed)}")
+        logger.info(f"[Context] Checking if can answer from context. Contracts discussed: {len(contracts_discussed)}")
         
         query_lower = query.lower()
         
@@ -704,7 +710,7 @@ Artist Profile:
         royalty_keywords = ['royalty', 'split', 'percentage', 'share']
         if any(kw in query_lower for kw in royalty_keywords):
             royalty_type = self._detect_royalty_type(query_lower)
-            print(f"[Context] Query is about royalty type: {royalty_type}")
+            logger.info(f"[Context] Query is about royalty type: {royalty_type}")
             
             # Check if we have this specific royalty type in context
             has_required_type = False
@@ -716,7 +722,7 @@ Artist Profile:
                     # New structure: {streaming: [...], publishing: [...]}
                     if royalty_splits.get(royalty_type):
                         has_required_type = True
-                        print(f"[Context] Found {royalty_type} splits in {contract.get('name')}")
+                        logger.info(f"[Context] Found {royalty_type} splits in {contract.get('name')}")
                         break
                     # Also check 'general' as fallback
                     if royalty_type == 'general' and any(royalty_splits.values()):
@@ -727,7 +733,7 @@ Artist Profile:
                     # Can only use if asking for 'general' or unspecified royalties
                     if royalty_type == 'general':
                         has_required_type = True
-                        print(f"[Context] Found legacy splits in {contract.get('name')}")
+                        logger.info(f"[Context] Found legacy splits in {contract.get('name')}")
                         break
             
             if has_required_type:
@@ -747,7 +753,7 @@ Artist Profile:
                 if any(ind in query_lower for ind in reask_indicators):
                     return True, f"reask_{royalty_type}"
             
-            print(f"[Context] Missing {royalty_type} splits - need document lookup")
+            logger.info(f"[Context] Missing {royalty_type} splits - need document lookup")
             return False, f"missing_{royalty_type}_splits"
         
         # Check for other data types
@@ -796,15 +802,15 @@ Artist Profile:
         Returns:
             Dict with answer and metadata
         """
-        print(f"[Context] _answer_from_context called with query: {query}")
+        logger.info(f"[Context] _answer_from_context called with query: {query}")
         
         # Build context summary for LLM
         context_summary = self._format_context_for_llm(context)
-        print(f"[Context] Formatted context summary:\n{context_summary}")
+        logger.info(f"[Context] Formatted context summary:\n{context_summary}")
         
         # Get conversation history
         history = self._get_conversation_context(session_id, max_turns=10)
-        print(f"[Context] Conversation history: {len(history)} messages")
+        logger.info(f"[Context] Conversation history: {len(history)} messages")
         
         # Analyze what data is available for suggestions
         available_data = self._get_available_data_types(context)
@@ -856,7 +862,7 @@ RULES:
                 answer = "I couldn't generate a response. Please try rephrasing your question."
             
         except Exception as e:
-            print(f"Error generating context-based answer: {e}")
+            logger.error(f"Error generating context-based answer: {e}")
             answer = "I encountered an error while processing your question. Please try again."
         
         # Extract any suggestion from the answer for tracking
@@ -871,7 +877,7 @@ RULES:
             if action_match:
                 pending_suggestion = action_match.group(1).strip()
                 self.memory.set_pending_suggestion(session_id, pending_suggestion, context_hash)
-                print(f"[Context] Stored pending suggestion: {pending_suggestion}")
+                logger.info(f"[Context] Stored pending suggestion: {pending_suggestion}")
         
         # Store in memory
         self._add_to_memory(session_id, "user", query)
@@ -1174,8 +1180,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         messages.append({"role": "user", "content": user_prompt})
         
         # Call LLM
-        print(f"\nGenerating answer using {self.llm_model}...")
-        print(f"Conversation history: {len(conversation_history)} messages included")
+        logger.info(f"\nGenerating answer using {self.llm_model}...")
+        logger.info(f"Conversation history: {len(conversation_history)} messages included")
         
         try:
             response = openai_client.chat.completions.create(
@@ -1212,7 +1218,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             }
             
         except Exception as e:
-            print(f"Error generating answer: {e}")
+            logger.error(f"Error generating answer: {e}")
             return {
                 "answer": "I encountered an error while processing your question. Please try again.",
                 "confidence": "error",
@@ -1255,30 +1261,30 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         Returns:
             Dict with answer, sources, categorization, and metadata
         """
-        print("\n" + "=" * 80)
-        print("SMART CONTRACT CHATBOT (with Query Categorization)")
-        print("="  * 80)
-        print(f"Question: {query}")
-        print(f"User ID: {user_id}")
-        print(f"Session ID: {session_id}")
-        print(f"Artist data available: {artist_data is not None}")
-        print(f"Context available: {context is not None}")
+        logger.info("\n" + "=" * 80)
+        logger.info("SMART CONTRACT CHATBOT (with Query Categorization)")
+        logger.info("="  * 80)
+        logger.info(f"Question: {query}")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Session ID: {session_id}")
+        logger.info(f"Artist data available: {artist_data is not None}")
+        logger.info(f"Context available: {context is not None}")
         if project_id:
-            print(f"Project ID: {project_id}")
+            logger.info(f"Project ID: {project_id}")
         if contract_id:
-            print(f"Contract ID: {contract_id}")
-        print("-" * 80)
+            logger.info(f"Contract ID: {contract_id}")
+        logger.info("-" * 80)
         
         # Check for affirmative response to pending suggestion first
         if session_id and self._is_affirmative_response(query):
             pending = self.memory.get_pending_suggestion(session_id)
             if pending:
-                print("[Affirmative] Detected affirmative response with pending suggestion")
+                logger.info("[Affirmative] Detected affirmative response with pending suggestion")
                 current_hash = self._compute_context_hash(context)
                 
                 # Validate context hasn't changed
                 if pending.get('context_hash') != current_hash:
-                    print("[Affirmative] Context hash mismatch - context was cleared")
+                    logger.info("[Affirmative] Context hash mismatch - context was cleared")
                     self.memory.clear_pending_suggestion(session_id)
                     return {
                         "query": query,
@@ -1292,7 +1298,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 
                 # Rewrite query to the pending suggestion and answer from context
                 suggestion = pending.get('suggestion', '')
-                print(f"[Affirmative] Rewriting query to: {suggestion}")
+                logger.info(f"[Affirmative] Rewriting query to: {suggestion}")
                 self.memory.clear_pending_suggestion(session_id)
                 
                 # Route to context-based answering with the suggestion as query
@@ -1302,23 +1308,23 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         can_answer, reason = self._should_use_context(query, context)
         
         if can_answer:
-            print("Detected context-based query - answering from conversation context")
+            logger.info("Detected context-based query - answering from conversation context")
             return self._answer_from_context(query, context, session_id)
         
         # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
-            print("Detected conversational query - handling without document search")
+            logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
         
         # Step 1: Classify the query - is it about artist or contracts?
         query_type = self._classify_query(query)
-        print(f"Query classified as: {query_type}")
+        logger.info(f"Query classified as: {query_type}")
         
         # Step 2: Route based on classification
         if query_type == "artist":
             # Artist query - use artist data
             if artist_data:
-                print("Handling as artist query - using artist data")
+                logger.info("Handling as artist query - using artist data")
                 return self._handle_artist_query(query, artist_data, session_id)
             else:
                 # No artist data available
@@ -1396,16 +1402,16 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         result["categorization"] = search_results.get("categorization", {})
         result["session_id"] = session_id
         
-        print("\n" + "=" * 80)
-        print("SMART ANSWER GENERATED")
-        print("=" * 80)
-        print(f"Confidence: {result['confidence']}")
+        logger.info("\n" + "=" * 80)
+        logger.info("SMART ANSWER GENERATED")
+        logger.info("=" * 80)
+        logger.info(f"Confidence: {result['confidence']}")
         if result.get('highest_score'):
-            print(f"Highest Similarity Score: {result['highest_score']}")
-        print(f"Sources Used: {len(result['sources'])}")
+            logger.info(f"Highest Similarity Score: {result['highest_score']}")
+        logger.info(f"Sources Used: {len(result['sources'])}")
         if result.get('categorization'):
-            print(f"Query Categories: {result['categorization'].get('categories', [])}")
-        print("=" * 80)
+            logger.info(f"Query Categories: {result['categorization'].get('categories', [])}")
+        logger.info("=" * 80)
         
         return result
     
@@ -1429,34 +1435,34 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         Returns:
             Dict with answer and metadata
         """
-        print("\n" + "=" * 80)
-        print("CHATBOT (No Project Selected)")
-        print("=" * 80)
-        print(f"Question: {query}")
-        print(f"User ID: {user_id}")
-        print(f"Session ID: {session_id}")
-        print(f"Artist data available: {artist_data is not None}")
-        print(f"Context available: {context is not None}")
-        print("-" * 80)
+        logger.info("\n" + "=" * 80)
+        logger.info("CHATBOT (No Project Selected)")
+        logger.info("=" * 80)
+        logger.info(f"Question: {query}")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Session ID: {session_id}")
+        logger.info(f"Artist data available: {artist_data is not None}")
+        logger.info(f"Context available: {context is not None}")
+        logger.info("-" * 80)
         
         # Check if we can answer from conversation context first
         if self._can_answer_from_context(query, context):
-            print("Detected context-based query - answering from conversation context")
+            logger.info("Detected context-based query - answering from conversation context")
             return self._answer_from_context(query, context, session_id)
         
         # Check for conversational queries
         if self._is_conversational_query(query):
-            print("Detected conversational query - handling without document search")
+            logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
         
         # Classify the query - is it about artist or contracts?
         query_type = self._classify_query(query)
-        print(f"Query classified as: {query_type}")
+        logger.info(f"Query classified as: {query_type}")
         
         if query_type == "artist":
             # Artist query - use artist data if available
             if artist_data:
-                print("Handling as artist query - using artist data")
+                logger.info("Handling as artist query - using artist data")
                 return self._handle_artist_query(query, artist_data, session_id)
             else:
                 # No artist data available
@@ -1546,40 +1552,40 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         Returns:
             Dict with answer and metadata
         """
-        print("\n" + "=" * 80)
-        print("MULTI-CONTRACT CHATBOT")
-        print("=" * 80)
-        print(f"Question: {query}")
-        print(f"User ID: {user_id}")
-        print(f"Project ID: {project_id}")
-        print(f"Session ID: {session_id}")
-        print(f"Contract IDs: {contract_ids}")
-        print(f"Number of contracts: {len(contract_ids)}")
-        print(f"Artist data available: {artist_data is not None}")
-        print(f"Context available: {context is not None}")
-        print("-" * 80)
+        logger.info("\n" + "=" * 80)
+        logger.info("MULTI-CONTRACT CHATBOT")
+        logger.info("=" * 80)
+        logger.info(f"Question: {query}")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Project ID: {project_id}")
+        logger.info(f"Session ID: {session_id}")
+        logger.info(f"Contract IDs: {contract_ids}")
+        logger.info(f"Number of contracts: {len(contract_ids)}")
+        logger.info(f"Artist data available: {artist_data is not None}")
+        logger.info(f"Context available: {context is not None}")
+        logger.info("-" * 80)
         
         # Check if we can answer from conversation context first
         can_answer, reason = self._should_use_context(query, context)
         
         if can_answer:
-            print("Detected context-based query - answering from conversation context")
+            logger.info("Detected context-based query - answering from conversation context")
             return self._answer_from_context(query, context, session_id)
         
         # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
-            print("Detected conversational query - handling without document search")
+            logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
         
         # Step 1: Classify the query - is it about artist or contracts?
         query_type = self._classify_query(query)
-        print(f"Query classified as: {query_type}")
+        logger.info(f"Query classified as: {query_type}")
         
         # Step 2: Route based on classification
         if query_type == "artist":
             # Artist query - use artist data
             if artist_data:
-                print("Handling as artist query - using artist data")
+                logger.info("Handling as artist query - using artist data")
                 return self._handle_artist_query(query, artist_data, session_id)
             else:
                 # No artist data available
@@ -1640,15 +1646,15 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         result["filter"] = search_results["filter"]
         result["session_id"] = session_id
         
-        print("\n" + "=" * 80)
-        print("MULTI-CONTRACT ANSWER GENERATED")
-        print("=" * 80)
-        print(f"Confidence: {result['confidence']}")
+        logger.info("\n" + "=" * 80)
+        logger.info("MULTI-CONTRACT ANSWER GENERATED")
+        logger.info("=" * 80)
+        logger.info(f"Confidence: {result['confidence']}")
         if result.get('highest_score'):
-            print(f"Highest Similarity Score: {result['highest_score']}")
-        print(f"Sources Used: {len(result['sources'])}")
-        print(f"Contracts Searched: {len(contract_ids)}")
-        print("=" * 80)
+            logger.info(f"Highest Similarity Score: {result['highest_score']}")
+        logger.info(f"Sources Used: {len(result['sources'])}")
+        logger.info(f"Contracts Searched: {len(contract_ids)}")
+        logger.info("=" * 80)
         
         return result
     
@@ -1686,12 +1692,12 @@ if __name__ == "__main__":
     # Create a session for conversation memory demo
     import uuid
     session_id = str(uuid.uuid4())
-    print(f"\nSession ID: {session_id}")
+    logger.info(f"\nSession ID: {session_id}")
     
     # Example 1: Ask about a project
-    print("\n" + "=" * 80)
-    print("EXAMPLE 1: Project-level question")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("EXAMPLE 1: Project-level question")
+    logger.info("=" * 80)
     
     result1 = chatbot.ask_project(
         query="What are the royalty percentage splits in this project?",
@@ -1700,18 +1706,17 @@ if __name__ == "__main__":
         session_id=session_id
     )
     
-    print("\nQUESTION:", result1["query"])
-    print("\nANSWER:")
-    print(result1["answer"])
-    print("\nCONFIDENCE:", result1["confidence"])
-    print("\nSOURCES:")
+    logger.info(f"\nQUESTION: {result1['query']}")
+    logger.info(f"\nANSWER:\n{result1['answer']}")
+    logger.info(f"\nCONFIDENCE: {result1['confidence']}")
+    logger.info("\nSOURCES:")
     for source in result1.get("sources", []):
-        print(f"  - {source['contract_file']} (Score: {source['score']})")
+        logger.info(f"  - {source['contract_file']} (Score: {source['score']})")
     
     # Example 2: Follow-up question (uses conversation memory)
-    print("\n\n" + "=" * 80)
-    print("EXAMPLE 2: Follow-up question (with conversation memory)")
-    print("=" * 80)
+    logger.info("\n\n" + "=" * 80)
+    logger.info("EXAMPLE 2: Follow-up question (with conversation memory)")
+    logger.info("=" * 80)
     
     result2 = chatbot.ask_project(
         query="What about the payment terms?",
@@ -1720,15 +1725,14 @@ if __name__ == "__main__":
         session_id=session_id  # Same session for context
     )
     
-    print("\nQUESTION:", result2["query"])
-    print("\nANSWER:")
-    print(result2["answer"])
-    print("\nCONFIDENCE:", result2["confidence"])
+    logger.info(f"\nQUESTION: {result2['query']}")
+    logger.info(f"\nANSWER:\n{result2['answer']}")
+    logger.info(f"\nCONFIDENCE: {result2['confidence']}")
     
     # Show conversation history
-    print("\n\n" + "=" * 80)
-    print("CONVERSATION HISTORY")
-    print("=" * 80)
+    logger.info("\n\n" + "=" * 80)
+    logger.info("CONVERSATION HISTORY")
+    logger.info("=" * 80)
     history = chatbot.get_session_history(session_id)
     for msg in history:
-        print(f"[{msg['role'].upper()}]: {msg['content'][:100]}...")
+        logger.info(f"[{msg['role'].upper()}]: {msg['content'][:100]}...")

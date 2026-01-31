@@ -25,6 +25,12 @@ from .helpers import normalize_title, find_matching_song, normalize_name
 import openpyxl
 from dotenv import load_dotenv
 
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
 # Load environment variables
 load_dotenv()
 
@@ -99,7 +105,7 @@ class RoyaltyCalculator:
             Dictionary mapping song titles to total net payable amounts
         """
         try:
-            print(f"\n📊 Reading royalty statement: {Path(excel_path).name}")
+            logger.info(f"\n📊 Reading royalty statement: {Path(excel_path).name}")
             
             # Detect file type
             file_ext = Path(excel_path).suffix.lower()
@@ -127,18 +133,18 @@ class RoyaltyCalculator:
             # Get headers (keys from DictReader)
             headers = [h.strip().lower() for h in reader.fieldnames]
             
-            print(f"   Found {len(headers)} columns: {', '.join(headers[:5])}...")
+            logger.info(f"   Found {len(headers)} columns: {', '.join(headers[:5])}...")
             
             # Auto-detect columns if not specified
             if title_column is None:
                 title_column = self._find_title_column(headers)
-                print(f"   ✓ Auto-detected title column: '{title_column}'")
+                logger.info(f"   ✓ Auto-detected title column: '{title_column}'")
             else:
                 title_column = title_column.lower()
             
             if payable_column is None:
                 payable_column = self._find_payable_column(headers)
-                print(f"   ✓ Auto-detected payable column: '{payable_column}'")
+                logger.info(f"   ✓ Auto-detected payable column: '{payable_column}'")
             else:
                 payable_column = payable_column.lower()
             
@@ -176,8 +182,8 @@ class RoyaltyCalculator:
                 else:
                     rows_skipped += 1
             
-            print(f"   ✓ Processed {rows_processed} rows ({rows_skipped} skipped)")
-            print(f"   ✓ Found {len(song_totals)} unique songs")
+            logger.info(f"   ✓ Processed {rows_processed} rows ({rows_skipped} skipped)")
+            logger.info(f"   ✓ Found {len(song_totals)} unique songs")
             
             if not song_totals:
                 raise ValueError("No valid royalty data found in statement")
@@ -200,18 +206,18 @@ class RoyaltyCalculator:
             if cell.value:
                 headers.append(str(cell.value).strip().lower())
         
-        print(f"   Found {len(headers)} columns: {', '.join(headers[:5])}...")
+        logger.info(f"   Found {len(headers)} columns: {', '.join(headers[:5])}...")
         
         # Auto-detect columns if not specified
         if title_column is None:
             title_column = self._find_title_column(headers)
-            print(f"   ✓ Auto-detected title column: '{title_column}'")
+            logger.info(f"   ✓ Auto-detected title column: '{title_column}'")
         else:
             title_column = title_column.lower()
         
         if payable_column is None:
             payable_column = self._find_payable_column(headers)
-            print(f"   ✓ Auto-detected payable column: '{payable_column}'")
+            logger.info(f"   ✓ Auto-detected payable column: '{payable_column}'")
         else:
             payable_column = payable_column.lower()
         
@@ -246,8 +252,8 @@ class RoyaltyCalculator:
         
         workbook.close()
         
-        print(f"   ✓ Processed {rows_processed} rows ({rows_skipped} skipped)")
-        print(f"   ✓ Found {len(song_totals)} unique songs")
+        logger.info(f"   ✓ Processed {rows_processed} rows ({rows_skipped} skipped)")
+        logger.info(f"   ✓ Found {len(song_totals)} unique songs")
         
         if not song_totals:
             raise ValueError("No valid royalty data found in statement")
@@ -346,7 +352,7 @@ class RoyaltyCalculator:
         if len(contracts) == 1:
             return contracts[0]
         
-        print(f"\n🔄 Merging {len(contracts)} contracts...")
+        logger.info(f"\n🔄 Merging {len(contracts)} contracts...")
         
         merged_parties = []
         merged_works = []
@@ -359,7 +365,7 @@ class RoyaltyCalculator:
         seen_shares = {}   # (party, type) -> RoyaltyShare
         
         for idx, contract in enumerate(contracts, 1):
-            print(f"   Processing contract {idx}/{len(contracts)}...")
+            logger.info(f"   Processing contract {idx}/{len(contracts)}...")
             
             if contract.contract_summary:
                 summaries.append(contract.contract_summary)
@@ -416,7 +422,7 @@ class RoyaltyCalculator:
                                  break
                 
                 if existing_share_for_party:
-                    print(f"      ℹ️  Duplicate share found for {share.party_name} ({share.percentage}%) - skipping")
+                    logger.info(f"      ℹ️  Duplicate share found for {share.party_name} ({share.percentage}%) - skipping")
                     continue
 
                 # If no exact duplicate found, add it
@@ -425,7 +431,7 @@ class RoyaltyCalculator:
         # Combine summaries
         merged_summary = "\n\n".join([s for s in summaries if s.strip()])
         
-        print(f"   ✓ Merged to: {len(merged_parties)} parties, {len(merged_works)} works, {len(merged_royalty_shares)} royalty entries")
+        logger.info(f"   ✓ Merged to: {len(merged_parties)} parties, {len(merged_works)} works, {len(merged_royalty_shares)} royalty entries")
         
         return ContractData(
             parties=merged_parties,
@@ -462,49 +468,49 @@ class RoyaltyCalculator:
         Returns:
             List of RoyaltyPayment objects with calculated amounts
         """
-        print("\n" + "="*80)
-        print("ROYALTY PAYMENT CALCULATION")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("ROYALTY PAYMENT CALCULATION")
+        logger.info("="*80)
         
         total_start = time.time()
 
         # Step 1: Parse contract from Pinecone
-        print("\n📄 Step 1: Extracting contract data from Pinecone...")
+        logger.info("\n📄 Step 1: Extracting contract data from Pinecone...")
         t0 = time.time()
         contract_data = self.contract_parser.parse_contract(
             path=contract_path,
             user_id=user_id,
             contract_id=contract_id
         )
-        print(f"⏱️  Step 1 took: {time.time() - t0:.2f}s")
+        logger.info(f"⏱️  Step 1 took: {time.time() - t0:.2f}s")
         
         # Step 2: Read royalty statement
-        print("\n💵 Step 2: Reading royalty statement...")
+        logger.info("\n💵 Step 2: Reading royalty statement...")
         t0 = time.time()
         song_totals = self.read_royalty_statement(
             statement_path, 
             title_column, 
             payable_column
         )
-        print(f"⏱️  Step 2 took: {time.time() - t0:.2f}s")
+        logger.info(f"⏱️  Step 2 took: {time.time() - t0:.2f}s")
         
         # Step 3: Calculate payments
-        print("\n🔍 DEBUG CHECK — Contract vs Statement")
-        print("Contract works:")
+        logger.info("\n🔍 DEBUG CHECK — Contract vs Statement")
+        logger.info("Contract works:")
         for w in contract_data.works:
-            print(f"   → {w.title}")
-        print("\nStatement songs:")
+            logger.info(f"   → {w.title}")
+        logger.info("\nStatement songs:")
         for s in list(song_totals.keys())[:10]:
-            print(f"   → {s}")
+            logger.info(f"   → {s}")
         
         t0 = time.time()
         payments = self._calculate_payments_from_data(
             contract_data,
             song_totals
         )
-        print(f"⏱️  Step 3 took: {time.time() - t0:.2f}s")
+        logger.info(f"⏱️  Step 3 took: {time.time() - t0:.2f}s")
         
-        print(f"\n✅ Total calculation process took: {time.time() - total_start:.2f}s")
+        logger.info(f"\n✅ Total calculation process took: {time.time() - total_start:.2f}s")
 
         return payments
     
@@ -529,12 +535,12 @@ class RoyaltyCalculator:
         Returns:
             List of RoyaltyPayment objects with combined results
         """
-        print("\n" + "="*80)
-        print(f"MULTI-CONTRACT ROYALTY CALCULATION ({len(contract_ids)} contracts)")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info(f"MULTI-CONTRACT ROYALTY CALCULATION ({len(contract_ids)} contracts)")
+        logger.info("="*80)
         
         # Step 1: Parse all contracts in PARALLEL
-        print(f"\n📄 Step 1: Parsing {len(contract_ids)} contracts from Pinecone (Parallel)...")
+        logger.info(f"\n📄 Step 1: Parsing {len(contract_ids)} contracts from Pinecone (Parallel)...")
         all_contracts_data = []
         
         # Use ThreadPoolExecutor for parallel processing
@@ -552,12 +558,12 @@ class RoyaltyCalculator:
             for i, future in enumerate(as_completed(future_to_cid), 1):
                 cid = future_to_cid[future]
                 try:
-                    # print(f"   ...Finished processing a contract...")
+                    # logger.info(f"   ...Finished processing a contract...")
                     data = future.result()
                     all_contracts_data.append(data)
-                    print(f"   ✓ Contract parsed successfully ({len(data.parties)} parties, {len(data.works)} works)")
+                    logger.info(f"   ✓ Contract parsed successfully ({len(data.parties)} parties, {len(data.works)} works)")
                 except Exception as e:
-                    print(f"   ⚠️  Failed to parse contract {cid}: {e}")
+                    logger.error(f"   ⚠️  Failed to parse contract {cid}: {e}")
         
         if not all_contracts_data:
             raise ValueError("❌ No valid contracts could be parsed. Please check your files.")
@@ -566,7 +572,7 @@ class RoyaltyCalculator:
         merged_data = self.merge_contracts(all_contracts_data)
         
         # Step 3: Read royalty statement
-        print("\n💵 Step 2: Reading royalty statement...")
+        logger.info("\n💵 Step 2: Reading royalty statement...")
         song_totals = self.read_royalty_statement(
             statement_path,
             title_column,
@@ -603,25 +609,25 @@ class RoyaltyCalculator:
         Returns:
             List of RoyaltyPayment objects with combined results
         """
-        print("\n" + "="*80)
-        print(f"MULTI-CONTRACT ROYALTY CALCULATION ({len(contract_paths)} contracts)")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info(f"MULTI-CONTRACT ROYALTY CALCULATION ({len(contract_paths)} contracts)")
+        logger.info("="*80)
         
         # Step 1: Parse all contracts
-        print(f"\n📄 Step 1: Parsing {len(contract_paths)} contracts...")
+        logger.info(f"\n📄 Step 1: Parsing {len(contract_paths)} contracts...")
         all_contracts_data = []
         
         for idx, path in enumerate(contract_paths, 1):
             try:
-                print(f"\n   Contract {idx}/{len(contract_paths)}: {Path(path).name}")
+                logger.info(f"\n   Contract {idx}/{len(contract_paths)}: {Path(path).name}")
                 data = self.contract_parser.parse_contract(path)
                 all_contracts_data.append(data)
                 
                 # Quick preview
-                print(f"      → {len(data.parties)} parties, {len(data.works)} works, {len(data.royalty_shares)} shares")
+                logger.info(f"      → {len(data.parties)} parties, {len(data.works)} works, {len(data.royalty_shares)} shares")
                 
             except Exception as e:
-                print(f"      ⚠️  Failed to parse: {e}")
+                logger.error(f"      ⚠️  Failed to parse: {e}")
                 continue
         
         if not all_contracts_data:
@@ -631,7 +637,7 @@ class RoyaltyCalculator:
         merged_data = self.merge_contracts(all_contracts_data)
         
         # Step 3: Read royalty statement
-        print("\n💵 Step 2: Reading royalty statement...")
+        logger.info("\n💵 Step 2: Reading royalty statement...")
         song_totals = self.read_royalty_statement(
             statement_path,
             title_column,
@@ -661,7 +667,7 @@ class RoyaltyCalculator:
         Returns:
             List of RoyaltyPayment objects
         """
-        print("\n💰 Step 3: Calculating payments...\n")
+        logger.info("\n💰 Step 3: Calculating payments...\n")
         
         # Validate inputs
         if not contract_data.works:
@@ -680,11 +686,11 @@ class RoyaltyCalculator:
         ]
         
         if not streaming_shares:
-            print("   ⚠️  No streaming royalty shares found in contract")
+            logger.warning("   ⚠️  No streaming royalty shares found in contract")
             return []
         
-        print(f"   Found {len(streaming_shares)} streaming royalty shares")
-        print(f"   Found {len(contract_data.works)} works to match")
+        logger.info(f"   Found {len(streaming_shares)} streaming royalty shares")
+        logger.info(f"   Found {len(contract_data.works)} works to match")
         
         # Calculate payments for each work
         payments = []
@@ -700,9 +706,9 @@ class RoyaltyCalculator:
             
             if matching_song:
                 matched_count += 1
-                print(f"\n   ✓ '{work.title}'")
-                print(f"      Matched to: '{matching_song}'")
-                print(f"      Total royalties: ${total_royalty:,.2f}")
+                logger.info(f"\n   ✓ '{work.title}'")
+                logger.info(f"      Matched to: '{matching_song}'")
+                logger.info(f"      Total royalties: ${total_royalty:,.2f}")
                 
                 # Calculate payment for each party with streaming shares
                 for share in streaming_shares:
@@ -728,21 +734,21 @@ class RoyaltyCalculator:
                     )
                     payments.append(payment)
                     
-                    print(f"         → {share.party_name} ({role}): {share.percentage}% = ${amount_to_pay:,.2f}")
+                    logger.info(f"         → {share.party_name} ({role}): {share.percentage}% = ${amount_to_pay:,.2f}")
             else:
                 unmatched_works.append(work.title)
         
         # Summary
-        print(f"\n   📊 Matching Summary:")
-        print(f"      ✓ Matched: {matched_count}/{len(contract_data.works)} works")
+        logger.info(f"\n   📊 Matching Summary:")
+        logger.info(f"      ✓ Matched: {matched_count}/{len(contract_data.works)} works")
         
         if unmatched_works:
-            print(f"      ⚠️  Unmatched works:")
+            logger.warning(f"      ⚠️  Unmatched works:")
             for title in unmatched_works:
-                print(f"         - {title}")
-            print(f"\n      💡 Tip: Check for typos or verify these songs are in the statement")
+                logger.warning(f"         - {title}")
+            logger.info(f"\n      💡 Tip: Check for typos or verify these songs are in the statement")
         
-        print(f"\n   ✅ Calculated {len(payments)} total payments")
+        logger.info(f"\n   ✅ Calculated {len(payments)} total payments")
         
         return payments
     
@@ -831,7 +837,7 @@ class RoyaltyCalculator:
             sheet[f'G{summary_row}'].number_format = '$#,##0.00'
         
         workbook.save(output_path)
-        print(f"\n💾 Payment breakdown saved to {output_path}")
+        logger.info(f"\n💾 Payment breakdown saved to {output_path}")
     
     def save_payments_to_json(
         self,
@@ -858,17 +864,17 @@ class RoyaltyCalculator:
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
-        print(f"💾 Payment data saved to {output_path}")
+        logger.info(f"💾 Payment data saved to {output_path}")
     
     def print_payment_summary(self, payments: List[RoyaltyPayment]):
         """Print a formatted summary of payments to console"""
         
-        print("\n" + "="*80)
-        print("PAYMENT SUMMARY")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("PAYMENT SUMMARY")
+        logger.info("="*80)
         
         if not payments:
-            print("\n⚠️  No payments calculated")
+            logger.warning("\n⚠️  No payments calculated")
             return
         
         # Group by payee
@@ -885,12 +891,12 @@ class RoyaltyCalculator:
         
         # Print summary for each payee
         for payee, data in sorted(payee_totals.items()):
-            print(f"\n👤 {payee} ({data['role'].title()})")
-            print(f"   Total Payment: ${data['total']:,.2f}")
-            print(f"   Breakdown:")
+            logger.info(f"\n👤 {payee} ({data['role'].title()})")
+            logger.info(f"   Total Payment: ${data['total']:,.2f}")
+            logger.info(f"   Breakdown:")
             
             for detail in data['details']:
-                print(
+                logger.info(
                     f"      • {detail.song_title}: "
                     f"{detail.percentage}% of ${detail.total_royalty:,.2f} "
                     f"= ${detail.amount_to_pay:,.2f}"
@@ -898,9 +904,9 @@ class RoyaltyCalculator:
         
         # Grand total
         grand_total = sum(p.amount_to_pay for p in payments)
-        print(f"\n{'='*80}")
-        print(f"GRAND TOTAL: ${grand_total:,.2f}")
-        print(f"Total Payments: {len(payments)}")
-        print(f"Unique Payees: {len(payee_totals)}")
-        print(f"Unique Songs: {len(set(p.song_title for p in payments))}")
-        print(f"{'='*80}\n")
+        logger.info(f"\n{'='*80}")
+        logger.info(f"GRAND TOTAL: ${grand_total:,.2f}")
+        logger.info(f"Total Payments: {len(payments)}")
+        logger.info(f"Unique Payees: {len(payee_totals)}")
+        logger.info(f"Unique Songs: {len(set(p.song_title for p in payments))}")
+        logger.info(f"{'='*80}\n")
