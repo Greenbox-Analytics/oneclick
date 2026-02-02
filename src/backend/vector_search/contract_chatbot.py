@@ -1259,6 +1259,48 @@ Artist Profile:
         if session_id:
             self.memory.add_message(session_id, role, content, metadata)
     
+    def _get_targeted_query(self, reason: str, original_query: str) -> str:
+        """
+        Generate a targeted search query based on missing data reason.
+        Maps reasons like 'missing_streaming_splits' to focused queries
+        like 'streaming royalty splits percentages'.
+        
+        Args:
+            reason: The reason from _can_answer_from_context (e.g., 'missing_streaming_splits')
+            original_query: The user's original question
+            
+        Returns:
+            Targeted search query optimized for retrieving the missing data
+        """
+        # Extract the data type from the reason
+        if reason.startswith("missing_"):
+            data_type = reason.replace("missing_", "")
+            
+            # Map data types to targeted search queries
+            targeted_queries = {
+                "streaming_splits": "streaming royalty splits percentages parties",
+                "publishing_splits": "publishing royalty splits percentages parties",
+                "mechanical_splits": "mechanical royalty splits percentages parties",
+                "sync_splits": "sync synchronization royalty splits percentages parties",
+                "master_splits": "master recording royalty splits percentages parties",
+                "performance_splits": "performance royalty splits percentages parties",
+                "general_splits": "royalty splits percentages parties",
+                "parties": "contract parties signatories names",
+                "payment_terms": "payment terms net days accounting",
+                "term_length": "contract term duration length period years",
+                "advances": "advance payment upfront signing bonus amount"
+            }
+            
+            # Return the targeted query if we have a mapping, otherwise use original
+            targeted = targeted_queries.get(data_type)
+            if targeted:
+                logger.info(f"[Targeted Retrieval] Generated targeted query for {data_type}: '{targeted}'")
+                return targeted
+        
+        # If no mapping found, return original query
+        logger.info(f"[Targeted Retrieval] No mapping for reason '{reason}', using original query")
+        return original_query
+    
     def _should_use_context(self, query: str, context: Optional[Dict]) -> Tuple[bool, str]:
         """
         Helper method to check if query should be answered from context.
@@ -1276,7 +1318,7 @@ Artist Profile:
         
         # Log why we're falling through to document search
         if not can_answer and reason.startswith("missing_"):
-            logger.info(f"[Context] Missing data in context ({reason}) - will search documents")
+            logger.info(f"[Context] Missing data in context ({reason}) - will use targeted retrieval")
         
         return can_answer, reason
     
@@ -1437,6 +1479,50 @@ Artist Profile:
         ]
         return any(kw in query_lower for kw in comparison_keywords)
     
+    def _build_comparison_context(self, contracts_with_data: List[Dict], 
+                                   data_type: str, 
+                                   search_results: Dict) -> str:
+        """
+        Build combined context for comparison: existing context data + new search results.
+        
+        Args:
+            contracts_with_data: Contracts that already have extracted data
+            data_type: The type of data being compared (e.g., 'streaming')
+            search_results: New search results for contracts missing data
+            
+        Returns:
+            Combined context string for LLM
+        """
+        context_parts = []
+        
+        # Add existing data from contracts that have it
+        context_parts.append("=== PREVIOUSLY RETRIEVED CONTRACT DATA ===")
+        for contract in contracts_with_data:
+            contract_name = contract.get('name', 'Unknown Contract')
+            data = contract.get('data_extracted', {})
+            royalty_splits = data.get('royalty_splits', {})
+            
+            if isinstance(royalty_splits, dict) and royalty_splits.get(data_type):
+                splits = royalty_splits[data_type]
+                context_parts.append(f"\n[Contract: {contract_name}]")
+                context_parts.append(f"{data_type.capitalize()} Royalty Splits:")
+                for split in splits:
+                    party = split.get('party', 'Unknown')
+                    percentage = split.get('percentage', 0)
+                    context_parts.append(f"  - {party}: {percentage}%")
+        
+        # Add new search results
+        context_parts.append("\n\n=== NEWLY RETRIEVED CONTRACT DATA ===")
+        for match in search_results.get("matches", []):
+            section = match.get('section_heading', 'N/A')
+            text = match.get('text', '')
+            contract_file = match.get('contract_file', 'Unknown')
+            context_parts.append(f"\n[Contract: {contract_file}]")
+            context_parts.append(f"[Section: {section}]")
+            context_parts.append(text)
+        
+        return "\n".join(context_parts)
+    
     def _expand_contract_ids_from_context(self, contract_ids: List[str], 
                                            context: Optional[Dict],
                                            limit: int = 5) -> List[str]:
@@ -1474,6 +1560,50 @@ Artist Profile:
         
         logger.info(f"[Comparison] Expanded contract_ids from {len(contract_ids or [])} to {len(all_ids)}")
         return all_ids
+    
+    def _build_comparison_context(self, contracts_with_data: List[Dict], 
+                                   data_type: str, 
+                                   search_results: Dict) -> str:
+        """
+        Build combined context for comparison: existing context data + new search results.
+        
+        Args:
+            contracts_with_data: Contracts that already have extracted data
+            data_type: The type of data being compared (e.g., 'streaming')
+            search_results: New search results for contracts missing data
+            
+        Returns:
+            Combined context string for LLM
+        """
+        context_parts = []
+        
+        # Add existing data from contracts that have it
+        context_parts.append("=== PREVIOUSLY RETRIEVED CONTRACT DATA ===")
+        for contract in contracts_with_data:
+            contract_name = contract.get('name', 'Unknown Contract')
+            data = contract.get('data_extracted', {})
+            royalty_splits = data.get('royalty_splits', {})
+            
+            if isinstance(royalty_splits, dict) and royalty_splits.get(data_type):
+                splits = royalty_splits[data_type]
+                context_parts.append(f"\n[Contract: {contract_name}]")
+                context_parts.append(f"{data_type.capitalize()} Royalty Splits:")
+                for split in splits:
+                    party = split.get('party', 'Unknown')
+                    percentage = split.get('percentage', 0)
+                    context_parts.append(f"  - {party}: {percentage}%")
+        
+        # Add new search results
+        context_parts.append("\n\n=== NEWLY RETRIEVED CONTRACT DATA ===")
+        for match in search_results.get("matches", []):
+            section = match.get('section_heading', 'N/A')
+            text = match.get('text', '')
+            contract_file = match.get('contract_file', 'Unknown')
+            context_parts.append(f"\n[Contract: {contract_file}]")
+            context_parts.append(f"[Section: {section}]")
+            context_parts.append(text)
+        
+        return "\n".join(context_parts)
     
     def _answer_from_context(self, query: str, context: Dict, session_id: Optional[str] = None) -> Dict:
         """
@@ -1829,7 +1959,8 @@ Your answers should be:
         
         return "\n\n".join(context_parts)
     
-    def _generate_answer(self, query: str, context: str, search_results: Dict, session_id: Optional[str] = None) -> Dict:
+    def _generate_answer(self, query: str, context: str, search_results: Dict, session_id: Optional[str] = None, 
+                        is_targeted_comparison: bool = False) -> Dict:
         """
         Generate answer using LLM with conversation history for context.
         
@@ -1838,6 +1969,7 @@ Your answers should be:
             context: Formatted context from search results
             search_results: Original search results
             session_id: Session ID for conversation history
+            is_targeted_comparison: Whether this is a comparison query using targeted retrieval
             
         Returns:
             Dict with answer and metadata
@@ -1853,9 +1985,33 @@ Your answers should be:
                 "sources": []
             }
         
-        # System prompt with strict focus on the question asked - NO follow-up suggestions
-        # Suggestions are only made in _answer_from_context when we have context data
-        system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
+        # Adjust system prompt based on whether this is a targeted comparison
+        if is_targeted_comparison:
+            system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
+Your task is to answer questions about contract documents based on the provided context.
+
+CRITICAL RULES:
+1. The user is asking for a COMPARISON between contracts
+2. Use BOTH the provided contract documents AND the conversation history to perform the comparison
+3. The conversation history contains information about previously discussed contracts - USE IT
+4. Clearly distinguish between contracts when comparing
+5. Be precise with numbers, percentages, and contract names
+6. If you cannot find information for all contracts, acknowledge what's missing
+
+COMPARISON INSTRUCTIONS:
+- Review the conversation history to see what contracts were previously discussed
+- Combine that information with the newly retrieved contract documents
+- Perform a comprehensive comparison as requested
+- Cite sources for each piece of information
+
+Your answers should be:
+- Accurate and grounded in both the provided documents and conversation history
+- Clear and concise
+- Properly cited with sources
+- Professional and helpful"""
+        else:
+            # Standard system prompt with strict focus on the question asked
+            system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
 Your task is to answer questions about contract documents based on the provided context.
 
 CRITICAL RULES:
@@ -2036,13 +2192,77 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Check if we have partial context data that could answer the query
         # This handles cases where user is comparing contracts but only one is selected
         if reason.startswith("need_more_contracts_for_") and context:
-            contracts_discussed = context.get('contracts_discussed', [])
-            contracts_with_data = [c for c in contracts_discussed if c.get('data_extracted')]
+            # Extract the specific data type from the reason
+            # e.g., "need_more_contracts_for_streaming_comparison" -> "streaming"
+            data_type = reason.replace("need_more_contracts_for_", "").replace("_comparison", "")
             
-            if len(contracts_with_data) >= 2:
-                # We have data for 2+ contracts in context, even if not all are selected
-                logger.info(f"Found {len(contracts_with_data)} contracts with data in context - answering from context")
+            contracts_discussed = context.get('contracts_discussed', [])
+            contracts_with_specific_data = [
+                c for c in contracts_discussed 
+                if self._contract_has_royalty_type(c, data_type)
+            ]
+            
+            if len(contracts_with_specific_data) >= 2:
+                # We have the SPECIFIC data type for 2+ contracts in context
+                logger.info(f"Found {len(contracts_with_specific_data)} contracts with {data_type} data in context - answering from context")
                 return self._answer_from_context(query, context, session_id)
+            else:
+                # Some contracts are missing data - do targeted retrieval for those contracts
+                contracts_missing_data = [
+                    c for c in contracts_discussed 
+                    if c.get('id') and not self._contract_has_royalty_type(c, data_type)
+                ]
+                
+                if contracts_missing_data and len(contracts_with_specific_data) >= 1:
+                    logger.info(f"[Multi-Step Comparison] {len(contracts_with_specific_data)} contract(s) have {data_type} data, {len(contracts_missing_data)} missing - doing targeted retrieval")
+                    
+                    # Get IDs of contracts missing data
+                    missing_contract_ids = [c.get('id') for c in contracts_missing_data if c.get('id')]
+                    
+                    # Do targeted search specifically for missing contracts
+                    targeted_query = self._get_targeted_query(f"missing_{data_type}_splits", query)
+                    logger.info(f"[Multi-Step Comparison] Targeted query for missing contracts: '{targeted_query}'")
+                    
+                    # Store user message in memory before search
+                    self._add_to_memory(session_id, "user", query)
+                    
+                    # Search only the contracts missing data
+                    search_results = self.search_engine.search_multiple_contracts(
+                        query=targeted_query,
+                        user_id=user_id,
+                        project_id=project_id,
+                        contract_ids=missing_contract_ids,
+                        top_k=top_k
+                    )
+                    
+                    if search_results["matches"]:
+                        # Build combined context: existing context data + new search results
+                        combined_context = self._build_comparison_context(
+                            contracts_with_data=contracts_with_specific_data,
+                            data_type=data_type,
+                            search_results=search_results
+                        )
+                        
+                        logger.info(f"[Multi-Step Comparison] Built combined context with existing data + new retrieval")
+                        
+                        # Generate comparison answer
+                        result = self._generate_answer(query, combined_context, search_results, session_id, is_targeted_comparison=True)
+                        
+                        # Store assistant response in memory
+                        self._add_to_memory(session_id, "assistant", result["answer"], {
+                            "confidence": result["confidence"],
+                            "sources": result.get("sources", [])
+                        })
+                        
+                        result["query"] = query
+                        result["search_results_count"] = search_results["total_results"]
+                        result["filter"] = search_results.get("filter", {})
+                        result["session_id"] = session_id
+                        result["multi_step_comparison"] = True
+                        
+                        return result
+                
+                logger.info(f"Only {len(contracts_with_specific_data)} contract(s) have {data_type} data - will use standard targeted retrieval")
         
         # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
@@ -2092,9 +2312,17 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
         
-        # Step 3: Query Pinecone for contract data
+        # Step 3: Determine search query (use targeted query if missing data detected)
+        search_query = query
+        if reason.startswith("missing_"):
+            # Generate targeted query for the missing data
+            search_query = self._get_targeted_query(reason, query)
+            logger.info(f"[Targeted Retrieval] Using targeted query for search: '{search_query}'")
+            logger.info(f"[Targeted Retrieval] Original query will be used for answer generation: '{query}'")
+        
+        # Step 4: Query Pinecone for contract data
         search_results = self.search_engine.smart_search(
-            query=query,
+            query=search_query,  # Use targeted query for search
             user_id=user_id,
             project_id=project_id,
             contract_id=contract_id,
@@ -2119,8 +2347,16 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Step 3: Format context
         context = self._format_context(search_results)
         
-        # Step 4: Generate answer with conversation history
-        result = self._generate_answer(query, context, search_results, session_id)
+        # Step 4: Detect if this is a targeted comparison query
+        is_targeted_comparison = (
+            reason.startswith("missing_") and 
+            self._is_comparison_query(query)
+        )
+        if is_targeted_comparison:
+            logger.info("[Targeted Comparison] Detected comparison query with targeted retrieval - will use conversation history for comparison")
+        
+        # Step 5: Generate answer with conversation history
+        result = self._generate_answer(query, context, search_results, session_id, is_targeted_comparison)
         
         # Step 5: Store assistant response in memory
         self._add_to_memory(session_id, "assistant", result["answer"], {
@@ -2317,13 +2553,77 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Check if we have partial context data that could answer the query
         # This handles cases where user is comparing contracts but only one is selected
         if reason.startswith("need_more_contracts_for_") and context:
-            contracts_discussed = context.get('contracts_discussed', [])
-            contracts_with_data = [c for c in contracts_discussed if c.get('data_extracted')]
+            # Extract the specific data type from the reason
+            # e.g., "need_more_contracts_for_streaming_comparison" -> "streaming"
+            data_type = reason.replace("need_more_contracts_for_", "").replace("_comparison", "")
             
-            if len(contracts_with_data) >= 2:
-                # We have data for 2+ contracts in context, even if not all are selected
-                logger.info(f"Found {len(contracts_with_data)} contracts with data in context - answering from context")
+            contracts_discussed = context.get('contracts_discussed', [])
+            contracts_with_specific_data = [
+                c for c in contracts_discussed 
+                if self._contract_has_royalty_type(c, data_type)
+            ]
+            
+            if len(contracts_with_specific_data) >= 2:
+                # We have the SPECIFIC data type for 2+ contracts in context
+                logger.info(f"Found {len(contracts_with_specific_data)} contracts with {data_type} data in context - answering from context")
                 return self._answer_from_context(query, context, session_id)
+            else:
+                # Some contracts are missing data - do targeted retrieval for those contracts
+                contracts_missing_data = [
+                    c for c in contracts_discussed 
+                    if c.get('id') and not self._contract_has_royalty_type(c, data_type)
+                ]
+                
+                if contracts_missing_data and len(contracts_with_specific_data) >= 1:
+                    logger.info(f"[Multi-Step Comparison] {len(contracts_with_specific_data)} contract(s) have {data_type} data, {len(contracts_missing_data)} missing - doing targeted retrieval")
+                    
+                    # Get IDs of contracts missing data
+                    missing_contract_ids = [c.get('id') for c in contracts_missing_data if c.get('id')]
+                    
+                    # Do targeted search specifically for missing contracts
+                    targeted_query = self._get_targeted_query(f"missing_{data_type}_splits", query)
+                    logger.info(f"[Multi-Step Comparison] Targeted query for missing contracts: '{targeted_query}'")
+                    
+                    # Store user message in memory before search
+                    self._add_to_memory(session_id, "user", query)
+                    
+                    # Search only the contracts missing data
+                    search_results = self.search_engine.search_multiple_contracts(
+                        query=targeted_query,
+                        user_id=user_id,
+                        project_id=project_id,
+                        contract_ids=missing_contract_ids,
+                        top_k=top_k
+                    )
+                    
+                    if search_results["matches"]:
+                        # Build combined context: existing context data + new search results
+                        combined_context = self._build_comparison_context(
+                            contracts_with_data=contracts_with_specific_data,
+                            data_type=data_type,
+                            search_results=search_results
+                        )
+                        
+                        logger.info(f"[Multi-Step Comparison] Built combined context with existing data + new retrieval")
+                        
+                        # Generate comparison answer
+                        result = self._generate_answer(query, combined_context, search_results, session_id, is_targeted_comparison=True)
+                        
+                        # Store assistant response in memory
+                        self._add_to_memory(session_id, "assistant", result["answer"], {
+                            "confidence": result["confidence"],
+                            "sources": result.get("sources", [])
+                        })
+                        
+                        result["query"] = query
+                        result["search_results_count"] = search_results["total_results"]
+                        result["filter"] = search_results.get("filter", {})
+                        result["session_id"] = session_id
+                        result["multi_step_comparison"] = True
+                        
+                        return result
+                
+                logger.info(f"Only {len(contracts_with_specific_data)} contract(s) have {data_type} data - will use standard targeted retrieval")
         
         # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
@@ -2358,9 +2658,17 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
         
-        # Step 3: Query Pinecone for contract data
+        # Step 3: Determine search query (use targeted query if missing data detected)
+        search_query = query
+        if reason.startswith("missing_"):
+            # Generate targeted query for the missing data
+            search_query = self._get_targeted_query(reason, query)
+            logger.info(f"[Targeted Retrieval] Using targeted query for search: '{search_query}'")
+            logger.info(f"[Targeted Retrieval] Original query will be used for answer generation: '{query}'")
+        
+        # Step 4: Query Pinecone for contract data
         search_results = self.search_engine.search_multiple_contracts(
-            query=query,
+            query=search_query,  # Use targeted query for search
             user_id=user_id,
             project_id=project_id,
             contract_ids=contract_ids,
@@ -2384,8 +2692,16 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Format context
         context = self._format_context(search_results)
         
+        # Detect if this is a targeted comparison query
+        is_targeted_comparison = (
+            reason.startswith("missing_") and 
+            self._is_comparison_query(query)
+        )
+        if is_targeted_comparison:
+            logger.info("[Targeted Comparison] Detected comparison query with targeted retrieval - will use conversation history for comparison")
+        
         # Generate answer with conversation history
-        result = self._generate_answer(query, context, search_results, session_id)
+        result = self._generate_answer(query, context, search_results, session_id, is_targeted_comparison)
         
         # Store assistant response in memory
         self._add_to_memory(session_id, "assistant", result["answer"], {
