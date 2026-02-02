@@ -56,7 +56,7 @@ interface Contract {
 }
 
 interface Message {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   confidence?: string;
   sources?: Array<{
@@ -67,6 +67,9 @@ interface Message {
   timestamp: string;
   showQuickActions?: boolean;
 }
+
+// Maximum messages before requiring session refresh
+const MAX_CONVERSATION_MESSAGES = 20;
 
 // Conversation context for structured tracking
 interface RoyaltySplitData {
@@ -93,6 +96,20 @@ interface ExtractedContractData {
   [key: string]: unknown;
 }
 
+interface ArtistDataExtracted {
+  bio?: string;
+  social_media?: Record<string, string>;
+  streaming_links?: Record<string, string>;
+  genres?: string[];
+  email?: string;
+}
+
+interface ArtistDiscussed {
+  id: string;
+  name: string;
+  data_extracted: ArtistDataExtracted;
+}
+
 interface ContractDiscussed {
   id: string;
   name: string;
@@ -109,6 +126,7 @@ interface ContextSwitch {
 interface ConversationContext {
   session_id: string;
   artist: { id: string; name: string } | null;
+  artists_discussed: ArtistDiscussed[];
   project: { id: string; name: string } | null;
   contracts_discussed: ContractDiscussed[];
   context_switches: ContextSwitch[];
@@ -152,6 +170,7 @@ const Zoe = () => {
   const [conversationContext, setConversationContext] = useState<ConversationContext>({
     session_id: sessionId,
     artist: null,
+    artists_discussed: [],
     project: null,
     contracts_discussed: [],
     context_switches: []
@@ -216,22 +235,32 @@ const Zoe = () => {
 
   useEffect(() => {
     fetchContracts();
-    // Reset UI and session when switching projects
+    // Update UI when switching projects (but keep conversation history)
     if (selectedProject) {
       setContractsOpen(true);
-      // Start a new session for the new project context
-      setSessionId(crypto.randomUUID());
-      setMessages([]); // Clear previous conversation
     } else {
       setContractsOpen(false);
     }
   }, [selectedProject]);
 
-  // Track artist context changes
+  // Track artist context changes - insert divider message when switching artists
   useEffect(() => {
     if (selectedArtist && selectedArtistName) {
       setConversationContext(prev => {
-        const contextSwitches = prev.artist && prev.artist.id !== selectedArtist
+        // Check if this is a switch to a different artist
+        const isArtistSwitch = prev.artist && prev.artist.id !== selectedArtist;
+        
+        if (isArtistSwitch) {
+          // Insert a divider message instead of clearing conversation
+          const dividerMessage: Message = {
+            role: "system",
+            content: `--- Switched to Artist: ${selectedArtistName} ---`,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages(prevMessages => [...prevMessages, dividerMessage]);
+        }
+        
+        const contextSwitches = isArtistSwitch
           ? [...prev.context_switches, {
               timestamp: new Date().toISOString(),
               type: 'artist' as const,
@@ -250,11 +279,23 @@ const Zoe = () => {
     }
   }, [selectedArtist, selectedArtistName, sessionId]);
 
-  // Track project context changes
+  // Track project context changes - insert divider message when switching projects
   useEffect(() => {
     if (selectedProject && selectedProjectName) {
       setConversationContext(prev => {
-        const contextSwitches = prev.project && prev.project.id !== selectedProject
+        const isProjectSwitch = prev.project && prev.project.id !== selectedProject;
+        
+        if (isProjectSwitch) {
+          // Insert a divider message for project switch
+          const dividerMessage: Message = {
+            role: "system",
+            content: `--- Switched to Project: ${selectedProjectName} ---`,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages(prevMessages => [...prevMessages, dividerMessage]);
+        }
+        
+        const contextSwitches = isProjectSwitch
           ? [...prev.context_switches, {
               timestamp: new Date().toISOString(),
               type: 'project' as const,
@@ -267,15 +308,15 @@ const Zoe = () => {
           ...prev,
           session_id: sessionId,
           project: { id: selectedProject, name: selectedProjectName },
-          contracts_discussed: [], // Reset on project change
+          // Keep contracts_discussed to allow cross-project comparisons
           context_switches: contextSwitches
         };
       });
     } else if (!selectedProject) {
       setConversationContext(prev => ({
         ...prev,
-        project: null,
-        contracts_discussed: []
+        project: null
+        // Note: contracts_discussed is preserved to allow cross-artist/project comparisons
       }));
     }
   }, [selectedProject, selectedProjectName, sessionId]);
@@ -485,6 +526,115 @@ const Zoe = () => {
     return extracted;
   };
 
+  // Extract artist data from answer for tracking
+  const extractArtistDataFromAnswer = (answer: string, query: string): ArtistDataExtracted => {
+    const extracted: ArtistDataExtracted = {};
+    const queryLower = query.toLowerCase();
+    
+    // Extract bio
+    if (queryLower.includes('bio')) {
+      // Simple extraction - the answer itself is likely the bio
+      if (answer.length > 0 && answer.length < 500 && !answer.includes('?')) {
+        extracted.bio = answer.trim();
+      }
+    }
+    
+    // Extract social media links
+    if (queryLower.includes('social')) {
+      const socialMedia: Record<string, string> = {};
+      const urlPattern = /https?:\/\/[^\s]+/g;
+      const urls = answer.match(urlPattern) || [];
+      
+      urls.forEach(url => {
+        if (url.includes('instagram')) socialMedia.instagram = url;
+        else if (url.includes('tiktok')) socialMedia.tiktok = url;
+        else if (url.includes('youtube')) socialMedia.youtube = url;
+        else if (url.includes('twitter') || url.includes('x.com')) socialMedia.twitter = url;
+        else if (url.includes('facebook')) socialMedia.facebook = url;
+      });
+      
+      if (Object.keys(socialMedia).length > 0) {
+        extracted.social_media = socialMedia;
+      }
+    }
+    
+    // Extract streaming links
+    if (queryLower.includes('streaming') || queryLower.includes('spotify') || queryLower.includes('apple music')) {
+      const streamingLinks: Record<string, string> = {};
+      const urlPattern = /https?:\/\/[^\s]+/g;
+      const urls = answer.match(urlPattern) || [];
+      
+      urls.forEach(url => {
+        if (url.includes('spotify')) streamingLinks.spotify = url;
+        else if (url.includes('apple') || url.includes('music.apple')) streamingLinks.apple_music = url;
+        else if (url.includes('soundcloud')) streamingLinks.soundcloud = url;
+      });
+      
+      if (Object.keys(streamingLinks).length > 0) {
+        extracted.streaming_links = streamingLinks;
+      }
+    }
+    
+    return extracted;
+  };
+
+  // Update artists_discussed when artist info is retrieved
+  const updateArtistsDiscussed = (answer: string, query: string, answeredFrom?: string, serverExtractedData?: ArtistDataExtracted) => {
+    // Only track if this was an artist-related query
+    if (answeredFrom !== 'artist_data' && answeredFrom !== 'artist_comparison') {
+      return;
+    }
+    
+    if (!selectedArtist || !selectedArtistName) {
+      return;
+    }
+    
+    // Use server-provided data if available, otherwise fall back to client-side extraction
+    const extractedData = serverExtractedData && Object.keys(serverExtractedData).length > 0
+      ? serverExtractedData
+      : extractArtistDataFromAnswer(answer, query);
+    
+    if (Object.keys(extractedData).length === 0) {
+      return;
+    }
+    
+    console.log('[Context] Updating artists_discussed with data:', extractedData, serverExtractedData ? '(from server)' : '(from client fallback)');
+    
+    setConversationContext(prev => {
+      const existingIndex = prev.artists_discussed.findIndex(a => a.id === selectedArtist);
+      
+      if (existingIndex >= 0) {
+        // Merge with existing artist data
+        const updatedArtists = [...prev.artists_discussed];
+        updatedArtists[existingIndex] = {
+          ...updatedArtists[existingIndex],
+          data_extracted: {
+            ...updatedArtists[existingIndex].data_extracted,
+            ...extractedData
+          }
+        };
+        
+        return {
+          ...prev,
+          artists_discussed: updatedArtists
+        };
+      } else {
+        // Add new artist
+        return {
+          ...prev,
+          artists_discussed: [
+            ...prev.artists_discussed,
+            {
+              id: selectedArtist,
+              name: selectedArtistName,
+              data_extracted: extractedData
+            }
+          ]
+        };
+      }
+    });
+  };
+
   // Update conversation context with extracted data from response
   // Now prioritizes server-provided extracted_data over client-side extraction
   const updateContextWithExtractedData = (
@@ -492,17 +642,26 @@ const Zoe = () => {
     query: string, 
     sources?: Message['sources'],
     answeredFrom?: string,
-    serverExtractedData?: ExtractedContractData
+    serverExtractedData?: ExtractedContractData | ArtistDataExtracted
   ) => {
     console.log('[Context] updateContextWithExtractedData called with sources:', sources, 'serverExtractedData:', serverExtractedData);
+    
+    // Update artist data if this was an artist query
+    // Pass serverExtractedData if it's artist data (has bio, social_media, etc.)
+    const isArtistData = serverExtractedData && ('bio' in serverExtractedData || 'social_media' in serverExtractedData || 'streaming_links' in serverExtractedData);
+    updateArtistsDiscussed(answer, query, answeredFrom, isArtistData ? serverExtractedData as ArtistDataExtracted : undefined);
+    
     if (!sources || sources.length === 0) {
-      console.log('[Context] No sources provided, skipping context update');
+      console.log('[Context] No sources provided, skipping contract context update');
       return;
     }
     
-    // Use server-provided data if available, otherwise fall back to client-side extraction
-    const extracted = serverExtractedData && Object.keys(serverExtractedData).length > 0 
-      ? serverExtractedData 
+    // For contract data, only use serverExtractedData if it's NOT artist data
+    const contractData = (serverExtractedData && !isArtistData) ? serverExtractedData as ExtractedContractData : undefined;
+    
+    // Use server-provided contract data if available, otherwise fall back to client-side extraction
+    const extracted = contractData && Object.keys(contractData).length > 0 
+      ? contractData 
       : extractDataFromAnswer(answer, query, sources);
     
     console.log('[Context] Using extracted data:', extracted, serverExtractedData ? '(from server)' : '(from client fallback)');
@@ -568,6 +727,12 @@ const Zoe = () => {
     // Need at least an artist selected
     if (!selectedArtist) {
       setError("Please select an artist first");
+      return;
+    }
+
+    // Check if conversation limit is reached
+    if (messages.length >= MAX_CONVERSATION_MESSAGES) {
+      setShowReloadDialog(true);
       return;
     }
 
@@ -669,6 +834,12 @@ const Zoe = () => {
   // Helper to send a specific query (used by quick actions)
   const sendMessageWithQuery = async (query: string) => {
     if (!query.trim() || !selectedArtist || !user) {
+      return;
+    }
+
+    // Check if conversation limit is reached
+    if (messages.length >= MAX_CONVERSATION_MESSAGES) {
+      setShowReloadDialog(true);
       return;
     }
 
@@ -819,12 +990,16 @@ const Zoe = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* Context summary badge - visible when sidebar is closed */}
-            {!sidebarOpen && selectedProject && (
+            {/* Context summary badge - shows current context */}
+            {selectedArtist && (
               <Badge variant="secondary" className="hidden sm:flex items-center gap-1.5 text-xs">
                 <span className="max-w-[100px] truncate">{selectedArtistName}</span>
-                <span className="text-muted-foreground">•</span>
-                <span className="max-w-[100px] truncate">{selectedProjectName}</span>
+                {selectedProject && (
+                  <>
+                    <span className="text-muted-foreground">•</span>
+                    <span className="max-w-[100px] truncate">{selectedProjectName}</span>
+                  </>
+                )}
                 {selectedContracts.length > 0 && (
                   <>
                     <span className="text-muted-foreground">•</span>
@@ -1124,9 +1299,20 @@ const Zoe = () => {
                       key={index}
                       className={cn(
                         "flex gap-3",
-                        message.role === "user" ? "justify-end" : "justify-start"
+                        message.role === "user" ? "justify-end" : message.role === "system" ? "justify-center" : "justify-start"
                       )}
                     >
+                      {/* System divider message */}
+                      {message.role === "system" && (
+                        <div className="flex items-center gap-2 py-2">
+                          <div className="h-px flex-1 bg-border" />
+                          <span className="text-xs text-muted-foreground px-2 whitespace-nowrap">
+                            {message.content.replace(/^---\s*|\s*---$/g, '')}
+                          </span>
+                          <div className="h-px flex-1 bg-border" />
+                        </div>
+                      )}
+                      
                       {message.role === "assistant" && (
                         <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-1">
                           <Bot className="w-4 h-4 text-primary" />
@@ -1231,21 +1417,23 @@ const Zoe = () => {
                 </Button>
                 <Input
                   placeholder={
-                    !selectedArtist
-                      ? "Select an artist to start chatting..."
-                      : selectedProject
-                        ? "Ask about contracts or artist info..."
-                        : "Ask about the artist (select a project for contract questions)..."
+                    messages.length >= MAX_CONVERSATION_MESSAGES
+                      ? "Conversation limit reached. Please refresh the page."
+                      : !selectedArtist
+                        ? "Select an artist to start chatting..."
+                        : selectedProject
+                          ? "Ask about contracts or artist info..."
+                          : "Ask about the artist (select a project for contract questions)..."
                   }
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  disabled={!selectedArtist || isLoading}
+                  disabled={!selectedArtist || isLoading || messages.length >= MAX_CONVERSATION_MESSAGES}
                   className="flex-1 h-11 rounded-full px-4 bg-muted/50 border-muted"
                 />
                 <Button
                   onClick={handleSendMessage}
-                  disabled={!selectedArtist || !inputMessage.trim() || isLoading}
+                  disabled={!selectedArtist || !inputMessage.trim() || isLoading || messages.length >= MAX_CONVERSATION_MESSAGES}
                   size="icon"
                   className="h-11 w-11 rounded-full flex-shrink-0"
                 >
@@ -1254,7 +1442,9 @@ const Zoe = () => {
               </div>
               
               <p className="text-[11px] text-center text-muted-foreground mt-2">
-                Zoe answers based on your artist profile and uploaded contracts
+                {messages.length >= MAX_CONVERSATION_MESSAGES 
+                  ? "Conversation limit reached. Please refresh the page to continue."
+                  : "Zoe answers based on your artist profile and uploaded contracts"}
               </p>
             </div>
           </div>
@@ -1335,18 +1525,20 @@ const Zoe = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Context Cleared Reload Dialog */}
+      {/* Context Cleared / Conversation Limit Reload Dialog */}
       <AlertDialog open={showReloadDialog} onOpenChange={setShowReloadDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Session Reset Required</AlertDialogTitle>
+            <AlertDialogTitle>Session Refresh Required</AlertDialogTitle>
             <AlertDialogDescription>
-              The conversation context was reset. Please reload the page to start a fresh session with Zoe.
+              {messages.length >= MAX_CONVERSATION_MESSAGES 
+                ? "You've reached the conversation limit. Please refresh the page to start a fresh session with Zoe."
+                : "The conversation context was reset. Please reload the page to start a fresh session with Zoe."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogAction onClick={() => window.location.reload()}>
-              Reload Page
+              Refresh Page
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
