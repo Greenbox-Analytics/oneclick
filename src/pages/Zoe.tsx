@@ -269,10 +269,21 @@ const Zoe = () => {
             }]
           : prev.context_switches;
         
+        // Ensure current artist is in artists_discussed
+        const artistInDiscussed = prev.artists_discussed.find(a => a.id === selectedArtist);
+        const updatedArtistsDiscussed = artistInDiscussed 
+          ? prev.artists_discussed 
+          : [...prev.artists_discussed, {
+              id: selectedArtist,
+              name: selectedArtistName,
+              data_extracted: {}
+            }];
+        
         return {
           ...prev,
           session_id: sessionId,
           artist: { id: selectedArtist, name: selectedArtistName },
+          artists_discussed: updatedArtistsDiscussed,
           context_switches: contextSwitches
         };
       });
