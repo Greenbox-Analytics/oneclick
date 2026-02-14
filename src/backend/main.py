@@ -957,6 +957,8 @@ async def oneclick_calculate_royalties_stream(
                             result = calc['results']
                             # Ensure is_cached flag is set
                             result['is_cached'] = True
+                            # Add type field so frontend SSE handler recognizes it
+                            result['type'] = 'complete'
                             
                             yield f"data: {json.dumps(result)}\n\n"
                             return

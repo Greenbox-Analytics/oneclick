@@ -438,7 +438,7 @@ const OneClickDocuments = () => {
                     setShowProgressModal(false);
                     
                     if (data.is_cached) {
-                        toast.success("Loaded cached results!");
+                        toast.success("Royalties loaded successfully!");
                     } else {
                         toast.success("Royalties calculated successfully!");
                     }
@@ -453,6 +453,32 @@ const OneClickDocuments = () => {
                     setShowProgressModal(false);
                     setError(data.message || "An error occurred");
                     toast.error(data.message || "Calculation failed");
+                    setIsUploading(false);
+                } else if (data.status === 'success' && data.payments) {
+                    // Defensive: Handle completion messages without explicit type field
+                    // This catches cached results that may have been stored before type field was added
+                    clearTimeout(timeout);
+                    eventSource.close();
+                    
+                    const result: CalculationResult = {
+                        status: data.status,
+                        total_payments: data.total_payments,
+                        payments: data.payments,
+                        message: data.message,
+                        is_cached: data.is_cached
+                    };
+                    
+                    setCalculationResult(result);
+                    setShowProgressModal(false);
+                    
+                    if (data.is_cached) {
+                        toast.success("Royalties loaded successfully!");
+                    } else {
+                        toast.success("Royalties calculated successfully!");
+                    }
+                    
+                    setContractFiles([]);
+                    setRoyaltyStatementFiles([]);
                     setIsUploading(false);
                 }
             } catch (err) {
