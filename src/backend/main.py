@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from supabase import create_client, Client
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import os
 import io
 import uuid
@@ -94,6 +94,18 @@ class ExtractedContractData(BaseModel):
     advances: Optional[str] = None
     term_length: Optional[str] = None
 
+class ArtistDataExtracted(BaseModel):
+    bio: Optional[str] = None
+    social_media: Optional[Dict[str, str]] = None
+    streaming_links: Optional[Dict[str, str]] = None
+    genres: Optional[List[str]] = None
+    email: Optional[str] = None
+
+class ArtistDiscussed(BaseModel):
+    id: str
+    name: str
+    data_extracted: Optional[ArtistDataExtracted] = None
+
 class ContractDiscussed(BaseModel):
     id: str
     name: str
@@ -119,6 +131,7 @@ class ContextSwitch(BaseModel):
 class ConversationContext(BaseModel):
     session_id: str
     artist: Optional[Dict[str, str]] = None
+    artists_discussed: List[ArtistDiscussed] = []  # NEW: Track all discussed artists
     project: Optional[Dict[str, str]] = None
     contracts_discussed: List[ContractDiscussed] = []
     context_switches: List[ContextSwitch] = []
@@ -159,6 +172,28 @@ class ZoeSource(BaseModel):
             project_name=source.get("project_name", "Unknown")
         )
 
+# Models for pinned facts and assumptions in API response
+class PinnedFactResponse(BaseModel):
+    id: str
+    fact_type: str
+    description: str
+    value: Any
+    confidence: float
+    source_type: str
+    source_reference: str
+    scope: Dict[str, Optional[str]]
+    extracted_at: str
+    last_verified: str
+
+class AssumptionResponse(BaseModel):
+    id: str
+    statement: str
+    context: str
+    scope: Dict[str, Optional[str]]
+    introduced_at: str
+    verified: bool
+    invalidated: bool
+
 class ZoeAskResponse(BaseModel):
     query: str
     answer: str
@@ -172,6 +207,13 @@ class ZoeAskResponse(BaseModel):
     extracted_data: Optional[ExtractedContractData] = None  # Server-side extracted structured data
     pending_suggestion: Optional[str] = None  # Follow-up suggestion that can be answered from context
     context_cleared: Optional[bool] = None  # True if context was cleared and user needs to refresh
+    # New fields for enhanced conversation management
+    extracted_facts: Optional[List[PinnedFactResponse]] = None  # Facts extracted from this response
+    active_assumptions: Optional[List[AssumptionResponse]] = None  # Currently active assumptions
+    invalidated_assumptions: Optional[List[str]] = None  # IDs of assumptions invalidated this turn
+    confidence_score: Optional[float] = None  # Numeric confidence (0.0-1.0)
+    needs_clarification: Optional[bool] = None  # True if query is ambiguous
+    clarification_options: Optional[List[str]] = None  # Options for disambiguation
 
 # Initialize Zoe chatbot and contract ingestion (singletons)
 zoe_chatbot = None

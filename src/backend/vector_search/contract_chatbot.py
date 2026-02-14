@@ -9,6 +9,9 @@ Features:
 - LLM-powered answer generation with grounding
 - Support for project-level and contract-level queries
 - Session-based conversation history with memory retention
+- Pinned facts with confidence scoring (0.0-1.0)
+- Assumptions ledger with scope-based invalidation
+- Rolling conversation summaries
 """
 
 import os
@@ -17,13 +20,281 @@ import time
 import json
 import hashlib
 import re
-from typing import List, Dict, Optional, Tuple
+import logging
+from typing import List, Dict, Optional, Tuple, Literal, Any
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from dotenv import load_dotenv
 from openai import OpenAI
 from vector_search.contract_search import ContractSearch
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
+
+# Confidence thresholds for graduated answering
+class ConfidenceLevel(Enum):
+    HIGH = "high"           # >= 0.85 - Answer directly
+    MEDIUM = "medium"       # 0.60-0.84 - Answer with caveat
+    LOW = "low"             # < 0.60 - Reverify or clarify
+    CONTEXT = "context"     # From pinned facts
+    CONVERSATIONAL = "conversational"  # Greetings, etc.
+
+
+@dataclass
+class Scope:
+    """Defines the scope for facts and assumptions"""
+    artist_id: Optional[str] = None
+    project_id: Optional[str] = None
+    contract_id: Optional[str] = None
+    
+    def matches(self, other: 'Scope') -> bool:
+        """Check if this scope matches or is a subset of another scope"""
+        if self.artist_id and other.artist_id and self.artist_id != other.artist_id:
+            return False
+        if self.project_id and other.project_id and self.project_id != other.project_id:
+            return False
+        if self.contract_id and other.contract_id and self.contract_id != other.contract_id:
+            return False
+        return True
+    
+    def is_global(self) -> bool:
+        """Check if this is a global (unscoped) fact"""
+        return not self.artist_id and not self.project_id and not self.contract_id
+    
+    def to_dict(self) -> Dict:
+        return {"artist_id": self.artist_id, "project_id": self.project_id, "contract_id": self.contract_id}
+
+
+@dataclass
+class PinnedFact:
+    """
+    A verified fact extracted from documents or user input.
+    Includes confidence scoring and scope tracking.
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    fact_type: str = ""  # royalty_split, payment_terms, parties, etc.
+    description: str = ""  # Human-readable description
+    value: Any = None  # The actual value (can be dict, list, string, number)
+    confidence: float = 0.0  # 0.0 to 1.0
+    source_type: Literal["document", "user_stated", "inferred"] = "document"
+    source_reference: str = ""  # Document name, chunk ID, or "user stated"
+    scope: Scope = field(default_factory=Scope)
+    extracted_at: datetime = field(default_factory=datetime.now)
+    last_verified: datetime = field(default_factory=datetime.now)
+    
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "fact_type": self.fact_type,
+            "description": self.description,
+            "value": self.value,
+            "confidence": self.confidence,
+            "source_type": self.source_type,
+            "source_reference": self.source_reference,
+            "scope": self.scope.to_dict(),
+            "extracted_at": self.extracted_at.isoformat(),
+            "last_verified": self.last_verified.isoformat()
+        }
+    
+    def get_confidence_level(self) -> ConfidenceLevel:
+        """Get the confidence level based on thresholds"""
+        if self.confidence >= 0.85:
+            return ConfidenceLevel.HIGH
+        elif self.confidence >= 0.60:
+            return ConfidenceLevel.MEDIUM
+        else:
+            return ConfidenceLevel.LOW
+
+
+@dataclass
+class Assumption:
+    """
+    An unverified assumption made during conversation.
+    Must be tracked separately from facts and invalidated on scope change.
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    statement: str = ""  # The assumption being made
+    context: str = ""  # What triggered this assumption
+    scope: Scope = field(default_factory=Scope)
+    introduced_at: datetime = field(default_factory=datetime.now)
+    verified: bool = False
+    invalidated: bool = False
+    invalidated_at: Optional[datetime] = None
+    invalidation_reason: Optional[str] = None
+    
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "statement": self.statement,
+            "context": self.context,
+            "scope": self.scope.to_dict(),
+            "introduced_at": self.introduced_at.isoformat(),
+            "verified": self.verified,
+            "invalidated": self.invalidated,
+            "invalidated_at": self.invalidated_at.isoformat() if self.invalidated_at else None,
+            "invalidation_reason": self.invalidation_reason
+        }
+    
+    def invalidate(self, reason: str) -> None:
+        """Mark this assumption as invalidated"""
+        self.invalidated = True
+        self.invalidated_at = datetime.now()
+        self.invalidation_reason = reason
+
+
+class FactLedger:
+    """
+    Manages pinned facts per session with confidence scoring and scope filtering.
+    Facts are stored per session and can be filtered by current scope.
+    """
+    
+    def __init__(self):
+        self._facts: Dict[str, List[PinnedFact]] = defaultdict(list)
+        self._session_timestamps: Dict[str, float] = {}
+    
+    def add_fact(self, session_id: str, fact: PinnedFact) -> None:
+        """Add or update a pinned fact for a session"""
+        existing_idx = None
+        for idx, existing in enumerate(self._facts[session_id]):
+            if (existing.fact_type == fact.fact_type and 
+                existing.scope.matches(fact.scope) and
+                existing.source_reference == fact.source_reference):
+                existing_idx = idx
+                break
+        
+        if existing_idx is not None:
+            if fact.confidence >= self._facts[session_id][existing_idx].confidence:
+                self._facts[session_id][existing_idx] = fact
+        else:
+            self._facts[session_id].append(fact)
+        
+        self._session_timestamps[session_id] = time.time()
+    
+    def get_facts(self, session_id: str, scope: Optional[Scope] = None, 
+                  min_confidence: float = 0.0) -> List[PinnedFact]:
+        """Get facts for a session, optionally filtered by scope and confidence"""
+        facts = self._facts.get(session_id, [])
+        
+        if scope:
+            facts = [f for f in facts if f.scope.matches(scope) or f.scope.is_global()]
+        
+        if min_confidence > 0:
+            facts = [f for f in facts if f.confidence >= min_confidence]
+        
+        return facts
+    
+    def get_fact_by_type(self, session_id: str, fact_type: str, 
+                         scope: Optional[Scope] = None) -> Optional[PinnedFact]:
+        """Get the highest confidence fact of a given type"""
+        facts = self.get_facts(session_id, scope)
+        matching = [f for f in facts if f.fact_type == fact_type]
+        if matching:
+            return max(matching, key=lambda f: f.confidence)
+        return None
+    
+    def clear_session(self, session_id: str) -> None:
+        """Clear all facts for a session"""
+        if session_id in self._facts:
+            del self._facts[session_id]
+        if session_id in self._session_timestamps:
+            del self._session_timestamps[session_id]
+
+
+class AssumptionLedger:
+    """
+    Manages assumptions per session with scope-based invalidation.
+    Assumptions are tracked separately from verified facts.
+    """
+    
+    def __init__(self):
+        self._assumptions: Dict[str, List[Assumption]] = defaultdict(list)
+    
+    def add_assumption(self, session_id: str, assumption: Assumption) -> None:
+        """Add an assumption for a session"""
+        self._assumptions[session_id].append(assumption)
+    
+    def get_active_assumptions(self, session_id: str, scope: Optional[Scope] = None) -> List[Assumption]:
+        """Get non-invalidated assumptions, optionally filtered by scope"""
+        assumptions = [a for a in self._assumptions.get(session_id, []) if not a.invalidated]
+        
+        if scope:
+            assumptions = [a for a in assumptions if a.scope.matches(scope) or a.scope.is_global()]
+        
+        return assumptions
+    
+    def invalidate_for_scope_change(self, session_id: str, old_scope: Scope, 
+                                     new_scope: Scope) -> List[Assumption]:
+        """
+        Invalidate assumptions that are no longer valid due to scope change.
+        Returns list of invalidated assumptions.
+        """
+        invalidated = []
+        
+        for assumption in self._assumptions.get(session_id, []):
+            if assumption.invalidated:
+                continue
+            
+            should_invalidate = False
+            reason = ""
+            
+            if (assumption.scope.artist_id and 
+                old_scope.artist_id == assumption.scope.artist_id and
+                new_scope.artist_id != assumption.scope.artist_id):
+                should_invalidate = True
+                reason = f"Artist changed from {old_scope.artist_id} to {new_scope.artist_id}"
+            
+            if (assumption.scope.project_id and
+                old_scope.project_id == assumption.scope.project_id and
+                new_scope.project_id != assumption.scope.project_id):
+                should_invalidate = True
+                reason = f"Project changed from {old_scope.project_id} to {new_scope.project_id}"
+            
+            if should_invalidate:
+                assumption.invalidate(reason)
+                invalidated.append(assumption)
+        
+        return invalidated
+    
+    def verify_assumption(self, session_id: str, assumption_id: str) -> bool:
+        """Mark an assumption as verified"""
+        for assumption in self._assumptions.get(session_id, []):
+            if assumption.id == assumption_id:
+                assumption.verified = True
+                return True
+        return False
+    
+    def clear_session(self, session_id: str) -> None:
+        """Clear all assumptions for a session"""
+        if session_id in self._assumptions:
+            del self._assumptions[session_id]
+
+
+class ConversationSummary:
+    """
+    Manages rolling conversation summaries per session.
+    Compresses older turns into a summary while keeping recent turns verbatim.
+    """
+    
+    def __init__(self, recent_turns_limit: int = 6):
+        self._summaries: Dict[str, str] = {}
+        self._recent_turns_limit = recent_turns_limit
+    
+    def get_summary(self, session_id: str) -> str:
+        """Get the rolling summary for a session"""
+        return self._summaries.get(session_id, "")
+    
+    def update_summary(self, session_id: str, summary: str) -> None:
+        """Update the rolling summary for a session"""
+        self._summaries[session_id] = summary
+    
+    def clear_session(self, session_id: str) -> None:
+        """Clear summary for a session"""
+        if session_id in self._summaries:
+            del self._summaries[session_id]
 
 
 @dataclass
@@ -155,6 +426,15 @@ class InMemoryChatMessageHistory:
 # Global conversation memory instance
 _conversation_memory = InMemoryChatMessageHistory(max_messages_per_session=20, session_ttl_seconds=3600)
 
+# Global ledger instances for fact and assumption tracking
+_fact_ledger = FactLedger()
+_assumption_ledger = AssumptionLedger()
+_conversation_summary = ConversationSummary()
+
+# Confidence thresholds
+CONFIDENCE_HIGH_THRESHOLD = 0.85  # Answer directly
+CONFIDENCE_MEDIUM_THRESHOLD = 0.60  # Answer with caveat
+
 # Load environment variables
 load_dotenv()
 
@@ -178,7 +458,7 @@ MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
 
 class ContractChatbot:
-    """RAG-based chatbot for contract Q&A with session-based memory"""
+    """RAG-based chatbot for contract Q&A with session-based memory, fact tracking, and assumptions"""
     
     # Conversational patterns that don't require document search
     CONVERSATIONAL_PATTERNS = [
@@ -209,6 +489,284 @@ class ContractChatbot:
         self.llm_model = llm_model
         self.search_engine = ContractSearch()
         self.memory = _conversation_memory  # Use global memory instance
+        self.fact_ledger = _fact_ledger  # Use global fact ledger
+        self.assumption_ledger = _assumption_ledger  # Use global assumption ledger
+        self.conversation_summary = _conversation_summary  # Use global conversation summary
+    
+    def _get_current_scope(self, artist_id: Optional[str] = None, 
+                           project_id: Optional[str] = None,
+                           contract_id: Optional[str] = None) -> Scope:
+        """Create a Scope object from current context"""
+        return Scope(artist_id=artist_id, project_id=project_id, contract_id=contract_id)
+    
+    def _calculate_confidence(self, similarity_score: float) -> float:
+        """
+        Calculate confidence score from vector similarity.
+        Maps similarity (typically 0.3-0.95) to confidence (0.0-1.0).
+        
+        Args:
+            similarity_score: Raw similarity score from vector search
+            
+        Returns:
+            Confidence score between 0.0 and 1.0
+        """
+        if similarity_score < MIN_SIMILARITY_THRESHOLD:
+            return 0.0
+        
+        # Normalize to 0-1 range based on practical bounds
+        normalized = (similarity_score - MIN_SIMILARITY_THRESHOLD) / (0.95 - MIN_SIMILARITY_THRESHOLD)
+        # Apply slight curve to favor higher similarities
+        confidence = min(1.0, normalized ** 0.8)
+        return round(confidence, 3)
+    
+    def _get_confidence_level(self, confidence: float) -> ConfidenceLevel:
+        """Get the confidence level enum from a confidence score"""
+        if confidence >= CONFIDENCE_HIGH_THRESHOLD:
+            return ConfidenceLevel.HIGH
+        elif confidence >= CONFIDENCE_MEDIUM_THRESHOLD:
+            return ConfidenceLevel.MEDIUM
+        else:
+            return ConfidenceLevel.LOW
+    
+    def _create_pinned_fact(self, fact_type: str, description: str, value: Any,
+                            confidence: float, source_reference: str,
+                            scope: Scope, source_type: str = "document") -> PinnedFact:
+        """Helper to create a PinnedFact with proper defaults"""
+        return PinnedFact(
+            fact_type=fact_type,
+            description=description,
+            value=value,
+            confidence=confidence,
+            source_type=source_type,
+            source_reference=source_reference,
+            scope=scope
+        )
+    
+    def _extract_and_pin_facts(self, answer: str, query: str, sources: List[Dict],
+                               session_id: str, scope: Scope) -> List[PinnedFact]:
+        """
+        Extract facts from an answer and pin them to the ledger.
+        
+        Args:
+            answer: The LLM-generated answer
+            query: The original query
+            sources: Source documents used
+            session_id: Session ID for storage
+            scope: Current scope for the facts
+            
+        Returns:
+            List of extracted and pinned facts
+        """
+        extracted_facts = []
+        
+        # Use existing extraction logic
+        extracted_data = self._extract_structured_data(answer, query)
+        
+        # Calculate base confidence from sources
+        base_confidence = 0.0
+        source_ref = "unknown"
+        if sources:
+            highest_score = max(s.get('score', 0) for s in sources)
+            base_confidence = self._calculate_confidence(highest_score)
+            source_ref = sources[0].get('contract_file', 'document')
+        
+        # Pin royalty splits
+        if 'royalty_splits' in extracted_data:
+            for royalty_type, splits in extracted_data['royalty_splits'].items():
+                fact = self._create_pinned_fact(
+                    fact_type=f"royalty_splits_{royalty_type}",
+                    description=f"{royalty_type.title()} royalty splits",
+                    value=splits,
+                    confidence=base_confidence,
+                    source_reference=source_ref,
+                    scope=scope
+                )
+                self.fact_ledger.add_fact(session_id, fact)
+                extracted_facts.append(fact)
+        
+        # Pin parties
+        if 'parties' in extracted_data:
+            fact = self._create_pinned_fact(
+                fact_type="parties",
+                description="Contract parties",
+                value=extracted_data['parties'],
+                confidence=base_confidence,
+                source_reference=source_ref,
+                scope=scope
+            )
+            self.fact_ledger.add_fact(session_id, fact)
+            extracted_facts.append(fact)
+        
+        # Pin payment terms
+        if 'payment_terms' in extracted_data:
+            fact = self._create_pinned_fact(
+                fact_type="payment_terms",
+                description="Payment terms",
+                value=extracted_data['payment_terms'],
+                confidence=base_confidence,
+                source_reference=source_ref,
+                scope=scope
+            )
+            self.fact_ledger.add_fact(session_id, fact)
+            extracted_facts.append(fact)
+        
+        # Pin term length
+        if 'term_length' in extracted_data:
+            fact = self._create_pinned_fact(
+                fact_type="term_length",
+                description="Contract term length",
+                value=extracted_data['term_length'],
+                confidence=base_confidence,
+                source_reference=source_ref,
+                scope=scope
+            )
+            self.fact_ledger.add_fact(session_id, fact)
+            extracted_facts.append(fact)
+        
+        # Pin advances
+        if 'advances' in extracted_data:
+            fact = self._create_pinned_fact(
+                fact_type="advances",
+                description="Advance payment",
+                value=extracted_data['advances'],
+                confidence=base_confidence,
+                source_reference=source_ref,
+                scope=scope
+            )
+            self.fact_ledger.add_fact(session_id, fact)
+            extracted_facts.append(fact)
+        
+        return extracted_facts
+    
+    def _get_pinned_facts_for_query(self, query: str, session_id: str, 
+                                     scope: Scope) -> List[PinnedFact]:
+        """
+        Get relevant pinned facts for a query based on detected type.
+        
+        Args:
+            query: User's question
+            session_id: Session ID
+            scope: Current scope
+            
+        Returns:
+            List of relevant facts sorted by confidence
+        """
+        query_lower = query.lower()
+        relevant_facts = []
+        
+        # Determine what type of fact might be relevant
+        if any(kw in query_lower for kw in ['royalty', 'split', 'percentage', 'share']):
+            royalty_type = self._detect_royalty_type(query_lower)
+            fact = self.fact_ledger.get_fact_by_type(
+                session_id, f"royalty_splits_{royalty_type}", scope
+            )
+            if fact:
+                relevant_facts.append(fact)
+            # Also check general if specific type not found
+            if not fact and royalty_type != 'general':
+                fact = self.fact_ledger.get_fact_by_type(
+                    session_id, "royalty_splits_general", scope
+                )
+                if fact:
+                    relevant_facts.append(fact)
+        
+        if any(kw in query_lower for kw in ['parties', 'who signed', 'signatories']):
+            fact = self.fact_ledger.get_fact_by_type(session_id, "parties", scope)
+            if fact:
+                relevant_facts.append(fact)
+        
+        if any(kw in query_lower for kw in ['payment', 'terms', 'net', 'days']):
+            fact = self.fact_ledger.get_fact_by_type(session_id, "payment_terms", scope)
+            if fact:
+                relevant_facts.append(fact)
+        
+        if any(kw in query_lower for kw in ['term', 'duration', 'length', 'period']):
+            fact = self.fact_ledger.get_fact_by_type(session_id, "term_length", scope)
+            if fact:
+                relevant_facts.append(fact)
+        
+        if any(kw in query_lower for kw in ['advance', 'upfront', 'signing']):
+            fact = self.fact_ledger.get_fact_by_type(session_id, "advances", scope)
+            if fact:
+                relevant_facts.append(fact)
+        
+        # Sort by confidence (highest first)
+        relevant_facts.sort(key=lambda f: f.confidence, reverse=True)
+        return relevant_facts
+    
+    def _answer_from_pinned_facts(self, query: str, facts: List[PinnedFact],
+                                   session_id: str) -> Optional[Dict]:
+        """
+        Try to answer a query using pinned facts if confidence is sufficient.
+        
+        Args:
+            query: User's question
+            facts: Relevant pinned facts
+            session_id: Session ID
+            
+        Returns:
+            Response dict if answerable from facts, None otherwise
+        """
+        if not facts:
+            return None
+        
+        # Get the highest confidence fact
+        best_fact = facts[0]
+        confidence_level = best_fact.get_confidence_level()
+        
+        # Only answer from facts if confidence is high enough
+        if confidence_level == ConfidenceLevel.LOW:
+            logger.info(f"[Facts] Low confidence ({best_fact.confidence:.2f}) - will search documents")
+            return None
+        
+        # Generate answer from fact
+        self._add_to_memory(session_id, "user", query)
+        
+        # Format the answer based on fact type and confidence level
+        value = best_fact.value
+        caveat = "" if confidence_level == ConfidenceLevel.HIGH else "Based on what we discussed earlier, "
+        
+        if best_fact.fact_type.startswith('royalty_splits'):
+            if isinstance(value, list):
+                splits_text = ", ".join([f"{s['party']}: {s['percentage']}%" for s in value])
+                answer = f"{caveat}The royalty splits are: {splits_text}"
+            else:
+                answer = f"{caveat}The royalty information: {value}"
+        elif best_fact.fact_type == 'parties':
+            if isinstance(value, list):
+                answer = f"{caveat}The contract parties are: {', '.join(value)}"
+            else:
+                answer = f"{caveat}The contract parties are: {value}"
+        elif best_fact.fact_type == 'payment_terms':
+            answer = f"{caveat}The payment terms: {value}"
+        elif best_fact.fact_type == 'term_length':
+            answer = f"{caveat}The contract term is {value}."
+        elif best_fact.fact_type == 'advances':
+            answer = f"{caveat}The advance is {value}."
+        else:
+            answer = f"{caveat}{value}"
+        
+        self._add_to_memory(session_id, "assistant", answer)
+        
+        return {
+            "query": query,
+            "answer": answer,
+            "confidence": ConfidenceLevel.CONTEXT.value,
+            "sources": [{"contract_file": best_fact.source_reference, "score": best_fact.confidence, "project_name": ""}],
+            "search_results_count": 0,
+            "session_id": session_id,
+            "answered_from": "pinned_facts",
+            "highest_score": best_fact.confidence,
+            "extracted_facts": [f.to_dict() for f in facts],
+            "confidence_score": best_fact.confidence
+        }
+    
+    def _add_confidence_caveat(self, answer: str, confidence_level: ConfidenceLevel) -> str:
+        """Add appropriate caveat based on confidence level"""
+        if confidence_level == ConfidenceLevel.MEDIUM:
+            if not answer.lower().startswith("based on"):
+                return f"Based on the available information: {answer}"
+        return answer
     
     def _is_affirmative_response(self, query: str) -> bool:
         """
@@ -475,7 +1033,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
                 return "contract"
                 
         except Exception as e:
-            print(f"Error classifying query: {e}")
+            logger.error(f"Error classifying query: {e}")
             # Default to contract if classification fails
             return "contract"
     
@@ -535,11 +1093,14 @@ Artist Profile:
             answer = response.choices[0].message.content
             
         except Exception as e:
-            print(f"Error generating artist answer: {e}")
+            logger.error(f"Error generating artist answer: {e}")
             answer = f"I have information about {artist_data.get('name', 'the artist')}, but encountered an error. Please try again."
         
         # Store assistant response in memory
         self._add_to_memory(session_id, "assistant", answer)
+        
+        # Extract structured artist data for frontend tracking
+        extracted_artist_data = self._extract_artist_data(artist_data)
         
         return {
             "query": query,
@@ -548,8 +1109,64 @@ Artist Profile:
             "sources": [],
             "search_results_count": 0,
             "session_id": session_id,
+            "answered_from": "artist_data",
+            "extracted_data": extracted_artist_data,
             "show_quick_actions": False
         }
+    
+    def _extract_artist_data(self, artist_data: Dict) -> Dict:
+        """
+        Extract structured artist data for frontend tracking.
+        
+        Args:
+            artist_data: Artist information from database
+            
+        Returns:
+            Dict with structured artist data for frontend
+        """
+        extracted = {}
+        
+        # Extract bio
+        if artist_data.get("bio"):
+            extracted["bio"] = artist_data["bio"]
+        
+        # Extract genres
+        if artist_data.get("genres"):
+            extracted["genres"] = artist_data["genres"]
+        
+        # Extract email
+        if artist_data.get("email"):
+            extracted["email"] = artist_data["email"]
+        
+        # Extract social media links
+        social_media = {}
+        if artist_data.get("social_instagram"):
+            social_media["instagram"] = artist_data["social_instagram"]
+        if artist_data.get("social_tiktok"):
+            social_media["tiktok"] = artist_data["social_tiktok"]
+        if artist_data.get("social_youtube"):
+            social_media["youtube"] = artist_data["social_youtube"]
+        if artist_data.get("social_twitter"):
+            social_media["twitter"] = artist_data["social_twitter"]
+        if artist_data.get("social_facebook"):
+            social_media["facebook"] = artist_data["social_facebook"]
+        
+        if social_media:
+            extracted["social_media"] = social_media
+        
+        # Extract streaming links
+        streaming_links = {}
+        if artist_data.get("dsp_spotify"):
+            streaming_links["spotify"] = artist_data["dsp_spotify"]
+        if artist_data.get("dsp_apple_music"):
+            streaming_links["apple_music"] = artist_data["dsp_apple_music"]
+        if artist_data.get("dsp_soundcloud"):
+            streaming_links["soundcloud"] = artist_data["dsp_soundcloud"]
+        
+        if streaming_links:
+            extracted["streaming_links"] = streaming_links
+        
+        return extracted
     
     def _format_artist_context(self, artist_data: Dict) -> str:
         """
@@ -642,6 +1259,48 @@ Artist Profile:
         if session_id:
             self.memory.add_message(session_id, role, content, metadata)
     
+    def _get_targeted_query(self, reason: str, original_query: str) -> str:
+        """
+        Generate a targeted search query based on missing data reason.
+        Maps reasons like 'missing_streaming_splits' to focused queries
+        like 'streaming royalty splits percentages'.
+        
+        Args:
+            reason: The reason from _can_answer_from_context (e.g., 'missing_streaming_splits')
+            original_query: The user's original question
+            
+        Returns:
+            Targeted search query optimized for retrieving the missing data
+        """
+        # Extract the data type from the reason
+        if reason.startswith("missing_"):
+            data_type = reason.replace("missing_", "")
+            
+            # Map data types to targeted search queries
+            targeted_queries = {
+                "streaming_splits": "streaming royalty splits percentages parties",
+                "publishing_splits": "publishing royalty splits percentages parties",
+                "mechanical_splits": "mechanical royalty splits percentages parties",
+                "sync_splits": "sync synchronization royalty splits percentages parties",
+                "master_splits": "master recording royalty splits percentages parties",
+                "performance_splits": "performance royalty splits percentages parties",
+                "general_splits": "royalty splits percentages parties",
+                "parties": "contract parties signatories names",
+                "payment_terms": "payment terms net days accounting",
+                "term_length": "contract term duration length period years",
+                "advances": "advance payment upfront signing bonus amount"
+            }
+            
+            # Return the targeted query if we have a mapping, otherwise use original
+            targeted = targeted_queries.get(data_type)
+            if targeted:
+                logger.info(f"[Targeted Retrieval] Generated targeted query for {data_type}: '{targeted}'")
+                return targeted
+        
+        # If no mapping found, return original query
+        logger.info(f"[Targeted Retrieval] No mapping for reason '{reason}', using original query")
+        return original_query
+    
     def _should_use_context(self, query: str, context: Optional[Dict]) -> Tuple[bool, str]:
         """
         Helper method to check if query should be answered from context.
@@ -655,11 +1314,11 @@ Artist Profile:
             Tuple of (should_use_context: bool, reason: str)
         """
         can_answer, reason = self._can_answer_from_context(query, context)
-        print(f"[Context] Can answer from context: {can_answer}, reason: {reason}")
+        logger.info(f"[Context] Can answer from context: {can_answer}, reason: {reason}")
         
         # Log why we're falling through to document search
         if not can_answer and reason.startswith("missing_"):
-            print(f"[Context] Missing data in context ({reason}) - will search documents")
+            logger.info(f"[Context] Missing data in context ({reason}) - will use targeted retrieval")
         
         return can_answer, reason
     
@@ -676,13 +1335,33 @@ Artist Profile:
             Tuple of (can_answer: bool, reason: str)
         """
         if not context:
-            print("[Context] No context provided, cannot answer from context")
+            logger.info("[Context] No context provided, cannot answer from context")
             return False, "no_context"
         
         contracts_discussed = context.get('contracts_discussed', [])
-        print(f"[Context] Checking if can answer from context. Contracts discussed: {len(contracts_discussed)}")
+        artists_discussed = context.get('artists_discussed', [])
+        logger.info(f"[Context] Checking if can answer from context. Contracts: {len(contracts_discussed)}, Artists: {len(artists_discussed)}")
         
         query_lower = query.lower()
+        
+        # Check for artist comparisons
+        comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between', 'both']
+        artist_keywords = ['artist', 'bio', 'social', 'streaming', 'genre', 'music']
+        
+        if any(kw in query_lower for kw in comparison_keywords):
+            # Check if asking about artists
+            if any(kw in query_lower for kw in artist_keywords) and len(artists_discussed) >= 2:
+                logger.info(f"[Context] Artist comparison detected with {len(artists_discussed)} artists")
+                return True, "artist_comparison"
+            
+            # Check if we have 2+ contracts with ANY extracted data for general comparison
+            contracts_with_any_data = [c for c in contracts_discussed 
+                                       if c.get('data_extracted') and any(c.get('data_extracted', {}).values())]
+            if len(contracts_with_any_data) >= 2:
+                logger.info(f"[Context] Contract comparison detected with {len(contracts_with_any_data)} contracts having data")
+                return True, "contract_comparison"
+            
+            # Check if asking about contracts (existing logic continues below)
         
         # Summary/recap questions about the conversation - always use context
         summary_keywords = ['summarize', 'summary', 'what did we discuss', 'recap', 
@@ -704,7 +1383,7 @@ Artist Profile:
         royalty_keywords = ['royalty', 'split', 'percentage', 'share']
         if any(kw in query_lower for kw in royalty_keywords):
             royalty_type = self._detect_royalty_type(query_lower)
-            print(f"[Context] Query is about royalty type: {royalty_type}")
+            logger.info(f"[Context] Query is about royalty type: {royalty_type}")
             
             # Check if we have this specific royalty type in context
             has_required_type = False
@@ -716,7 +1395,7 @@ Artist Profile:
                     # New structure: {streaming: [...], publishing: [...]}
                     if royalty_splits.get(royalty_type):
                         has_required_type = True
-                        print(f"[Context] Found {royalty_type} splits in {contract.get('name')}")
+                        logger.info(f"[Context] Found {royalty_type} splits in {contract.get('name')}")
                         break
                     # Also check 'general' as fallback
                     if royalty_type == 'general' and any(royalty_splits.values()):
@@ -727,7 +1406,7 @@ Artist Profile:
                     # Can only use if asking for 'general' or unspecified royalties
                     if royalty_type == 'general':
                         has_required_type = True
-                        print(f"[Context] Found legacy splits in {contract.get('name')}")
+                        logger.info(f"[Context] Found legacy splits in {contract.get('name')}")
                         break
             
             if has_required_type:
@@ -747,7 +1426,7 @@ Artist Profile:
                 if any(ind in query_lower for ind in reask_indicators):
                     return True, f"reask_{royalty_type}"
             
-            print(f"[Context] Missing {royalty_type} splits - need document lookup")
+            logger.info(f"[Context] Missing {royalty_type} splits - need document lookup")
             return False, f"missing_{royalty_type}_splits"
         
         # Check for other data types
@@ -782,6 +1461,150 @@ Artist Profile:
             return len(royalty_splits) > 0
         return False
     
+    def _is_comparison_query(self, query: str) -> bool:
+        """
+        Detect if the query is asking for a comparison between contracts.
+        
+        Args:
+            query: User's question
+            
+        Returns:
+            True if comparison is requested
+        """
+        query_lower = query.lower()
+        comparison_keywords = [
+            'compare', 'comparison', 'difference', 'differences', 
+            'versus', 'vs', 'between', 'both', 'all contracts',
+            'across', 'each contract', 'the two', 'these contracts'
+        ]
+        return any(kw in query_lower for kw in comparison_keywords)
+    
+    def _build_comparison_context(self, contracts_with_data: List[Dict], 
+                                   data_type: str, 
+                                   search_results: Dict) -> str:
+        """
+        Build combined context for comparison: existing context data + new search results.
+        
+        Args:
+            contracts_with_data: Contracts that already have extracted data
+            data_type: The type of data being compared (e.g., 'streaming')
+            search_results: New search results for contracts missing data
+            
+        Returns:
+            Combined context string for LLM
+        """
+        context_parts = []
+        
+        # Add existing data from contracts that have it
+        context_parts.append("=== PREVIOUSLY RETRIEVED CONTRACT DATA ===")
+        for contract in contracts_with_data:
+            contract_name = contract.get('name', 'Unknown Contract')
+            data = contract.get('data_extracted', {})
+            royalty_splits = data.get('royalty_splits', {})
+            
+            if isinstance(royalty_splits, dict) and royalty_splits.get(data_type):
+                splits = royalty_splits[data_type]
+                context_parts.append(f"\n[Contract: {contract_name}]")
+                context_parts.append(f"{data_type.capitalize()} Royalty Splits:")
+                for split in splits:
+                    party = split.get('party', 'Unknown')
+                    percentage = split.get('percentage', 0)
+                    context_parts.append(f"  - {party}: {percentage}%")
+        
+        # Add new search results
+        context_parts.append("\n\n=== NEWLY RETRIEVED CONTRACT DATA ===")
+        for match in search_results.get("matches", []):
+            section = match.get('section_heading', 'N/A')
+            text = match.get('text', '')
+            contract_file = match.get('contract_file', 'Unknown')
+            context_parts.append(f"\n[Contract: {contract_file}]")
+            context_parts.append(f"[Section: {section}]")
+            context_parts.append(text)
+        
+        return "\n".join(context_parts)
+    
+    def _expand_contract_ids_from_context(self, contract_ids: List[str], 
+                                           context: Optional[Dict],
+                                           limit: int = 5) -> List[str]:
+        """
+        Expand contract_ids to include contracts from conversation context.
+        Used when comparison is detected to include previously discussed contracts.
+        
+        Args:
+            contract_ids: Currently selected contract IDs
+            context: Conversation context with contracts_discussed
+            limit: Maximum number of contracts to include (most recent)
+            
+        Returns:
+            Expanded list of contract IDs
+        """
+        if not context:
+            return contract_ids
+        
+        contracts_discussed = context.get('contracts_discussed', [])
+        if not contracts_discussed:
+            return contract_ids
+        
+        # Get all contract IDs from context
+        context_ids = [c.get('id') for c in contracts_discussed if c.get('id')]
+        
+        # Merge with current selection (deduplicate, preserve order)
+        all_ids = list(contract_ids) if contract_ids else []
+        for cid in context_ids:
+            if cid not in all_ids:
+                all_ids.append(cid)
+        
+        # Limit to most recent N contracts
+        if len(all_ids) > limit:
+            all_ids = all_ids[-limit:]
+        
+        logger.info(f"[Comparison] Expanded contract_ids from {len(contract_ids or [])} to {len(all_ids)}")
+        return all_ids
+    
+    def _build_comparison_context(self, contracts_with_data: List[Dict], 
+                                   data_type: str, 
+                                   search_results: Dict) -> str:
+        """
+        Build combined context for comparison: existing context data + new search results.
+        
+        Args:
+            contracts_with_data: Contracts that already have extracted data
+            data_type: The type of data being compared (e.g., 'streaming')
+            search_results: New search results for contracts missing data
+            
+        Returns:
+            Combined context string for LLM
+        """
+        context_parts = []
+        
+        # Add existing data from contracts that have it
+        context_parts.append("=== PREVIOUSLY RETRIEVED CONTRACT DATA ===")
+        for contract in contracts_with_data:
+            contract_name = contract.get('name', 'Unknown Contract')
+            data = contract.get('data_extracted', {})
+            royalty_splits = data.get('royalty_splits', {})
+            
+            if isinstance(royalty_splits, dict) and royalty_splits.get(data_type):
+                splits = royalty_splits[data_type]
+                context_parts.append(f"\n[Contract: {contract_name}]")
+                context_parts.append(f"{data_type.capitalize()} Royalty Splits:")
+                for split in splits:
+                    party = split.get('party', 'Unknown')
+                    percentage = split.get('percentage', 0)
+                    context_parts.append(f"  - {party}: {percentage}%")
+        
+        # Add new search results
+        context_parts.append("\n\n=== NEWLY RETRIEVED CONTRACT DATA ===")
+        for match in search_results.get("matches", []):
+            section = match.get('section_heading', 'N/A')
+            text = match.get('text', '')
+            contract_file = match.get('contract_file', 'Unknown')
+            context_parts.append(f"\n[Contract: {contract_file}]")
+            context_parts.append(f"[Section: {section}]")
+            context_parts.append(text)
+        
+        return "\n".join(context_parts)
+    
     def _answer_from_context(self, query: str, context: Dict, session_id: Optional[str] = None) -> Dict:
         """
         Answer question using structured context and conversation history.
@@ -796,15 +1619,15 @@ Artist Profile:
         Returns:
             Dict with answer and metadata
         """
-        print(f"[Context] _answer_from_context called with query: {query}")
+        logger.info(f"[Context] _answer_from_context called with query: {query}")
         
         # Build context summary for LLM
         context_summary = self._format_context_for_llm(context)
-        print(f"[Context] Formatted context summary:\n{context_summary}")
+        logger.info(f"[Context] Formatted context summary:\n{context_summary}")
         
         # Get conversation history
         history = self._get_conversation_context(session_id, max_turns=10)
-        print(f"[Context] Conversation history: {len(history)} messages")
+        logger.info(f"[Context] Conversation history: {len(history)} messages")
         
         # Analyze what data is available for suggestions
         available_data = self._get_available_data_types(context)
@@ -856,7 +1679,7 @@ RULES:
                 answer = "I couldn't generate a response. Please try rephrasing your question."
             
         except Exception as e:
-            print(f"Error generating context-based answer: {e}")
+            logger.error(f"Error generating context-based answer: {e}")
             answer = "I encountered an error while processing your question. Please try again."
         
         # Extract any suggestion from the answer for tracking
@@ -871,7 +1694,7 @@ RULES:
             if action_match:
                 pending_suggestion = action_match.group(1).strip()
                 self.memory.set_pending_suggestion(session_id, pending_suggestion, context_hash)
-                print(f"[Context] Stored pending suggestion: {pending_suggestion}")
+                logger.info(f"[Context] Stored pending suggestion: {pending_suggestion}")
         
         # Store in memory
         self._add_to_memory(session_id, "user", query)
@@ -880,13 +1703,24 @@ RULES:
         # Extract structured data from the answer
         extracted_data = self._extract_structured_data(answer, query)
         
+        # Determine the specific answered_from value
+        query_lower = query.lower()
+        comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between', 'both']
+        artist_keywords = ['artist', 'bio', 'social', 'streaming', 'genre', 'music']
+        
+        answered_from = "conversation_context"
+        if any(kw in query_lower for kw in comparison_keywords) and any(kw in query_lower for kw in artist_keywords):
+            artists_discussed = context.get('artists_discussed', [])
+            if len(artists_discussed) >= 2:
+                answered_from = "artist_comparison"
+        
         return {
             "query": query,
             "answer": answer,
             "confidence": "context_based",
             "sources": [],
             "search_results_count": 0,
-            "answered_from": "conversation_context",
+            "answered_from": answered_from,
             "session_id": session_id,
             "extracted_data": extracted_data if extracted_data else None,
             "pending_suggestion": pending_suggestion
@@ -1006,6 +1840,30 @@ INVALID suggestions (would require document lookup - DO NOT suggest these):
         if context.get('artist'):
             parts.append(f"Current Artist: {context['artist'].get('name', 'Unknown')}")
         
+        # Format artists discussed for comparisons
+        if context.get('artists_discussed'):
+            parts.append("\nArtists Discussed:")
+            for artist in context['artists_discussed']:
+                parts.append(f"\n🎤 {artist.get('name', 'Unknown Artist')}")
+                data_extracted = artist.get('data_extracted', {})
+                if data_extracted:
+                    if data_extracted.get('bio'):
+                        parts.append(f"  • Bio: {data_extracted['bio']}")
+                    if data_extracted.get('genres'):
+                        genres = data_extracted['genres']
+                        if isinstance(genres, list):
+                            parts.append(f"  • Genres: {', '.join(genres)}")
+                        else:
+                            parts.append(f"  • Genres: {genres}")
+                    if data_extracted.get('social_media'):
+                        parts.append(f"  • Social Media:")
+                        for platform, url in data_extracted['social_media'].items():
+                            parts.append(f"    - {platform.title()}: {url}")
+                    if data_extracted.get('streaming_links'):
+                        parts.append(f"  • Streaming Links:")
+                        for platform, url in data_extracted['streaming_links'].items():
+                            parts.append(f"    - {platform.title()}: {url}")
+        
         if context.get('project'):
             parts.append(f"Current Project: {context['project'].get('name', 'Unknown')}")
         
@@ -1101,7 +1959,8 @@ Your answers should be:
         
         return "\n\n".join(context_parts)
     
-    def _generate_answer(self, query: str, context: str, search_results: Dict, session_id: Optional[str] = None) -> Dict:
+    def _generate_answer(self, query: str, context: str, search_results: Dict, session_id: Optional[str] = None, 
+                        is_targeted_comparison: bool = False) -> Dict:
         """
         Generate answer using LLM with conversation history for context.
         
@@ -1110,6 +1969,7 @@ Your answers should be:
             context: Formatted context from search results
             search_results: Original search results
             session_id: Session ID for conversation history
+            is_targeted_comparison: Whether this is a comparison query using targeted retrieval
             
         Returns:
             Dict with answer and metadata
@@ -1125,9 +1985,33 @@ Your answers should be:
                 "sources": []
             }
         
-        # System prompt with strict focus on the question asked - NO follow-up suggestions
-        # Suggestions are only made in _answer_from_context when we have context data
-        system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
+        # Adjust system prompt based on whether this is a targeted comparison
+        if is_targeted_comparison:
+            system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
+Your task is to answer questions about contract documents based on the provided context.
+
+CRITICAL RULES:
+1. The user is asking for a COMPARISON between contracts
+2. Use BOTH the provided contract documents AND the conversation history to perform the comparison
+3. The conversation history contains information about previously discussed contracts - USE IT
+4. Clearly distinguish between contracts when comparing
+5. Be precise with numbers, percentages, and contract names
+6. If you cannot find information for all contracts, acknowledge what's missing
+
+COMPARISON INSTRUCTIONS:
+- Review the conversation history to see what contracts were previously discussed
+- Combine that information with the newly retrieved contract documents
+- Perform a comprehensive comparison as requested
+- Cite sources for each piece of information
+
+Your answers should be:
+- Accurate and grounded in both the provided documents and conversation history
+- Clear and concise
+- Properly cited with sources
+- Professional and helpful"""
+        else:
+            # Standard system prompt with strict focus on the question asked
+            system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
 Your task is to answer questions about contract documents based on the provided context.
 
 CRITICAL RULES:
@@ -1174,8 +2058,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         messages.append({"role": "user", "content": user_prompt})
         
         # Call LLM
-        print(f"\nGenerating answer using {self.llm_model}...")
-        print(f"Conversation history: {len(conversation_history)} messages included")
+        logger.info(f"\nGenerating answer using {self.llm_model}...")
+        logger.info(f"Conversation history: {len(conversation_history)} messages included")
         
         try:
             response = openai_client.chat.completions.create(
@@ -1212,7 +2096,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             }
             
         except Exception as e:
-            print(f"Error generating answer: {e}")
+            logger.error(f"Error generating answer: {e}")
             return {
                 "answer": "I encountered an error while processing your question. Please try again.",
                 "confidence": "error",
@@ -1255,30 +2139,30 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         Returns:
             Dict with answer, sources, categorization, and metadata
         """
-        print("\n" + "=" * 80)
-        print("SMART CONTRACT CHATBOT (with Query Categorization)")
-        print("="  * 80)
-        print(f"Question: {query}")
-        print(f"User ID: {user_id}")
-        print(f"Session ID: {session_id}")
-        print(f"Artist data available: {artist_data is not None}")
-        print(f"Context available: {context is not None}")
+        logger.info("\n" + "=" * 80)
+        logger.info("SMART CONTRACT CHATBOT (with Query Categorization)")
+        logger.info("="  * 80)
+        logger.info(f"Question: {query}")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Session ID: {session_id}")
+        logger.info(f"Artist data available: {artist_data is not None}")
+        logger.info(f"Context available: {context is not None}")
         if project_id:
-            print(f"Project ID: {project_id}")
+            logger.info(f"Project ID: {project_id}")
         if contract_id:
-            print(f"Contract ID: {contract_id}")
-        print("-" * 80)
+            logger.info(f"Contract ID: {contract_id}")
+        logger.info("-" * 80)
         
         # Check for affirmative response to pending suggestion first
         if session_id and self._is_affirmative_response(query):
             pending = self.memory.get_pending_suggestion(session_id)
             if pending:
-                print("[Affirmative] Detected affirmative response with pending suggestion")
+                logger.info("[Affirmative] Detected affirmative response with pending suggestion")
                 current_hash = self._compute_context_hash(context)
                 
                 # Validate context hasn't changed
                 if pending.get('context_hash') != current_hash:
-                    print("[Affirmative] Context hash mismatch - context was cleared")
+                    logger.info("[Affirmative] Context hash mismatch - context was cleared")
                     self.memory.clear_pending_suggestion(session_id)
                     return {
                         "query": query,
@@ -1292,7 +2176,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 
                 # Rewrite query to the pending suggestion and answer from context
                 suggestion = pending.get('suggestion', '')
-                print(f"[Affirmative] Rewriting query to: {suggestion}")
+                logger.info(f"[Affirmative] Rewriting query to: {suggestion}")
                 self.memory.clear_pending_suggestion(session_id)
                 
                 # Route to context-based answering with the suggestion as query
@@ -1302,23 +2186,98 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         can_answer, reason = self._should_use_context(query, context)
         
         if can_answer:
-            print("Detected context-based query - answering from conversation context")
+            logger.info("Detected context-based query - answering from conversation context")
             return self._answer_from_context(query, context, session_id)
+        
+        # Check if we have partial context data that could answer the query
+        # This handles cases where user is comparing contracts but only one is selected
+        if reason.startswith("need_more_contracts_for_") and context:
+            # Extract the specific data type from the reason
+            # e.g., "need_more_contracts_for_streaming_comparison" -> "streaming"
+            data_type = reason.replace("need_more_contracts_for_", "").replace("_comparison", "")
+            
+            contracts_discussed = context.get('contracts_discussed', [])
+            contracts_with_specific_data = [
+                c for c in contracts_discussed 
+                if self._contract_has_royalty_type(c, data_type)
+            ]
+            
+            if len(contracts_with_specific_data) >= 2:
+                # We have the SPECIFIC data type for 2+ contracts in context
+                logger.info(f"Found {len(contracts_with_specific_data)} contracts with {data_type} data in context - answering from context")
+                return self._answer_from_context(query, context, session_id)
+            else:
+                # Some contracts are missing data - do targeted retrieval for those contracts
+                contracts_missing_data = [
+                    c for c in contracts_discussed 
+                    if c.get('id') and not self._contract_has_royalty_type(c, data_type)
+                ]
+                
+                if contracts_missing_data and len(contracts_with_specific_data) >= 1:
+                    logger.info(f"[Multi-Step Comparison] {len(contracts_with_specific_data)} contract(s) have {data_type} data, {len(contracts_missing_data)} missing - doing targeted retrieval")
+                    
+                    # Get IDs of contracts missing data
+                    missing_contract_ids = [c.get('id') for c in contracts_missing_data if c.get('id')]
+                    
+                    # Do targeted search specifically for missing contracts
+                    targeted_query = self._get_targeted_query(f"missing_{data_type}_splits", query)
+                    logger.info(f"[Multi-Step Comparison] Targeted query for missing contracts: '{targeted_query}'")
+                    
+                    # Store user message in memory before search
+                    self._add_to_memory(session_id, "user", query)
+                    
+                    # Search only the contracts missing data
+                    search_results = self.search_engine.search_multiple_contracts(
+                        query=targeted_query,
+                        user_id=user_id,
+                        project_id=project_id,
+                        contract_ids=missing_contract_ids,
+                        top_k=top_k
+                    )
+                    
+                    if search_results["matches"]:
+                        # Build combined context: existing context data + new search results
+                        combined_context = self._build_comparison_context(
+                            contracts_with_data=contracts_with_specific_data,
+                            data_type=data_type,
+                            search_results=search_results
+                        )
+                        
+                        logger.info(f"[Multi-Step Comparison] Built combined context with existing data + new retrieval")
+                        
+                        # Generate comparison answer
+                        result = self._generate_answer(query, combined_context, search_results, session_id, is_targeted_comparison=True)
+                        
+                        # Store assistant response in memory
+                        self._add_to_memory(session_id, "assistant", result["answer"], {
+                            "confidence": result["confidence"],
+                            "sources": result.get("sources", [])
+                        })
+                        
+                        result["query"] = query
+                        result["search_results_count"] = search_results["total_results"]
+                        result["filter"] = search_results.get("filter", {})
+                        result["session_id"] = session_id
+                        result["multi_step_comparison"] = True
+                        
+                        return result
+                
+                logger.info(f"Only {len(contracts_with_specific_data)} contract(s) have {data_type} data - will use standard targeted retrieval")
         
         # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
-            print("Detected conversational query - handling without document search")
+            logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
         
         # Step 1: Classify the query - is it about artist or contracts?
         query_type = self._classify_query(query)
-        print(f"Query classified as: {query_type}")
+        logger.info(f"Query classified as: {query_type}")
         
         # Step 2: Route based on classification
         if query_type == "artist":
             # Artist query - use artist data
             if artist_data:
-                print("Handling as artist query - using artist data")
+                logger.info("Handling as artist query - using artist data")
                 return self._handle_artist_query(query, artist_data, session_id)
             else:
                 # No artist data available
@@ -1353,9 +2312,17 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
         
-        # Step 3: Query Pinecone for contract data
+        # Step 3: Determine search query (use targeted query if missing data detected)
+        search_query = query
+        if reason.startswith("missing_"):
+            # Generate targeted query for the missing data
+            search_query = self._get_targeted_query(reason, query)
+            logger.info(f"[Targeted Retrieval] Using targeted query for search: '{search_query}'")
+            logger.info(f"[Targeted Retrieval] Original query will be used for answer generation: '{query}'")
+        
+        # Step 4: Query Pinecone for contract data
         search_results = self.search_engine.smart_search(
-            query=query,
+            query=search_query,  # Use targeted query for search
             user_id=user_id,
             project_id=project_id,
             contract_id=contract_id,
@@ -1380,8 +2347,16 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Step 3: Format context
         context = self._format_context(search_results)
         
-        # Step 4: Generate answer with conversation history
-        result = self._generate_answer(query, context, search_results, session_id)
+        # Step 4: Detect if this is a targeted comparison query
+        is_targeted_comparison = (
+            reason.startswith("missing_") and 
+            self._is_comparison_query(query)
+        )
+        if is_targeted_comparison:
+            logger.info("[Targeted Comparison] Detected comparison query with targeted retrieval - will use conversation history for comparison")
+        
+        # Step 5: Generate answer with conversation history
+        result = self._generate_answer(query, context, search_results, session_id, is_targeted_comparison)
         
         # Step 5: Store assistant response in memory
         self._add_to_memory(session_id, "assistant", result["answer"], {
@@ -1396,16 +2371,16 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         result["categorization"] = search_results.get("categorization", {})
         result["session_id"] = session_id
         
-        print("\n" + "=" * 80)
-        print("SMART ANSWER GENERATED")
-        print("=" * 80)
-        print(f"Confidence: {result['confidence']}")
+        logger.info("\n" + "=" * 80)
+        logger.info("SMART ANSWER GENERATED")
+        logger.info("=" * 80)
+        logger.info(f"Confidence: {result['confidence']}")
         if result.get('highest_score'):
-            print(f"Highest Similarity Score: {result['highest_score']}")
-        print(f"Sources Used: {len(result['sources'])}")
+            logger.info(f"Highest Similarity Score: {result['highest_score']}")
+        logger.info(f"Sources Used: {len(result['sources'])}")
         if result.get('categorization'):
-            print(f"Query Categories: {result['categorization'].get('categories', [])}")
-        print("=" * 80)
+            logger.info(f"Query Categories: {result['categorization'].get('categories', [])}")
+        logger.info("=" * 80)
         
         return result
     
@@ -1429,34 +2404,36 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         Returns:
             Dict with answer and metadata
         """
-        print("\n" + "=" * 80)
-        print("CHATBOT (No Project Selected)")
-        print("=" * 80)
-        print(f"Question: {query}")
-        print(f"User ID: {user_id}")
-        print(f"Session ID: {session_id}")
-        print(f"Artist data available: {artist_data is not None}")
-        print(f"Context available: {context is not None}")
-        print("-" * 80)
+        logger.info("\n" + "=" * 80)
+        logger.info("CHATBOT (No Project Selected)")
+        logger.info("=" * 80)
+        logger.info(f"Question: {query}")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Session ID: {session_id}")
+        logger.info(f"Artist data available: {artist_data is not None}")
+        logger.info(f"Context available: {context is not None}")
+        logger.info("-" * 80)
         
         # Check if we can answer from conversation context first
-        if self._can_answer_from_context(query, context):
-            print("Detected context-based query - answering from conversation context")
+        # Note: _can_answer_from_context returns a tuple (bool, reason)
+        can_answer, reason = self._can_answer_from_context(query, context)
+        if can_answer:
+            logger.info(f"Detected context-based query ({reason}) - answering from conversation context")
             return self._answer_from_context(query, context, session_id)
         
         # Check for conversational queries
         if self._is_conversational_query(query):
-            print("Detected conversational query - handling without document search")
+            logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
         
         # Classify the query - is it about artist or contracts?
         query_type = self._classify_query(query)
-        print(f"Query classified as: {query_type}")
+        logger.info(f"Query classified as: {query_type}")
         
         if query_type == "artist":
             # Artist query - use artist data if available
             if artist_data:
-                print("Handling as artist query - using artist data")
+                logger.info("Handling as artist query - using artist data")
                 return self._handle_artist_query(query, artist_data, session_id)
             else:
                 # No artist data available
@@ -1546,40 +2523,122 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         Returns:
             Dict with answer and metadata
         """
-        print("\n" + "=" * 80)
-        print("MULTI-CONTRACT CHATBOT")
-        print("=" * 80)
-        print(f"Question: {query}")
-        print(f"User ID: {user_id}")
-        print(f"Project ID: {project_id}")
-        print(f"Session ID: {session_id}")
-        print(f"Contract IDs: {contract_ids}")
-        print(f"Number of contracts: {len(contract_ids)}")
-        print(f"Artist data available: {artist_data is not None}")
-        print(f"Context available: {context is not None}")
-        print("-" * 80)
+        logger.info("\n" + "=" * 80)
+        logger.info("MULTI-CONTRACT CHATBOT")
+        logger.info("=" * 80)
+        logger.info(f"Question: {query}")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Project ID: {project_id}")
+        logger.info(f"Session ID: {session_id}")
+        logger.info(f"Contract IDs: {contract_ids}")
+        logger.info(f"Number of contracts: {len(contract_ids)}")
+        logger.info(f"Artist data available: {artist_data is not None}")
+        logger.info(f"Context available: {context is not None}")
+        logger.info("-" * 80)
+        
+        # Expand contract_ids from context if this is a comparison query
+        if self._is_comparison_query(query) and context:
+            original_count = len(contract_ids)
+            contract_ids = self._expand_contract_ids_from_context(contract_ids, context)
+            if len(contract_ids) > original_count:
+                logger.info(f"[Comparison] Expanded search to include {len(contract_ids)} contracts from conversation context")
         
         # Check if we can answer from conversation context first
         can_answer, reason = self._should_use_context(query, context)
         
         if can_answer:
-            print("Detected context-based query - answering from conversation context")
+            logger.info("Detected context-based query - answering from conversation context")
             return self._answer_from_context(query, context, session_id)
+        
+        # Check if we have partial context data that could answer the query
+        # This handles cases where user is comparing contracts but only one is selected
+        if reason.startswith("need_more_contracts_for_") and context:
+            # Extract the specific data type from the reason
+            # e.g., "need_more_contracts_for_streaming_comparison" -> "streaming"
+            data_type = reason.replace("need_more_contracts_for_", "").replace("_comparison", "")
+            
+            contracts_discussed = context.get('contracts_discussed', [])
+            contracts_with_specific_data = [
+                c for c in contracts_discussed 
+                if self._contract_has_royalty_type(c, data_type)
+            ]
+            
+            if len(contracts_with_specific_data) >= 2:
+                # We have the SPECIFIC data type for 2+ contracts in context
+                logger.info(f"Found {len(contracts_with_specific_data)} contracts with {data_type} data in context - answering from context")
+                return self._answer_from_context(query, context, session_id)
+            else:
+                # Some contracts are missing data - do targeted retrieval for those contracts
+                contracts_missing_data = [
+                    c for c in contracts_discussed 
+                    if c.get('id') and not self._contract_has_royalty_type(c, data_type)
+                ]
+                
+                if contracts_missing_data and len(contracts_with_specific_data) >= 1:
+                    logger.info(f"[Multi-Step Comparison] {len(contracts_with_specific_data)} contract(s) have {data_type} data, {len(contracts_missing_data)} missing - doing targeted retrieval")
+                    
+                    # Get IDs of contracts missing data
+                    missing_contract_ids = [c.get('id') for c in contracts_missing_data if c.get('id')]
+                    
+                    # Do targeted search specifically for missing contracts
+                    targeted_query = self._get_targeted_query(f"missing_{data_type}_splits", query)
+                    logger.info(f"[Multi-Step Comparison] Targeted query for missing contracts: '{targeted_query}'")
+                    
+                    # Store user message in memory before search
+                    self._add_to_memory(session_id, "user", query)
+                    
+                    # Search only the contracts missing data
+                    search_results = self.search_engine.search_multiple_contracts(
+                        query=targeted_query,
+                        user_id=user_id,
+                        project_id=project_id,
+                        contract_ids=missing_contract_ids,
+                        top_k=top_k
+                    )
+                    
+                    if search_results["matches"]:
+                        # Build combined context: existing context data + new search results
+                        combined_context = self._build_comparison_context(
+                            contracts_with_data=contracts_with_specific_data,
+                            data_type=data_type,
+                            search_results=search_results
+                        )
+                        
+                        logger.info(f"[Multi-Step Comparison] Built combined context with existing data + new retrieval")
+                        
+                        # Generate comparison answer
+                        result = self._generate_answer(query, combined_context, search_results, session_id, is_targeted_comparison=True)
+                        
+                        # Store assistant response in memory
+                        self._add_to_memory(session_id, "assistant", result["answer"], {
+                            "confidence": result["confidence"],
+                            "sources": result.get("sources", [])
+                        })
+                        
+                        result["query"] = query
+                        result["search_results_count"] = search_results["total_results"]
+                        result["filter"] = search_results.get("filter", {})
+                        result["session_id"] = session_id
+                        result["multi_step_comparison"] = True
+                        
+                        return result
+                
+                logger.info(f"Only {len(contracts_with_specific_data)} contract(s) have {data_type} data - will use standard targeted retrieval")
         
         # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
-            print("Detected conversational query - handling without document search")
+            logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
         
         # Step 1: Classify the query - is it about artist or contracts?
         query_type = self._classify_query(query)
-        print(f"Query classified as: {query_type}")
+        logger.info(f"Query classified as: {query_type}")
         
         # Step 2: Route based on classification
         if query_type == "artist":
             # Artist query - use artist data
             if artist_data:
-                print("Handling as artist query - using artist data")
+                logger.info("Handling as artist query - using artist data")
                 return self._handle_artist_query(query, artist_data, session_id)
             else:
                 # No artist data available
@@ -1599,9 +2658,17 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
         
-        # Step 3: Query Pinecone for contract data
+        # Step 3: Determine search query (use targeted query if missing data detected)
+        search_query = query
+        if reason.startswith("missing_"):
+            # Generate targeted query for the missing data
+            search_query = self._get_targeted_query(reason, query)
+            logger.info(f"[Targeted Retrieval] Using targeted query for search: '{search_query}'")
+            logger.info(f"[Targeted Retrieval] Original query will be used for answer generation: '{query}'")
+        
+        # Step 4: Query Pinecone for contract data
         search_results = self.search_engine.search_multiple_contracts(
-            query=query,
+            query=search_query,  # Use targeted query for search
             user_id=user_id,
             project_id=project_id,
             contract_ids=contract_ids,
@@ -1625,8 +2692,16 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Format context
         context = self._format_context(search_results)
         
+        # Detect if this is a targeted comparison query
+        is_targeted_comparison = (
+            reason.startswith("missing_") and 
+            self._is_comparison_query(query)
+        )
+        if is_targeted_comparison:
+            logger.info("[Targeted Comparison] Detected comparison query with targeted retrieval - will use conversation history for comparison")
+        
         # Generate answer with conversation history
-        result = self._generate_answer(query, context, search_results, session_id)
+        result = self._generate_answer(query, context, search_results, session_id, is_targeted_comparison)
         
         # Store assistant response in memory
         self._add_to_memory(session_id, "assistant", result["answer"], {
@@ -1640,15 +2715,15 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         result["filter"] = search_results["filter"]
         result["session_id"] = session_id
         
-        print("\n" + "=" * 80)
-        print("MULTI-CONTRACT ANSWER GENERATED")
-        print("=" * 80)
-        print(f"Confidence: {result['confidence']}")
+        logger.info("\n" + "=" * 80)
+        logger.info("MULTI-CONTRACT ANSWER GENERATED")
+        logger.info("=" * 80)
+        logger.info(f"Confidence: {result['confidence']}")
         if result.get('highest_score'):
-            print(f"Highest Similarity Score: {result['highest_score']}")
-        print(f"Sources Used: {len(result['sources'])}")
-        print(f"Contracts Searched: {len(contract_ids)}")
-        print("=" * 80)
+            logger.info(f"Highest Similarity Score: {result['highest_score']}")
+        logger.info(f"Sources Used: {len(result['sources'])}")
+        logger.info(f"Contracts Searched: {len(contract_ids)}")
+        logger.info("=" * 80)
         
         return result
     
@@ -1686,12 +2761,12 @@ if __name__ == "__main__":
     # Create a session for conversation memory demo
     import uuid
     session_id = str(uuid.uuid4())
-    print(f"\nSession ID: {session_id}")
+    logger.info(f"\nSession ID: {session_id}")
     
     # Example 1: Ask about a project
-    print("\n" + "=" * 80)
-    print("EXAMPLE 1: Project-level question")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info("EXAMPLE 1: Project-level question")
+    logger.info("=" * 80)
     
     result1 = chatbot.ask_project(
         query="What are the royalty percentage splits in this project?",
@@ -1700,18 +2775,17 @@ if __name__ == "__main__":
         session_id=session_id
     )
     
-    print("\nQUESTION:", result1["query"])
-    print("\nANSWER:")
-    print(result1["answer"])
-    print("\nCONFIDENCE:", result1["confidence"])
-    print("\nSOURCES:")
+    logger.info(f"\nQUESTION: {result1['query']}")
+    logger.info(f"\nANSWER:\n{result1['answer']}")
+    logger.info(f"\nCONFIDENCE: {result1['confidence']}")
+    logger.info("\nSOURCES:")
     for source in result1.get("sources", []):
-        print(f"  - {source['contract_file']} (Score: {source['score']})")
+        logger.info(f"  - {source['contract_file']} (Score: {source['score']})")
     
     # Example 2: Follow-up question (uses conversation memory)
-    print("\n\n" + "=" * 80)
-    print("EXAMPLE 2: Follow-up question (with conversation memory)")
-    print("=" * 80)
+    logger.info("\n\n" + "=" * 80)
+    logger.info("EXAMPLE 2: Follow-up question (with conversation memory)")
+    logger.info("=" * 80)
     
     result2 = chatbot.ask_project(
         query="What about the payment terms?",
@@ -1720,15 +2794,14 @@ if __name__ == "__main__":
         session_id=session_id  # Same session for context
     )
     
-    print("\nQUESTION:", result2["query"])
-    print("\nANSWER:")
-    print(result2["answer"])
-    print("\nCONFIDENCE:", result2["confidence"])
+    logger.info(f"\nQUESTION: {result2['query']}")
+    logger.info(f"\nANSWER:\n{result2['answer']}")
+    logger.info(f"\nCONFIDENCE: {result2['confidence']}")
     
     # Show conversation history
-    print("\n\n" + "=" * 80)
-    print("CONVERSATION HISTORY")
-    print("=" * 80)
+    logger.info("\n\n" + "=" * 80)
+    logger.info("CONVERSATION HISTORY")
+    logger.info("=" * 80)
     history = chatbot.get_session_history(session_id)
     for msg in history:
-        print(f"[{msg['role'].upper()}]: {msg['content'][:100]}...")
+        logger.info(f"[{msg['role'].upper()}]: {msg['content'][:100]}...")

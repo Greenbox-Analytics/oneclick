@@ -49,6 +49,12 @@ LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")
 INDEX_NAME = PINECONE_INDEX_NAME
 
 
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Data Models
 # ---------------------------------------------------------------------------
@@ -124,10 +130,10 @@ class MusicContractParser:
             )
 
         start_time = time.time()
-        print(f"📄 Extracting contract data from Pinecone")
-        print(f"   User ID: {user_id}")
-        print(f"   Contract ID: {contract_id}")
-        print(f"   Mode: {'Parallel' if use_parallel else 'Sequential'}")
+        logger.info(f"📄 Extracting contract data from Pinecone")
+        logger.info(f"   User ID: {user_id}")
+        logger.info(f"   Contract ID: {contract_id}")
+        logger.info(f"   Mode: {'Parallel' if use_parallel else 'Sequential'}")
 
         if use_parallel:
             # 1. Extract parties and works FIRST in parallel
@@ -150,29 +156,29 @@ class MusicContractParser:
                         elif task_name == "works":
                             works = result
                     except Exception as e:
-                        print(f"   ⚠️ Error in {task_name} extraction: {e}")
+                        logger.error(f"   ⚠️ Error in {task_name} extraction: {e}")
             
-            print(f"   ⏱️  Parties & Works extraction took: {time.time() - t0:.2f}s")
+            logger.info(f"   ⏱️  Parties & Works extraction took: {time.time() - t0:.2f}s")
 
             # 2. Extract royalties using parties context
             t1 = time.time()
             royalty_shares = self._extract_royalties(user_id, contract_id, parties)
-            print(f"   ⏱️  Royalties extraction took: {time.time() - t1:.2f}s")
+            logger.info(f"   ⏱️  Royalties extraction took: {time.time() - t1:.2f}s")
             
             summary = ""
         else:
             # Sequential execution
             t0 = time.time()
             parties = self._extract_parties(user_id, contract_id)
-            print(f"   ⏱️  Parties extraction took: {time.time() - t0:.2f}s")
+            logger.info(f"   ⏱️  Parties extraction took: {time.time() - t0:.2f}s")
 
             t0 = time.time()
             works = self._extract_works(user_id, contract_id)
-            print(f"   ⏱️  Works extraction took: {time.time() - t0:.2f}s")
+            logger.info(f"   ⏱️  Works extraction took: {time.time() - t0:.2f}s")
 
             t0 = time.time()
             royalty_shares = self._extract_royalties(user_id, contract_id, parties)
-            print(f"   ⏱️  Royalties extraction took: {time.time() - t0:.2f}s")
+            logger.info(f"   ⏱️  Royalties extraction took: {time.time() - t0:.2f}s")
             
             summary = ""
 
@@ -200,14 +206,14 @@ class MusicContractParser:
             
             # Update share name if a better match is found from the parties list
             if best_match:
-                print(f"   🔄 Reconciling name: '{share.party_name}' -> '{best_match.name}'")
+                logger.info(f"   🔄 Reconciling name: '{share.party_name}' -> '{best_match.name}'")
                 share.party_name = best_match.name
                 # If we want to attach the role, we might need to modify the RoyaltyShare dataclass or handle it downstream.
                 # For now, ensuring the name matches allows the frontend/calculator to look up the role from the parties list.
 
         total_time = time.time() - start_time
-        print(f"✅ Extraction complete in {total_time:.2f}s")
-        print(f"   → {len(parties)} parties, {len(works)} works, {len(royalty_shares)} shares")
+        logger.info(f"✅ Extraction complete in {total_time:.2f}s")
+        logger.info(f"   → {len(parties)} parties, {len(works)} works, {len(royalty_shares)} shares")
 
         return ContractData(
             parties=parties,
@@ -230,15 +236,15 @@ class MusicContractParser:
         Returns:
             Concatenated text from top results
         """
-        print(f"\n   🧠 Categorizing query: '{query}'")
+        logger.info(f"\n   🧠 Categorizing query: '{query}'")
         
         # 1. Categorize the query (use fast keyword-based categorization by default)
         t_cat = time.time()
         categorization = categorize_query(query, self.openai_client, use_llm=not use_fast_categorization)
-        print(f"      → Categories: {categorization.get('categories')}")
-        print(f"      → Confidence: {categorization.get('confidence')}")
-        print(f"      → Method: {'Keyword-based (fast)' if use_fast_categorization else 'LLM-based'}")
-        print(f"      ⏱️  Categorization took: {time.time() - t_cat:.2f}s")
+        logger.info(f"      → Categories: {categorization.get('categories')}")
+        logger.info(f"      → Confidence: {categorization.get('confidence')}")
+        logger.info(f"      → Method: {'Keyword-based (fast)' if use_fast_categorization else 'LLM-based'}")
+        logger.info(f"      ⏱️  Categorization took: {time.time() - t_cat:.2f}s")
 
         # 2. Build metadata filter
         filter_dict = build_metadata_filter(
@@ -255,12 +261,12 @@ class MusicContractParser:
             input=[query]
         )
         query_embedding = response.data[0].embedding
-        print(f"      ⏱️  Embedding creation took: {time.time() - t_embed:.2f}s")
+        logger.info(f"      ⏱️  Embedding creation took: {time.time() - t_embed:.2f}s")
 
         # Query Pinecone
         namespace = f"{user_id}-namespace"
         
-        print(f"      → Using filter: {filter_dict}")
+        logger.info(f"      → Using filter: {filter_dict}")
         
         t_query = time.time()
         try:
@@ -272,7 +278,7 @@ class MusicContractParser:
                 include_metadata=True
             )
         except Exception as e:
-            print(f"      ⚠️ Error with filtered search: {e}. Falling back to broad search.")
+            logger.warning(f"      ⚠️ Error with filtered search: {e}. Falling back to broad search.")
             # Fallback to simple contract_id filter if category search fails or returns nothing
             results = self.index.query(
                 namespace=namespace,
@@ -281,24 +287,24 @@ class MusicContractParser:
                 filter={"contract_id": contract_id},
                 include_metadata=True
             )
-        print(f"      ⏱️  Pinecone query took: {time.time() - t_query:.2f}s")
+        logger.info(f"      ⏱️  Pinecone query took: {time.time() - t_query:.2f}s")
 
         # Concatenate results
         context_parts = []
         if hasattr(results, 'matches') and len(results.matches) > 0:
-            print(f"   🔍 Retrieving chunks for: '{query}'")
+            logger.info(f"   🔍 Retrieving chunks for: '{query}'")
             for i, match in enumerate(results.matches):
                 chunk_id = match.id
                 section = match.metadata.get("section_heading", "N/A")
                 category = match.metadata.get("section_category", "N/A")
                 score = match.score
-                print(f"      Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}' | Category='{category}'")
+                logger.info(f"      Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}' | Category='{category}'")
                 
                 text = match.metadata.get("chunk_text", "")
                 if text:
                     context_parts.append(text)
         else:
-            print("      ⚠️ No matches found with filters. Retrying without category filter.")
+            logger.warning("      ⚠️ No matches found with filters. Retrying without category filter.")
             results = self.index.query(
                 namespace=namespace,
                 vector=query_embedding,
@@ -311,7 +317,7 @@ class MusicContractParser:
                     chunk_id = match.id
                     section = match.metadata.get("section_heading", "N/A")
                     score = match.score
-                    print(f"      Fallback Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}'")
+                    logger.info(f"      Fallback Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}'")
                     text = match.metadata.get("chunk_text", "")
                     if text:
                         context_parts.append(text)
@@ -337,7 +343,7 @@ class MusicContractParser:
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}]
         )
-        print(f"      ⏱️  LLM response took: {time.time() - t_llm:.2f}s")
+        logger.info(f"      ⏱️  LLM response took: {time.time() - t_llm:.2f}s")
         
         return response.choices[0].message.content.strip()
 
@@ -375,9 +381,9 @@ Answer:
                     if name and role:
                         parties.append(Party(name, role.lower()))
         
-        print(f"👥 Extracted {len(parties)} parties")
+        logger.info(f"👥 Extracted {len(parties)} parties")
         for i, party in enumerate(parties):
-            print(f"   {i+1}. {party.name} ({party.role})")
+            logger.info(f"   {i+1}. {party.name} ({party.role})")
         return parties
 
     def _extract_works(self, user_id: str, contract_id: str) -> List[Work]:
@@ -404,9 +410,9 @@ Answer:
                     if title:
                         works.append(Work(title, typ.lower() or "song"))
         
-        print(f"🎵 Extracted {len(works)} works")
+        logger.info(f"🎵 Extracted {len(works)} works")
         for i, work in enumerate(works):
-            print(f"   {i+1}. {work.title} ({work.work_type})")
+            logger.info(f"   {i+1}. {work.title} ({work.work_type})")
         return works
 
     def _extract_royalties(self, user_id: str, contract_id: str, parties: List[Party] = None) -> List[RoyaltyShare]:
@@ -417,9 +423,9 @@ Answer:
         if parties:
             parties_list = [f"{p.name} ({p.role})" for p in parties]
             parties_context = "\nKNOWN PARTIES & ROLES:\n" + "\n".join(parties_list) + "\n"
-            print(f"   ℹ️  Providing known parties context to LLM: {len(parties)} parties")
+            logger.info(f"   ℹ️  Providing known parties context to LLM: {len(parties)} parties")
             for p in parties:
-                print(f"      - {p.name} ({p.role})")
+                logger.info(f"      - {p.name} ({p.role})")
 
         question = (
             "What are the explicit royalty percentage splits defined in the contract? "
@@ -440,6 +446,8 @@ Instructions:
 1. Identify the percentage split for each party.
 2. If a royalty split refers to a generic role (e.g., 'Songwriter', 'Producer', 'Artist'), substitute it with the actual name from the KNOWN PARTIES list above.
 3. If the role is ambiguous or no matching name is found, keep the role name.
+4. Simplify the 'Royalty Type' to one of these standard terms if applicable: 'Streaming',Master', 'Publishing', 'Producer', 'Mixer', 'Remixer'. If it doesn't fit, use a short descriptive term (max 3 words).
+
 
 List each as: Name | Royalty Type | Percentage | Terms
 Answer:
@@ -463,9 +471,9 @@ Answer:
                     except ValueError:
                         continue
         
-        print(f"💰 Extracted {len(shares)} royalty shares")
+        logger.info(f"💰 Extracted {len(shares)} royalty shares")
         for i, share in enumerate(shares):
-            print(f"   {i+1}. {share.party_name} | {share.royalty_type} | {share.percentage}%" + (f" | {share.terms}" if share.terms else ""))
+            logger.info(f"   {i+1}. {share.party_name} | {share.royalty_type} | {share.percentage}%" + (f" | {share.terms}" if share.terms else ""))
         return shares
 
     def _extract_summary(self, user_id: str, contract_id: str) -> str:
@@ -485,5 +493,5 @@ Answer (2-3 paragraphs):
         context = self._query_pinecone(question, user_id, contract_id, top_k=8)
         result = self._ask_llm(context, question, template)
         
-        print("🧾 Summary generated")
+        logger.info("🧾 Summary generated")
         return result
