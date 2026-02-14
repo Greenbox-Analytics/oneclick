@@ -446,6 +446,8 @@ Instructions:
 1. Identify the percentage split for each party.
 2. If a royalty split refers to a generic role (e.g., 'Songwriter', 'Producer', 'Artist'), substitute it with the actual name from the KNOWN PARTIES list above.
 3. If the role is ambiguous or no matching name is found, keep the role name.
+4. Simplify the 'Royalty Type' to one of these standard terms if applicable: 'Streaming',Master', 'Publishing', 'Producer', 'Mixer', 'Remixer'. If it doesn't fit, use a short descriptive term (max 3 words).
+
 
 List each as: Name | Royalty Type | Percentage | Terms
 Answer:
