@@ -8,7 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus } from "lucide-react";
+import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus, RefreshCw } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import * as XLSX from "xlsx";
@@ -115,6 +115,9 @@ const OneClickDocuments = () => {
 
   // Ref for chart download (only the chart content, not the entire card)
   const chartContentRef = useRef<HTMLDivElement>(null);
+  
+  // Ref to track if auto-save has been triggered for current result
+  const autoSaveTriggeredRef = useRef<string | null>(null);
 
   // Fetch Artist Name
   useEffect(() => {
@@ -596,7 +599,6 @@ const OneClickDocuments = () => {
           if (!response.ok) throw new Error("Failed to save results");
 
           setSaveSuccess(true);
-          toast.success("Results confirmed and saved!");
       } catch (err) {
           console.error("Error saving results:", err);
           toast.error("Failed to save results");
@@ -604,6 +606,26 @@ const OneClickDocuments = () => {
           setIsSaving(false);
       }
   };
+
+  // Auto-save non-cached results
+  useEffect(() => {
+      if (!calculationResult || !lastCalculationContext || !user) return;
+      
+      // Only auto-save new calculations (not cached results)
+      if (calculationResult.is_cached) return;
+      
+      // Create unique key for this result to prevent duplicate saves
+      const resultKey = `${lastCalculationContext.statementId}-${lastCalculationContext.contractIds.join(',')}`;
+      
+      // Check if we've already triggered save for this result
+      if (autoSaveTriggeredRef.current === resultKey) return;
+      
+      // Mark as triggered
+      autoSaveTriggeredRef.current = resultKey;
+      
+      // Trigger auto-save
+      handleConfirmResultsWithContext();
+  }, [calculationResult, lastCalculationContext, user]);
 
   if (isLoadingArtist) {
     return (
@@ -1183,45 +1205,16 @@ const OneClickDocuments = () => {
           <div className="mt-8 space-y-6">
             <div className="flex items-start justify-between">
               <div>
-                <div className="flex items-center gap-3 mb-2">
-                    <h2 className="text-2xl font-bold text-foreground">Royalty Calculation Results</h2>
-                    {calculationResult.is_cached && (
-                        <div className="flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-xs rounded-full font-medium">
-                            <CheckCircle2 className="w-3 h-3" />
-                            Cached
-                        </div>
-                    )}
-                </div>
+                <h2 className="text-2xl font-bold text-foreground">Royalty Calculation Results</h2>
                 <p className="text-muted-foreground">{calculationResult.message}</p>
               </div>
               
               <div className="flex gap-2">
-                  {calculationResult.is_cached ? (
+                  {calculationResult.is_cached && (
                       <Button variant="outline" onClick={() => handleCalculateRoyalties(true)} disabled={isUploading}>
-                          <Loader2 className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
+                          <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
                           Recalculate
                       </Button>
-                  ) : (
-                      !saveSuccess ? (
-                          <Button onClick={handleConfirmResultsWithContext} disabled={isSaving}>
-                              {isSaving ? (
-                                  <>
-                                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                      Saving...
-                                  </>
-                              ) : (
-                                  <>
-                                      <CheckCircle2 className="w-4 h-4 mr-2" />
-                                      Confirm & Save Results
-                                  </>
-                              )}
-                          </Button>
-                      ) : (
-                          <Button variant="secondary" disabled className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100 opacity-100">
-                              <CheckCircle2 className="w-4 h-4 mr-2" />
-                              Results Saved
-                          </Button>
-                      )
                   )}
               </div>
             </div>
