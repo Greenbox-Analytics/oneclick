@@ -85,6 +85,7 @@ const OneClickDocuments = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [existingContracts, setExistingContracts] = useState<ArtistFile[]>([]);
   const [existingRoyaltyStatements, setExistingRoyaltyStatements] = useState<ArtistFile[]>([]);
+  const [projectFilesById, setProjectFilesById] = useState<Record<string, ArtistFile[]>>({});
   
   // UI State - Separate project selection for each card
   const [selectedContractProject, setSelectedContractProject] = useState<string | null>(null);
@@ -118,6 +119,51 @@ const OneClickDocuments = () => {
   
   // Ref to track if auto-save has been triggered for current result
   const autoSaveTriggeredRef = useRef<string | null>(null);
+
+  const normalizeFileName = (name: string) => name.trim().toLowerCase();
+
+  const showPersistentDuplicateToast = (message: string) => {
+    toast.error(message, {
+      duration: Infinity,
+      closeButton: true,
+      style: {
+        background: "hsl(var(--destructive))",
+        color: "hsl(var(--destructive-foreground))",
+        border: "1px solid hsl(var(--destructive))",
+      },
+    });
+  };
+
+  const findDuplicateFileNames = (files: File[]) => {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+
+    for (const file of files) {
+      const normalized = normalizeFileName(file.name);
+      if (seen.has(normalized)) {
+        duplicates.add(file.name);
+      } else {
+        seen.add(normalized);
+      }
+    }
+
+    return Array.from(duplicates);
+  };
+
+  const fetchProjectFilesForValidation = async (projectId: string): Promise<ArtistFile[]> => {
+    if (projectFilesById[projectId]) {
+      return projectFilesById[projectId];
+    }
+
+    const response = await fetch(`${API_URL}/files/${projectId}`);
+    if (!response.ok) {
+      throw new Error("Failed to load existing files for duplicate check");
+    }
+
+    const data: ArtistFile[] = await response.json();
+    setProjectFilesById(prev => ({ ...prev, [projectId]: data }));
+    return data;
+  };
 
   // Fetch Artist Name
   useEffect(() => {
@@ -163,6 +209,7 @@ const OneClickDocuments = () => {
       fetch(`${API_URL}/files/${selectedContractProject}`)
         .then(res => res.json())
         .then((data: ArtistFile[]) => {
+            setProjectFilesById(prev => ({ ...prev, [selectedContractProject]: data }));
             // Filter contracts
             const contracts = data.filter(f => f.folder_category === 'contract');
             setExistingContracts(contracts);
@@ -188,6 +235,7 @@ const OneClickDocuments = () => {
       fetch(`${API_URL}/files/${selectedRoyaltyStatementProject}`)
         .then(res => res.json())
         .then((data: ArtistFile[]) => {
+            setProjectFilesById(prev => ({ ...prev, [selectedRoyaltyStatementProject]: data }));
             // Filter royalty statements
             const statements = data.filter(f => f.folder_category === 'royalty_statement');
             setExistingRoyaltyStatements(statements);
@@ -203,14 +251,90 @@ const OneClickDocuments = () => {
     }
   }, [selectedRoyaltyStatementProject]);
 
-  const handleContractFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleContractFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files) setContractFiles(prev => [...prev, ...Array.from(files)]);
+    if (!files) return;
+
+    const incomingFiles = Array.from(files);
+    const blockedNames = new Set<string>();
+    const existingSelectedNames = new Set(contractFiles.map(file => normalizeFileName(file.name)));
+    const seenInBatch = new Set<string>();
+    const projectFileNames = new Set<string>();
+
+    if (newContractProjectId && newContractProjectId !== "none") {
+      try {
+        const projectFiles = await fetchProjectFilesForValidation(newContractProjectId);
+        projectFiles.forEach(file => projectFileNames.add(normalizeFileName(file.file_name)));
+      } catch (err) {
+        console.error("Error checking contract duplicates:", err);
+      }
+    }
+
+    const allowedFiles: File[] = [];
+    incomingFiles.forEach(file => {
+      const normalizedName = normalizeFileName(file.name);
+
+      if (seenInBatch.has(normalizedName) || existingSelectedNames.has(normalizedName) || projectFileNames.has(normalizedName)) {
+        blockedNames.add(file.name);
+        return;
+      }
+
+      seenInBatch.add(normalizedName);
+      allowedFiles.push(file);
+    });
+
+    if (blockedNames.size > 0) {
+      showPersistentDuplicateToast(`Duplicate file name(s) blocked: ${Array.from(blockedNames).join(", ")}`);
+    }
+
+    if (allowedFiles.length > 0) {
+      setContractFiles(prev => [...prev, ...allowedFiles]);
+    }
+
+    e.target.value = "";
   };
 
-  const handleRoyaltyStatementFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleRoyaltyStatementFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files) setRoyaltyStatementFiles(prev => [...prev, ...Array.from(files)]);
+    if (!files) return;
+
+    const incomingFiles = Array.from(files);
+    const blockedNames = new Set<string>();
+    const existingSelectedNames = new Set(royaltyStatementFiles.map(file => normalizeFileName(file.name)));
+    const seenInBatch = new Set<string>();
+    const projectFileNames = new Set<string>();
+
+    if (newRoyaltyStatementProjectId && newRoyaltyStatementProjectId !== "none") {
+      try {
+        const projectFiles = await fetchProjectFilesForValidation(newRoyaltyStatementProjectId);
+        projectFiles.forEach(file => projectFileNames.add(normalizeFileName(file.file_name)));
+      } catch (err) {
+        console.error("Error checking royalty statement duplicates:", err);
+      }
+    }
+
+    const allowedFiles: File[] = [];
+    incomingFiles.forEach(file => {
+      const normalizedName = normalizeFileName(file.name);
+
+      if (seenInBatch.has(normalizedName) || existingSelectedNames.has(normalizedName) || projectFileNames.has(normalizedName)) {
+        blockedNames.add(file.name);
+        return;
+      }
+
+      seenInBatch.add(normalizedName);
+      allowedFiles.push(file);
+    });
+
+    if (blockedNames.size > 0) {
+      showPersistentDuplicateToast(`Duplicate file name(s) blocked: ${Array.from(blockedNames).join(", ")}`);
+    }
+
+    if (allowedFiles.length > 0) {
+      setRoyaltyStatementFiles(prev => [...prev, ...allowedFiles]);
+    }
+
+    e.target.value = "";
   };
 
   const handleRemoveContractFile = (index: number) => {
@@ -304,6 +428,23 @@ const OneClickDocuments = () => {
                  throw new Error("You must select a project to save the new contract to.");
              }
 
+           const duplicateNamesInContractSelection = findDuplicateFileNames(contractFiles);
+           if (duplicateNamesInContractSelection.length > 0) {
+             showPersistentDuplicateToast(`Duplicate file name(s) blocked: ${duplicateNamesInContractSelection.join(", ")}`);
+             throw new Error("Please remove duplicate contract file names before uploading.");
+           }
+
+           const projectFiles = await fetchProjectFilesForValidation(newContractProjectId);
+           const projectFileNames = new Set(projectFiles.map(existing => normalizeFileName(existing.file_name)));
+           const contractDuplicatesInProject = contractFiles
+             .filter(file => projectFileNames.has(normalizeFileName(file.name)))
+             .map(file => file.name);
+
+           if (contractDuplicatesInProject.length > 0) {
+             showPersistentDuplicateToast(`These file name(s) already exist in this project: ${contractDuplicatesInProject.join(", ")}`);
+             throw new Error("Duplicate file names found in selected project.");
+           }
+
              // Upload each file sequentially to ensure order and error handling
              for (const file of contractFiles) {
                  const formData = new FormData();
@@ -341,6 +482,12 @@ const OneClickDocuments = () => {
 
         // 2. Determine Statement ID
         if (royaltyStatementFiles.length > 0) {
+           const duplicateNamesInRoyaltySelection = findDuplicateFileNames(royaltyStatementFiles);
+           if (duplicateNamesInRoyaltySelection.length > 0) {
+             showPersistentDuplicateToast(`Duplicate file name(s) blocked: ${duplicateNamesInRoyaltySelection.join(", ")}`);
+             throw new Error("Please remove duplicate royalty statement file names before uploading.");
+           }
+
              const formData = new FormData();
              formData.append("file", royaltyStatementFiles[0]);
              formData.append("artist_id", artistId);
@@ -348,13 +495,27 @@ const OneClickDocuments = () => {
              // Associate with explicitly selected project, or contract's project if available
              const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
              if (targetProjectId) formData.append("project_id", targetProjectId);
+
+           if (targetProjectId) {
+             const projectFiles = await fetchProjectFilesForValidation(targetProjectId);
+             const projectFileNames = new Set(projectFiles.map(existing => normalizeFileName(existing.file_name)));
+             const targetFileName = royaltyStatementFiles[0]?.name;
+
+             if (targetFileName && projectFileNames.has(normalizeFileName(targetFileName))) {
+               showPersistentDuplicateToast(`A file named "${targetFileName}" already exists in this project.`);
+               throw new Error("Duplicate file name found in selected project.");
+             }
+           }
              
              const uploadRes = await fetch(`${API_URL}/upload`, {
                  method: "POST",
                  body: formData
              });
 
-             if (!uploadRes.ok) throw new Error("Failed to upload royalty statement");
+           if (!uploadRes.ok) {
+             const errData = await uploadRes.json();
+             throw new Error(errData.detail || "Failed to upload royalty statement");
+           }
              const uploadData = await uploadRes.json();
              finalStatementId = uploadData.file.id;
 
@@ -501,8 +662,11 @@ const OneClickDocuments = () => {
 
     } catch (error: any) {
         console.error("Error:", error);
-        setError(error.message || "An error occurred.");
-        toast.error(error.message || "An error occurred during processing.");
+      const errorMessage = error?.message || "An error occurred.";
+      setError(errorMessage);
+      if (!String(errorMessage).toLowerCase().includes("duplicate file")) {
+        toast.error(errorMessage || "An error occurred during processing.");
+      }
         setShowProgressModal(false);
         setIsUploading(false);
     }

@@ -59,6 +59,14 @@ def get_supabase_client() -> Client:
         supabase = create_client(url, key)
     return supabase
 
+def normalize_file_name(file_name: str) -> str:
+    return file_name.strip().lower()
+
+def file_name_exists_in_project(project_id: str, file_name: str) -> bool:
+    existing_files = get_supabase_client().table("project_files").select("file_name").eq("project_id", project_id).execute()
+    target_name = normalize_file_name(file_name)
+    return any(normalize_file_name(existing["file_name"]) == target_name for existing in (existing_files.data or []))
+
 # --- Data Models ---
 class RoyaltyBreakdown(BaseModel):
     songName: str
@@ -378,6 +386,12 @@ async def upload_file(
                 }).execute()
                 project_id = new_proj.data[0]['id']
 
+        if file_name_exists_in_project(project_id, file.filename):
+            raise HTTPException(
+                status_code=409,
+                detail=f'A file named "{file.filename}" already exists in this project.'
+            )
+
         file_content = await file.read()
         
         # Clean filename
@@ -413,13 +427,29 @@ async def upload_file(
             "file_type": file.content_type
         }
         
-        db_res = get_supabase_client().table("project_files").insert(db_record).execute()
+        try:
+            db_res = get_supabase_client().table("project_files").insert(db_record).execute()
+        except Exception as db_error:
+            try:
+                get_supabase_client().storage.from_("project-files").remove([file_path])
+            except Exception as cleanup_error:
+                print(f"Failed to cleanup uploaded file after DB error: {cleanup_error}")
+
+            error_message = str(db_error).lower()
+            if "duplicate" in error_message and "project_files" in error_message:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'A file named "{file.filename}" already exists in this project.'
+                )
+            raise db_error
         
         return {
             "status": "success", 
             "file": db_res.data[0]
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -511,6 +541,12 @@ async def upload_contract(
         project_res = get_supabase_client().table("projects").select("name").eq("id", project_id).execute()
         if not project_res.data:
             raise HTTPException(status_code=404, detail="Project not found")
+
+        if file_name_exists_in_project(project_id, file.filename):
+            raise HTTPException(
+                status_code=409,
+                detail=f'A file named "{file.filename}" already exists in this project.'
+            )
         
         project_name = project_res.data[0]["name"]
         
@@ -542,7 +578,22 @@ async def upload_contract(
             "file_type": file.content_type
         }
         
-        db_res = get_supabase_client().table("project_files").insert(db_record).execute()
+        try:
+            db_res = get_supabase_client().table("project_files").insert(db_record).execute()
+        except Exception as db_error:
+            try:
+                get_supabase_client().storage.from_("project-files").remove([file_path])
+            except Exception as cleanup_error:
+                print(f"Failed to cleanup uploaded contract after DB error: {cleanup_error}")
+
+            error_message = str(db_error).lower()
+            if "duplicate" in error_message and "project_files" in error_message:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'A file named "{file.filename}" already exists in this project.'
+                )
+            raise db_error
+
         contract_id = db_res.data[0]["id"]
         
         # 3. Save PDF temporarily for processing

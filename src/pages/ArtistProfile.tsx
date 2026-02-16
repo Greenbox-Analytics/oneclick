@@ -237,6 +237,8 @@ const ArtistProfile = () => {
     }
   };
 
+  const normalizeFileName = (name: string) => name.trim().toLowerCase();
+
   const fetchProjectFiles = async (projectId: string) => {
     const { data, error } = await supabase
       .from('project_files')
@@ -257,6 +259,36 @@ const ArtistProfile = () => {
   const handleFileUpload = async (projectId: string, folderCategory: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    const projectFilesForValidation = projectFiles[projectId]
+      ? projectFiles[projectId]
+      : await (async () => {
+          const { data, error } = await supabase
+            .from('project_files')
+            .select('file_name')
+            .eq('project_id', projectId);
+
+          if (error) {
+            return [];
+          }
+
+          return data || [];
+        })();
+
+    const hasDuplicateInCache = projectFilesForValidation.some(
+      existing => normalizeFileName(existing.file_name) === normalizeFileName(file.name)
+    );
+
+    if (hasDuplicateInCache) {
+      toast({
+        title: "Duplicate file name",
+        description: `A file named "${file.name}" already exists in this project.`,
+        variant: "destructive",
+        duration: Number.POSITIVE_INFINITY,
+      });
+      event.target.value = "";
+      return;
+    }
 
     setUploadingFile(`${projectId}-${folderCategory}`);
 
@@ -289,7 +321,20 @@ const ArtistProfile = () => {
         .select()
         .single();
 
-      if (dbError) throw dbError;
+      if (dbError) {
+        const errorMessage = dbError.message?.toLowerCase() || "";
+        if (errorMessage.includes("duplicate") || errorMessage.includes("unique")) {
+          await supabase.storage.from('project-files').remove([filePath]);
+          toast({
+            title: "Duplicate file name",
+            description: `A file named "${file.name}" already exists in this project.`,
+            variant: "destructive",
+            duration: Number.POSITIVE_INFINITY,
+          });
+          return;
+        }
+        throw dbError;
+      }
 
       // Update local state
       setProjectFiles(prev => ({
@@ -310,6 +355,7 @@ const ArtistProfile = () => {
       });
     } finally {
       setUploadingFile(null);
+      event.target.value = "";
     }
   };
 

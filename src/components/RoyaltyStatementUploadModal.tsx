@@ -34,23 +34,66 @@ export const RoyaltyStatementUploadModal = ({
   const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
   const [error, setError] = useState("");
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const files = Array.from(e.target.files);
-      const validFiles = files.filter((file) => {
-        const ext = file.name.toLowerCase();
-        return ext.endsWith(".xlsx") || ext.endsWith(".csv");
-      });
-      
-      if (validFiles.length !== files.length) {
-        setError("Only XLSX and CSV files are supported. Non-supported files were filtered out.");
-      } else {
-        setError("");
-      }
-      
-      setSelectedFiles(validFiles);
-      setUploadResults([]);
+  const normalizeFileName = (name: string) => name.trim().toLowerCase();
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+
+    const files = Array.from(e.target.files);
+    const validFiles = files.filter((file) => {
+      const ext = file.name.toLowerCase();
+      return ext.endsWith(".xlsx") || ext.endsWith(".csv");
+    });
+    const blockedNames = new Set<string>();
+    const seenInBatch = new Set<string>();
+    
+    if (validFiles.length !== files.length) {
+      setError("Only XLSX and CSV files are supported. Non-supported files were filtered out.");
+    } else {
+      setError("");
     }
+
+    let projectFileNames = new Set<string>();
+
+    try {
+      const { data, error: projectFilesError } = await supabase
+        .from('project_files')
+        .select('file_name')
+        .eq('project_id', projectId);
+
+      if (projectFilesError) {
+        throw projectFilesError;
+      }
+
+      projectFileNames = new Set((data || []).map(file => normalizeFileName(file.file_name)));
+    } catch (projectCheckError) {
+      console.error("Error checking duplicate royalty files:", projectCheckError);
+    }
+
+    const filteredFiles: File[] = [];
+    for (const file of validFiles) {
+      const normalized = normalizeFileName(file.name);
+      if (seenInBatch.has(normalized) || projectFileNames.has(normalized)) {
+        blockedNames.add(file.name);
+        continue;
+      }
+
+      seenInBatch.add(normalized);
+      filteredFiles.push(file);
+    }
+
+    if (blockedNames.size > 0) {
+      toast({
+        title: "Duplicate file names blocked",
+        description: Array.from(blockedNames).join(", "),
+        variant: "destructive",
+        duration: Number.POSITIVE_INFINITY,
+      });
+    }
+    
+    setSelectedFiles(filteredFiles);
+    setUploadResults([]);
+    e.target.value = "";
   };
 
   const handleUpload = async () => {
@@ -115,6 +158,11 @@ export const RoyaltyStatementUploadModal = ({
         );
       } catch (err) {
         console.error(`Error uploading ${file.name}:`, err);
+
+        const rawErrorMessage = err instanceof Error ? err.message : "Upload failed";
+        const friendlyErrorMessage = rawErrorMessage.toLowerCase().includes("duplicate") || rawErrorMessage.toLowerCase().includes("unique")
+          ? `A file named "${file.name}" already exists in this project.`
+          : rawErrorMessage;
         
         // Update result for this file
         setUploadResults((prev) =>
@@ -123,7 +171,7 @@ export const RoyaltyStatementUploadModal = ({
               ? {
                   filename: file.name,
                   status: "error",
-                  error: err instanceof Error ? err.message : "Upload failed",
+                  error: friendlyErrorMessage,
                 }
               : r
           )
@@ -191,9 +239,20 @@ export const RoyaltyStatementUploadModal = ({
               className="cursor-pointer"
             />
             {selectedFiles.length > 0 && (
-              <p className="text-sm text-muted-foreground">
-                {selectedFiles.length} file{selectedFiles.length > 1 ? "s" : ""} selected
-              </p>
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  {selectedFiles.length} file{selectedFiles.length > 1 ? "s" : ""} selected
+                </p>
+                <div className="max-h-32 overflow-y-auto rounded-md border bg-muted/30 p-2">
+                  <ul className="space-y-1 text-sm">
+                    {selectedFiles.map((file, idx) => (
+                      <li key={`${file.name}-${idx}`} className="truncate text-foreground">
+                        {file.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
             )}
           </div>
 
