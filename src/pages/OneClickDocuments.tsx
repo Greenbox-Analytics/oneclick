@@ -1,6 +1,4 @@
-// React hooks for managing component state and side effects
 import { useState, useEffect, useRef } from "react";
-// UI components from shadcn/ui library for building the interface
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,13 +8,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-// Icons from lucide-react for visual elements
-import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus } from "lucide-react";
-// React Router hooks for navigation and getting URL parameters
+import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus, RefreshCw } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
-// Recharts for pie chart
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-// xlsx library for Excel export
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
@@ -26,10 +20,8 @@ import { Label } from "@/components/ui/label";
 import { toPng } from 'html-to-image';
 
 
-// Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
-// Type definitions
 interface RoyaltyPayment {
   song_title: string;
   party_name: string;
@@ -47,6 +39,7 @@ interface CalculationResult {
   payments: RoyaltyPayment[];
   excel_file_url?: string;
   message: string;
+  is_cached?: boolean;
 }
 
 interface Project {
@@ -81,6 +74,8 @@ const OneClickDocuments = () => {
   // Calculation Results State
   const [calculationResult, setCalculationResult] = useState<CalculationResult | null>(null);
   const [error, setError] = useState<string>("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Existing Documents Selection State
   const [selectedExistingContracts, setSelectedExistingContracts] = useState<string[]>([]); // Array of file_ids (OneClick uses IDs)
@@ -120,6 +115,9 @@ const OneClickDocuments = () => {
 
   // Ref for chart download (only the chart content, not the entire card)
   const chartContentRef = useRef<HTMLDivElement>(null);
+  
+  // Ref to track if auto-save has been triggered for current result
+  const autoSaveTriggeredRef = useRef<string | null>(null);
 
   // Fetch Artist Name
   useEffect(() => {
@@ -268,7 +266,7 @@ const OneClickDocuments = () => {
     );
   };
 
-  const handleCalculateRoyalties = async () => {
+  const handleCalculateRoyalties = async (forceRecalculate = false) => {
     if (!artistId || !user) {
         toast.error("User or Artist not found.");
         return;
@@ -368,11 +366,20 @@ const OneClickDocuments = () => {
              throw new Error("Could not determine contracts or statement to process.");
         }
 
+        // Store context for confirmation
+        setLastCalculationContext({
+            contractIds: finalContractIds,
+            statementId: finalStatementId,
+            projectId: finalProjectId
+        });
+
+        // 3. Show progress modal and start SSE connection
         // 3. Show progress modal and start SSE connection
         setShowProgressModal(true);
         setCalculationProgress(0);
         setCalculationStage("starting");
         setCalculationMessage("Starting calculation...");
+        setSaveSuccess(false); // Reset save state
 
         // Build request body
         const requestBody = {
@@ -388,6 +395,10 @@ const OneClickDocuments = () => {
             project_id: requestBody.project_id,
             royalty_statement_file_id: requestBody.royalty_statement_file_id
         });
+        
+        if (forceRecalculate) {
+            queryParams.append("force_recalculate", "true");
+        }
         
         // Append each contract_id
         finalContractIds.forEach(id => queryParams.append("contract_ids", id));
@@ -422,12 +433,18 @@ const OneClickDocuments = () => {
                         status: data.status,
                         total_payments: data.total_payments,
                         payments: data.payments,
-                        message: data.message
+                        message: data.message,
+                        is_cached: data.is_cached
                     };
                     
                     setCalculationResult(result);
                     setShowProgressModal(false);
-                    toast.success("Royalties calculated successfully!");
+                    
+                    if (data.is_cached) {
+                        toast.success("Royalties loaded successfully!");
+                    } else {
+                        toast.success("Royalties calculated successfully!");
+                    }
                     
                     // Clear uploaded files from state
                     setContractFiles([]);
@@ -439,6 +456,32 @@ const OneClickDocuments = () => {
                     setShowProgressModal(false);
                     setError(data.message || "An error occurred");
                     toast.error(data.message || "Calculation failed");
+                    setIsUploading(false);
+                } else if (data.status === 'success' && data.payments) {
+                    // Defensive: Handle completion messages without explicit type field
+                    // This catches cached results that may have been stored before type field was added
+                    clearTimeout(timeout);
+                    eventSource.close();
+                    
+                    const result: CalculationResult = {
+                        status: data.status,
+                        total_payments: data.total_payments,
+                        payments: data.payments,
+                        message: data.message,
+                        is_cached: data.is_cached
+                    };
+                    
+                    setCalculationResult(result);
+                    setShowProgressModal(false);
+                    
+                    if (data.is_cached) {
+                        toast.success("Royalties loaded successfully!");
+                    } else {
+                        toast.success("Royalties calculated successfully!");
+                    }
+                    
+                    setContractFiles([]);
+                    setRoyaltyStatementFiles([]);
                     setIsUploading(false);
                 }
             } catch (err) {
@@ -529,6 +572,60 @@ const OneClickDocuments = () => {
       toast.error("Failed to download chart. Please try again.");
     }
   };
+
+  const [lastCalculationContext, setLastCalculationContext] = useState<{
+      contractIds: string[],
+      statementId: string,
+      projectId: string
+  } | null>(null);
+
+  const handleConfirmResultsWithContext = async () => {
+      if (!lastCalculationContext || !calculationResult || !user) return;
+
+      setIsSaving(true);
+      try {
+          const response = await fetch(`${API_URL}/oneclick/confirm`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                  contract_ids: lastCalculationContext.contractIds,
+                  royalty_statement_id: lastCalculationContext.statementId,
+                  project_id: lastCalculationContext.projectId,
+                  user_id: user.id,
+                  results: calculationResult
+              })
+          });
+
+          if (!response.ok) throw new Error("Failed to save results");
+
+          setSaveSuccess(true);
+      } catch (err) {
+          console.error("Error saving results:", err);
+          toast.error("Failed to save results");
+      } finally {
+          setIsSaving(false);
+      }
+  };
+
+  // Auto-save non-cached results
+  useEffect(() => {
+      if (!calculationResult || !lastCalculationContext || !user) return;
+      
+      // Only auto-save new calculations (not cached results)
+      if (calculationResult.is_cached) return;
+      
+      // Create unique key for this result to prevent duplicate saves
+      const resultKey = `${lastCalculationContext.statementId}-${lastCalculationContext.contractIds.join(',')}`;
+      
+      // Check if we've already triggered save for this result
+      if (autoSaveTriggeredRef.current === resultKey) return;
+      
+      // Mark as triggered
+      autoSaveTriggeredRef.current = resultKey;
+      
+      // Trigger auto-save
+      handleConfirmResultsWithContext();
+  }, [calculationResult, lastCalculationContext, user]);
 
   if (isLoadingArtist) {
     return (
@@ -928,7 +1025,7 @@ const OneClickDocuments = () => {
 
         <div className="flex gap-3 justify-center mb-8">
           <Button
-            onClick={handleCalculateRoyalties}
+            onClick={() => handleCalculateRoyalties(false)}
             disabled={((contractFiles.length === 0 && selectedExistingContracts.length === 0) || 
                        (royaltyStatementFiles.length === 0 && selectedExistingRoyaltyStatements.length === 0)) || 
                        isUploading}
@@ -1106,9 +1203,20 @@ const OneClickDocuments = () => {
 
         {calculationResult && (
           <div className="mt-8 space-y-6">
-            <div>
-              <h2 className="text-2xl font-bold text-foreground mb-2">Royalty Calculation Results</h2>
-              <p className="text-muted-foreground">{calculationResult.message}</p>
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-foreground">Royalty Calculation Results</h2>
+                <p className="text-muted-foreground">{calculationResult.message}</p>
+              </div>
+              
+              <div className="flex gap-2">
+                  {calculationResult.is_cached && (
+                      <Button variant="outline" onClick={() => handleCalculateRoyalties(true)} disabled={isUploading}>
+                          <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
+                          Recalculate
+                      </Button>
+                  )}
+              </div>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

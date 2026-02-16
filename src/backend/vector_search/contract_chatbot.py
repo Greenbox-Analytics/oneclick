@@ -993,21 +993,28 @@ class ContractChatbot:
             "show_quick_actions": show_quick_actions
         }
     
-    def _classify_query(self, query: str) -> str:
+    def _classify_query(self, query: str, artist_data: Optional[Dict] = None) -> str:
         """
         Use LLM to classify whether a query is about artist info or contracts.
         
         Args:
             query: User's question
+            artist_data: Optional artist data to help with context (e.g. artist name)
             
         Returns:
             "artist" if query is about artist profile/info
             "contract" if query is about contracts/agreements
         """
-        system_prompt = """You are a query classifier. Determine if the user's question is about:
+        # Add artist context if available to help disambiguate
+        artist_context = ""
+        if artist_data and artist_data.get('name'):
+            artist_name = artist_data.get('name')
+            artist_context = f"\nIMPORTANT CONTEXT: The current artist is '{artist_name}'. If the user asks about '{artist_name}', classify it as ARTIST."
+
+        system_prompt = f"""You are a query classifier. Determine if the user's question is about:
 
 1. ARTIST - Questions about the artist's profile, bio, social media, streaming links, genres, contact info, EPK, press kit, etc.
-   Examples: "What's the artist's bio?", "What are their social media links?", "What genre do they make?", "What's their Spotify?"
+   Examples: "What's the artist's bio?", "What are their social media links?", "What genre do they make?", "What's their Spotify?"{artist_context}
 
 2. CONTRACT - Questions about contracts, agreements, royalties, payment terms, splits, advances, legal terms, parties, clauses, etc.
    Examples: "What are the royalty splits?", "Who are the parties?", "What's the advance amount?", "When does the contract end?"
@@ -2270,7 +2277,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             return self._handle_conversational_query(query, session_id)
         
         # Step 1: Classify the query - is it about artist or contracts?
-        query_type = self._classify_query(query)
+        query_type = self._classify_query(query, artist_data)
         logger.info(f"Query classified as: {query_type}")
         
         # Step 2: Route based on classification
@@ -2427,7 +2434,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             return self._handle_conversational_query(query, session_id)
         
         # Classify the query - is it about artist or contracts?
-        query_type = self._classify_query(query)
+        query_type = self._classify_query(query, artist_data)
         logger.info(f"Query classified as: {query_type}")
         
         if query_type == "artist":
@@ -2631,7 +2638,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             return self._handle_conversational_query(query, session_id)
         
         # Step 1: Classify the query - is it about artist or contracts?
-        query_type = self._classify_query(query)
+        query_type = self._classify_query(query, artist_data)
         logger.info(f"Query classified as: {query_type}")
         
         # Step 2: Route based on classification
