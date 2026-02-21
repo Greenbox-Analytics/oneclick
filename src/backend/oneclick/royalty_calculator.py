@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from .contract_parser import MusicContractParser, ContractData
-from .helpers import normalize_title, find_matching_song, normalize_name
+from .helpers import normalize_title, find_matching_song, normalize_name, simplify_role
 
 import openpyxl
 from dotenv import load_dotenv
@@ -461,10 +461,15 @@ class RoyaltyCalculator:
                         seen_parties[norm_name] = party
                         merged_parties.append(party)
                     else:
-                        # Update role if current one is more specific
                         existing = seen_parties[norm_name]
-                        if party.role != 'party' and existing.role == 'party':
-                            existing.role = party.role
+                        # Combine roles from both contracts
+                        existing_roles = set(r.strip() for r in existing.role.split(";"))
+                        new_roles = set(r.strip() for r in party.role.split(";"))
+                        combined = existing_roles | new_roles
+                        # Remove generic 'party' if a specific role exists
+                        if len(combined) > 1:
+                            combined.discard('party')
+                        existing.role = "; ".join(sorted(combined))
             
             # Merge works
             for work in contract.works:
@@ -510,6 +515,10 @@ class RoyaltyCalculator:
 
                 # If no exact duplicate found, add it
                 merged_royalty_shares.append(share)
+        
+        # Simplify combined roles
+        for party in merged_parties:
+            party.role = simplify_role(party.role)
         
         # Combine summaries
         merged_summary = "\n\n".join([s for s in summaries if s.strip()])
