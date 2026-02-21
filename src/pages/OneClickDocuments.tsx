@@ -68,7 +68,7 @@ const OneClickDocuments = () => {
   
   // File Upload State
   const [contractFiles, setContractFiles] = useState<File[]>([]);
-  const [royaltyStatementFiles, setRoyaltyStatementFiles] = useState<File[]>([]);
+  const [royaltyStatementFile, setRoyaltyStatementFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   
   // Calculation Results State
@@ -79,7 +79,7 @@ const OneClickDocuments = () => {
 
   // Existing Documents Selection State
   const [selectedExistingContracts, setSelectedExistingContracts] = useState<string[]>([]); // Array of file_ids (OneClick uses IDs)
-  const [selectedExistingRoyaltyStatements, setSelectedExistingRoyaltyStatements] = useState<string[]>([]); // Array of file_ids (OneClick uses IDs)
+  const [selectedExistingRoyaltyStatement, setSelectedExistingRoyaltyStatement] = useState<string | null>(null);
 
   // Data from Backend
   const [projects, setProjects] = useState<Project[]>([]);
@@ -228,8 +228,7 @@ const OneClickDocuments = () => {
   // Fetch Royalty Statements when Royalty Statement Project Selected
   useEffect(() => {
     if (selectedRoyaltyStatementProject) {
-      // Clear previous royalty statement selections when changing projects
-      setSelectedExistingRoyaltyStatements([]);
+      setSelectedExistingRoyaltyStatement(null);
       
       setIsLoadingProjectFiles(true);
       fetch(`${API_URL}/files/${selectedRoyaltyStatementProject}`)
@@ -247,7 +246,7 @@ const OneClickDocuments = () => {
         });
     } else {
         setExistingRoyaltyStatements([]);
-        setSelectedExistingRoyaltyStatements([]);
+        setSelectedExistingRoyaltyStatement(null);
     }
   }, [selectedRoyaltyStatementProject]);
 
@@ -296,42 +295,24 @@ const OneClickDocuments = () => {
 
   const handleRoyaltyStatementFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
+    if (!files || files.length === 0) return;
 
-    const incomingFiles = Array.from(files);
-    const blockedNames = new Set<string>();
-    const existingSelectedNames = new Set(royaltyStatementFiles.map(file => normalizeFileName(file.name)));
-    const seenInBatch = new Set<string>();
+    const file = files[0];
     const projectFileNames = new Set<string>();
 
     if (newRoyaltyStatementProjectId && newRoyaltyStatementProjectId !== "none") {
       try {
         const projectFiles = await fetchProjectFilesForValidation(newRoyaltyStatementProjectId);
-        projectFiles.forEach(file => projectFileNames.add(normalizeFileName(file.file_name)));
+        projectFiles.forEach(f => projectFileNames.add(normalizeFileName(f.file_name)));
       } catch (err) {
         console.error("Error checking royalty statement duplicates:", err);
       }
     }
 
-    const allowedFiles: File[] = [];
-    incomingFiles.forEach(file => {
-      const normalizedName = normalizeFileName(file.name);
-
-      if (seenInBatch.has(normalizedName) || existingSelectedNames.has(normalizedName) || projectFileNames.has(normalizedName)) {
-        blockedNames.add(file.name);
-        return;
-      }
-
-      seenInBatch.add(normalizedName);
-      allowedFiles.push(file);
-    });
-
-    if (blockedNames.size > 0) {
-      showPersistentDuplicateToast(`Duplicate file name(s) blocked: ${Array.from(blockedNames).join(", ")}`);
-    }
-
-    if (allowedFiles.length > 0) {
-      setRoyaltyStatementFiles(prev => [...prev, ...allowedFiles]);
+    if (projectFileNames.has(normalizeFileName(file.name))) {
+      showPersistentDuplicateToast(`Duplicate file name blocked: ${file.name}`);
+    } else {
+      setRoyaltyStatementFile(file);
     }
 
     e.target.value = "";
@@ -341,8 +322,8 @@ const OneClickDocuments = () => {
     setContractFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleRemoveRoyaltyStatementFile = (index: number) => {
-    setRoyaltyStatementFiles(prev => prev.filter((_, i) => i !== index));
+  const handleRemoveRoyaltyStatementFile = () => {
+    setRoyaltyStatementFile(null);
   };
 
   const handleCreateProject = async () => {
@@ -385,9 +366,7 @@ const OneClickDocuments = () => {
   };
 
   const handleToggleExistingRoyaltyStatement = (fileId: string) => {
-    setSelectedExistingRoyaltyStatements(prev =>
-      prev.includes(fileId) ? prev.filter(p => p !== fileId) : [...prev, fileId]
-    );
+    setSelectedExistingRoyaltyStatement(prev => prev === fileId ? null : fileId);
   };
 
   const handleCalculateRoyalties = async (forceRecalculate = false) => {
@@ -397,18 +376,11 @@ const OneClickDocuments = () => {
     }
 
     const hasContracts = contractFiles.length > 0 || selectedExistingContracts.length > 0;
-    const hasRoyaltyStatements = royaltyStatementFiles.length > 0 || selectedExistingRoyaltyStatements.length > 0;
+    const hasRoyaltyStatement = royaltyStatementFile !== null || selectedExistingRoyaltyStatement !== null;
     
-    if (!hasContracts || !hasRoyaltyStatements) {
-        toast.error("Please provide both contracts and royalty statements.");
+    if (!hasContracts || !hasRoyaltyStatement) {
+        toast.error("Please provide both contracts and a royalty statement.");
         return;
-    }
-
-    // OneClick currently supports multiple contracts but ONE statement at a time.
-    
-    // Check if multiple statements selected - warn user (or just use first)
-    if ((royaltyStatementFiles.length + selectedExistingRoyaltyStatements.length) > 1) {
-          toast.warning("Note: OneClick currently processes one royalty statement at a time. Using the first selected.");
     }
 
     setIsUploading(true);
@@ -481,27 +453,20 @@ const OneClickDocuments = () => {
         }
 
         // 2. Determine Statement ID
-        if (royaltyStatementFiles.length > 0) {
-           const duplicateNamesInRoyaltySelection = findDuplicateFileNames(royaltyStatementFiles);
-           if (duplicateNamesInRoyaltySelection.length > 0) {
-             showPersistentDuplicateToast(`Duplicate file name(s) blocked: ${duplicateNamesInRoyaltySelection.join(", ")}`);
-             throw new Error("Please remove duplicate royalty statement file names before uploading.");
-           }
-
+        if (royaltyStatementFile) {
              const formData = new FormData();
-             formData.append("file", royaltyStatementFiles[0]);
+             formData.append("file", royaltyStatementFile);
              formData.append("artist_id", artistId);
              formData.append("category", "royalty_statement");
-             // Associate with explicitly selected project, or contract's project if available
              const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
              if (targetProjectId) formData.append("project_id", targetProjectId);
 
            if (targetProjectId) {
              const projectFiles = await fetchProjectFilesForValidation(targetProjectId);
              const projectFileNames = new Set(projectFiles.map(existing => normalizeFileName(existing.file_name)));
-             const targetFileName = royaltyStatementFiles[0]?.name;
+             const targetFileName = royaltyStatementFile.name;
 
-             if (targetFileName && projectFileNames.has(normalizeFileName(targetFileName))) {
+             if (projectFileNames.has(normalizeFileName(targetFileName))) {
                showPersistentDuplicateToast(`A file named "${targetFileName}" already exists in this project.`);
                throw new Error("Duplicate file name found in selected project.");
              }
@@ -519,8 +484,8 @@ const OneClickDocuments = () => {
              const uploadData = await uploadRes.json();
              finalStatementId = uploadData.file.id;
 
-        } else if (selectedExistingRoyaltyStatements.length > 0) {
-            finalStatementId = selectedExistingRoyaltyStatements[0];
+        } else if (selectedExistingRoyaltyStatement) {
+            finalStatementId = selectedExistingRoyaltyStatement;
         }
 
         if (finalContractIds.length === 0 || !finalStatementId) {
@@ -609,7 +574,7 @@ const OneClickDocuments = () => {
                     
                     // Clear uploaded files from state
                     setContractFiles([]);
-                    setRoyaltyStatementFiles([]);
+                    setRoyaltyStatementFile(null);
                     setIsUploading(false);
                 } else if (data.type === 'error') {
                     clearTimeout(timeout);
@@ -642,7 +607,7 @@ const OneClickDocuments = () => {
                     }
                     
                     setContractFiles([]);
-                    setRoyaltyStatementFiles([]);
+                    setRoyaltyStatementFile(null);
                     setIsUploading(false);
                 }
             } catch (err) {
@@ -1056,7 +1021,7 @@ const OneClickDocuments = () => {
                     </label>
                   </div>
 
-                  {royaltyStatementFiles.length > 0 && (
+                  {royaltyStatementFile && (
                     <div className="space-y-2 pt-2 border-t border-border">
                       <div className="flex items-center gap-2">
                         <Folder className="w-4 h-4 text-muted-foreground" />
@@ -1088,19 +1053,17 @@ const OneClickDocuments = () => {
                     </div>
                   )}
 
-                  {royaltyStatementFiles.length > 0 && (
+                  {royaltyStatementFile && (
                     <div className="space-y-2 mt-4">
-                      {royaltyStatementFiles.map((file, index) => (
-                        <div key={index} className="flex items-center justify-between p-2 border border-border rounded-lg bg-secondary/50">
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            <FileText className="w-4 h-4 text-primary flex-shrink-0" />
-                            <p className="text-xs font-medium text-foreground truncate">{file.name}</p>
-                          </div>
-                          <Button variant="ghost" size="sm" onClick={() => handleRemoveRoyaltyStatementFile(index)} className="text-destructive hover:text-destructive flex-shrink-0">
-                            <X className="w-3 h-3" />
-                          </Button>
+                      <div className="flex items-center justify-between p-2 border border-border rounded-lg bg-secondary/50">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <FileText className="w-4 h-4 text-primary flex-shrink-0" />
+                          <p className="text-xs font-medium text-foreground truncate">{royaltyStatementFile.name}</p>
                         </div>
-                      ))}
+                        <Button variant="ghost" size="sm" onClick={() => handleRemoveRoyaltyStatementFile()} className="text-destructive hover:text-destructive flex-shrink-0">
+                          <X className="w-3 h-3" />
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </TabsContent>
@@ -1157,7 +1120,7 @@ const OneClickDocuments = () => {
                                 <div className="flex items-center gap-3 flex-1">
                                   <Checkbox
                                     id={`existing-royalty-${statement.id}`}
-                                    checked={selectedExistingRoyaltyStatements.includes(statement.id)}
+                                    checked={selectedExistingRoyaltyStatement === statement.id}
                                     onCheckedChange={() => handleToggleExistingRoyaltyStatement(statement.id)}
                                   />
                                   <label htmlFor={`existing-royalty-${statement.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
@@ -1191,7 +1154,7 @@ const OneClickDocuments = () => {
           <Button
             onClick={() => handleCalculateRoyalties(false)}
             disabled={((contractFiles.length === 0 && selectedExistingContracts.length === 0) || 
-                       (royaltyStatementFiles.length === 0 && selectedExistingRoyaltyStatements.length === 0)) || 
+                       (royaltyStatementFile === null && selectedExistingRoyaltyStatement === null)) || 
                        isUploading}
             size="lg"
             className="w-full max-w-sm"
@@ -1462,7 +1425,10 @@ const OneClickDocuments = () => {
             <Card>
                 <CardHeader>
                     <div className="flex items-center justify-between">
-                        <CardTitle>Royalty Breakdown</CardTitle>
+                        <div>
+                            <CardTitle>Royalty Breakdown</CardTitle>
+                            <p className="text-sm text-muted-foreground mt-1">All calculations are based on net revenue from the uploaded royalty statement.</p>
+                        </div>
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild><Button variant="outline" size="sm"><Download className="mr-2 h-4 w-4"/> Export</Button></DropdownMenuTrigger>
                             <DropdownMenuContent>

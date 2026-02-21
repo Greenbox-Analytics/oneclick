@@ -219,7 +219,7 @@ export const RoyaltyStatementUploadModal = ({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
+        <div className="space-y-4 py-4 overflow-hidden">
           {/* File Input */}
           <div className="space-y-2">
             <Label htmlFor="royalty-files">Select XLSX or CSV Files</Label>
@@ -243,10 +243,10 @@ export const RoyaltyStatementUploadModal = ({
                 <p className="text-sm text-muted-foreground">
                   {selectedFiles.length} file{selectedFiles.length > 1 ? "s" : ""} selected
                 </p>
-                <div className="max-h-32 overflow-y-auto rounded-md border bg-muted/30 p-2">
-                  <ul className="space-y-1 text-sm">
+                <div className="max-h-32 overflow-y-auto overflow-x-hidden rounded-md border bg-muted/30 p-2">
+                  <ul className="space-y-1 text-sm min-w-0">
                     {selectedFiles.map((file, idx) => (
-                      <li key={`${file.name}-${idx}`} className="truncate text-foreground">
+                      <li key={`${file.name}-${idx}`} className="truncate text-foreground" title={file.name}>
                         {file.name}
                       </li>
                     ))}
@@ -298,7 +298,7 @@ export const RoyaltyStatementUploadModal = ({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <FileSpreadsheet className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                        <p className="text-sm font-medium truncate">{result.filename}</p>
+                        <p className="text-sm font-medium truncate" title={result.filename}>{result.filename}</p>
                       </div>
 
                       {result.status === "uploading" && (
