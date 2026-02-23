@@ -237,6 +237,8 @@ const ArtistProfile = () => {
     }
   };
 
+  const normalizeFileName = (name: string) => name.trim().toLowerCase();
+
   const fetchProjectFiles = async (projectId: string) => {
     const { data, error } = await supabase
       .from('project_files')
@@ -257,6 +259,36 @@ const ArtistProfile = () => {
   const handleFileUpload = async (projectId: string, folderCategory: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    const projectFilesForValidation = projectFiles[projectId]
+      ? projectFiles[projectId]
+      : await (async () => {
+          const { data, error } = await supabase
+            .from('project_files')
+            .select('file_name')
+            .eq('project_id', projectId);
+
+          if (error) {
+            return [];
+          }
+
+          return data || [];
+        })();
+
+    const hasDuplicateInCache = projectFilesForValidation.some(
+      existing => normalizeFileName(existing.file_name) === normalizeFileName(file.name)
+    );
+
+    if (hasDuplicateInCache) {
+      toast({
+        title: "Duplicate file name",
+        description: `A file named "${file.name}" already exists in this project.`,
+        variant: "destructive",
+        duration: Number.POSITIVE_INFINITY,
+      });
+      event.target.value = "";
+      return;
+    }
 
     setUploadingFile(`${projectId}-${folderCategory}`);
 
@@ -289,7 +321,20 @@ const ArtistProfile = () => {
         .select()
         .single();
 
-      if (dbError) throw dbError;
+      if (dbError) {
+        const errorMessage = dbError.message?.toLowerCase() || "";
+        if (errorMessage.includes("duplicate") || errorMessage.includes("unique")) {
+          await supabase.storage.from('project-files').remove([filePath]);
+          toast({
+            title: "Duplicate file name",
+            description: `A file named "${file.name}" already exists in this project.`,
+            variant: "destructive",
+            duration: Number.POSITIVE_INFINITY,
+          });
+          return;
+        }
+        throw dbError;
+      }
 
       // Update local state
       setProjectFiles(prev => ({
@@ -310,6 +355,7 @@ const ArtistProfile = () => {
       });
     } finally {
       setUploadingFile(null);
+      event.target.value = "";
     }
   };
 
@@ -685,31 +731,34 @@ const ArtistProfile = () => {
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
-              onClick={() => setShowDeleteDialog(true)}
-            >
-              <Trash2 className="w-4 h-4 mr-2" />
-              Delete Artist
-            </Button>
-            <Button
-              variant={isEditMode ? "outline" : "default"}
-              onClick={() => isEditMode ? handleCancel() : setIsEditMode(true)}
-            >
-              {isEditMode ? <><X className="w-4 h-4 mr-2" />Cancel</> : <><Edit className="w-4 h-4 mr-2" />Edit Profile</>}
+          <div className="flex gap-2 items-center">
+            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")} title="Back to Dashboard">
+              <ArrowLeft className="w-4 h-4" />
             </Button>
             {isEditMode && (
-              <Button onClick={handleSave}>
-                <Save className="w-4 h-4 mr-2" />
-                Save Changes
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                onClick={() => setShowDeleteDialog(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete
               </Button>
             )}
-            <Button variant="outline" onClick={() => navigate("/artists")}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Artists
+            <Button
+              variant={isEditMode ? "outline" : "default"}
+              size="sm"
+              onClick={() => isEditMode ? handleCancel() : setIsEditMode(true)}
+            >
+              {isEditMode ? <><X className="w-4 h-4 mr-2" />Cancel</> : <><Edit className="w-4 h-4 mr-2" />Edit</>}
             </Button>
+            {isEditMode && (
+              <Button size="sm" onClick={handleSave}>
+                <Save className="w-4 h-4 mr-2" />
+                Save
+              </Button>
+            )}
           </div>
         </div>
       </header>

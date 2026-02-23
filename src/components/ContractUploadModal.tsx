@@ -38,20 +38,71 @@ export const ContractUploadModal = ({
   const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
   const [error, setError] = useState("");
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const files = Array.from(e.target.files);
-      const pdfFiles = files.filter((file) => file.name.toLowerCase().endsWith(".pdf"));
-      
-      if (pdfFiles.length !== files.length) {
-        setError("Only PDF files are supported. Non-PDF files were filtered out.");
-      } else {
-        setError("");
-      }
-      
-      setSelectedFiles(pdfFiles);
-      setUploadResults([]);
+  const normalizeFileName = (name: string) => name.trim().toLowerCase();
+
+  const showPersistentDuplicateToast = (message: string) => {
+    toast.error(message, {
+      duration: Infinity,
+      closeButton: true,
+      style: {
+        background: "hsl(var(--destructive))",
+        color: "hsl(var(--destructive-foreground))",
+        border: "1px solid hsl(var(--destructive))",
+      },
+    });
+  };
+
+  const getProjectFileNames = async (): Promise<Set<string>> => {
+    const response = await fetch(`${API_URL}/files/${projectId}`);
+    if (!response.ok) {
+      throw new Error("Failed to check existing project files");
     }
+
+    const files = await response.json();
+    return new Set((files || []).map((f: { file_name: string }) => normalizeFileName(f.file_name)));
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+
+    const files = Array.from(e.target.files);
+    const pdfFiles = files.filter((file) => file.name.toLowerCase().endsWith(".pdf"));
+    const blockedNames = new Set<string>();
+    const seenInBatch = new Set<string>();
+
+    if (pdfFiles.length !== files.length) {
+      setError("Only PDF files are supported. Non-PDF files were filtered out.");
+    } else {
+      setError("");
+    }
+
+    let projectFileNames = new Set<string>();
+
+    try {
+      projectFileNames = await getProjectFileNames();
+    } catch (projectCheckError) {
+      console.error("Error checking duplicate contract files:", projectCheckError);
+    }
+
+    const filteredFiles: File[] = [];
+    for (const file of pdfFiles) {
+      const normalized = normalizeFileName(file.name);
+      if (seenInBatch.has(normalized) || projectFileNames.has(normalized)) {
+        blockedNames.add(file.name);
+        continue;
+      }
+
+      seenInBatch.add(normalized);
+      filteredFiles.push(file);
+    }
+
+    if (blockedNames.size > 0) {
+      showPersistentDuplicateToast(`Duplicate file name(s) blocked: ${Array.from(blockedNames).join(", ")}`);
+    }
+
+    setSelectedFiles(filteredFiles);
+    setUploadResults([]);
+    e.target.value = "";
   };
 
   const handleUpload = async () => {
@@ -160,7 +211,7 @@ export const ContractUploadModal = ({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
+        <div className="space-y-4 py-4 overflow-hidden">
           {/* File Input */}
           <div className="space-y-2">
             <Label htmlFor="contract-files">Select PDF Files</Label>
@@ -180,9 +231,20 @@ export const ContractUploadModal = ({
               className="cursor-pointer"
             />
             {selectedFiles.length > 0 && (
-              <p className="text-sm text-muted-foreground">
-                {selectedFiles.length} file{selectedFiles.length > 1 ? "s" : ""} selected
-              </p>
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  {selectedFiles.length} file{selectedFiles.length > 1 ? "s" : ""} selected
+                </p>
+                <div className="max-h-32 overflow-y-auto overflow-x-hidden rounded-md border bg-muted/30 p-2">
+                  <ul className="space-y-1 text-sm min-w-0">
+                    {selectedFiles.map((file, idx) => (
+                      <li key={`${file.name}-${idx}`} className="truncate text-foreground" title={file.name}>
+                        {file.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
             )}
           </div>
 
@@ -228,7 +290,7 @@ export const ContractUploadModal = ({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start gap-2">
                         <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
-                        <p className="text-sm font-medium break-words">{result.filename}</p>
+                        <p className="text-sm font-medium truncate" title={result.filename}>{result.filename}</p>
                       </div>
 
                       {result.status === "uploading" && (

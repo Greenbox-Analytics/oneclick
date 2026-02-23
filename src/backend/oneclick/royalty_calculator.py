@@ -16,14 +16,16 @@ import os
 import json
 import csv
 import time
+import difflib
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from .contract_parser import MusicContractParser, ContractData
-from .helpers import normalize_title, find_matching_song, normalize_name
+from .helpers import normalize_title, find_matching_song, normalize_name, simplify_role
 
 import openpyxl
 from dotenv import load_dotenv
+from openai import OpenAI
 
 import logging
 
@@ -287,11 +289,21 @@ class RoyaltyCalculator:
         )
     
     def _find_payable_column(self, headers: List[str]) -> str:
-        """Auto-detect the net payable column from headers"""
+        """
+        Auto-detect the net payable column from headers using 3 layers:
+        1. Keyword matching (exact/partial)
+        2. Fuzzy matching
+        3. Semantic search (LLM)
+        """
+        
+        # --- Layer 1: Keyword Matching ---
+        
         # Priority variations (more specific matches first)
         priority_variations = [
             'net payable',
             'net payment',
+            'net earnings',
+            'net pay'
             'total payable',
             'net revenue',
             'net amount',
@@ -319,10 +331,81 @@ class RoyaltyCalculator:
                     excluded_terms = ['withheld', 'deduction', 'fee', 'commission', 'advance']
                     if not any(term in header_clean for term in excluded_terms):
                         return header
+
+        logger.info("   ⚠️  Layer 1 (Keyword) failed to find payable column. Trying Layer 2 (Fuzzy)...")
+
+        # --- Layer 2: Fuzzy Matching ---
+        
+        target_terms = ['net payable', 'net amount', 'payable', 'total payable', 'royalty amount', 'net pay']
+        
+        # Get close matches for each target term against all headers
+        # We use a cutoff of 0.8 for high confidence
+        best_match = None
+        highest_ratio = 0.0
+        
+        for header in headers:
+            header_clean = header.lower().strip()
+            # Skip likely irrelevant columns to avoid false positives
+            if any(x in header_clean for x in ['date', 'isrc', 'upc', 'territory', 'country', 'label', 'artist', 'title']):
+                continue
+                
+            for target in target_terms:
+                ratio = difflib.SequenceMatcher(None, header_clean, target).ratio()
+                if ratio > highest_ratio and ratio > 0.8:  # 80% similarity threshold
+                    highest_ratio = ratio
+                    best_match = header
+        
+        if best_match:
+            logger.info(f"   ✓ Layer 2 (Fuzzy) detected payable column: '{best_match}' (confidence: {highest_ratio:.2f})")
+            return best_match
+
+        logger.info("   ⚠️  Layer 2 (Fuzzy) failed. Trying Layer 3 (Semantic)...")
+
+        # --- Layer 3: Semantic Search (LLM) ---
+        
+        if self.api_key:
+            try:
+                client = OpenAI(api_key=self.api_key)
+                
+                prompt = (
+                    f"Given these column headers from a music royalty statement: {headers}\\n\\n"
+                    "Identify the single column that represents the 'Net Payable Amount' or 'Royalty Amount' "
+                    "that should be paid to the licensor/artist. "
+                    "Ignore columns representing gross revenue, fees, taxes, or deductions unless they are the only option.\\n"
+                    "Return ONLY the exact column name from the list. If none match, return 'None'."
+                )
+                
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini", # Use a fast/cheap model
+                    messages=[
+                        {"role": "system", "content": "You are a data analyst helper. Output only the requested column name."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.0
+                )
+                
+                result = response.choices[0].message.content.strip()
+                
+                # Verify the result is actually in the headers
+                # (LLM might strip quotes or change case slightly, so we check loosely)
+                if result and result.lower() != 'none':
+                    # Try to find exact match first
+                    if result in headers:
+                        logger.info(f"   ✓ Layer 3 (Semantic) detected payable column: '{result}'")
+                        return result
+                    
+                    # Try case-insensitive match
+                    for h in headers:
+                        if h.lower() == result.lower():
+                            logger.info(f"   ✓ Layer 3 (Semantic) detected payable column: '{h}'")
+                            return h
+                            
+            except Exception as e:
+                logger.warning(f"   ⚠️  Layer 3 (Semantic) error: {e}")
         
         raise ValueError(
-            f"Could not auto-detect payable column.\n"
-            f"Available columns: {headers}\n"
+            f"Could not auto-detect payable column after 3 layers of search.\\n"
+            f"Available columns: {headers}\\n"
             f"Please specify payable_column parameter explicitly."
         )
     
@@ -378,10 +461,15 @@ class RoyaltyCalculator:
                         seen_parties[norm_name] = party
                         merged_parties.append(party)
                     else:
-                        # Update role if current one is more specific
                         existing = seen_parties[norm_name]
-                        if party.role != 'party' and existing.role == 'party':
-                            existing.role = party.role
+                        # Combine roles from both contracts
+                        existing_roles = set(r.strip() for r in existing.role.split(";"))
+                        new_roles = set(r.strip() for r in party.role.split(";"))
+                        combined = existing_roles | new_roles
+                        # Remove generic 'party' if a specific role exists
+                        if len(combined) > 1:
+                            combined.discard('party')
+                        existing.role = "; ".join(sorted(combined))
             
             # Merge works
             for work in contract.works:
@@ -427,6 +515,10 @@ class RoyaltyCalculator:
 
                 # If no exact duplicate found, add it
                 merged_royalty_shares.append(share)
+        
+        # Simplify combined roles
+        for party in merged_parties:
+            party.role = simplify_role(party.role)
         
         # Combine summaries
         merged_summary = "\n\n".join([s for s in summaries if s.strip()])

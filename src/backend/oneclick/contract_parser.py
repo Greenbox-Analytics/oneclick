@@ -12,6 +12,7 @@ from openai import OpenAI
 from pathlib import Path
 import sys
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add backend directory to path to allow imports from vector_search
@@ -182,8 +183,12 @@ class MusicContractParser:
             
             summary = ""
 
+        # Simplify party roles
+        from oneclick.helpers import normalize_name, simplify_role
+        for party in parties:
+            party.role = simplify_role(party.role)
+        
         # Reconcile royalty share names with extracted parties
-        from oneclick.helpers import normalize_name
         
         for share in royalty_shares:
             share_name_norm = normalize_name(share.party_name)
@@ -225,18 +230,22 @@ class MusicContractParser:
     def _query_pinecone(self, query: str, user_id: str, contract_id: str, top_k: int = 5, use_fast_categorization: bool = True) -> str:
         """
         Query Pinecone and return concatenated context.
+        Over-fetches 2x chunks, reranks with LLM, and returns the top_k most relevant.
         
         Args:
             query: Search query
             user_id: User ID for namespace
             contract_id: Contract ID for filtering
-            top_k: Number of results to retrieve
+            top_k: Number of final results to return after reranking
             use_fast_categorization: If True, uses fast keyword matching instead of LLM (default: True)
             
         Returns:
             Concatenated text from top results
         """
         logger.info(f"\n   🧠 Categorizing query: '{query}'")
+        
+        # Over-fetch 2x for reranking, then trim back to top_k
+        fetch_k = top_k * 2
         
         # 1. Categorize the query (use fast keyword-based categorization by default)
         t_cat = time.time()
@@ -250,7 +259,7 @@ class MusicContractParser:
         filter_dict = build_metadata_filter(
             categories=categorization.get('categories', []),
             is_general=categorization.get('is_general', False),
-            user_id=None, # user_id is handled by namespace
+            user_id=None,
             contract_id=contract_id
         )
         
@@ -263,66 +272,107 @@ class MusicContractParser:
         query_embedding = response.data[0].embedding
         logger.info(f"      ⏱️  Embedding creation took: {time.time() - t_embed:.2f}s")
 
-        # Query Pinecone
+        # Query Pinecone (over-fetch for reranking)
         namespace = f"{user_id}-namespace"
         
         logger.info(f"      → Using filter: {filter_dict}")
+        logger.info(f"      → Fetching {fetch_k} chunks (2x over-fetch for reranking, returning top {top_k})")
         
         t_query = time.time()
         try:
             results = self.index.query(
                 namespace=namespace,
                 vector=query_embedding,
-                top_k=top_k,
+                top_k=fetch_k,
                 filter=filter_dict,
                 include_metadata=True
             )
         except Exception as e:
             logger.warning(f"      ⚠️ Error with filtered search: {e}. Falling back to broad search.")
-            # Fallback to simple contract_id filter if category search fails or returns nothing
             results = self.index.query(
                 namespace=namespace,
                 vector=query_embedding,
-                top_k=top_k,
+                top_k=fetch_k,
                 filter={"contract_id": contract_id},
                 include_metadata=True
             )
         logger.info(f"      ⏱️  Pinecone query took: {time.time() - t_query:.2f}s")
 
-        # Concatenate results
-        context_parts = []
+        # Collect raw chunks
+        raw_chunks = []
         if hasattr(results, 'matches') and len(results.matches) > 0:
-            logger.info(f"   🔍 Retrieving chunks for: '{query}'")
+            logger.info(f"   🔍 Retrieved {len(results.matches)} chunks for reranking")
             for i, match in enumerate(results.matches):
-                chunk_id = match.id
                 section = match.metadata.get("section_heading", "N/A")
                 category = match.metadata.get("section_category", "N/A")
                 score = match.score
-                logger.info(f"      Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}' | Category='{category}'")
-                
+                logger.info(f"      Chunk {i+1}: Score={score:.4f} | Section='{section}' | Category='{category}'")
                 text = match.metadata.get("chunk_text", "")
                 if text:
-                    context_parts.append(text)
+                    raw_chunks.append(text)
         else:
             logger.warning("      ⚠️ No matches found with filters. Retrying without category filter.")
             results = self.index.query(
                 namespace=namespace,
                 vector=query_embedding,
-                top_k=top_k,
+                top_k=fetch_k,
                 filter={"contract_id": contract_id},
                 include_metadata=True
             )
             if hasattr(results, 'matches') and len(results.matches) > 0:
-                 for i, match in enumerate(results.matches):
-                    chunk_id = match.id
+                for i, match in enumerate(results.matches):
                     section = match.metadata.get("section_heading", "N/A")
                     score = match.score
-                    logger.info(f"      Fallback Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}'")
+                    logger.info(f"      Fallback Chunk {i+1}: Score={score:.4f} | Section='{section}'")
                     text = match.metadata.get("chunk_text", "")
                     if text:
-                        context_parts.append(text)
+                        raw_chunks.append(text)
 
-        return "\n\n".join(context_parts)
+        # Rerank and trim to top_k
+        if len(raw_chunks) > 2:
+            reranked = self._rerank_results(query, raw_chunks, top_k)
+        else:
+            reranked = raw_chunks
+
+        return "\n\n".join(reranked)
+
+    def _rerank_results(self, query: str, chunks: List[str], top_k: int) -> List[str]:
+        """
+        Rerank chunks by relevance using a fast LLM call.
+        Returns only the top_k most relevant chunks.
+        """
+        logger.info(f"   🔄 Reranking {len(chunks)} chunks → keeping top {top_k}...")
+        t_rerank = time.time()
+        
+        indexed_chunks = []
+        for i, chunk in enumerate(chunks):
+            indexed_chunks.append(f"[{i}]: {chunk}")
+        
+        prompt = (
+            f"Query: \"{query}\"\n\n"
+            f"Chunks:\n" + "\n\n".join(indexed_chunks) + "\n\n"
+            f"Return a JSON list of chunk indices ordered by relevance to the query (most relevant first). "
+            f"Only return the JSON list, nothing else."
+        )
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=100
+            )
+            content = response.choices[0].message.content.strip()
+            if "```" in content:
+                content = content.replace("```json", "").replace("```", "").strip()
+            
+            indices = json.loads(content)
+            reranked = [chunks[i] for i in indices if isinstance(i, int) and 0 <= i < len(chunks)]
+            logger.info(f"   ✓ Reranking complete in {time.time() - t_rerank:.2f}s (order: {indices[:top_k]})")
+            return reranked[:top_k]
+        except Exception as e:
+            logger.warning(f"   ⚠️ Reranking failed ({e}). Returning original top {top_k}.")
+            return chunks[:top_k]
 
     def _ask_llm(self, context: str, question: str, template: str) -> str:
         """
@@ -446,6 +496,8 @@ Instructions:
 1. Identify the percentage split for each party.
 2. If a royalty split refers to a generic role (e.g., 'Songwriter', 'Producer', 'Artist'), substitute it with the actual name from the KNOWN PARTIES list above.
 3. If the role is ambiguous or no matching name is found, keep the role name.
+4. Simplify the 'Royalty Type' to one of these standard terms if applicable: 'Streaming',Master', 'Publishing', 'Producer', 'Mixer', 'Remixer'. If it doesn't fit, use a short descriptive term (max 3 words).
+
 
 List each as: Name | Royalty Type | Percentage | Terms
 Answer:

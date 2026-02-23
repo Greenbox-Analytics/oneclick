@@ -59,6 +59,14 @@ def get_supabase_client() -> Client:
         supabase = create_client(url, key)
     return supabase
 
+def normalize_file_name(file_name: str) -> str:
+    return file_name.strip().lower()
+
+def file_name_exists_in_project(project_id: str, file_name: str) -> bool:
+    existing_files = get_supabase_client().table("project_files").select("file_name").eq("project_id", project_id).execute()
+    target_name = normalize_file_name(file_name)
+    return any(normalize_file_name(existing["file_name"]) == target_name for existing in (existing_files.data or []))
+
 # --- Data Models ---
 class RoyaltyBreakdown(BaseModel):
     songName: str
@@ -378,6 +386,12 @@ async def upload_file(
                 }).execute()
                 project_id = new_proj.data[0]['id']
 
+        if file_name_exists_in_project(project_id, file.filename):
+            raise HTTPException(
+                status_code=409,
+                detail=f'A file named "{file.filename}" already exists in this project.'
+            )
+
         file_content = await file.read()
         
         # Clean filename
@@ -413,13 +427,29 @@ async def upload_file(
             "file_type": file.content_type
         }
         
-        db_res = get_supabase_client().table("project_files").insert(db_record).execute()
+        try:
+            db_res = get_supabase_client().table("project_files").insert(db_record).execute()
+        except Exception as db_error:
+            try:
+                get_supabase_client().storage.from_("project-files").remove([file_path])
+            except Exception as cleanup_error:
+                print(f"Failed to cleanup uploaded file after DB error: {cleanup_error}")
+
+            error_message = str(db_error).lower()
+            if "duplicate" in error_message and "project_files" in error_message:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'A file named "{file.filename}" already exists in this project.'
+                )
+            raise db_error
         
         return {
             "status": "success", 
             "file": db_res.data[0]
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -511,6 +541,12 @@ async def upload_contract(
         project_res = get_supabase_client().table("projects").select("name").eq("id", project_id).execute()
         if not project_res.data:
             raise HTTPException(status_code=404, detail="Project not found")
+
+        if file_name_exists_in_project(project_id, file.filename):
+            raise HTTPException(
+                status_code=409,
+                detail=f'A file named "{file.filename}" already exists in this project.'
+            )
         
         project_name = project_res.data[0]["name"]
         
@@ -542,7 +578,22 @@ async def upload_contract(
             "file_type": file.content_type
         }
         
-        db_res = get_supabase_client().table("project_files").insert(db_record).execute()
+        try:
+            db_res = get_supabase_client().table("project_files").insert(db_record).execute()
+        except Exception as db_error:
+            try:
+                get_supabase_client().storage.from_("project-files").remove([file_path])
+            except Exception as cleanup_error:
+                print(f"Failed to cleanup uploaded contract after DB error: {cleanup_error}")
+
+            error_message = str(db_error).lower()
+            if "duplicate" in error_message and "project_files" in error_message:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'A file named "{file.filename}" already exists in this project.'
+                )
+            raise db_error
+
         contract_id = db_res.data[0]["id"]
         
         # 3. Save PDF temporarily for processing
@@ -833,6 +884,47 @@ class OneClickRoyaltyResponse(BaseModel):
     payments: List[RoyaltyPaymentResponse]
     excel_file_url: Optional[str] = None
     message: str
+    is_cached: Optional[bool] = False
+
+class ConfirmCalculationRequest(BaseModel):
+    contract_ids: List[str]
+    royalty_statement_id: str
+    project_id: str
+    user_id: str
+    results: Dict[str, Any]
+
+@app.post("/oneclick/confirm")
+async def confirm_calculation(request: ConfirmCalculationRequest):
+    """
+    Save confirmed calculation results to the database.
+    """
+    try:
+        # 1. Insert into royalty_calculations
+        calc_res = get_supabase_client().table("royalty_calculations").insert({
+            "royalty_statement_id": request.royalty_statement_id,
+            "project_id": request.project_id,
+            "user_id": request.user_id,
+            "results": request.results
+        }).execute()
+        
+        if not calc_res.data:
+            raise HTTPException(status_code=500, detail="Failed to save calculation")
+            
+        calculation_id = calc_res.data[0]['id']
+        
+        # 2. Insert into junction table for each contract
+        junction_rows = [
+            {"calculation_id": calculation_id, "contract_id": cid}
+            for cid in request.contract_ids
+        ]
+        
+        get_supabase_client().table("royalty_calculation_contracts").insert(junction_rows).execute()
+        
+        return {"status": "success", "message": "Calculation saved successfully", "id": calculation_id}
+        
+    except Exception as e:
+        print(f"Error saving calculation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save calculation: {str(e)}")
 
 @app.get("/oneclick/calculate-royalties-stream")
 async def oneclick_calculate_royalties_stream(
@@ -840,12 +932,14 @@ async def oneclick_calculate_royalties_stream(
     project_id: str,
     royalty_statement_file_id: str,
     contract_id: Optional[str] = None,
-    contract_ids: Optional[List[str]] = Query(None)
+    contract_ids: Optional[List[str]] = Query(None),
+    force_recalculate: bool = False
 ):
     """
     OneClick Royalty Calculation with Server-Sent Events (SSE) for real-time progress updates.
     
     This endpoint streams progress updates to the client as the calculation proceeds:
+    - Checks cache for existing confirmed results
     - Downloading files
     - Extracting contract data (parties, works, royalties, summary)
     - Processing royalty statement
@@ -857,6 +951,7 @@ async def oneclick_calculate_royalties_stream(
         user_id: User ID
         project_id: Project ID
         royalty_statement_file_id: Royalty Statement File ID
+        force_recalculate: If True, bypass cache
         
     Returns:
         SSE stream with progress updates and final results
@@ -881,6 +976,46 @@ async def oneclick_calculate_royalties_stream(
             if not target_contract_ids:
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No contracts specified'})}\n\n"
                 return
+
+            # --- CACHE CHECK ---
+            if not force_recalculate:
+                try:
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Checking cache...', 'progress': 5, 'stage': 'starting'})}\n\n"
+                    
+                    # Find calculations that match the statement ID
+                    # We need to find a calculation that has EXACTLY the same set of contracts
+                    
+                    # 1. Get all calculations for this statement
+                    calcs_res = get_supabase_client().table("royalty_calculations")\
+                        .select("id, results")\
+                        .eq("royalty_statement_id", royalty_statement_file_id)\
+                        .execute()
+                    
+                    for calc in calcs_res.data:
+                        # 2. For each candidate, get its contracts
+                        contracts_res = get_supabase_client().table("royalty_calculation_contracts")\
+                            .select("contract_id")\
+                            .eq("calculation_id", calc['id'])\
+                            .execute()
+                        
+                        cached_contract_ids = [c['contract_id'] for c in contracts_res.data]
+                        
+                        # 3. Compare sets (order doesn't matter)
+                        if set(cached_contract_ids) == set(target_contract_ids):
+                            # CACHE HIT!
+                            yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
+                            
+                            result = calc['results']
+                            # Ensure is_cached flag is set
+                            result['is_cached'] = True
+                            # Add type field so frontend SSE handler recognizes it
+                            result['type'] = 'complete'
+                            
+                            yield f"data: {json.dumps(result)}\n\n"
+                            return
+
+                except Exception as e:
+                    print(f"Cache check failed (continuing to calculate): {e}")
             
             # Step 1: Download royalty statement
             yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"

@@ -108,6 +108,42 @@ def find_matching_song(
     return (None, 0.0)
 
 
+ROLE_SIMPLIFICATIONS = {
+    "lyrical writer": "writer",
+    "lyrical writer (songwriter)": "writer",
+    "lyrical writer (credited as a sole lyrical writer)": "writer",
+    "songwriter": "writer",
+    "writer": "writer",
+    "producer": "producer",
+    "artist": "artist",
+    "label": "label",
+    "distributor": "distributor",
+    "manager": "manager",
+    "mixer": "mixer",
+    "remixer": "remixer",
+    "publisher": "publisher",
+    "company": "label",
+    "licensor": "licensor",
+    "licensee": "licensee",
+}
+
+
+def simplify_role(role: str) -> str:
+    """
+    Simplify a potentially verbose role string into concise, standardized terms.
+    Handles combined roles separated by semicolons.
+    
+    Examples:
+        "lyrical writer (credited as a sole lyrical writer)" -> "Writer"
+        "producer; lyrical writer (songwriter)" -> "Producer; Writer"
+    """
+    parts = [r.strip() for r in role.split(";")]
+    simplified = set()
+    for part in parts:
+        simplified.add(ROLE_SIMPLIFICATIONS.get(part.lower(), part))
+    return "; ".join(sorted(simplified))
+
+
 def normalize_name(name: str) -> str:
     """
     Normalize party/artist name for comparison.

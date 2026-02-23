@@ -1254,7 +1254,7 @@ const Zoe = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleQuickAction(`What are ${selectedArtistName || 'the artist'}'s social media links?`)}
+                          onClick={() => handleQuickAction("What are the artist's social media links?")}
                           disabled={isLoading}
                           className="text-sm"
                         >
@@ -1263,7 +1263,7 @@ const Zoe = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleQuickAction(`Tell me about ${selectedArtistName || 'the artist'}`)}
+                          onClick={() => handleQuickAction("Tell me about the artist")}
                           disabled={isLoading}
                           className="text-sm"
                         >
@@ -1272,7 +1272,7 @@ const Zoe = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleQuickAction(`What is ${selectedArtistName || 'the artist'}'s bio`)}
+                          onClick={() => handleQuickAction("What is the artist's bio?")}
                           disabled={isLoading}
                           className="text-sm"
                         >
