@@ -227,27 +227,30 @@ class MusicContractParser:
             contract_summary=summary
         )
 
+    @staticmethod
+    def _is_quantitative_query(query: str) -> bool:
+        """Check if a query is seeking quantitative/financial data (percentages, splits, etc.)."""
+        quantitative_keywords = [
+            "percentage", "percent", "split", "splits", "royalty", "royalties",
+            "share", "shares", "compensation", "revenue", "payment", "how much",
+            "%", "points", "rate", "net", "gross", "fee", "amount", "master"
+        ]
+        query_lower = query.lower()
+        return any(kw in query_lower for kw in quantitative_keywords)
+
     def _query_pinecone(self, query: str, user_id: str, contract_id: str, top_k: int = 5, use_fast_categorization: bool = True) -> str:
         """
         Query Pinecone and return concatenated context.
         Over-fetches 2x chunks, reranks with LLM, and returns the top_k most relevant.
         
-        Args:
-            query: Search query
-            user_id: User ID for namespace
-            contract_id: Contract ID for filtering
-            top_k: Number of final results to return after reranking
-            use_fast_categorization: If True, uses fast keyword matching instead of LLM (default: True)
-            
-        Returns:
-            Concatenated text from top results
+        For quantitative queries, performs a supplementary fetch specifically targeting
+        table chunks to ensure structured data is always considered.
         """
         logger.info(f"\n   🧠 Categorizing query: '{query}'")
         
-        # Over-fetch 2x for reranking, then trim back to top_k
         fetch_k = top_k * 2
         
-        # 1. Categorize the query (use fast keyword-based categorization by default)
+        # 1. Categorize the query
         t_cat = time.time()
         categorization = categorize_query(query, self.openai_client, use_llm=not use_fast_categorization)
         logger.info(f"      → Categories: {categorization.get('categories')}")
@@ -272,7 +275,7 @@ class MusicContractParser:
         query_embedding = response.data[0].embedding
         logger.info(f"      ⏱️  Embedding creation took: {time.time() - t_embed:.2f}s")
 
-        # Query Pinecone (over-fetch for reranking)
+        # 3. Primary fetch
         namespace = f"{user_id}-namespace"
         
         logger.info(f"      → Using filter: {filter_dict}")
@@ -298,18 +301,23 @@ class MusicContractParser:
             )
         logger.info(f"      ⏱️  Pinecone query took: {time.time() - t_query:.2f}s")
 
-        # Collect raw chunks
+        # Collect raw chunks from primary fetch
         raw_chunks = []
+        seen_texts = set()
+
         if hasattr(results, 'matches') and len(results.matches) > 0:
-            logger.info(f"   🔍 Retrieved {len(results.matches)} chunks for reranking")
+            logger.info(f"   🔍 Primary fetch: {len(results.matches)} chunks")
             for i, match in enumerate(results.matches):
                 section = match.metadata.get("section_heading", "N/A")
                 category = match.metadata.get("section_category", "N/A")
+                content_type = match.metadata.get("content_type", "text")
                 score = match.score
-                logger.info(f"      Chunk {i+1}: Score={score:.4f} | Section='{section}' | Category='{category}'")
+                chunk_id = match.id
+                logger.info(f"      Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Type={content_type} | Section='{section}' | Category='{category}'")
                 text = match.metadata.get("chunk_text", "")
-                if text:
+                if text and text not in seen_texts:
                     raw_chunks.append(text)
+                    seen_texts.add(text)
         else:
             logger.warning("      ⚠️ No matches found with filters. Retrying without category filter.")
             results = self.index.query(
@@ -323,23 +331,55 @@ class MusicContractParser:
                 for i, match in enumerate(results.matches):
                     section = match.metadata.get("section_heading", "N/A")
                     score = match.score
-                    logger.info(f"      Fallback Chunk {i+1}: Score={score:.4f} | Section='{section}'")
+                    chunk_id = match.id
+                    logger.info(f"      Fallback Chunk {i+1}: ID={chunk_id} | Score={score:.4f} | Section='{section}'")
                     text = match.metadata.get("chunk_text", "")
-                    if text:
+                    if text and text not in seen_texts:
                         raw_chunks.append(text)
+                        seen_texts.add(text)
 
-        # Rerank and trim to top_k
+        # 4. Supplementary table fetch for quantitative queries
+        is_quantitative = self._is_quantitative_query(query)
+        if is_quantitative:
+            t_table = time.time()
+            table_filter = {
+                "contract_id": {"$eq": contract_id},
+                "content_type": {"$eq": "table"}
+            }
+            try:
+                table_results = self.index.query(
+                    namespace=namespace,
+                    vector=query_embedding,
+                    top_k=3,
+                    filter=table_filter,
+                    include_metadata=True
+                )
+                table_count = 0
+                if hasattr(table_results, 'matches') and len(table_results.matches) > 0:
+                    for match in table_results.matches:
+                        text = match.metadata.get("chunk_text", "")
+                        if text and text not in seen_texts:
+                            raw_chunks.append(text)
+                            seen_texts.add(text)
+                            table_count += 1
+                logger.info(f"   📊 Supplementary table fetch: {table_count} new table chunk(s) added ({time.time() - t_table:.2f}s)")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Supplementary table fetch failed: {e}")
+        else:
+            logger.info(f"   📊 Supplementary table fetch: skipped (non-quantitative query)")
+
+        # 5. Rerank and trim to top_k
         if len(raw_chunks) > 2:
-            reranked = self._rerank_results(query, raw_chunks, top_k)
+            reranked = self._rerank_results(query, raw_chunks, top_k, is_quantitative=is_quantitative)
         else:
             reranked = raw_chunks
 
         return "\n\n".join(reranked)
 
-    def _rerank_results(self, query: str, chunks: List[str], top_k: int) -> List[str]:
+    def _rerank_results(self, query: str, chunks: List[str], top_k: int, is_quantitative: bool = False) -> List[str]:
         """
         Rerank chunks by relevance using a fast LLM call.
-        Returns only the top_k most relevant chunks.
+        For quantitative queries, explicitly instructs the model to prefer table content.
         """
         logger.info(f"   🔄 Reranking {len(chunks)} chunks → keeping top {top_k}...")
         t_rerank = time.time()
@@ -348,8 +388,17 @@ class MusicContractParser:
         for i, chunk in enumerate(chunks):
             indexed_chunks.append(f"[{i}]: {chunk}")
         
+        table_guidance = ""
+        if is_quantitative:
+            table_guidance = (
+                "This is a quantitative query about numbers, percentages, or financial terms. "
+                "Chunks containing structured tables with specific numbers, percentages, or financial data "
+                "should be ranked higher than prose that merely describes terms in general.\n"
+            )
+        
         prompt = (
             f"Query: \"{query}\"\n\n"
+            f"{table_guidance}"
             f"Chunks:\n" + "\n\n".join(indexed_chunks) + "\n\n"
             f"Return a JSON list of chunk indices ordered by relevance to the query (most relevant first). "
             f"Only return the JSON list, nothing else."
