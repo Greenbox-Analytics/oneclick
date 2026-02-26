@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from supabase import create_client, Client
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 import os
 import io
 import uuid
@@ -153,6 +153,14 @@ class ZoeAskRequest(BaseModel):
     session_id: Optional[str] = None  # Session ID for conversation memory
     artist_id: Optional[str] = None  # Artist ID for artist-related queries
     context: Optional[ConversationContext] = None  # Conversation context for structured tracking
+    source_preference: Optional[Literal["artist_profile", "contract_context", "conversation_history"]] = None
+
+
+class ZoeQuickAction(BaseModel):
+    id: str
+    label: str
+    query: Optional[str] = None
+    source_preference: Optional[Literal["artist_profile", "contract_context", "conversation_history"]] = None
 
 class ZoeSource(BaseModel):
     contract_file: str
@@ -212,9 +220,11 @@ class ZoeAskResponse(BaseModel):
     session_id: Optional[str] = None  # Return session ID for frontend tracking
     show_quick_actions: Optional[bool] = None  # Show quick action buttons in response
     answered_from: Optional[str] = None  # Indicates if answered from context vs document search
-    extracted_data: Optional[ExtractedContractData] = None  # Server-side extracted structured data
+    extracted_data: Optional[Dict[str, Any]] = None  # Server-side extracted structured data (contract or artist)
     pending_suggestion: Optional[str] = None  # Follow-up suggestion that can be answered from context
     context_cleared: Optional[bool] = None  # True if context was cleared and user needs to refresh
+    needs_source_selection: Optional[bool] = None
+    quick_actions: Optional[List[ZoeQuickAction]] = None
     # New fields for enhanced conversation management
     extracted_facts: Optional[List[PinnedFactResponse]] = None  # Facts extracted from this response
     active_assumptions: Optional[List[AssumptionResponse]] = None  # Currently active assumptions
@@ -772,7 +782,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 user_id=request.user_id,
                 session_id=session_id,
                 artist_data=artist_data,
-                context=context_dict
+                context=context_dict,
+                source_preference=request.source_preference
             )
         elif request.contract_ids and len(request.contract_ids) > 0:
             # Multiple contracts selected - search across all of them
@@ -784,7 +795,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 top_k=top_k,
                 session_id=session_id,
                 artist_data=artist_data,
-                context=context_dict
+                context=context_dict,
+                source_preference=request.source_preference
             )
         else:
             # Project-wide question
@@ -795,7 +807,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 top_k=top_k,
                 session_id=session_id,
                 artist_data=artist_data,
-                context=context_dict
+                context=context_dict,
+                source_preference=request.source_preference
             )
         
         # Format response - filter out sources with missing required fields
@@ -805,10 +818,12 @@ async def zoe_ask_question(request: ZoeAskRequest):
             if zoe_source is not None:
                 valid_sources.append(zoe_source)
         
-        # Convert extracted_data dict to ExtractedContractData if present
-        extracted_data = None
-        if result.get("extracted_data"):
-            extracted_data = ExtractedContractData(**result["extracted_data"])
+        # Pass extracted_data through as raw dict (supports both contract and artist payloads)
+        extracted_data = result.get("extracted_data")
+
+        quick_actions = None
+        if result.get("quick_actions"):
+            quick_actions = [ZoeQuickAction(**action) for action in result.get("quick_actions", [])]
         
         return ZoeAskResponse(
             query=result["query"],
@@ -822,7 +837,9 @@ async def zoe_ask_question(request: ZoeAskRequest):
             answered_from=result.get("answered_from"),
             extracted_data=extracted_data,
             pending_suggestion=result.get("pending_suggestion"),
-            context_cleared=result.get("context_cleared")
+            context_cleared=result.get("context_cleared"),
+            needs_source_selection=result.get("needs_source_selection"),
+            quick_actions=quick_actions
         )
         
     except Exception as e:

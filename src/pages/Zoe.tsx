@@ -55,6 +55,15 @@ interface Contract {
   project_id: string;
 }
 
+type SourcePreference = "artist_profile" | "contract_context" | "conversation_history";
+
+interface AssistantQuickAction {
+  id: string;
+  label: string;
+  query?: string;
+  source_preference?: SourcePreference;
+}
+
 interface Message {
   role: "user" | "assistant" | "system";
   content: string;
@@ -66,10 +75,11 @@ interface Message {
   }>;
   timestamp: string;
   showQuickActions?: boolean;
+  quickActions?: AssistantQuickAction[];
 }
 
 // Maximum messages before requiring session refresh
-const MAX_CONVERSATION_MESSAGES = 20;
+const MAX_CONVERSATION_MESSAGES = 100;
 
 // Conversation context for structured tracking
 interface RoyaltySplitData {
@@ -773,6 +783,7 @@ const Zoe = () => {
           session_id: sessionId,
           artist_id: selectedArtist,
           context: conversationContext, // Send conversation context
+          source_preference: null,
         }),
       });
 
@@ -801,6 +812,7 @@ const Zoe = () => {
         sources: data.sources,
         timestamp: new Date().toISOString(),
         showQuickActions: data.show_quick_actions,
+        quickActions: data.quick_actions,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -831,19 +843,33 @@ const Zoe = () => {
     }
   };
 
-  // Handle quick action button clicks
+  // Handle static quick action button clicks
   const handleQuickAction = (question: string) => {
     setInputMessage(question);
     // Use setTimeout to ensure state is updated before sending
     setTimeout(() => {
-      const syntheticEvent = { key: "Enter", shiftKey: false, preventDefault: () => {} } as React.KeyboardEvent;
       // Directly trigger the send with the question
       sendMessageWithQuery(question);
     }, 0);
   };
 
+  const handleAssistantQuickAction = (action: AssistantQuickAction) => {
+    const queryToSend = action.query || inputMessage;
+    if (!queryToSend.trim()) return;
+
+    sendMessageWithQuery(
+      queryToSend,
+      action.source_preference,
+      action.label
+    );
+  };
+
   // Helper to send a specific query (used by quick actions)
-  const sendMessageWithQuery = async (query: string) => {
+  const sendMessageWithQuery = async (
+    query: string,
+    sourcePreference?: SourcePreference,
+    userDisplayMessage?: string
+  ) => {
     if (!query.trim() || !selectedArtist || !user) {
       return;
     }
@@ -856,7 +882,7 @@ const Zoe = () => {
 
     const userMessage: Message = {
       role: "user",
-      content: query,
+      content: userDisplayMessage || query,
       timestamp: new Date().toISOString(),
     };
 
@@ -879,6 +905,7 @@ const Zoe = () => {
           session_id: sessionId,
           artist_id: selectedArtist,
           context: conversationContext, // Send conversation context
+          source_preference: sourcePreference || null,
         }),
       });
 
@@ -906,6 +933,7 @@ const Zoe = () => {
         sources: data.sources,
         timestamp: new Date().toISOString(),
         showQuickActions: data.show_quick_actions,
+        quickActions: data.quick_actions,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -938,7 +966,9 @@ const Zoe = () => {
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSendMessage();
+      if (!isLoading) {
+        handleSendMessage();
+      }
     }
   };
 
@@ -1343,7 +1373,24 @@ const Zoe = () => {
                         </div>
                         
                         {/* Quick Action Buttons in greeting responses */}
-                        {message.role === "assistant" && message.showQuickActions && (
+                        {message.role === "assistant" && message.quickActions && message.quickActions.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-border/50">
+                            {message.quickActions.map((action) => (
+                              <Button
+                                key={action.id}
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleAssistantQuickAction(action)}
+                                disabled={isLoading}
+                                className="text-xs h-7"
+                              >
+                                {action.label}
+                              </Button>
+                            ))}
+                          </div>
+                        )}
+
+                        {message.role === "assistant" && message.showQuickActions && (!message.quickActions || message.quickActions.length === 0) && (
                           <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-border/50">
                             <Button
                               variant="outline"
@@ -1439,7 +1486,7 @@ const Zoe = () => {
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  disabled={!selectedArtist || isLoading || messages.length >= MAX_CONVERSATION_MESSAGES}
+                  disabled={!selectedArtist || messages.length >= MAX_CONVERSATION_MESSAGES}
                   className="flex-1 h-11 rounded-full px-4 bg-muted/50 border-muted"
                 />
                 <Button

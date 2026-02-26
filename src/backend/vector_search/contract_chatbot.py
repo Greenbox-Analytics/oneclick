@@ -45,6 +45,16 @@ class ConfidenceLevel(Enum):
 
 
 @dataclass
+class RouteDecision:
+    """Routing decision for the current turn."""
+    route: Literal["artist", "contract", "disambiguate"] = "contract"
+    answer_mode: Literal["context", "retrieve"] = "retrieve"
+    confidence: float = 0.0
+    reason: str = "default_contract_retrieval"
+    retrieval_reason: str = "general_retrieval"
+
+
+@dataclass
 class Scope:
     """Defines the scope for facts and assumptions"""
     artist_id: Optional[str] = None
@@ -422,9 +432,43 @@ class InMemoryChatMessageHistory:
         if hasattr(self, '_pending_suggestions') and session_id in self._pending_suggestions:
             del self._pending_suggestions[session_id]
 
+    def estimate_token_count(self, session_id: str) -> int:
+        """
+        Estimate the token count for a session's history.
+        Uses a simple heuristic: ~1 token per 4 characters.
+
+        Args:
+            session_id: Unique session identifier
+
+        Returns:
+            Estimated token count
+        """
+        messages = self._sessions.get(session_id, [])
+        total_chars = sum(len(msg.content) for msg in messages)
+        return total_chars // 4
+
+    def trim_to_recent(self, session_id: str, keep_recent: int = 6) -> List[ChatMessage]:
+        """
+        Remove older messages and return them, keeping only the most recent ones.
+
+        Args:
+            session_id: Unique session identifier
+            keep_recent: Number of recent messages to keep
+
+        Returns:
+            List of removed (older) messages
+        """
+        messages = self._sessions.get(session_id, [])
+        if len(messages) <= keep_recent:
+            return []
+
+        older_messages = messages[:-keep_recent]
+        self._sessions[session_id] = messages[-keep_recent:]
+        return older_messages
+
 
 # Global conversation memory instance
-_conversation_memory = InMemoryChatMessageHistory(max_messages_per_session=20, session_ttl_seconds=3600)
+_conversation_memory = InMemoryChatMessageHistory(max_messages_per_session=100, session_ttl_seconds=3600)
 
 # Global ledger instances for fact and assumption tracking
 _fact_ledger = FactLedger()
@@ -477,6 +521,33 @@ class ContractChatbot:
         "go ahead", "do it", "yes please", "sounds good", "that would be great",
         "absolutely", "definitely", "of course", "ok", "okay", "alright",
         "let's do it", "show me", "tell me", "i'd like that", "yes do that"
+    ]
+
+    ARTIST_INTENT_PHRASES = [
+        # Profile / bio
+        "artist", "bio", "biography", "about the artist", "about this artist",
+        "tell me about", "who is", "who are",
+        # Social media
+        "social", "social media", "instagram", "tiktok", "youtube", "twitter",
+        "facebook", "socials",
+        # Streaming / DSP
+        "spotify", "apple music", "soundcloud", "dsp", "streaming link",
+        "where can i listen", "where to listen", "music link",
+        # Contact / press
+        "email", "contact", "epk", "press kit", "linktree", "website",
+        # Genre / style
+        "genre", "genres", "what type of music", "what kind of music",
+        "music style", "sound like",
+        # General artist info
+        "artist info", "artist profile", "artist page", "artist details",
+        "background", "artist background",
+    ]
+
+    CONTRACT_INTENT_KEYWORDS = [
+        "contract", "agreement", "clause", "royalty", "royalties", "split", "splits",
+        "payment", "advance", "term", "termination", "copyright", "master rights",
+        "publishing rights", "parties", "legal", "streaming", "spotify", "apple music",
+        "dsp", "revenue", "net revenue", "gross revenue"
     ]
     
     def __init__(self, llm_model: str = DEFAULT_LLM_MODEL):
@@ -789,7 +860,7 @@ class ContractChatbot:
     
     def _compute_context_hash(self, context: Optional[Dict]) -> str:
         """
-        Compute a hash of the contracts discussed to detect context changes.
+        Compute a hash of key context entities to detect context changes.
         
         Args:
             context: Conversation context
@@ -801,8 +872,14 @@ class ContractChatbot:
             return ""
         
         contracts_discussed = context.get('contracts_discussed', [])
-        contract_ids = sorted([c.get('id', '') for c in contracts_discussed])
-        return hashlib.md5(json.dumps(contract_ids).encode()).hexdigest()
+        artists_discussed = context.get('artists_discussed', [])
+        contract_ids = sorted([c.get('id', '') for c in contracts_discussed if isinstance(c, dict)])
+        artist_ids = sorted([a.get('id', '') for a in artists_discussed if isinstance(a, dict)])
+        payload = {
+            "contract_ids": contract_ids,
+            "artist_ids": artist_ids
+        }
+        return hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     
     def _extract_structured_data(self, answer: str, query: str) -> Dict:
         """
@@ -1043,6 +1120,373 @@ Respond with ONLY one word: either "artist" or "contract"."""
             logger.error(f"Error classifying query: {e}")
             # Default to contract if classification fails
             return "contract"
+
+    def _is_artist_intent_query(self, query: str) -> bool:
+        """Detect artist-intent queries via deterministic phrase matching.
+
+        Returns False if the query also contains contract-related keywords,
+        since those ambiguous queries should go through LLM routing instead.
+        """
+        query_lower = query.lower().strip()
+        has_artist_signal = any(phrase in query_lower for phrase in self.ARTIST_INTENT_PHRASES)
+        if not has_artist_signal:
+            return False
+        # If query also has contract keywords, it's ambiguous — don't fast-path
+        has_contract_signal = any(keyword in query_lower for keyword in self.CONTRACT_INTENT_KEYWORDS)
+        return not has_contract_signal
+
+    def _is_contract_intent_query(self, query: str) -> bool:
+        """Detect explicit contract-intent queries via deterministic keyword matching."""
+        query_lower = query.lower()
+        return any(keyword in query_lower for keyword in self.CONTRACT_INTENT_KEYWORDS)
+
+    def _has_non_empty_value(self, value: Any) -> bool:
+        """Determine whether a value is meaningful (not empty/null-like)."""
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, tuple, set, dict)):
+            return len(value) > 0
+        return True
+
+    def _has_contract_context(self, context: Optional[Dict]) -> bool:
+        """Check whether there is meaningful prior contract context in the conversation."""
+        if not context:
+            return False
+        contracts_discussed = context.get("contracts_discussed", [])
+        for contract in contracts_discussed:
+            extracted_data = contract.get("data_extracted", {}) if isinstance(contract, dict) else {}
+            if isinstance(extracted_data, dict) and any(self._has_non_empty_value(v) for v in extracted_data.values()):
+                return True
+        return False
+
+    def _build_source_selection_response(self, query: str, session_id: Optional[str] = None) -> Dict:
+        """Ask user whether to use artist profile or contract/context as answer source."""
+        response = (
+            "I can answer this in two ways: using the artist profile from Supabase, "
+            "or using the selected contract/context. Which source should I use?"
+        )
+
+        self._add_to_memory(session_id, "user", query)
+        self._add_to_memory(session_id, "assistant", response)
+
+        return {
+            "query": query,
+            "answer": response,
+            "confidence": "needs_source_selection",
+            "sources": [],
+            "search_results_count": 0,
+            "session_id": session_id,
+            "answered_from": "source_disambiguation",
+            "show_quick_actions": True,
+            "needs_source_selection": True,
+            "quick_actions": [
+                {
+                    "id": "artist_profile",
+                    "label": "Use artist profile",
+                    "query": query,
+                    "source_preference": "artist_profile"
+                },
+                {
+                    "id": "contract_context",
+                    "label": "Use contract/context",
+                    "query": query,
+                    "source_preference": "contract_context"
+                }
+            ]
+        }
+
+    def _build_artist_source_selection_response(self, query: str, session_id: Optional[str] = None) -> Dict:
+        """Ask user whether to use artist profile or continue conversation (use history)."""
+        response = (
+            "I can answer this using the artist profile, or I can continue based on our "
+            "conversation so far. Which would you prefer?"
+        )
+
+        self._add_to_memory(session_id, "user", query)
+        self._add_to_memory(session_id, "assistant", response)
+
+        return {
+            "query": query,
+            "answer": response,
+            "confidence": "needs_source_selection",
+            "sources": [],
+            "search_results_count": 0,
+            "session_id": session_id,
+            "answered_from": "source_disambiguation",
+            "show_quick_actions": True,
+            "needs_source_selection": True,
+            "quick_actions": [
+                {
+                    "id": "artist_profile",
+                    "label": "Artist Profile",
+                    "query": query,
+                    "source_preference": "artist_profile"
+                },
+                {
+                    "id": "conversation_history",
+                    "label": "Continue Conversation",
+                    "query": query,
+                    "source_preference": "conversation_history"
+                }
+            ]
+        }
+
+    def _resolve_query_route(self,
+                             query: str,
+                             artist_data: Optional[Dict],
+                             context: Optional[Dict],
+                             source_preference: Optional[str] = None) -> str:
+        """
+        Resolve whether query should route to artist or contract handling.
+
+        Returns one of: "artist", "contract", "disambiguate".
+        """
+        if source_preference == "artist_profile":
+            return "artist"
+        if source_preference == "contract_context":
+            return "contract"
+
+        has_artist_data = artist_data is not None
+        has_contract_context = self._has_contract_context(context)
+        is_contract_intent = self._is_contract_intent_query(query)
+        is_artist_intent = self._is_artist_intent_query(query)
+
+        # Contract intent always takes precedence for legal/royalty questions.
+        if is_contract_intent:
+            return "contract"
+
+        if has_artist_data and is_artist_intent:
+            if has_contract_context:
+                return "disambiguate"
+            return "artist"
+
+        if has_artist_data and not has_contract_context and not self._is_contract_intent_query(query):
+            return "artist"
+
+        return "contract"
+
+    def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
+        """Extract the first JSON object found in text."""
+        if not text:
+            return None
+
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+
+        match = re.search(r'\{[\s\S]*\}', text)
+        if not match:
+            return None
+
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            return None
+
+    def _build_routing_context_summary(self,
+                                       context: Optional[Dict],
+                                       artist_data: Optional[Dict],
+                                       project_id: Optional[str],
+                                       contract_id: Optional[str],
+                                       source_preference: Optional[str]) -> str:
+        """Build compact context summary for routing decisions."""
+        context = context or {}
+        artists_discussed = context.get("artists_discussed", [])
+        contracts_discussed = context.get("contracts_discussed", [])
+
+        artist_names = []
+        for artist in artists_discussed[-5:]:
+            if isinstance(artist, dict):
+                artist_names.append(artist.get("name") or "Unknown artist")
+
+        contract_names = []
+        for contract in contracts_discussed[-5:]:
+            if isinstance(contract, dict):
+                contract_names.append(contract.get("name") or "Unknown contract")
+
+        current_artist_name = ""
+        if artist_data and artist_data.get("name"):
+            current_artist_name = artist_data.get("name")
+
+        summary = {
+            "source_preference": source_preference,
+            "has_project_selected": bool(project_id),
+            "has_contract_selected": bool(contract_id),
+            "current_artist": current_artist_name,
+            "artists_discussed_count": len(artists_discussed),
+            "artists_discussed": artist_names,
+            "contracts_discussed_count": len(contracts_discussed),
+            "contracts_discussed": contract_names,
+            "has_contract_context": self._has_contract_context(context)
+        }
+        return json.dumps(summary, ensure_ascii=False)
+
+    def _build_default_route_decision(self,
+                                      query: str,
+                                      artist_data: Optional[Dict],
+                                      context: Optional[Dict],
+                                      source_preference: Optional[str],
+                                      project_id: Optional[str],
+                                      contract_id: Optional[str]) -> RouteDecision:
+        """Fallback route decision when LLM routing is unavailable."""
+        route = self._resolve_query_route(query, artist_data, context, source_preference)
+
+        answer_mode: Literal["context", "retrieve"] = "retrieve"
+        reason = "fallback_retrieval"
+        retrieval_reason = "general_retrieval"
+
+        if route == "artist":
+            answer_mode = "context" if context else "retrieve"
+            reason = "fallback_artist_route"
+        elif route == "disambiguate":
+            answer_mode = "context"
+            reason = "fallback_disambiguate"
+        elif context and not contract_id and not project_id:
+            # Without a selected contract/project, context is often the only useful source.
+            answer_mode = "context"
+            reason = "fallback_context_no_project"
+
+        return RouteDecision(
+            route=route,
+            answer_mode=answer_mode,
+            confidence=0.35,
+            reason=reason,
+            retrieval_reason=retrieval_reason
+        )
+
+    def _llm_route_decision(self,
+                            query: str,
+                            artist_data: Optional[Dict],
+                            context: Optional[Dict],
+                            source_preference: Optional[str] = None,
+                            project_id: Optional[str] = None,
+                            contract_id: Optional[str] = None) -> RouteDecision:
+        """
+        Use LLM to decide route and whether to answer from context or retrieve.
+        """
+        if source_preference == "artist_profile":
+            return RouteDecision(
+                route="artist",
+                answer_mode="context",
+                confidence=1.0,
+                reason="source_preference_artist",
+                retrieval_reason="none"
+            )
+
+        if source_preference == "contract_context":
+            return RouteDecision(
+                route="contract",
+                answer_mode="context" if context else "retrieve",
+                confidence=1.0,
+                reason="source_preference_contract_context",
+                retrieval_reason="general_retrieval"
+            )
+
+        routing_context = self._build_routing_context_summary(
+            context=context,
+            artist_data=artist_data,
+            project_id=project_id,
+            contract_id=contract_id,
+            source_preference=source_preference
+        )
+
+        system_prompt = """You are a routing planner for a music assistant.
+Given the user query and current state, return ONLY valid JSON with:
+{
+  "route": "artist" | "contract" | "disambiguate",
+  "answer_mode": "context" | "retrieve",
+  "confidence": number between 0 and 1,
+  "reason": "short_snake_case_reason",
+  "retrieval_reason": "general_retrieval" | "missing_streaming_splits" | "missing_publishing_splits" | "missing_mechanical_splits" | "missing_sync_splits" | "missing_master_splits" | "missing_performance_splits" | "missing_general_splits" | "missing_parties" | "missing_payment_terms" | "missing_term_length" | "missing_advances"
+}
+
+Rules:
+1) Prefer route="artist" for artist profile/social/bio/genre/link questions.
+2) Prefer route="contract" for legal/royalty/term/payment/party questions.
+3) For ambiguous artist+contract wording where user intent is truly unclear, use route="disambiguate".
+4) If the question can be answered from provided context/history, set answer_mode="context".
+5) If evidence likely needs contract retrieval, set answer_mode="retrieve".
+6) If selected contract exists and question is contract-specific, lean retrieve unless context clearly contains exact requested facts.
+7) Return JSON only, no markdown or prose."""
+
+        user_prompt = f"""User Query:\n{query}\n\nState:\n{routing_context}"""
+
+        try:
+            response = openai_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_completion_tokens=250
+            )
+
+            content = (response.choices[0].message.content or "").strip()
+            parsed = self._extract_json_object(content)
+            if not parsed:
+                raise ValueError("No valid JSON route decision returned")
+
+            route = parsed.get("route", "contract")
+            answer_mode = parsed.get("answer_mode", "retrieve")
+            confidence = float(parsed.get("confidence", 0.0) or 0.0)
+            reason = parsed.get("reason", "llm_default")
+            retrieval_reason = parsed.get("retrieval_reason", "general_retrieval")
+
+            if route not in {"artist", "contract", "disambiguate"}:
+                route = "contract"
+            if answer_mode not in {"context", "retrieve"}:
+                answer_mode = "retrieve"
+            confidence = max(0.0, min(1.0, confidence))
+
+            decision = RouteDecision(
+                route=route,
+                answer_mode=answer_mode,
+                confidence=confidence,
+                reason=reason,
+                retrieval_reason=retrieval_reason
+            )
+            logger.info(
+                f"[Routing] LLM decision route={decision.route}, mode={decision.answer_mode}, "
+                f"confidence={decision.confidence:.2f}, reason={decision.reason}, retrieval_reason={decision.retrieval_reason}"
+            )
+            return decision
+        except Exception as e:
+            logger.error(f"[Routing] LLM route decision failed: {e}")
+            fallback = self._build_default_route_decision(
+                query=query,
+                artist_data=artist_data,
+                context=context,
+                source_preference=source_preference,
+                project_id=project_id,
+                contract_id=contract_id
+            )
+            logger.info(
+                f"[Routing] Fallback decision route={fallback.route}, mode={fallback.answer_mode}, "
+                f"confidence={fallback.confidence:.2f}, reason={fallback.reason}"
+            )
+            return fallback
+
+    def _should_answer_from_context(self,
+                                    decision: RouteDecision,
+                                    context: Optional[Dict],
+                                    contract_id: Optional[str]) -> bool:
+        """Apply policy guardrails for using context responses."""
+        if not context:
+            return False
+        if decision.answer_mode != "context":
+            return False
+
+        # Soft override: if contract is selected, require stronger confidence for context-only answer.
+        threshold = 0.85 if contract_id else 0.6
+        if decision.confidence < threshold:
+            logger.info(
+                f"[Routing] Context mode requested but confidence {decision.confidence:.2f} < threshold {threshold:.2f}; retrieving"
+            )
+            return False
+        return True
     
     def _handle_artist_query(self, query: str, artist_data: Dict, session_id: Optional[str] = None) -> Dict:
         """
@@ -1063,7 +1507,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
         artist_context = self._format_artist_context(artist_data)
         
         # Generate answer using LLM
-        system_prompt = """You are a helpful assistant providing concise, direct information about an artist. 
+        system_prompt = """You are a helpful assistant providing concise, direct information about an artist.
 Answer the user's question based on the artist profile information provided.
 
 CRITICAL RULES:
@@ -1072,13 +1516,20 @@ CRITICAL RULES:
 3. Do NOT infer or add information not explicitly stated in the artist data
 4. If asked for a specific piece of information (like bio), provide ONLY that information
 5. Keep responses brief - typically 1-2 sentences unless the data itself is longer
-6. Format links as plain URLs when mentioning them
-7. If information is not available, simply say so
+6. If information is not available, simply say so
+
+FORMATTING:
+- Use markdown for structure, not decoration — keep it minimal
+- Use **bold** for field labels (e.g., **Bio:**, **Genres:**)
+- Use bullet points for listing multiple items (socials, links, genres)
+- Format URLs as markdown links: [Platform Name](url)
+- Only use ### headers when answering about multiple fields — skip headers for single-field answers
+- Do NOT add filler phrases, introductions, or conclusions — just the data
 
 Examples:
 - If asked "What's the artist's bio?" and bio is "House DJ" → Answer: "House DJ"
 - If asked "What's their genre?" and genre is "Electronic" → Answer: "Electronic"
-- If asked "What are their socials?" → List only the available social media links"""
+- If asked "What are their socials?" → List as bullet points with markdown links"""
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -1096,12 +1547,15 @@ Artist Profile:
                 messages=messages,
                 max_completion_tokens=500
             )
-            
-            answer = response.choices[0].message.content
+
+            raw_answer = response.choices[0].message.content
+            answer = (raw_answer or "").strip()
+            if not answer:
+                answer = self._build_artist_fallback_answer(artist_data, query)
             
         except Exception as e:
             logger.error(f"Error generating artist answer: {e}")
-            answer = f"I have information about {artist_data.get('name', 'the artist')}, but encountered an error. Please try again."
+            answer = self._build_artist_fallback_answer(artist_data, query)
         
         # Store assistant response in memory
         self._add_to_memory(session_id, "assistant", answer)
@@ -1120,6 +1574,49 @@ Artist Profile:
             "extracted_data": extracted_artist_data,
             "show_quick_actions": False
         }
+
+    def _build_artist_fallback_answer(self, artist_data: Dict, query: str) -> str:
+        """Build a deterministic artist answer when LLM output is empty or fails."""
+        extracted = self._extract_artist_data(artist_data)
+        artist_name = artist_data.get("name", "the artist")
+        query_lower = query.lower()
+
+        if "bio" in query_lower and extracted.get("bio"):
+            return str(extracted["bio"])
+
+        if any(kw in query_lower for kw in ["genre", "genres"]) and extracted.get("genres"):
+            genres = extracted.get("genres", [])
+            if isinstance(genres, list):
+                return ", ".join([str(genre) for genre in genres])
+            return str(genres)
+
+        if any(kw in query_lower for kw in ["social", "instagram", "tiktok", "youtube", "twitter", "facebook"]):
+            social = extracted.get("social_media", {})
+            if isinstance(social, dict) and social:
+                return "\n".join([f"{platform}: {url}" for platform, url in social.items()])
+
+        if any(kw in query_lower for kw in ["stream", "spotify", "apple music", "soundcloud", "dsp"]):
+            links = extracted.get("streaming_links", {})
+            if isinstance(links, dict) and links:
+                return "\n".join([f"{platform}: {url}" for platform, url in links.items()])
+
+        if any(kw in query_lower for kw in ["email", "contact"]) and extracted.get("email"):
+            return str(extracted["email"])
+
+        summary_parts = []
+        if extracted.get("bio"):
+            summary_parts.append(f"Bio: {extracted['bio']}")
+        if extracted.get("genres"):
+            genres = extracted["genres"]
+            if isinstance(genres, list):
+                summary_parts.append(f"Genres: {', '.join([str(genre) for genre in genres])}")
+            else:
+                summary_parts.append(f"Genres: {genres}")
+
+        if summary_parts:
+            return f"Here’s what I have for {artist_name}: " + " | ".join(summary_parts)
+
+        return f"I found the artist record for {artist_name}, but profile details are currently empty."
     
     def _extract_artist_data(self, artist_data: Dict) -> Dict:
         """
@@ -1248,24 +1745,106 @@ Artist Profile:
     
     def _get_conversation_context(self, session_id: Optional[str], max_turns: int = 5) -> List[Dict]:
         """
-        Get conversation history for context.
-        
+        Get conversation history for context, prepending rolling summary if available.
+
         Args:
             session_id: Session identifier
             max_turns: Maximum conversation turns to include
-            
+
         Returns:
             List of message dicts for LLM
         """
         if not session_id:
             return []
-        return self.memory.get_messages_for_llm(session_id, limit=max_turns)
+
+        messages = []
+
+        # Prepend rolling summary if one exists (from previous summarization)
+        summary = _conversation_summary.get_summary(session_id)
+        if summary:
+            messages.append({
+                "role": "system",
+                "content": f"Summary of earlier conversation:\n{summary}"
+            })
+
+        messages.extend(self.memory.get_messages_for_llm(session_id, limit=max_turns))
+        return messages
     
     def _add_to_memory(self, session_id: Optional[str], role: str, content: str, metadata: Dict = None) -> None:
         """Add a message to session memory."""
         if session_id:
             self.memory.add_message(session_id, role, content, metadata)
-    
+
+    def _summarize_if_needed(self, session_id: Optional[str]) -> None:
+        """
+        Check if conversation history exceeds token limits and summarize if needed.
+        Keeps the most recent 6 messages verbatim and compresses older messages
+        into a rolling summary using the existing ConversationSummary class.
+
+        Target: Keep history under 250k tokens (leaving buffer below 300k ceiling).
+        """
+        if not session_id:
+            return
+
+        TOKEN_LIMIT = 250_000
+        estimated_tokens = self.memory.estimate_token_count(session_id)
+
+        if estimated_tokens <= TOKEN_LIMIT:
+            return
+
+        logger.info(
+            f"[Summarization] Token estimate ({estimated_tokens}) exceeds limit ({TOKEN_LIMIT}). "
+            f"Summarizing older messages."
+        )
+
+        # Get older messages that will be summarized, keeping recent 6 verbatim
+        older_messages = self.memory.trim_to_recent(session_id, keep_recent=6)
+
+        if not older_messages:
+            return
+
+        # Build text from older messages for summarization
+        existing_summary = _conversation_summary.get_summary(session_id)
+        messages_text = "\n".join(
+            f"{msg.role.upper()}: {msg.content}" for msg in older_messages
+        )
+
+        summary_input = ""
+        if existing_summary:
+            summary_input = f"Previous summary:\n{existing_summary}\n\nNew messages to incorporate:\n{messages_text}"
+        else:
+            summary_input = f"Conversation to summarize:\n{messages_text}"
+
+        try:
+            response = openai_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Summarize this conversation concisely, preserving all key facts, "
+                            "data points (royalty splits, payment terms, parties, etc.), decisions, "
+                            "and important details. The summary will be used as context for future "
+                            "questions, so accuracy is critical. Keep it under 2000 words."
+                        )
+                    },
+                    {"role": "user", "content": summary_input}
+                ],
+                max_completion_tokens=2000
+            )
+
+            summary = (response.choices[0].message.content or "").strip()
+            if summary:
+                _conversation_summary.update_summary(session_id, summary)
+                logger.info(
+                    f"[Summarization] Summarized {len(older_messages)} messages. "
+                    f"Summary length: {len(summary)} chars"
+                )
+
+        except Exception as e:
+            logger.error(f"[Summarization] Error summarizing conversation: {e}")
+            # On failure, keep the trimmed state but without summary
+
     def _get_targeted_query(self, reason: str, original_query: str) -> str:
         """
         Generate a targeted search query based on missing data reason.
@@ -1467,151 +2046,91 @@ Artist Profile:
         elif isinstance(royalty_splits, list) and royalty_type == 'general':
             return len(royalty_splits) > 0
         return False
-    
-    def _is_comparison_query(self, query: str) -> bool:
+
+    def _try_answer_from_history(self, query: str, session_id: Optional[str], context: Optional[Dict] = None) -> Optional[Dict]:
         """
-        Detect if the query is asking for a comparison between contracts.
-        
+        Try to answer a question from conversation history alone.
+        Returns None if history is empty or insufficient, allowing fallback to semantic search.
+
         Args:
             query: User's question
-            
+            session_id: Session ID for conversation memory
+            context: Optional conversation context
+
         Returns:
-            True if comparison is requested
+            Dict with answer if history can answer, None otherwise
         """
-        query_lower = query.lower()
-        comparison_keywords = [
-            'compare', 'comparison', 'difference', 'differences', 
-            'versus', 'vs', 'between', 'both', 'all contracts',
-            'across', 'each contract', 'the two', 'these contracts'
-        ]
-        return any(kw in query_lower for kw in comparison_keywords)
-    
-    def _build_comparison_context(self, contracts_with_data: List[Dict], 
-                                   data_type: str, 
-                                   search_results: Dict) -> str:
-        """
-        Build combined context for comparison: existing context data + new search results.
-        
-        Args:
-            contracts_with_data: Contracts that already have extracted data
-            data_type: The type of data being compared (e.g., 'streaming')
-            search_results: New search results for contracts missing data
-            
-        Returns:
-            Combined context string for LLM
-        """
-        context_parts = []
-        
-        # Add existing data from contracts that have it
-        context_parts.append("=== PREVIOUSLY RETRIEVED CONTRACT DATA ===")
-        for contract in contracts_with_data:
-            contract_name = contract.get('name', 'Unknown Contract')
-            data = contract.get('data_extracted', {})
-            royalty_splits = data.get('royalty_splits', {})
-            
-            if isinstance(royalty_splits, dict) and royalty_splits.get(data_type):
-                splits = royalty_splits[data_type]
-                context_parts.append(f"\n[Contract: {contract_name}]")
-                context_parts.append(f"{data_type.capitalize()} Royalty Splits:")
-                for split in splits:
-                    party = split.get('party', 'Unknown')
-                    percentage = split.get('percentage', 0)
-                    context_parts.append(f"  - {party}: {percentage}%")
-        
-        # Add new search results
-        context_parts.append("\n\n=== NEWLY RETRIEVED CONTRACT DATA ===")
-        for match in search_results.get("matches", []):
-            section = match.get('section_heading', 'N/A')
-            text = match.get('text', '')
-            contract_file = match.get('contract_file', 'Unknown')
-            context_parts.append(f"\n[Contract: {contract_file}]")
-            context_parts.append(f"[Section: {section}]")
-            context_parts.append(text)
-        
-        return "\n".join(context_parts)
-    
-    def _expand_contract_ids_from_context(self, contract_ids: List[str], 
-                                           context: Optional[Dict],
-                                           limit: int = 5) -> List[str]:
-        """
-        Expand contract_ids to include contracts from conversation context.
-        Used when comparison is detected to include previously discussed contracts.
-        
-        Args:
-            contract_ids: Currently selected contract IDs
-            context: Conversation context with contracts_discussed
-            limit: Maximum number of contracts to include (most recent)
-            
-        Returns:
-            Expanded list of contract IDs
-        """
-        if not context:
-            return contract_ids
-        
-        contracts_discussed = context.get('contracts_discussed', [])
-        if not contracts_discussed:
-            return contract_ids
-        
-        # Get all contract IDs from context
-        context_ids = [c.get('id') for c in contracts_discussed if c.get('id')]
-        
-        # Merge with current selection (deduplicate, preserve order)
-        all_ids = list(contract_ids) if contract_ids else []
-        for cid in context_ids:
-            if cid not in all_ids:
-                all_ids.append(cid)
-        
-        # Limit to most recent N contracts
-        if len(all_ids) > limit:
-            all_ids = all_ids[-limit:]
-        
-        logger.info(f"[Comparison] Expanded contract_ids from {len(contract_ids or [])} to {len(all_ids)}")
-        return all_ids
-    
-    def _build_comparison_context(self, contracts_with_data: List[Dict], 
-                                   data_type: str, 
-                                   search_results: Dict) -> str:
-        """
-        Build combined context for comparison: existing context data + new search results.
-        
-        Args:
-            contracts_with_data: Contracts that already have extracted data
-            data_type: The type of data being compared (e.g., 'streaming')
-            search_results: New search results for contracts missing data
-            
-        Returns:
-            Combined context string for LLM
-        """
-        context_parts = []
-        
-        # Add existing data from contracts that have it
-        context_parts.append("=== PREVIOUSLY RETRIEVED CONTRACT DATA ===")
-        for contract in contracts_with_data:
-            contract_name = contract.get('name', 'Unknown Contract')
-            data = contract.get('data_extracted', {})
-            royalty_splits = data.get('royalty_splits', {})
-            
-            if isinstance(royalty_splits, dict) and royalty_splits.get(data_type):
-                splits = royalty_splits[data_type]
-                context_parts.append(f"\n[Contract: {contract_name}]")
-                context_parts.append(f"{data_type.capitalize()} Royalty Splits:")
-                for split in splits:
-                    party = split.get('party', 'Unknown')
-                    percentage = split.get('percentage', 0)
-                    context_parts.append(f"  - {party}: {percentage}%")
-        
-        # Add new search results
-        context_parts.append("\n\n=== NEWLY RETRIEVED CONTRACT DATA ===")
-        for match in search_results.get("matches", []):
-            section = match.get('section_heading', 'N/A')
-            text = match.get('text', '')
-            contract_file = match.get('contract_file', 'Unknown')
-            context_parts.append(f"\n[Contract: {contract_file}]")
-            context_parts.append(f"[Section: {section}]")
-            context_parts.append(text)
-        
-        return "\n".join(context_parts)
-    
+        if not session_id:
+            return None
+
+        history = self._get_conversation_context(session_id, max_turns=10)
+        if not history:
+            return None
+
+        logger.info(f"[History] Checking if conversation history ({len(history)} messages) can answer: {query}")
+
+        system_prompt = """You are a music industry assistant reviewing a conversation history.
+Determine if the conversation history contains enough information to fully answer the user's new question.
+
+RULES:
+1. If the conversation history contains the information needed to answer the question, provide a complete answer.
+2. If the information is NOT in the history, or is incomplete/insufficient, respond with exactly: NEEDS_RETRIEVAL
+3. When answering from history, be specific and reference the relevant information from previous messages.
+4. You may compare, summarize, or re-analyze information that was previously discussed.
+5. Do NOT make up or infer information that is not present in the history.
+6. For questions about NEW topics not discussed before, respond with NEEDS_RETRIEVAL.
+7. Do NOT suggest follow-up questions.
+8. Format responses using clean, minimal markdown (bold labels, bullet points, markdown links for URLs). Do not embellish — just the data."""
+
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history)
+
+        # Include structured context if available for richer answers
+        context_note = ""
+        if context:
+            context_summary = self._format_context_for_llm(context)
+            if context_summary and context_summary != "No context available.":
+                context_note = f"\n\nAdditional structured context:\n{context_summary}"
+
+        messages.append({"role": "user", "content": f"New question: {query}{context_note}"})
+
+        try:
+            response = openai_client.chat.completions.create(
+                model=self.llm_model,
+                messages=messages,
+                max_completion_tokens=1000
+            )
+
+            answer = (response.choices[0].message.content or "").strip()
+
+            if not answer or "NEEDS_RETRIEVAL" in answer:
+                logger.info("[History] History insufficient - falling through to retrieval")
+                return None
+
+            logger.info("[History] Successfully answered from conversation history")
+
+            # Store in memory
+            self._add_to_memory(session_id, "user", query)
+            self._add_to_memory(session_id, "assistant", answer)
+
+            # Extract structured data from the answer
+            extracted_data = self._extract_structured_data(answer, query)
+
+            return {
+                "query": query,
+                "answer": answer,
+                "confidence": "conversation_history",
+                "sources": [],
+                "search_results_count": 0,
+                "answered_from": "conversation_history",
+                "session_id": session_id,
+                "extracted_data": extracted_data if extracted_data else None
+            }
+
+        except Exception as e:
+            logger.error(f"[History] Error checking conversation history: {e}")
+            return None
+
     def _answer_from_context(self, query: str, context: Dict, session_id: Optional[str] = None) -> Dict:
         """
         Answer question using structured context and conversation history.
@@ -1662,10 +2181,17 @@ If no context-only follow-up makes sense, don't suggest anything.
 RULES:
 1. Base your answer ONLY on the provided context and conversation history
 2. If comparing contracts, clearly distinguish between them
-3. Be specific about which contract each piece of information came from
-4. If information is incomplete, acknowledge what you don't have
-5. Format comparisons in a clear, readable way (use bullet points or tables)
-6. Only suggest follow-ups that can be answered from existing context data"""
+3. If comparing artists, always provide a comparison answer using available context
+4. If artist context is sparse, explicitly state there is not enough information for a full comparison and list what is missing
+5. Be specific about which contract each piece of information came from
+6. If information is incomplete, acknowledge what you don't have
+7. Format responses using clean, minimal markdown:
+   - Use ### headers to separate each artist or contract being compared
+   - Use **bold** for field labels, bullet points for attributes
+   - Format URLs as markdown links: [Platform Name](url)
+   - For comparisons, use headers per entity then a short ### Answer section for the user's specific question
+   - Do NOT pad with filler text, introductions, or unnecessary transitions — just structured data and a direct answer
+8. Only suggest follow-ups that can be answered from existing context data"""
 
         messages = [{"role": "system", "content": system_prompt}]
         # Add conversation history first, then the current query with context
@@ -1863,11 +2389,11 @@ INVALID suggestions (would require document lookup - DO NOT suggest these):
                         else:
                             parts.append(f"  • Genres: {genres}")
                     if data_extracted.get('social_media'):
-                        parts.append(f"  • Social Media:")
+                        parts.append("  • Social Media:")
                         for platform, url in data_extracted['social_media'].items():
                             parts.append(f"    - {platform.title()}: {url}")
                     if data_extracted.get('streaming_links'):
-                        parts.append(f"  • Streaming Links:")
+                        parts.append("  • Streaming Links:")
                         for platform, url in data_extracted['streaming_links'].items():
                             parts.append(f"    - {platform.title()}: {url}")
         
@@ -1939,9 +2465,9 @@ CRITICAL RULES:
 
 Your answers should be:
 - Accurate and grounded in the provided text
-- Clear and concise
-- Properly cited with sources
-- Professional and helpful"""
+- Clear, concise, and to the point — no filler or embellishment
+- Formatted using minimal markdown (**bold** for key terms, bullet points for lists, ### headers only when multiple sections are needed)
+- Format URLs as markdown links: [Display Text](url)"""
     
     def _format_context(self, search_results: Dict) -> str:
         """
@@ -1966,8 +2492,7 @@ Your answers should be:
         
         return "\n\n".join(context_parts)
     
-    def _generate_answer(self, query: str, context: str, search_results: Dict, session_id: Optional[str] = None, 
-                        is_targeted_comparison: bool = False) -> Dict:
+    def _generate_answer(self, query: str, context: str, search_results: Dict, session_id: Optional[str] = None) -> Dict:
         """
         Generate answer using LLM with conversation history for context.
         
@@ -1976,7 +2501,6 @@ Your answers should be:
             context: Formatted context from search results
             search_results: Original search results
             session_id: Session ID for conversation history
-            is_targeted_comparison: Whether this is a comparison query using targeted retrieval
             
         Returns:
             Dict with answer and metadata
@@ -1992,33 +2516,8 @@ Your answers should be:
                 "sources": []
             }
         
-        # Adjust system prompt based on whether this is a targeted comparison
-        if is_targeted_comparison:
-            system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
-Your task is to answer questions about contract documents based on the provided context.
-
-CRITICAL RULES:
-1. The user is asking for a COMPARISON between contracts
-2. Use BOTH the provided contract documents AND the conversation history to perform the comparison
-3. The conversation history contains information about previously discussed contracts - USE IT
-4. Clearly distinguish between contracts when comparing
-5. Be precise with numbers, percentages, and contract names
-6. If you cannot find information for all contracts, acknowledge what's missing
-
-COMPARISON INSTRUCTIONS:
-- Review the conversation history to see what contracts were previously discussed
-- Combine that information with the newly retrieved contract documents
-- Perform a comprehensive comparison as requested
-- Cite sources for each piece of information
-
-Your answers should be:
-- Accurate and grounded in both the provided documents and conversation history
-- Clear and concise
-- Properly cited with sources
-- Professional and helpful"""
-        else:
-            # Standard system prompt with strict focus on the question asked
-            system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
+        # Standard system prompt with strict focus on the question asked
+        system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
 Your task is to answer questions about contract documents based on the provided context.
 
 CRITICAL RULES:
@@ -2030,14 +2529,15 @@ CRITICAL RULES:
 6. Do NOT suggest follow-up questions - the system handles this separately based on extracted context
 
 CONVERSATION AWARENESS:
-- Use conversation history ONLY to understand pronouns and references (e.g., "this contract" = the one just discussed)
-- Do NOT proactively bring up or compare to previous topics
+- Use conversation history to understand context, pronouns, and references (e.g., "this contract" = the one just discussed)
+- If the conversation history contains relevant information that complements the search results, incorporate it into your answer
+- Do NOT proactively bring up unrelated previous topics unless the user asks
 
 Your answers should be:
 - Accurate and grounded in the provided text
-- Clear and concise
-- Properly cited with sources
-- Professional and helpful"""
+- Clear, concise, and to the point — no filler or embellishment
+- Formatted using minimal markdown (**bold** for key terms, bullet points for lists, ### headers only when multiple sections are needed)
+- Format URLs as markdown links: [Display Text](url)"""
 
         # Build messages list with conversation history
         messages = [{"role": "system", "content": system_prompt}]
@@ -2048,7 +2548,7 @@ Your answers should be:
             # Add a context separator
             messages.append({
                 "role": "system", 
-                "content": "Previous conversation for context (use ONLY for understanding references, NOT for adding unsolicited comparisons):"
+                "content": "Previous conversation for context (use for understanding references and incorporating relevant prior information):"
             })
             messages.extend(conversation_history)
         
@@ -2075,10 +2575,13 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 max_completion_tokens=1000
             )
             
-            answer = response.choices[0].message.content
+            raw_answer = response.choices[0].message.content
+            answer = (raw_answer or "").strip()
+            if not answer:
+                answer = "I don't know based on the available documents."
             
             # Server-side extraction of structured data
-            extracted_data = self._extract_structured_data(answer, query) if answer else None
+            extracted_data = self._extract_structured_data(answer, query)
             
             # Extract sources from search results
             sources = [
@@ -2119,7 +2622,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                   top_k: Optional[int] = None,
                   session_id: Optional[str] = None,
                   artist_data: Optional[Dict] = None,
-                  context: Optional[Dict] = None) -> Dict:
+                  context: Optional[Dict] = None,
+                  source_preference: Optional[str] = None) -> Dict:
         """
         Ask a question using smart retrieval with automatic query categorization.
         
@@ -2159,6 +2663,9 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         if contract_id:
             logger.info(f"Contract ID: {contract_id}")
         logger.info("-" * 80)
+
+        # Summarize conversation history if token limit is approaching
+        self._summarize_if_needed(session_id)
         
         # Check for affirmative response to pending suggestion first
         if session_id and self._is_affirmative_response(query):
@@ -2189,117 +2696,77 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 # Route to context-based answering with the suggestion as query
                 return self._answer_from_context(suggestion, context, session_id)
         
-        # Check if we can answer from conversation context first
-        can_answer, reason = self._should_use_context(query, context)
-        
-        if can_answer:
-            logger.info("Detected context-based query - answering from conversation context")
-            return self._answer_from_context(query, context, session_id)
-        
-        # Check if we have partial context data that could answer the query
-        # This handles cases where user is comparing contracts but only one is selected
-        if reason.startswith("need_more_contracts_for_") and context:
-            # Extract the specific data type from the reason
-            # e.g., "need_more_contracts_for_streaming_comparison" -> "streaming"
-            data_type = reason.replace("need_more_contracts_for_", "").replace("_comparison", "")
-            
-            contracts_discussed = context.get('contracts_discussed', [])
-            contracts_with_specific_data = [
-                c for c in contracts_discussed 
-                if self._contract_has_royalty_type(c, data_type)
-            ]
-            
-            if len(contracts_with_specific_data) >= 2:
-                # We have the SPECIFIC data type for 2+ contracts in context
-                logger.info(f"Found {len(contracts_with_specific_data)} contracts with {data_type} data in context - answering from context")
-                return self._answer_from_context(query, context, session_id)
-            else:
-                # Some contracts are missing data - do targeted retrieval for those contracts
-                contracts_missing_data = [
-                    c for c in contracts_discussed 
-                    if c.get('id') and not self._contract_has_royalty_type(c, data_type)
-                ]
-                
-                if contracts_missing_data and len(contracts_with_specific_data) >= 1:
-                    logger.info(f"[Multi-Step Comparison] {len(contracts_with_specific_data)} contract(s) have {data_type} data, {len(contracts_missing_data)} missing - doing targeted retrieval")
-                    
-                    # Get IDs of contracts missing data
-                    missing_contract_ids = [c.get('id') for c in contracts_missing_data if c.get('id')]
-                    
-                    # Do targeted search specifically for missing contracts
-                    targeted_query = self._get_targeted_query(f"missing_{data_type}_splits", query)
-                    logger.info(f"[Multi-Step Comparison] Targeted query for missing contracts: '{targeted_query}'")
-                    
-                    # Store user message in memory before search
-                    self._add_to_memory(session_id, "user", query)
-                    
-                    # Search only the contracts missing data
-                    search_results = self.search_engine.search_multiple_contracts(
-                        query=targeted_query,
-                        user_id=user_id,
-                        project_id=project_id,
-                        contract_ids=missing_contract_ids,
-                        top_k=top_k
-                    )
-                    
-                    if search_results["matches"]:
-                        # Build combined context: existing context data + new search results
-                        combined_context = self._build_comparison_context(
-                            contracts_with_data=contracts_with_specific_data,
-                            data_type=data_type,
-                            search_results=search_results
-                        )
-                        
-                        logger.info(f"[Multi-Step Comparison] Built combined context with existing data + new retrieval")
-                        
-                        # Generate comparison answer
-                        result = self._generate_answer(query, combined_context, search_results, session_id, is_targeted_comparison=True)
-                        
-                        # Store assistant response in memory
-                        self._add_to_memory(session_id, "assistant", result["answer"], {
-                            "confidence": result["confidence"],
-                            "sources": result.get("sources", [])
-                        })
-                        
-                        result["query"] = query
-                        result["search_results_count"] = search_results["total_results"]
-                        result["filter"] = search_results.get("filter", {})
-                        result["session_id"] = session_id
-                        result["multi_step_comparison"] = True
-                        
-                        return result
-                
-                logger.info(f"Only {len(contracts_with_specific_data)} contract(s) have {data_type} data - will use standard targeted retrieval")
-        
         # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
             logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
-        
-        # Step 1: Classify the query - is it about artist or contracts?
-        query_type = self._classify_query(query, artist_data)
-        logger.info(f"Query classified as: {query_type}")
-        
-        # Step 2: Route based on classification
-        if query_type == "artist":
-            # Artist query - use artist data
+
+        # Try to answer from conversation history first
+        # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        if not source_preference or source_preference == "conversation_history":
+            history_answer = self._try_answer_from_history(query, session_id, context)
+            if history_answer:
+                logger.info("[History] Answered from conversation history")
+                return history_answer
+            # If user explicitly chose conversation_history but it couldn't answer,
+            # fall through to normal routing
+            if source_preference == "conversation_history":
+                source_preference = None  # Reset so normal routing proceeds
+
+        # Fast path: deterministic artist routing for obvious artist queries
+        if not source_preference and artist_data and self._is_artist_intent_query(query):
+            logger.info("[FastPath] Artist query detected via keyword matching - skipping LLM routing")
+            route_decision = RouteDecision(
+                route="artist",
+                answer_mode="context",
+                confidence=0.9,
+                reason="keyword_artist_match"
+            )
+        else:
+            # LLM-based routing: artist/contract/disambiguation + context/retrieve policy
+            route_decision = self._llm_route_decision(
+                query=query,
+                artist_data=artist_data,
+                context=context,
+                source_preference=source_preference,
+                project_id=project_id,
+                contract_id=contract_id
+            )
+
+        if route_decision.route == "disambiguate":
+            logger.info("[Routing] Disambiguation requested")
+            return self._build_source_selection_response(query, session_id)
+
+        if route_decision.route == "artist":
             if artist_data:
-                logger.info("Handling as artist query - using artist data")
+                # If user explicitly chose artist profile, skip disambiguation
+                if source_preference == "artist_profile":
+                    logger.info("[Routing] Handling query with artist profile data (explicit choice)")
+                    return self._handle_artist_query(query, artist_data, session_id)
+                # If conversation history exists, let user choose between profile and conversation
+                history = self._get_conversation_context(session_id, max_turns=1)
+                if history:
+                    logger.info("[Routing] Artist query with history - offering source choice")
+                    return self._build_artist_source_selection_response(query, session_id)
+                logger.info("[Routing] Handling query with artist profile data")
                 return self._handle_artist_query(query, artist_data, session_id)
-            else:
-                # No artist data available
-                self._add_to_memory(session_id, "user", query)
-                response = "I don't have artist information available. Please select an artist from the sidebar."
-                self._add_to_memory(session_id, "assistant", response)
-                return {
-                    "query": query,
-                    "answer": response,
-                    "confidence": "needs_artist",
-                    "sources": [],
-                    "search_results_count": 0,
-                    "session_id": session_id,
-                    "show_quick_actions": True
-                }
+
+            self._add_to_memory(session_id, "user", query)
+            response = "I don't have artist information available. Please select an artist from the sidebar."
+            self._add_to_memory(session_id, "assistant", response)
+            return {
+                "query": query,
+                "answer": response,
+                "confidence": "needs_artist",
+                "sources": [],
+                "search_results_count": 0,
+                "session_id": session_id,
+                "show_quick_actions": True
+            }
+
+        if self._should_answer_from_context(route_decision, context, contract_id):
+            logger.info("[Routing] Answering from conversation context")
+            return self._answer_from_context(query, context, session_id)
         
         # Contract query - need a project to search
         if not project_id:
@@ -2319,11 +2786,12 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
         
-        # Step 3: Determine search query (use targeted query if missing data detected)
+        # Step 3: Determine search query from LLM retrieval reason
         search_query = query
-        if reason.startswith("missing_"):
+        retrieval_reason = route_decision.retrieval_reason or "general_retrieval"
+        if retrieval_reason.startswith("missing_"):
             # Generate targeted query for the missing data
-            search_query = self._get_targeted_query(reason, query)
+            search_query = self._get_targeted_query(retrieval_reason, query)
             logger.info(f"[Targeted Retrieval] Using targeted query for search: '{search_query}'")
             logger.info(f"[Targeted Retrieval] Original query will be used for answer generation: '{query}'")
         
@@ -2351,19 +2819,11 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 "session_id": session_id
             }
         
-        # Step 3: Format context
-        context = self._format_context(search_results)
-        
-        # Step 4: Detect if this is a targeted comparison query
-        is_targeted_comparison = (
-            reason.startswith("missing_") and 
-            self._is_comparison_query(query)
-        )
-        if is_targeted_comparison:
-            logger.info("[Targeted Comparison] Detected comparison query with targeted retrieval - will use conversation history for comparison")
+        # Step 3: Format context (use a different variable name to avoid shadowing the `context` parameter)
+        formatted_context = self._format_context(search_results)
         
         # Step 5: Generate answer with conversation history
-        result = self._generate_answer(query, context, search_results, session_id, is_targeted_comparison)
+        result = self._generate_answer(query, formatted_context, search_results, session_id)
         
         # Step 5: Store assistant response in memory
         self._add_to_memory(session_id, "assistant", result["answer"], {
@@ -2396,7 +2856,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                            user_id: str,
                            session_id: Optional[str] = None,
                            artist_data: Optional[Dict] = None,
-                           context: Optional[Dict] = None) -> Dict:
+                           context: Optional[Dict] = None,
+                           source_preference: Optional[str] = None) -> Dict:
         """
         Handle queries when no project is selected.
         Can answer artist-related queries or prompt to select a project for contract queries.
@@ -2420,56 +2881,94 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         logger.info(f"Artist data available: {artist_data is not None}")
         logger.info(f"Context available: {context is not None}")
         logger.info("-" * 80)
-        
-        # Check if we can answer from conversation context first
-        # Note: _can_answer_from_context returns a tuple (bool, reason)
-        can_answer, reason = self._can_answer_from_context(query, context)
-        if can_answer:
-            logger.info(f"Detected context-based query ({reason}) - answering from conversation context")
-            return self._answer_from_context(query, context, session_id)
-        
+
+        # Summarize conversation history if token limit is approaching
+        self._summarize_if_needed(session_id)
+
         # Check for conversational queries
         if self._is_conversational_query(query):
             logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
-        
-        # Classify the query - is it about artist or contracts?
-        query_type = self._classify_query(query, artist_data)
-        logger.info(f"Query classified as: {query_type}")
-        
-        if query_type == "artist":
-            # Artist query - use artist data if available
-            if artist_data:
-                logger.info("Handling as artist query - using artist data")
-                return self._handle_artist_query(query, artist_data, session_id)
-            else:
-                # No artist data available
-                self._add_to_memory(session_id, "user", query)
-                response = "I don't have artist information available. Please select an artist from the sidebar."
-                self._add_to_memory(session_id, "assistant", response)
-                return {
-                    "query": query,
-                    "answer": response,
-                    "confidence": "needs_artist",
-                    "sources": [],
-                    "search_results_count": 0,
-                    "session_id": session_id,
-                    "show_quick_actions": True
-                }
+
+        # Try to answer from conversation history first
+        # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        if not source_preference or source_preference == "conversation_history":
+            history_answer = self._try_answer_from_history(query, session_id, context)
+            if history_answer:
+                logger.info("[History] Answered from conversation history")
+                return history_answer
+            # If user explicitly chose conversation_history but it couldn't answer,
+            # fall through to normal routing
+            if source_preference == "conversation_history":
+                source_preference = None  # Reset so normal routing proceeds
+
+        # Fast path: deterministic artist routing for obvious artist queries
+        if not source_preference and artist_data and self._is_artist_intent_query(query):
+            logger.info("[FastPath] Artist query detected via keyword matching - skipping LLM routing")
+            route_decision = RouteDecision(
+                route="artist",
+                answer_mode="context",
+                confidence=0.9,
+                reason="keyword_artist_match"
+            )
         else:
-            # Contract query but no project selected - prompt to select project
+            route_decision = self._llm_route_decision(
+                query=query,
+                artist_data=artist_data,
+                context=context,
+                source_preference=source_preference,
+                project_id=None,
+                contract_id=None
+            )
+
+        if route_decision.route == "disambiguate":
+            logger.info("[Routing] Disambiguation requested")
+            return self._build_source_selection_response(query, session_id)
+
+        if route_decision.route == "artist":
+            if artist_data:
+                # If user explicitly chose artist profile, skip disambiguation
+                if source_preference == "artist_profile":
+                    logger.info("[Routing] Handling query with artist profile data (explicit choice)")
+                    return self._handle_artist_query(query, artist_data, session_id)
+                # If conversation history exists, let user choose between profile and conversation
+                history = self._get_conversation_context(session_id, max_turns=1)
+                if history:
+                    logger.info("[Routing] Artist query with history - offering source choice")
+                    return self._build_artist_source_selection_response(query, session_id)
+                logger.info("[Routing] Handling query with artist profile data")
+                return self._handle_artist_query(query, artist_data, session_id)
+
             self._add_to_memory(session_id, "user", query)
-            response = "To answer questions about contracts, I need you to select a project first. Please choose a project from the sidebar."
+            response = "I don't have artist information available. Please select an artist from the sidebar."
             self._add_to_memory(session_id, "assistant", response)
             return {
                 "query": query,
                 "answer": response,
-                "confidence": "needs_project",
+                "confidence": "needs_artist",
                 "sources": [],
                 "search_results_count": 0,
                 "session_id": session_id,
                 "show_quick_actions": True
             }
+
+        if self._should_answer_from_context(route_decision, context, contract_id=None):
+            logger.info("[Routing] Answering from conversation context")
+            return self._answer_from_context(query, context, session_id)
+
+        # Contract query but no project selected - prompt to select project
+        self._add_to_memory(session_id, "user", query)
+        response = "To answer questions about contracts, I need you to select a project first. Please choose a project from the sidebar."
+        self._add_to_memory(session_id, "assistant", response)
+        return {
+            "query": query,
+            "answer": response,
+            "confidence": "needs_project",
+            "sources": [],
+            "search_results_count": 0,
+            "session_id": session_id,
+            "show_quick_actions": True
+        }
     
     def ask_project(self,
                    query: str,
@@ -2478,7 +2977,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                    top_k: int = DEFAULT_TOP_K,
                    session_id: Optional[str] = None,
                    artist_data: Optional[Dict] = None,
-                   context: Optional[Dict] = None) -> Dict:
+                   context: Optional[Dict] = None,
+                   source_preference: Optional[str] = None) -> Dict:
         """
         Ask a question about a specific project's contracts using smart retrieval.
         
@@ -2501,7 +3001,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             top_k=top_k,
             session_id=session_id,
             artist_data=artist_data,
-            context=context
+            context=context,
+            source_preference=source_preference
         )
     
     def ask_multiple_contracts(self,
@@ -2512,7 +3013,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                               top_k: int = DEFAULT_TOP_K,
                               session_id: Optional[str] = None,
                               artist_data: Optional[Dict] = None,
-                              context: Optional[Dict] = None) -> Dict:
+                              context: Optional[Dict] = None,
+                              source_preference: Optional[str] = None) -> Dict:
         """
         Ask a question about multiple specific contracts using smart retrieval.
         Searches across all selected contracts similar to project-wide search.
@@ -2542,134 +3044,90 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         logger.info(f"Artist data available: {artist_data is not None}")
         logger.info(f"Context available: {context is not None}")
         logger.info("-" * 80)
-        
-        # Expand contract_ids from context if this is a comparison query
-        if self._is_comparison_query(query) and context:
-            original_count = len(contract_ids)
-            contract_ids = self._expand_contract_ids_from_context(contract_ids, context)
-            if len(contract_ids) > original_count:
-                logger.info(f"[Comparison] Expanded search to include {len(contract_ids)} contracts from conversation context")
-        
-        # Check if we can answer from conversation context first
-        can_answer, reason = self._should_use_context(query, context)
-        
-        if can_answer:
-            logger.info("Detected context-based query - answering from conversation context")
-            return self._answer_from_context(query, context, session_id)
-        
-        # Check if we have partial context data that could answer the query
-        # This handles cases where user is comparing contracts but only one is selected
-        if reason.startswith("need_more_contracts_for_") and context:
-            # Extract the specific data type from the reason
-            # e.g., "need_more_contracts_for_streaming_comparison" -> "streaming"
-            data_type = reason.replace("need_more_contracts_for_", "").replace("_comparison", "")
-            
-            contracts_discussed = context.get('contracts_discussed', [])
-            contracts_with_specific_data = [
-                c for c in contracts_discussed 
-                if self._contract_has_royalty_type(c, data_type)
-            ]
-            
-            if len(contracts_with_specific_data) >= 2:
-                # We have the SPECIFIC data type for 2+ contracts in context
-                logger.info(f"Found {len(contracts_with_specific_data)} contracts with {data_type} data in context - answering from context")
-                return self._answer_from_context(query, context, session_id)
-            else:
-                # Some contracts are missing data - do targeted retrieval for those contracts
-                contracts_missing_data = [
-                    c for c in contracts_discussed 
-                    if c.get('id') and not self._contract_has_royalty_type(c, data_type)
-                ]
-                
-                if contracts_missing_data and len(contracts_with_specific_data) >= 1:
-                    logger.info(f"[Multi-Step Comparison] {len(contracts_with_specific_data)} contract(s) have {data_type} data, {len(contracts_missing_data)} missing - doing targeted retrieval")
-                    
-                    # Get IDs of contracts missing data
-                    missing_contract_ids = [c.get('id') for c in contracts_missing_data if c.get('id')]
-                    
-                    # Do targeted search specifically for missing contracts
-                    targeted_query = self._get_targeted_query(f"missing_{data_type}_splits", query)
-                    logger.info(f"[Multi-Step Comparison] Targeted query for missing contracts: '{targeted_query}'")
-                    
-                    # Store user message in memory before search
-                    self._add_to_memory(session_id, "user", query)
-                    
-                    # Search only the contracts missing data
-                    search_results = self.search_engine.search_multiple_contracts(
-                        query=targeted_query,
-                        user_id=user_id,
-                        project_id=project_id,
-                        contract_ids=missing_contract_ids,
-                        top_k=top_k
-                    )
-                    
-                    if search_results["matches"]:
-                        # Build combined context: existing context data + new search results
-                        combined_context = self._build_comparison_context(
-                            contracts_with_data=contracts_with_specific_data,
-                            data_type=data_type,
-                            search_results=search_results
-                        )
-                        
-                        logger.info(f"[Multi-Step Comparison] Built combined context with existing data + new retrieval")
-                        
-                        # Generate comparison answer
-                        result = self._generate_answer(query, combined_context, search_results, session_id, is_targeted_comparison=True)
-                        
-                        # Store assistant response in memory
-                        self._add_to_memory(session_id, "assistant", result["answer"], {
-                            "confidence": result["confidence"],
-                            "sources": result.get("sources", [])
-                        })
-                        
-                        result["query"] = query
-                        result["search_results_count"] = search_results["total_results"]
-                        result["filter"] = search_results.get("filter", {})
-                        result["session_id"] = session_id
-                        result["multi_step_comparison"] = True
-                        
-                        return result
-                
-                logger.info(f"Only {len(contracts_with_specific_data)} contract(s) have {data_type} data - will use standard targeted retrieval")
-        
+
+        # Summarize conversation history if token limit is approaching
+        self._summarize_if_needed(session_id)
+
         # Check for conversational queries (greetings, thanks, etc.)
         if self._is_conversational_query(query):
             logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
-        
-        # Step 1: Classify the query - is it about artist or contracts?
-        query_type = self._classify_query(query, artist_data)
-        logger.info(f"Query classified as: {query_type}")
-        
-        # Step 2: Route based on classification
-        if query_type == "artist":
-            # Artist query - use artist data
+
+        # Try to answer from conversation history first
+        # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        if not source_preference or source_preference == "conversation_history":
+            history_answer = self._try_answer_from_history(query, session_id, context)
+            if history_answer:
+                logger.info("[History] Answered from conversation history")
+                return history_answer
+            # If user explicitly chose conversation_history but it couldn't answer,
+            # fall through to normal routing
+            if source_preference == "conversation_history":
+                source_preference = None  # Reset so normal routing proceeds
+
+        # Fast path: deterministic artist routing for obvious artist queries
+        if not source_preference and artist_data and self._is_artist_intent_query(query):
+            logger.info("[FastPath] Artist query detected via keyword matching - skipping LLM routing")
+            route_decision = RouteDecision(
+                route="artist",
+                answer_mode="context",
+                confidence=0.9,
+                reason="keyword_artist_match"
+            )
+        else:
+            route_decision = self._llm_route_decision(
+                query=query,
+                artist_data=artist_data,
+                context=context,
+                source_preference=source_preference,
+                project_id=project_id,
+                contract_id=contract_ids[0] if contract_ids else None
+            )
+
+        if route_decision.route == "disambiguate":
+            logger.info("[Routing] Disambiguation requested")
+            return self._build_source_selection_response(query, session_id)
+
+        if route_decision.route == "artist":
             if artist_data:
-                logger.info("Handling as artist query - using artist data")
+                # If user explicitly chose artist profile, skip disambiguation
+                if source_preference == "artist_profile":
+                    logger.info("[Routing] Handling query with artist profile data (explicit choice)")
+                    return self._handle_artist_query(query, artist_data, session_id)
+                # If conversation history exists, let user choose between profile and conversation
+                history = self._get_conversation_context(session_id, max_turns=1)
+                if history:
+                    logger.info("[Routing] Artist query with history - offering source choice")
+                    return self._build_artist_source_selection_response(query, session_id)
+                logger.info("[Routing] Handling query with artist profile data")
                 return self._handle_artist_query(query, artist_data, session_id)
-            else:
-                # No artist data available
-                self._add_to_memory(session_id, "user", query)
-                response = "I don't have artist information available. Please select an artist from the sidebar."
-                self._add_to_memory(session_id, "assistant", response)
-                return {
-                    "query": query,
-                    "answer": response,
-                    "confidence": "needs_artist",
-                    "sources": [],
-                    "search_results_count": 0,
-                    "session_id": session_id,
-                    "show_quick_actions": True
-                }
+
+            self._add_to_memory(session_id, "user", query)
+            response = "I don't have artist information available. Please select an artist from the sidebar."
+            self._add_to_memory(session_id, "assistant", response)
+            return {
+                "query": query,
+                "answer": response,
+                "confidence": "needs_artist",
+                "sources": [],
+                "search_results_count": 0,
+                "session_id": session_id,
+                "show_quick_actions": True
+            }
+
+        if self._should_answer_from_context(route_decision, context, contract_ids[0] if contract_ids else None):
+            logger.info("[Routing] Answering from conversation context")
+            return self._answer_from_context(query, context, session_id)
         
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
         
-        # Step 3: Determine search query (use targeted query if missing data detected)
+        # Step 3: Determine search query from LLM retrieval reason
         search_query = query
-        if reason.startswith("missing_"):
+        retrieval_reason = route_decision.retrieval_reason or "general_retrieval"
+        if retrieval_reason.startswith("missing_"):
             # Generate targeted query for the missing data
-            search_query = self._get_targeted_query(reason, query)
+            search_query = self._get_targeted_query(retrieval_reason, query)
             logger.info(f"[Targeted Retrieval] Using targeted query for search: '{search_query}'")
             logger.info(f"[Targeted Retrieval] Original query will be used for answer generation: '{query}'")
         
@@ -2696,19 +3154,11 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 "session_id": session_id
             }
         
-        # Format context
-        context = self._format_context(search_results)
-        
-        # Detect if this is a targeted comparison query
-        is_targeted_comparison = (
-            reason.startswith("missing_") and 
-            self._is_comparison_query(query)
-        )
-        if is_targeted_comparison:
-            logger.info("[Targeted Comparison] Detected comparison query with targeted retrieval - will use conversation history for comparison")
+        # Format context (use a different variable name to avoid shadowing the `context` parameter)
+        formatted_context = self._format_context(search_results)
         
         # Generate answer with conversation history
-        result = self._generate_answer(query, context, search_results, session_id, is_targeted_comparison)
+        result = self._generate_answer(query, formatted_context, search_results, session_id)
         
         # Store assistant response in memory
         self._add_to_memory(session_id, "assistant", result["answer"], {
