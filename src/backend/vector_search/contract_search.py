@@ -304,7 +304,9 @@ class ContractSearch:
         # Process results
         matches = []
         if hasattr(results, 'matches') and len(results.matches) > 0:
-            for match in results.matches:
+            for i, match in enumerate(results.matches):
+                chunk_text = match.metadata.get("chunk_text", "")
+                logger.info(f"  Match {i+1}: score={match.score:.4f}, text_length={len(chunk_text)}, section={match.metadata.get('section_heading', 'N/A')}")
                 matches.append({
                     "id": match.id,
                     "score": round(match.score, 4),
@@ -446,8 +448,53 @@ class ContractSearch:
                     "uploaded_at": match.metadata.get("uploaded_at")
                 })
         
+        # Fallback: if no matches or best score is too low, retry without category filter
+        best_score = matches[0]["score"] if matches else 0.0
+        has_category_filter = metadata_filter and "section_category" in (metadata_filter or {})
+        if has_category_filter and (not matches or best_score < 0.30):
+            logger.info(f"[Fallback] Category-filtered search returned poor results (best score: {best_score}) — retrying without category filter")
+            fallback_filter = {k: v for k, v in metadata_filter.items() if k != "section_category"}
+            if not fallback_filter:
+                fallback_filter = None
+
+            fallback_results = self.index.query(
+                namespace=namespace,
+                vector=query_embedding,
+                top_k=top_k,
+                filter=fallback_filter,
+                include_metadata=True
+            )
+
+            fallback_matches = []
+            if hasattr(fallback_results, 'matches') and len(fallback_results.matches) > 0:
+                for i, match in enumerate(fallback_results.matches):
+                    logger.info(f"\n[Fallback] Match {i+1}:")
+                    logger.info(f"  Score: {match.score:.4f}")
+                    logger.info(f"  Section: {match.metadata.get('section_heading', 'N/A')}")
+                    logger.info(f"  Category: {match.metadata.get('section_category', 'N/A')}")
+
+                    fallback_matches.append({
+                        "id": match.id,
+                        "score": round(match.score, 4),
+                        "contract_id": match.metadata.get("contract_id"),
+                        "contract_file": match.metadata.get("contract_file"),
+                        "project_id": match.metadata.get("project_id"),
+                        "project_name": match.metadata.get("project_name"),
+                        "section_heading": match.metadata.get("section_heading", ""),
+                        "section_category": match.metadata.get("section_category", "OTHER"),
+                        "text": match.metadata.get("chunk_text", ""),
+                        "uploaded_at": match.metadata.get("uploaded_at")
+                    })
+
+            fallback_best = fallback_matches[0]["score"] if fallback_matches else 0.0
+            if fallback_best > best_score:
+                logger.info(f"[Fallback] Using fallback results — top score improved: {best_score} → {fallback_best}")
+                matches = fallback_matches
+            else:
+                logger.info(f"[Fallback] No improvement — keeping original results (best: {best_score})")
+
         logger.info("=" * 80)
-        
+
         return {
             "query": query,
             "total_results": len(matches),

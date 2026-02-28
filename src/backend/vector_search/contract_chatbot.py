@@ -29,6 +29,7 @@ from enum import Enum
 from dotenv import load_dotenv
 from openai import OpenAI
 from vector_search.contract_search import ContractSearch
+from oneclick.helpers import normalize_name
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -1204,8 +1205,8 @@ Respond with ONLY one word: either "artist" or "contract"."""
             "conversation so far. Which would you prefer?"
         )
 
-        self._add_to_memory(session_id, "user", query)
-        self._add_to_memory(session_id, "assistant", response)
+        # Don't store disambiguation in memory — it's a UI flow control message,
+        # not part of the actual conversation. Storing it pollutes history.
 
         return {
             "query": query,
@@ -1226,7 +1227,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
                 },
                 {
                     "id": "conversation_history",
-                    "label": "Continue Conversation",
+                    "label": "Conversation",
                     "query": query,
                     "source_preference": "conversation_history"
                 }
@@ -1948,7 +1949,18 @@ Artist Profile:
                 return True, "contract_comparison"
             
             # Check if asking about contracts (existing logic continues below)
-        
+
+        # Single-artist re-ask: asking about artist data when we have extracted data in context
+        artist_data_keywords = ['genre', 'genres', 'bio', 'biography', 'social', 'socials',
+                                'instagram', 'tiktok', 'spotify', 'streaming', 'email', 'contact',
+                                'website', 'epk', 'linktree', 'apple music', 'soundcloud',
+                                'youtube', 'twitter', 'facebook']
+        if any(kw in query_lower for kw in artist_data_keywords) and len(artists_discussed) >= 1:
+            for artist in artists_discussed:
+                if artist.get('data_extracted') and any(artist['data_extracted'].values()):
+                    logger.info(f"[Context] Artist data re-ask detected with extracted data for {artist.get('name')}")
+                    return True, "artist_data_reask"
+
         # Summary/recap questions about the conversation - always use context
         summary_keywords = ['summarize', 'summary', 'what did we discuss', 'recap', 
                            'what have we talked about', 'what do we know', 'overview']
@@ -1966,7 +1978,8 @@ Artist Profile:
             return False, "no_contracts_for_followup"
         
         # Check if asking about royalties - need to verify we have the SPECIFIC type
-        royalty_keywords = ['royalty', 'split', 'percentage', 'share']
+        royalty_keywords = ['royalty', 'split', 'percentage', 'share', 'payout',
+                           'revenue', 'each person', 'each party', 'who gets']
         if any(kw in query_lower for kw in royalty_keywords):
             royalty_type = self._detect_royalty_type(query_lower)
             logger.info(f"[Context] Query is about royalty type: {royalty_type}")
@@ -1997,21 +2010,32 @@ Artist Profile:
             
             if has_required_type:
                 # Check for comparison or re-ask
-                comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between', 
+                comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between',
                                        'which one', 'both', 'all', 'total', 'across']
                 reask_indicators = ['again', 'remind me', 'what was', 'what were', 'tell me again']
-                
+
                 if any(kw in query_lower for kw in comparison_keywords):
                     # Need multiple contracts with this data type
-                    contracts_with_type = sum(1 for c in contracts_discussed 
+                    contracts_with_type = sum(1 for c in contracts_discussed
                                               if self._contract_has_royalty_type(c, royalty_type))
                     if contracts_with_type >= 2:
                         return True, f"comparison_{royalty_type}"
                     return False, f"need_more_contracts_for_{royalty_type}_comparison"
-                
+
+                # Check for aggregate/summary queries across multiple contracts
+                aggregate_keywords = ['summary', 'everyone', 'each person', 'each party',
+                                      'who gets', 'how much', 'payout', 'breakdown',
+                                      'combined', 'all parties', 'all contracts']
+                if any(kw in query_lower for kw in aggregate_keywords):
+                    contracts_with_type = sum(1 for c in contracts_discussed
+                                              if self._contract_has_royalty_type(c, royalty_type))
+                    if contracts_with_type >= 2:
+                        logger.info(f"[Context] Aggregate split query detected with {contracts_with_type} contracts")
+                        return True, f"aggregate_{royalty_type}"
+
                 if any(ind in query_lower for ind in reask_indicators):
                     return True, f"reask_{royalty_type}"
-            
+
             logger.info(f"[Context] Missing {royalty_type} splits - need document lookup")
             return False, f"missing_{royalty_type}_splits"
         
@@ -2047,6 +2071,188 @@ Artist Profile:
             return len(royalty_splits) > 0
         return False
 
+    def _is_multi_contract_split_query(self, query: str, context: Optional[Dict]) -> bool:
+        """
+        Detect if query is asking about royalty splits across multiple contracts.
+        Returns True when: query mentions split/royalty keywords AND 2+ contracts
+        in context have non-empty royalty_splits data.
+        """
+        if not context:
+            return False
+
+        query_lower = query.lower()
+        split_keywords = [
+            'split', 'splits', 'royalty', 'royalties', 'payout', 'payouts',
+            'revenue', 'share', 'shares', 'percentage', 'percentages',
+            'who gets', 'each person', 'each party', 'how much does',
+            'breakdown', 'combined', 'everyone', 'all parties'
+        ]
+        if not any(kw in query_lower for kw in split_keywords):
+            return False
+
+        contracts_discussed = context.get('contracts_discussed', [])
+        contracts_with_splits = 0
+        for contract in contracts_discussed:
+            data = contract.get('data_extracted', {})
+            royalty_splits = data.get('royalty_splits', {})
+            if isinstance(royalty_splits, dict) and any(royalty_splits.values()):
+                contracts_with_splits += 1
+            elif isinstance(royalty_splits, list) and len(royalty_splits) > 0:
+                contracts_with_splits += 1
+
+        if contracts_with_splits >= 2:
+            logger.info(f"[Aggregation] Multi-contract split query detected: {contracts_with_splits} contracts with splits")
+            return True
+        return False
+
+    def _extract_revenue_amount(self, query: str) -> Optional[float]:
+        """Extract a dollar/revenue amount from the query string."""
+        query_lower = query.lower()
+
+        # $10,000 or $10,000.00
+        match = re.search(r'\$\s*([\d,]+(?:\.\d{1,2})?)', query)
+        if match:
+            return float(match.group(1).replace(',', ''))
+
+        # $10k / $10K / 10k dollars
+        match = re.search(r'\$?\s*(\d+(?:\.\d+)?)\s*[kK]\b', query)
+        if match:
+            return float(match.group(1)) * 1000
+
+        # $10m / $10M
+        match = re.search(r'\$?\s*(\d+(?:\.\d+)?)\s*[mM]\b', query)
+        if match:
+            return float(match.group(1)) * 1_000_000
+
+        # "10000 dollars" / "10,000 dollars" / "10000 in revenue"
+        match = re.search(r'([\d,]+(?:\.\d{1,2})?)\s*(?:dollars?|usd|in revenue|in earnings|in income)', query_lower)
+        if match:
+            return float(match.group(1).replace(',', ''))
+
+        return None
+
+    def _aggregate_splits_across_contracts(self, context: Dict, query: str) -> Dict:
+        """
+        Aggregate royalty splits across multiple contracts by deduplicating per party.
+        Each contract describes a portion of the SAME 100% pie — splits are NOT summed
+        per person across contracts.
+
+        Returns:
+            Dict with keys: parties, total_percentage, revenue_amount, payouts
+        """
+        royalty_type = self._detect_royalty_type(query.lower())
+        contracts_discussed = context.get('contracts_discussed', [])
+
+        # Collect per-party data: {normalized_name: {display_name, percentage, source_contracts}}
+        party_map: Dict[str, Dict] = {}
+
+        for contract in contracts_discussed:
+            contract_name = contract.get('name', 'Unknown Contract')
+            data = contract.get('data_extracted', {})
+            royalty_splits = data.get('royalty_splits', {})
+
+            splits_list = []
+            if isinstance(royalty_splits, dict):
+                # Try specific type first, then general
+                splits_list = royalty_splits.get(royalty_type, [])
+                if not splits_list and royalty_type != 'general':
+                    splits_list = royalty_splits.get('general', [])
+                # If still empty, grab the first non-empty type
+                if not splits_list:
+                    for _type, _splits in royalty_splits.items():
+                        if _splits:
+                            splits_list = _splits
+                            break
+            elif isinstance(royalty_splits, list):
+                splits_list = royalty_splits
+
+            for split in splits_list:
+                if not isinstance(split, dict):
+                    continue
+                party_name = split.get('party', split.get('name', ''))
+                percentage = split.get('percentage', split.get('share', 0))
+                if not party_name:
+                    continue
+
+                try:
+                    percentage = float(percentage)
+                except (ValueError, TypeError):
+                    continue
+
+                norm_name = normalize_name(party_name)
+                if norm_name in party_map:
+                    # Take MAX percentage (should be equal across contracts, but defensive)
+                    if percentage > party_map[norm_name]['percentage']:
+                        party_map[norm_name]['percentage'] = percentage
+                    if contract_name not in party_map[norm_name]['source_contracts']:
+                        party_map[norm_name]['source_contracts'].append(contract_name)
+                else:
+                    party_map[norm_name] = {
+                        'display_name': party_name.strip(),
+                        'percentage': percentage,
+                        'source_contracts': [contract_name]
+                    }
+
+        # Build result
+        parties = []
+        total_pct = 0.0
+        for _norm, info in sorted(party_map.items(), key=lambda x: x[1]['percentage'], reverse=True):
+            parties.append({
+                'name': info['display_name'],
+                'percentage': info['percentage'],
+                'source_contracts': info['source_contracts']
+            })
+            total_pct += info['percentage']
+
+        revenue_amount = self._extract_revenue_amount(query)
+        payouts = None
+        if revenue_amount and parties:
+            payouts = []
+            for p in parties:
+                payout = revenue_amount * (p['percentage'] / 100.0)
+                payouts.append({'name': p['name'], 'amount': payout})
+
+        result = {
+            'parties': parties,
+            'total_percentage': total_pct,
+            'royalty_type': royalty_type,
+            'num_contracts': len(contracts_discussed),
+            'revenue_amount': revenue_amount,
+            'payouts': payouts
+        }
+        logger.info(f"[Aggregation] Result: {len(parties)} parties, total={total_pct}%, revenue={revenue_amount}")
+        return result
+
+    def _format_aggregated_splits_for_llm(self, aggregation: Dict) -> str:
+        """Format pre-computed aggregated splits as a text block for the LLM prompt."""
+        royalty_type = aggregation.get('royalty_type', 'general')
+        type_label = royalty_type.title() if royalty_type != 'general' else 'General'
+        num_contracts = aggregation.get('num_contracts', 0)
+        parties = aggregation.get('parties', [])
+        total_pct = aggregation.get('total_percentage', 0)
+        revenue = aggregation.get('revenue_amount')
+        payouts = aggregation.get('payouts')
+
+        lines = [
+            f"=== PRE-COMPUTED AGGREGATED ROYALTY SPLITS ({type_label}) ===",
+            f"(Merged from {num_contracts} contracts — shares of the SAME 100% pie, NOT summed.)",
+            ""
+        ]
+
+        for p in parties:
+            sources = ", ".join(p['source_contracts'])
+            lines.append(f"  {p['name']}: {p['percentage']:.1f}%  (appears in: {sources})")
+
+        lines.append(f"\n  Total accounted for: {total_pct:.1f}%")
+
+        if revenue and payouts:
+            lines.append(f"\n--- Payout calculation (total revenue: ${revenue:,.2f}) ---")
+            for pay in payouts:
+                lines.append(f"  {pay['name']}: ${pay['amount']:,.2f}")
+
+        lines.append("=== END AGGREGATED SPLITS ===")
+        return "\n".join(lines)
+
     def _try_answer_from_history(self, query: str, session_id: Optional[str], context: Optional[Dict] = None) -> Optional[Dict]:
         """
         Try to answer a question from conversation history alone.
@@ -2069,18 +2275,19 @@ Artist Profile:
 
         logger.info(f"[History] Checking if conversation history ({len(history)} messages) can answer: {query}")
 
-        system_prompt = """You are a music industry assistant reviewing a conversation history.
-Determine if the conversation history contains enough information to fully answer the user's new question.
+        system_prompt = """You are a music industry assistant reviewing a conversation history and structured context.
+Determine if the conversation history or additional structured context contains enough information to answer the user's new question.
 
 RULES:
-1. If the conversation history contains the information needed to answer the question, provide a complete answer.
-2. If the information is NOT in the history, or is incomplete/insufficient, respond with exactly: NEEDS_RETRIEVAL
-3. When answering from history, be specific and reference the relevant information from previous messages.
+1. If the conversation history OR the additional structured context contains the information needed, provide a complete answer.
+2. If the information is NOT in the history AND NOT in the structured context, respond with exactly: NEEDS_RETRIEVAL
+3. When answering, be specific and reference the relevant information from previous messages or context.
 4. You may compare, summarize, or re-analyze information that was previously discussed.
-5. Do NOT make up or infer information that is not present in the history.
-6. For questions about NEW topics not discussed before, respond with NEEDS_RETRIEVAL.
-7. Do NOT suggest follow-up questions.
-8. Format responses using clean, minimal markdown (bold labels, bullet points, markdown links for URLs). Do not embellish — just the data."""
+5. Do NOT make up or infer information that is not present in the history or structured context.
+6. For questions about genuinely NEW topics with NO relevant data in history or context, respond with NEEDS_RETRIEVAL.
+7. If the structured context contains extracted data (genres, bio, social media, streaming links, etc.) that answers the question, USE it — do not return NEEDS_RETRIEVAL.
+8. Do NOT suggest follow-up questions.
+9. Format responses using clean, minimal markdown (bold labels, bullet points, markdown links for URLs). Do not embellish — just the data."""
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
@@ -2150,21 +2357,40 @@ RULES:
         # Build context summary for LLM
         context_summary = self._format_context_for_llm(context)
         logger.info(f"[Context] Formatted context summary:\n{context_summary}")
-        
+
+        # Check if this is a multi-contract split query and pre-aggregate
+        aggregated_splits_block = ""
+        royalty_rule_prompt = ""
+        if self._is_multi_contract_split_query(query, context):
+            aggregation = self._aggregate_splits_across_contracts(context, query)
+            if aggregation['parties']:
+                aggregated_splits_block = self._format_aggregated_splits_for_llm(aggregation)
+                context_summary = f"{aggregated_splits_block}\n\n{context_summary}"
+                logger.info(f"[Aggregation] Prepended aggregated splits to context:\n{aggregated_splits_block}")
+                royalty_rule_prompt = """
+
+CRITICAL ROYALTY SPLIT RULE:
+The PRE-COMPUTED AGGREGATED ROYALTY SPLITS above are ALREADY CORRECT. These splits represent portions of the SAME 100% pie — they are NOT summed per person across contracts.
+- If a person appears in multiple bilateral contracts (e.g., Bob appears in Contract 1 and Contract 2 both at 40%), their share is STILL 40% — NOT 80%.
+- Each contract describes a bilateral agreement between two parties, but all contracts refer to the same underlying revenue pool.
+- Use ONLY the pre-computed numbers above. Do NOT re-calculate or sum percentages from individual contracts.
+- If a payout calculation is included above, present those exact numbers."""
+
         # Get conversation history
         history = self._get_conversation_context(session_id, max_turns=10)
         logger.info(f"[Context] Conversation history: {len(history)} messages")
-        
+
         # Analyze what data is available for suggestions
         available_data = self._get_available_data_types(context)
         suggestion_guidance = self._build_suggestion_guidance(available_data)
-        
+
         system_prompt = f"""You are answering a follow-up question using information from the conversation context.
 
-The user is asking about information that was previously discussed in this conversation. 
+The user is asking about information that was previously discussed in this conversation.
 Use the structured context and conversation history to provide a comprehensive answer.
 
 CRITICAL: You can compare, summarize, or analyze the information provided without needing to search documents again.
+{royalty_rule_prompt}
 
 CONTEXT-ONLY SUGGESTIONS:
 After answering, you MAY suggest ONE follow-up question, but ONLY if:
@@ -2507,11 +2733,17 @@ Your answers should be:
         """
         # Check similarity threshold
         if not self._check_similarity_threshold(search_results):
+            highest = search_results["matches"][0]["score"] if search_results["matches"] else 0.0
+            categories = [m.get("section_category") for m in search_results["matches"]]
+            logger.warning(
+                f"[Threshold] Rejected — highest score {highest} < {MIN_SIMILARITY_THRESHOLD}. "
+                f"Matches: {len(search_results['matches'])}, Categories: {categories}"
+            )
             return {
                 "answer": "I don't know based on the available documents.",
                 "confidence": "low",
                 "reason": "No sufficiently relevant information found (similarity threshold not met)",
-                "highest_score": search_results["matches"][0]["score"] if search_results["matches"] else 0.0,
+                "highest_score": highest,
                 "threshold": MIN_SIMILARITY_THRESHOLD,
                 "sources": []
             }
@@ -2567,6 +2799,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Call LLM
         logger.info(f"\nGenerating answer using {self.llm_model}...")
         logger.info(f"Conversation history: {len(conversation_history)} messages included")
+        logger.info(f"Context being sent to LLM (first 2000 chars):\n{context[:2000]}")
         
         try:
             response = openai_client.chat.completions.create(
@@ -2574,15 +2807,40 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 messages=messages,
                 max_completion_tokens=1000
             )
-            
+
             raw_answer = response.choices[0].message.content
+            finish_reason = response.choices[0].finish_reason
+            logger.info(f"LLM finish_reason: {finish_reason}")
+            logger.info(f"LLM raw response (first 500 chars): {raw_answer[:500] if raw_answer else 'EMPTY'}")
+            if hasattr(response.choices[0].message, 'refusal') and response.choices[0].message.refusal:
+                logger.warning(f"LLM refusal: {response.choices[0].message.refusal}")
+
             answer = (raw_answer or "").strip()
+
+            # Retry once without conversation history if LLM returned empty
+            if not answer:
+                logger.warning("[Retry] LLM returned empty — retrying without conversation history")
+                retry_messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                retry_response = openai_client.chat.completions.create(
+                    model=self.llm_model,
+                    messages=retry_messages,
+                    max_completion_tokens=1000
+                )
+                raw_answer = retry_response.choices[0].message.content
+                retry_finish = retry_response.choices[0].finish_reason
+                logger.info(f"[Retry] finish_reason: {retry_finish}")
+                logger.info(f"[Retry] response (first 500 chars): {raw_answer[:500] if raw_answer else 'EMPTY'}")
+                answer = (raw_answer or "").strip()
+
             if not answer:
                 answer = "I don't know based on the available documents."
-            
+
             # Server-side extraction of structured data
             extracted_data = self._extract_structured_data(answer, query)
-            
+
             # Extract sources from search results
             sources = [
                 {
@@ -2594,10 +2852,11 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 }
                 for match in search_results["matches"]
             ]
-            
+
+            is_fallback = answer == "I don't know based on the available documents."
             return {
                 "answer": answer,
-                "confidence": "high",
+                "confidence": "low" if is_fallback else "high",
                 "highest_score": search_results["matches"][0]["score"],
                 "threshold": MIN_SIMILARITY_THRESHOLD,
                 "sources": sources,
@@ -2703,15 +2962,22 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
 
         # Try to answer from conversation history first
         # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        skip_artist_disambiguation = False
         if not source_preference or source_preference == "conversation_history":
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
                 logger.info("[History] Answered from conversation history")
                 return history_answer
             # If user explicitly chose conversation_history but it couldn't answer,
-            # fall through to normal routing
+            # fall through to normal routing but skip artist disambiguation
             if source_preference == "conversation_history":
-                source_preference = None  # Reset so normal routing proceeds
+                # History alone couldn't answer — try structured context before giving up
+                can_use_context, reason = self._should_use_context(query, context)
+                if can_use_context:
+                    logger.info(f"[History] History insufficient but structured context can answer ({reason})")
+                    return self._answer_from_context(query, context, session_id)
+                source_preference = None
+                skip_artist_disambiguation = True
 
         # Fast path: deterministic artist routing for obvious artist queries
         if not source_preference and artist_data and self._is_artist_intent_query(query):
@@ -2743,6 +3009,22 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 if source_preference == "artist_profile":
                     logger.info("[Routing] Handling query with artist profile data (explicit choice)")
                     return self._handle_artist_query(query, artist_data, session_id)
+                # If user chose conversation history but it was insufficient, don't fall back to artist profile
+                if skip_artist_disambiguation:
+                    logger.info("[Routing] User chose conversation history but it was insufficient")
+                    fallback_msg = "I wasn't able to find anything related to that in our conversation. Could you rephrase your question, or would you like me to look up the artist's profile instead?"
+                    self._add_to_memory(session_id, "user", query)
+                    self._add_to_memory(session_id, "assistant", fallback_msg)
+                    return {
+                        "query": query,
+                        "answer": fallback_msg,
+                        "confidence": "low",
+                        "sources": [],
+                        "search_results_count": 0,
+                        "session_id": session_id,
+                        "answered_from": "conversation_history_insufficient",
+                        "show_quick_actions": False
+                    }
                 # If conversation history exists, let user choose between profile and conversation
                 history = self._get_conversation_context(session_id, max_turns=1)
                 if history:
@@ -2892,15 +3174,22 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
 
         # Try to answer from conversation history first
         # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        skip_artist_disambiguation = False
         if not source_preference or source_preference == "conversation_history":
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
                 logger.info("[History] Answered from conversation history")
                 return history_answer
             # If user explicitly chose conversation_history but it couldn't answer,
-            # fall through to normal routing
+            # fall through to normal routing but skip artist disambiguation
             if source_preference == "conversation_history":
-                source_preference = None  # Reset so normal routing proceeds
+                # History alone couldn't answer — try structured context before giving up
+                can_use_context, reason = self._should_use_context(query, context)
+                if can_use_context:
+                    logger.info(f"[History] History insufficient but structured context can answer ({reason})")
+                    return self._answer_from_context(query, context, session_id)
+                source_preference = None
+                skip_artist_disambiguation = True
 
         # Fast path: deterministic artist routing for obvious artist queries
         if not source_preference and artist_data and self._is_artist_intent_query(query):
@@ -2931,6 +3220,22 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 if source_preference == "artist_profile":
                     logger.info("[Routing] Handling query with artist profile data (explicit choice)")
                     return self._handle_artist_query(query, artist_data, session_id)
+                # If user chose conversation history but it was insufficient, don't fall back to artist profile
+                if skip_artist_disambiguation:
+                    logger.info("[Routing] User chose conversation history but it was insufficient")
+                    fallback_msg = "I wasn't able to find anything related to that in our conversation. Could you rephrase your question, or would you like me to look up the artist's profile instead?"
+                    self._add_to_memory(session_id, "user", query)
+                    self._add_to_memory(session_id, "assistant", fallback_msg)
+                    return {
+                        "query": query,
+                        "answer": fallback_msg,
+                        "confidence": "low",
+                        "sources": [],
+                        "search_results_count": 0,
+                        "session_id": session_id,
+                        "answered_from": "conversation_history_insufficient",
+                        "show_quick_actions": False
+                    }
                 # If conversation history exists, let user choose between profile and conversation
                 history = self._get_conversation_context(session_id, max_turns=1)
                 if history:
@@ -3055,15 +3360,22 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
 
         # Try to answer from conversation history first
         # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        skip_artist_disambiguation = False
         if not source_preference or source_preference == "conversation_history":
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
                 logger.info("[History] Answered from conversation history")
                 return history_answer
             # If user explicitly chose conversation_history but it couldn't answer,
-            # fall through to normal routing
+            # fall through to normal routing but skip artist disambiguation
             if source_preference == "conversation_history":
-                source_preference = None  # Reset so normal routing proceeds
+                # History alone couldn't answer — try structured context before giving up
+                can_use_context, reason = self._should_use_context(query, context)
+                if can_use_context:
+                    logger.info(f"[History] History insufficient but structured context can answer ({reason})")
+                    return self._answer_from_context(query, context, session_id)
+                source_preference = None
+                skip_artist_disambiguation = True
 
         # Fast path: deterministic artist routing for obvious artist queries
         if not source_preference and artist_data and self._is_artist_intent_query(query):
@@ -3094,6 +3406,22 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 if source_preference == "artist_profile":
                     logger.info("[Routing] Handling query with artist profile data (explicit choice)")
                     return self._handle_artist_query(query, artist_data, session_id)
+                # If user chose conversation history but it was insufficient, don't fall back to artist profile
+                if skip_artist_disambiguation:
+                    logger.info("[Routing] User chose conversation history but it was insufficient")
+                    fallback_msg = "I wasn't able to find anything related to that in our conversation. Could you rephrase your question, or would you like me to look up the artist's profile instead?"
+                    self._add_to_memory(session_id, "user", query)
+                    self._add_to_memory(session_id, "assistant", fallback_msg)
+                    return {
+                        "query": query,
+                        "answer": fallback_msg,
+                        "confidence": "low",
+                        "sources": [],
+                        "search_results_count": 0,
+                        "session_id": session_id,
+                        "answered_from": "conversation_history_insufficient",
+                        "show_quick_actions": False
+                    }
                 # If conversation history exists, let user choose between profile and conversation
                 history = self._get_conversation_context(session_id, max_turns=1)
                 if history:

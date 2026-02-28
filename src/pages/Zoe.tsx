@@ -880,13 +880,15 @@ const Zoe = () => {
       return;
     }
 
-    const userMessage: Message = {
-      role: "user",
-      content: userDisplayMessage || query,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
+    // Only add user message to chat if NOT a silent quick action
+    if (!sourcePreference) {
+      const userMessage: Message = {
+        role: "user",
+        content: userDisplayMessage || query,
+        timestamp: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+    }
     setInputMessage("");
     setIsLoading(true);
     setError("");
