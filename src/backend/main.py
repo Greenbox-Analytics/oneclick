@@ -847,6 +847,67 @@ async def zoe_ask_question(request: ZoeAskRequest):
         raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
 
 
+@app.post("/zoe/ask-stream")
+async def zoe_ask_stream(request: ZoeAskRequest):
+    """
+    Zoe AI Chatbot streaming endpoint — returns Server-Sent Events (SSE).
+
+    Uses the same routing logic as /zoe/ask but streams LLM tokens in
+    real-time instead of waiting for the full answer.
+
+    SSE event types:
+      start    — session metadata
+      sources  — search results (before answer)
+      token    — streamed answer chunk
+      data     — extracted data + confidence (after answer)
+      done     — stream complete
+      complete — instant non-streamed response (tiers 1/2)
+      error    — error during generation
+    """
+    try:
+        chatbot = get_zoe_chatbot()
+        session_id = request.session_id or str(uuid.uuid4())
+
+        # Fetch artist data if artist_id is provided
+        artist_data = None
+        if request.artist_id:
+            try:
+                artist_response = get_supabase_client().table("artists").select("*").eq("id", request.artist_id).single().execute()
+                artist_data = artist_response.data
+            except Exception as e:
+                print(f"Warning: Could not fetch artist data: {e}")
+
+        # Convert context to dict
+        context_dict = None
+        if request.context:
+            context_dict = request.context.model_dump()
+
+        def generate():
+            try:
+                for event in chatbot.ask_stream(
+                    query=request.query,
+                    user_id=request.user_id,
+                    project_id=request.project_id,
+                    contract_ids=request.contract_ids,
+                    top_k=8,
+                    session_id=session_id,
+                    artist_data=artist_data,
+                    context=context_dict,
+                    source_preference=request.source_preference
+                ):
+                    yield event
+            except Exception as e:
+                print(f"[Stream] Error in Zoe streaming: {e}")
+                import json as _json
+                yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
+    except Exception as e:
+        print(f"Error in Zoe streaming chatbot: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
+
+
 @app.delete("/zoe/session/{session_id}")
 async def zoe_clear_session(session_id: str):
     """

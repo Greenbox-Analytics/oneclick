@@ -2960,10 +2960,17 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
 
-        # Try to answer from conversation history first
-        # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        # Detect artist intent early — these queries skip Tier 2 so they reach
+        # the artist routing path (which offers profile vs conversation choice)
+        is_artist_intent = (
+            not source_preference
+            and artist_data
+            and self._is_artist_intent_query(query)
+        )
+
+        # Try to answer from conversation history first (skip for artist intent queries)
         skip_artist_disambiguation = False
-        if not source_preference or source_preference == "conversation_history":
+        if not is_artist_intent and (not source_preference or source_preference == "conversation_history"):
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
                 logger.info("[History] Answered from conversation history")
@@ -3172,10 +3179,17 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
 
-        # Try to answer from conversation history first
-        # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        # Detect artist intent early — these queries skip Tier 2 so they reach
+        # the artist routing path (which offers profile vs conversation choice)
+        is_artist_intent = (
+            not source_preference
+            and artist_data
+            and self._is_artist_intent_query(query)
+        )
+
+        # Try to answer from conversation history first (skip for artist intent queries)
         skip_artist_disambiguation = False
-        if not source_preference or source_preference == "conversation_history":
+        if not is_artist_intent and (not source_preference or source_preference == "conversation_history"):
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
                 logger.info("[History] Answered from conversation history")
@@ -3358,10 +3372,17 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             logger.info("Detected conversational query - handling without document search")
             return self._handle_conversational_query(query, session_id)
 
-        # Try to answer from conversation history first
-        # Either automatically (no source_preference) or when user explicitly chose conversation_history
+        # Detect artist intent early — these queries skip Tier 2 so they reach
+        # the artist routing path (which offers profile vs conversation choice)
+        is_artist_intent = (
+            not source_preference
+            and artist_data
+            and self._is_artist_intent_query(query)
+        )
+
+        # Try to answer from conversation history first (skip for artist intent queries)
         skip_artist_disambiguation = False
-        if not source_preference or source_preference == "conversation_history":
+        if not is_artist_intent and (not source_preference or source_preference == "conversation_history"):
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
                 logger.info("[History] Answered from conversation history")
@@ -3512,6 +3533,523 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         
         return result
     
+    # ──────────────────────────────────────────────────────────────
+    # SSE Streaming Methods
+    # ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _sse_event(event_type: str, data: Dict) -> str:
+        """Format a Server-Sent Events string."""
+        payload = {"type": event_type, **data}
+        return f"data: {json.dumps(payload)}\n\n"
+
+    def _stream_llm_completion(self, messages: List[Dict], max_tokens: int = 1000):
+        """
+        Generator that yields token strings from an OpenAI streaming call.
+        """
+        response = openai_client.chat.completions.create(
+            model=self.llm_model,
+            messages=messages,
+            max_completion_tokens=max_tokens,
+            stream=True
+        )
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    def _generate_answer_stream(self, query: str, context: str,
+                                 search_results: Dict,
+                                 session_id: Optional[str] = None):
+        """
+        Generator version of _generate_answer. Yields SSE event strings.
+        Streams LLM tokens in real-time, then yields post-processed metadata.
+        """
+        # Check similarity threshold
+        if not self._check_similarity_threshold(search_results):
+            highest = search_results["matches"][0]["score"] if search_results["matches"] else 0.0
+            yield self._sse_event("complete", {
+                "answer": "I don't know based on the available documents.",
+                "confidence": "low",
+                "sources": [],
+                "highest_score": highest
+            })
+            return
+
+        # Build sources from search results (known before LLM call)
+        sources = [
+            {
+                "contract_file": match["contract_file"],
+                "score": match["score"],
+                "project_name": match["project_name"],
+                "section_heading": match.get("section_heading", ""),
+                "section_category": match.get("section_category", "")
+            }
+            for match in search_results["matches"]
+        ]
+        highest_score = search_results["matches"][0]["score"]
+
+        # Yield sources before streaming starts
+        yield self._sse_event("sources", {
+            "sources": sources,
+            "highest_score": highest_score,
+            "search_results_count": search_results["total_results"]
+        })
+
+        # Build prompt (same as _generate_answer)
+        system_prompt = """You are a legal contract analyst specializing in music industry agreements.
+Your task is to answer questions about contract documents based on the provided context.
+
+CRITICAL RULES:
+1. Answer ONLY the specific question asked - nothing more, nothing less
+2. Do NOT automatically add comparisons, summaries, or extra information unless explicitly requested
+3. Do NOT reference or compare to previous topics in the conversation unless the user asks for it
+4. Be precise and only include information that is explicitly stated in the provided context
+5. If you cannot answer based on the documents, say so clearly
+6. Do NOT suggest follow-up questions - the system handles this separately based on extracted context
+
+CONVERSATION AWARENESS:
+- Use conversation history to understand context, pronouns, and references (e.g., "this contract" = the one just discussed)
+- If the conversation history contains relevant information that complements the search results, incorporate it into your answer
+- Do NOT proactively bring up unrelated previous topics unless the user asks
+
+Your answers should be:
+- Accurate and grounded in the provided text
+- Clear, concise, and to the point — no filler or embellishment
+- Formatted using minimal markdown (**bold** for key terms, bullet points for lists, ### headers only when multiple sections are needed)
+- Format URLs as markdown links: [Display Text](url)"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+
+        conversation_history = self._get_conversation_context(session_id, max_turns=5)
+        if conversation_history:
+            messages.append({
+                "role": "system",
+                "content": "Previous conversation for context (use for understanding references and incorporating relevant prior information):"
+            })
+            messages.extend(conversation_history)
+
+        user_prompt = f"""Based on the following contract documents, answer this question:
+
+{query}
+
+Contract documents:
+{context}
+
+Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
+
+        messages.append({"role": "user", "content": user_prompt})
+
+        logger.info(f"\n[Stream] Generating answer using {self.llm_model}...")
+
+        try:
+            # Stream LLM tokens
+            full_answer = ""
+            for token in self._stream_llm_completion(messages, 1000):
+                full_answer += token
+                yield self._sse_event("token", {"content": token})
+
+            answer = full_answer.strip()
+
+            # Retry once without history if empty
+            if not answer:
+                logger.warning("[Stream][Retry] LLM returned empty — retrying without history")
+                retry_messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                full_answer = ""
+                for token in self._stream_llm_completion(retry_messages, 1000):
+                    full_answer += token
+                    yield self._sse_event("token", {"content": token})
+                answer = full_answer.strip()
+
+            if not answer:
+                answer = "I don't know based on the available documents."
+                yield self._sse_event("token", {"content": answer})
+
+            # Post-processing (after full answer is available)
+            extracted_data = self._extract_structured_data(answer, query)
+            is_fallback = answer == "I don't know based on the available documents."
+
+            yield self._sse_event("data", {
+                "extracted_data": extracted_data if extracted_data else None,
+                "confidence": "low" if is_fallback else "high",
+                "highest_score": highest_score,
+                "model": self.llm_model
+            })
+
+            # Store in memory
+            self._add_to_memory(session_id, "assistant", answer, {
+                "confidence": "low" if is_fallback else "high",
+                "sources": sources
+            })
+
+            yield self._sse_event("done", {"answered_from": "document"})
+
+        except Exception as e:
+            logger.error(f"[Stream] Error generating answer: {e}")
+            yield self._sse_event("error", {"message": str(e)})
+
+    def _handle_artist_query_stream(self, query: str, artist_data: Dict,
+                                     session_id: Optional[str] = None):
+        """
+        Generator version of _handle_artist_query. Yields SSE event strings.
+        """
+        self._add_to_memory(session_id, "user", query)
+        artist_context = self._format_artist_context(artist_data)
+
+        system_prompt = """You are a helpful assistant providing concise, direct information about an artist.
+Answer the user's question based on the artist profile information provided.
+
+CRITICAL RULES:
+1. Answer ONLY with the exact information from the provided artist data
+2. Be direct and concise - do NOT add extra commentary, interpretation, or embellishment
+3. Do NOT infer or add information not explicitly stated in the artist data
+4. If asked for a specific piece of information (like bio), provide ONLY that information
+5. Keep responses brief - typically 1-2 sentences unless the data itself is longer
+6. If information is not available, simply say so
+
+FORMATTING:
+- Use markdown for structure, not decoration — keep it minimal
+- Use **bold** for field labels (e.g., **Bio:**, **Genres:**)
+- Use bullet points for listing multiple items (socials, links, genres)
+- Format URLs as markdown links: [Platform Name](url)
+- Only use ### headers when answering about multiple fields — skip headers for single-field answers
+- Do NOT add filler phrases, introductions, or conclusions — just the data"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"""Based on the following artist profile, answer this question:
+
+{query}
+
+Artist Profile:
+{artist_context}"""}
+        ]
+
+        try:
+            full_answer = ""
+            for token in self._stream_llm_completion(messages, 500):
+                full_answer += token
+                yield self._sse_event("token", {"content": token})
+
+            answer = full_answer.strip()
+            if not answer:
+                answer = self._build_artist_fallback_answer(artist_data, query)
+                yield self._sse_event("token", {"content": answer})
+
+        except Exception as e:
+            logger.error(f"[Stream] Error generating artist answer: {e}")
+            answer = self._build_artist_fallback_answer(artist_data, query)
+            yield self._sse_event("token", {"content": answer})
+
+        self._add_to_memory(session_id, "assistant", answer)
+        extracted_artist_data = self._extract_artist_data(artist_data)
+
+        yield self._sse_event("data", {
+            "extracted_data": extracted_artist_data if extracted_artist_data else None,
+            "confidence": "artist_data",
+            "answered_from": "artist_data"
+        })
+        yield self._sse_event("done", {"answered_from": "artist_data"})
+
+    def _answer_from_context_stream(self, query: str, context: Dict,
+                                     session_id: Optional[str] = None):
+        """
+        Generator version of _answer_from_context. Yields SSE event strings.
+        """
+        logger.info(f"[Stream][Context] _answer_from_context_stream called with query: {query}")
+        context_summary = self._format_context_for_llm(context)
+
+        aggregated_splits_block = ""
+        royalty_rule_prompt = ""
+        if self._is_multi_contract_split_query(query, context):
+            aggregation = self._aggregate_splits_across_contracts(context, query)
+            if aggregation['parties']:
+                aggregated_splits_block = self._format_aggregated_splits_for_llm(aggregation)
+                context_summary = f"{aggregated_splits_block}\n\n{context_summary}"
+                royalty_rule_prompt = """
+
+CRITICAL ROYALTY SPLIT RULE:
+The PRE-COMPUTED AGGREGATED ROYALTY SPLITS above are ALREADY CORRECT. These splits represent portions of the SAME 100% pie — they are NOT summed per person across contracts.
+- If a person appears in multiple bilateral contracts (e.g., Bob appears in Contract 1 and Contract 2 both at 40%), their share is STILL 40% — NOT 80%.
+- Each contract describes a bilateral agreement between two parties, but all contracts refer to the same underlying revenue pool.
+- Use ONLY the pre-computed numbers above. Do NOT re-calculate or sum percentages from individual contracts.
+- If a payout calculation is included above, present those exact numbers."""
+
+        history = self._get_conversation_context(session_id, max_turns=10)
+
+        available_data = self._get_available_data_types(context)
+        suggestion_guidance = self._build_suggestion_guidance(available_data)
+
+        system_prompt = f"""You are answering a follow-up question using information from the conversation context.
+
+The user is asking about information that was previously discussed in this conversation.
+Use the structured context and conversation history to provide a comprehensive answer.
+
+CRITICAL: You can compare, summarize, or analyze the information provided without needing to search documents again.
+{royalty_rule_prompt}
+
+CONTEXT-ONLY SUGGESTIONS:
+After answering, you MAY suggest ONE follow-up question, but ONLY if:
+1. The answer can be derived ENTIRELY from the provided context data
+2. It's genuinely relevant to what the user just asked
+3. It adds value (comparison, deeper analysis, related insight)
+
+Format suggestions as: "Would you like me to [specific action]?"
+
+{suggestion_guidance}
+
+If no context-only follow-up makes sense, don't suggest anything.
+
+RULES:
+1. Base your answer ONLY on the provided context and conversation history
+2. If comparing contracts, clearly distinguish between them
+3. If comparing artists, always provide a comparison answer using available context
+4. If artist context is sparse, explicitly state there is not enough information for a full comparison and list what is missing
+5. Be specific about which contract each piece of information came from
+6. If information is incomplete, acknowledge what you don't have
+7. Format responses using clean, minimal markdown:
+   - Use ### headers to separate each artist or contract being compared
+   - Use **bold** for field labels, bullet points for attributes
+   - Format URLs as markdown links: [Platform Name](url)
+   - For comparisons, use headers per entity then a short ### Answer section for the user's specific question
+   - Do NOT pad with filler text, introductions, or unnecessary transitions — just structured data and a direct answer
+8. Only suggest follow-ups that can be answered from existing context data"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": f"Context:\n{context_summary}\n\nQuestion: {query}"})
+
+        try:
+            full_answer = ""
+            for token in self._stream_llm_completion(messages, 1000):
+                full_answer += token
+                yield self._sse_event("token", {"content": token})
+
+            answer = full_answer.strip()
+            if not answer:
+                answer = "I couldn't generate a response. Please try rephrasing your question."
+                yield self._sse_event("token", {"content": answer})
+
+        except Exception as e:
+            logger.error(f"[Stream] Error generating context-based answer: {e}")
+            answer = "I encountered an error while processing your question. Please try again."
+            yield self._sse_event("token", {"content": answer})
+
+        # Extract suggestion from answer (same as non-streaming)
+        _clean_answer, suggestion = self._extract_suggestion_from_answer(answer)
+
+        pending_suggestion = None
+        if suggestion and session_id:
+            context_hash = self._compute_context_hash(context)
+            action_match = re.search(r'(?:Would you like (?:me to|to)?|Shall I|Should I)\s*(.+?)\??$', suggestion, re.IGNORECASE)
+            if action_match:
+                pending_suggestion = action_match.group(1).strip()
+                self.memory.set_pending_suggestion(session_id, pending_suggestion, context_hash)
+
+        self._add_to_memory(session_id, "user", query)
+        self._add_to_memory(session_id, "assistant", answer)
+
+        yield self._sse_event("data", {
+            "confidence": "context",
+            "answered_from": "context",
+            "pending_suggestion": pending_suggestion
+        })
+        yield self._sse_event("done", {"answered_from": "context"})
+
+    def ask_stream(self,
+                   query: str,
+                   user_id: str,
+                   project_id: Optional[str] = None,
+                   contract_ids: Optional[List[str]] = None,
+                   top_k: Optional[int] = None,
+                   session_id: Optional[str] = None,
+                   artist_data: Optional[Dict] = None,
+                   context: Optional[Dict] = None,
+                   source_preference: Optional[str] = None):
+        """
+        Unified streaming entry point for Zoe chatbot.
+        Generator that yields SSE event strings.
+
+        Handles all three cases:
+        - No project (artist-only queries)
+        - Project-wide queries
+        - Multi-contract queries
+
+        For instant responses (conversational, disambiguation, etc.), yields a
+        single "complete" event. For LLM-generated answers, streams tokens.
+        """
+        logger.info("\n" + "=" * 80)
+        logger.info("STREAMING SMART CONTRACT CHATBOT")
+        logger.info("=" * 80)
+        logger.info(f"Question: {query}")
+        logger.info(f"User ID: {user_id}")
+        logger.info(f"Session ID: {session_id}")
+
+        yield self._sse_event("start", {"session_id": session_id})
+
+        # Summarize conversation history if token limit is approaching
+        self._summarize_if_needed(session_id)
+
+        # ── Affirmative response to pending suggestion ──
+        if session_id and self._is_affirmative_response(query):
+            pending = self.memory.get_pending_suggestion(session_id)
+            if pending:
+                current_hash = self._compute_context_hash(context)
+                if pending.get('context_hash') != current_hash:
+                    self.memory.clear_pending_suggestion(session_id)
+                    yield self._sse_event("complete", {
+                        "answer": "It looks like the conversation context was reset. Please refresh the page to start a new session, or ask your question again.",
+                        "confidence": "context_cleared",
+                        "sources": [],
+                        "context_cleared": True,
+                        "session_id": session_id
+                    })
+                    return
+
+                suggestion = pending.get('suggestion', '')
+                self.memory.clear_pending_suggestion(session_id)
+                yield from self._answer_from_context_stream(suggestion, context, session_id)
+                return
+
+        # ── Tier 1: Conversational fast path ──
+        if self._is_conversational_query(query):
+            logger.info("[Stream] Detected conversational query")
+            result = self._handle_conversational_query(query, session_id)
+            yield self._sse_event("complete", result)
+            return
+
+        # ── Detect artist intent early (before Tier 2) ──
+        is_artist_intent = (
+            not source_preference
+            and artist_data
+            and self._is_artist_intent_query(query)
+        )
+
+        # ── Tier 2: Try conversation history (skip for artist intent queries) ──
+        skip_artist_disambiguation = False
+        if not is_artist_intent and (not source_preference or source_preference == "conversation_history"):
+            history_answer = self._try_answer_from_history(query, session_id, context)
+            if history_answer:
+                logger.info("[Stream][History] Answered from conversation history")
+                yield self._sse_event("complete", history_answer)
+                return
+            if source_preference == "conversation_history":
+                can_use_context, _reason = self._should_use_context(query, context)
+                if can_use_context:
+                    yield from self._answer_from_context_stream(query, context, session_id)
+                    return
+                source_preference = None
+                skip_artist_disambiguation = True
+
+        # ── Routing decision ──
+        contract_id = contract_ids[0] if contract_ids and len(contract_ids) == 1 else None
+        if not source_preference and artist_data and self._is_artist_intent_query(query):
+            route_decision = RouteDecision(
+                route="artist", answer_mode="context",
+                confidence=0.9, reason="keyword_artist_match"
+            )
+        else:
+            route_decision = self._llm_route_decision(
+                query=query, artist_data=artist_data, context=context,
+                source_preference=source_preference,
+                project_id=project_id,
+                contract_id=contract_id
+            )
+
+        # ── Disambiguation ──
+        if route_decision.route == "disambiguate":
+            yield self._sse_event("complete", self._build_source_selection_response(query, session_id))
+            return
+
+        # ── Artist route ──
+        if route_decision.route == "artist":
+            if artist_data:
+                if source_preference == "artist_profile":
+                    yield from self._handle_artist_query_stream(query, artist_data, session_id)
+                    return
+                if skip_artist_disambiguation:
+                    fallback_msg = "I wasn't able to find anything related to that in our conversation. Could you rephrase your question, or would you like me to look up the artist's profile instead?"
+                    self._add_to_memory(session_id, "user", query)
+                    self._add_to_memory(session_id, "assistant", fallback_msg)
+                    yield self._sse_event("complete", {
+                        "query": query, "answer": fallback_msg, "confidence": "low",
+                        "sources": [], "search_results_count": 0, "session_id": session_id,
+                        "answered_from": "conversation_history_insufficient",
+                        "show_quick_actions": False
+                    })
+                    return
+                history = self._get_conversation_context(session_id, max_turns=1)
+                if history:
+                    yield self._sse_event("complete", self._build_artist_source_selection_response(query, session_id))
+                    return
+                yield from self._handle_artist_query_stream(query, artist_data, session_id)
+                return
+
+            self._add_to_memory(session_id, "user", query)
+            response = "I don't have artist information available. Please select an artist from the sidebar."
+            self._add_to_memory(session_id, "assistant", response)
+            yield self._sse_event("complete", {
+                "query": query, "answer": response, "confidence": "needs_artist",
+                "sources": [], "search_results_count": 0, "session_id": session_id,
+                "show_quick_actions": True
+            })
+            return
+
+        # ── Context-based answer ──
+        if self._should_answer_from_context(route_decision, context, contract_id):
+            yield from self._answer_from_context_stream(query, context, session_id)
+            return
+
+        # ── Need a project for contract search ──
+        if not project_id:
+            self._add_to_memory(session_id, "user", query)
+            response = "To answer questions about contracts, I need you to select a project first. Please choose a project from the sidebar."
+            self._add_to_memory(session_id, "assistant", response)
+            yield self._sse_event("complete", {
+                "query": query, "answer": response, "confidence": "needs_project",
+                "sources": [], "search_results_count": 0, "session_id": session_id,
+                "show_quick_actions": True
+            })
+            return
+
+        # ── Tier 3: Vector search + streaming LLM generation ──
+        self._add_to_memory(session_id, "user", query)
+
+        search_query = query
+        retrieval_reason = route_decision.retrieval_reason or "general_retrieval"
+        if retrieval_reason.startswith("missing_"):
+            search_query = self._get_targeted_query(retrieval_reason, query)
+
+        # Perform search based on contract selection
+        if contract_ids and len(contract_ids) > 0:
+            search_results = self.search_engine.search_multiple_contracts(
+                query=search_query, user_id=user_id,
+                project_id=project_id, contract_ids=contract_ids,
+                top_k=top_k or DEFAULT_TOP_K
+            )
+        else:
+            search_results = self.search_engine.smart_search(
+                query=search_query, user_id=user_id,
+                project_id=project_id, contract_id=contract_id,
+                top_k=top_k
+            )
+
+        if not search_results["matches"]:
+            no_result_answer = "I don't know based on the available documents."
+            self._add_to_memory(session_id, "assistant", no_result_answer)
+            yield self._sse_event("complete", {
+                "query": query, "answer": no_result_answer, "confidence": "low",
+                "sources": [], "search_results_count": 0, "session_id": session_id
+            })
+            return
+
+        formatted_context = self._format_context(search_results)
+
+        # Stream the answer generation
+        yield from self._generate_answer_stream(query, formatted_context, search_results, session_id)
+
     def clear_session(self, session_id: str) -> None:
         """Clear conversation history for a session."""
         self.memory.clear_session(session_id)

@@ -1,15 +1,14 @@
-import { useState, useEffect, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import { Card, CardContent } from "@/components/ui/card";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Send, Bot, User, AlertCircle, Upload, Trash2, ChevronDown, Music, Plus, Loader2, PanelLeftClose, PanelLeft, FileText, FolderOpen, Users, GripVertical, Paperclip } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, ChevronDown, Music, Plus, Loader2, PanelLeftClose, PanelLeft, FileText, FolderOpen, Users, GripVertical, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { ZoeChatMessages } from "@/components/zoe/ZoeChatMessages";
+import { ZoeInputBar } from "@/components/zoe/ZoeInputBar";
 import { ContractUploadModal } from "@/components/ContractUploadModal";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -33,6 +32,9 @@ import {
 import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
+import { useStreamingChat } from "@/hooks/useStreamingChat";
+import type { Message, AssistantQuickAction } from "@/hooks/useStreamingChat";
+import { useConversationPersistence, restoreLatestSession } from "@/hooks/useConversationPersistence";
 import { cn } from "@/lib/utils";
 
 // Backend API URL
@@ -55,31 +57,7 @@ interface Contract {
   project_id: string;
 }
 
-type SourcePreference = "artist_profile" | "contract_context" | "conversation_history";
-
-interface AssistantQuickAction {
-  id: string;
-  label: string;
-  query?: string;
-  source_preference?: SourcePreference;
-}
-
-interface Message {
-  role: "user" | "assistant" | "system";
-  content: string;
-  confidence?: string;
-  sources?: Array<{
-    contract_file: string;
-    page_number: number;
-    score: number;
-  }>;
-  timestamp: string;
-  showQuickActions?: boolean;
-  quickActions?: AssistantQuickAction[];
-}
-
-// Maximum messages before requiring session refresh
-const MAX_CONVERSATION_MESSAGES = 100;
+// Message, SourcePreference, AssistantQuickAction types imported from useStreamingChat
 
 // Conversation context for structured tracking
 interface RoyaltySplitData {
@@ -148,13 +126,16 @@ const Zoe = () => {
   const { user } = useAuth();
   const { toast } = useToast();
 
+  // Restore previous session (runs once, before other state)
+  const [restoredSession] = useState(() => restoreLatestSession());
+
   // State for artists, projects and contracts
   const [artists, setArtists] = useState<Artist[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
-  const [selectedArtist, setSelectedArtist] = useState<string>("");
-  const [selectedProject, setSelectedProject] = useState<string>("");
-  const [selectedContracts, setSelectedContracts] = useState<string[]>([]);
+  const [selectedArtist, setSelectedArtist] = useState<string>(restoredSession?.selectedArtist || "");
+  const [selectedProject, setSelectedProject] = useState<string>(restoredSession?.selectedProject || "");
+  const [selectedContracts, setSelectedContracts] = useState<string[]>(restoredSession?.selectedContracts || []);
 
   // Create Project State
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
@@ -168,22 +149,32 @@ const Zoe = () => {
   const [contractsOpen, setContractsOpen] = useState<boolean>(false);
   const prevContractsCountRef = useRef<number>(0);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  
-  // Chat state
-  const [messages, setMessages] = useState<Message[]>([]);
+
+  // Chat state (via streaming hook)
+  const {
+    messages, setMessages, isStreaming, error, setError,
+    sendMessage, stopGeneration, retryLastMessage,
+    addSystemMessage, clearMessages, isAtLimit,
+  } = useStreamingChat();
   const [inputMessage, setInputMessage] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID());
+  const [sessionId, setSessionId] = useState<string>(
+    () => restoredSession?.sessionId || crypto.randomUUID()
+  );
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
   // Conversation context for structured tracking
-  const [conversationContext, setConversationContext] = useState<ConversationContext>({
-    session_id: sessionId,
-    artist: null,
-    artists_discussed: [],
-    project: null,
-    contracts_discussed: [],
-    context_switches: []
+  const [conversationContext, setConversationContext] = useState<ConversationContext>(() => {
+    if (restoredSession?.conversationContext) {
+      return restoredSession.conversationContext as ConversationContext;
+    }
+    return {
+      session_id: sessionId,
+      artist: null,
+      artists_discussed: [],
+      project: null,
+      contracts_discussed: [],
+      context_switches: [],
+    };
   });
 
   // Upload/Delete state
@@ -195,8 +186,45 @@ const Zoe = () => {
   // Context cleared reload dialog
   const [showReloadDialog, setShowReloadDialog] = useState(false);
 
+  // Conversation persistence — auto-saves to localStorage
+  const { clearSession } = useConversationPersistence({
+    sessionId,
+    messages,
+    selectedArtist,
+    selectedProject,
+    selectedContracts,
+    conversationContext,
+  });
+
+  // Restore messages from saved session on mount
+  useEffect(() => {
+    if (restoredSession?.messages && restoredSession.messages.length > 0) {
+      setMessages(restoredSession.messages);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const selectedArtistName = artists.find((a) => a.id === selectedArtist)?.name;
   const selectedProjectName = projects.find((p) => p.id === selectedProject)?.name;
+
+  // New conversation — clears chat and starts fresh
+  const handleNewConversation = useCallback(() => {
+    clearSession();
+    clearMessages();
+    setSessionId(crypto.randomUUID());
+    setConversationContext({
+      session_id: crypto.randomUUID(),
+      artist: selectedArtist && selectedArtistName
+        ? { id: selectedArtist, name: selectedArtistName }
+        : null,
+      artists_discussed: [],
+      project: selectedProject && selectedProjectName
+        ? { id: selectedProject, name: selectedProjectName }
+        : null,
+      contracts_discussed: [],
+      context_switches: [],
+    });
+    setInputMessage("");
+  }, [clearSession, clearMessages, selectedArtist, selectedArtistName, selectedProject, selectedProjectName]);
 
   // Fetch artists on mount - filter by logged in user
   useEffect(() => {
@@ -263,6 +291,7 @@ const Zoe = () => {
         if (isArtistSwitch) {
           // Insert a divider message instead of clearing conversation
           const dividerMessage: Message = {
+            id: `divider-artist-${Date.now()}`,
             role: "system",
             content: `--- Switched to Artist: ${selectedArtistName} ---`,
             timestamp: new Date().toISOString(),
@@ -309,6 +338,7 @@ const Zoe = () => {
         if (isProjectSwitch) {
           // Insert a divider message for project switch
           const dividerMessage: Message = {
+            id: `divider-project-${Date.now()}`,
             role: "system",
             content: `--- Switched to Project: ${selectedProjectName} ---`,
             timestamp: new Date().toISOString(),
@@ -469,510 +499,134 @@ const Zoe = () => {
     }
   };
 
-  // Detect royalty type from query for categorization
-  const detectRoyaltyType = (queryLower: string): keyof RoyaltySplitsByType => {
-    const royaltyTypes: Record<keyof RoyaltySplitsByType, string[]> = {
-      streaming: ['streaming', 'stream', 'spotify', 'apple music', 'dsp'],
-      publishing: ['publishing', 'publish', 'songwriter', 'composition'],
-      mechanical: ['mechanical', 'mechanicals'],
-      sync: ['sync', 'synchronization', 'synch'],
-      master: ['master', 'masters', 'recording'],
-      performance: ['performance', 'performing', 'pro', 'ascap', 'bmi'],
-      general: ['royalty', 'royalties', 'split', 'splits', 'percentage'],
-    };
-    
-    for (const [royaltyType, keywords] of Object.entries(royaltyTypes)) {
-      if (keywords.some(kw => queryLower.includes(kw))) {
-        return royaltyType as keyof RoyaltySplitsByType;
-      }
-    }
-    return 'general';
-  };
+  // ── Chat params helper (shared by all send functions) ──
+  const getChatParams = useCallback(() => ({
+    userId: user!.id,
+    artistId: selectedArtist,
+    projectId: selectedProject || undefined,
+    contractIds: selectedContracts.length > 0 ? selectedContracts : undefined,
+    sessionId,
+    context: conversationContext,
+  }), [user, selectedArtist, selectedProject, selectedContracts, sessionId, conversationContext]);
 
-  // Extract structured data from assistant responses to update context
-  // This now primarily uses server-provided extracted_data, with fallback to client-side extraction
-  const extractDataFromAnswer = (answer: string, query: string, sources?: Message['sources']): ExtractedContractData => {
-    const extracted: ExtractedContractData = {};
-    const queryLower = query.toLowerCase();
-    
-    // Extract royalty splits if discussing royalties (fallback for older responses)
-    if (queryLower.includes('royalty') || queryLower.includes('split') || queryLower.includes('percentage') || 
-        queryLower.includes('streaming') || queryLower.includes('revenue') || queryLower.includes('publishing')) {
-      // Match patterns like "Name: 35%" or "Name: 35% of net revenue"
-      const splitMatches = answer.match(/([A-Za-z\s]+):\s*(\d+(?:\.\d+)?)\s*%/g);
-      console.log('[Context] Fallback extraction - attempting to extract splits from answer, matches:', splitMatches);
-      if (splitMatches) {
-        const splits = splitMatches.map(match => {
-          const parts = match.match(/([A-Za-z\s]+):\s*(\d+(?:\.\d+)?)\s*%/);
-          if (parts) {
-            return { party: parts[1].trim(), percentage: parseFloat(parts[2]) };
+  // Process the result returned from sendMessage (update session, context, etc.)
+  const handleSendResult = useCallback((result: {
+    sessionId: string;
+    contextCleared?: boolean;
+    extractedData?: Record<string, unknown> | null;
+    answeredFrom?: string;
+    sources?: Array<{ contract_file: string; score: number }>;
+  }) => {
+    if (result.sessionId !== sessionId) {
+      setSessionId(result.sessionId);
+    }
+    if (result.contextCleared) {
+      setShowReloadDialog(true);
+    }
+    // Update conversation context with extracted data from backend
+    if (result.extractedData && Object.keys(result.extractedData).length > 0) {
+      const isArtistData = 'bio' in result.extractedData || 'social_media' in result.extractedData || 'streaming_links' in result.extractedData;
+
+      if (isArtistData && selectedArtist && selectedArtistName &&
+          (result.answeredFrom === 'artist_data' || result.answeredFrom === 'artist_comparison')) {
+        setConversationContext(prev => {
+          const idx = prev.artists_discussed.findIndex(a => a.id === selectedArtist);
+          const updatedArtists = [...prev.artists_discussed];
+          if (idx >= 0) {
+            updatedArtists[idx] = {
+              ...updatedArtists[idx],
+              data_extracted: { ...updatedArtists[idx].data_extracted, ...result.extractedData }
+            };
+          } else {
+            updatedArtists.push({ id: selectedArtist, name: selectedArtistName!, data_extracted: result.extractedData as ArtistDataExtracted });
           }
-          return null;
-        }).filter((s): s is RoyaltySplitData => s !== null);
-        
-        if (splits.length > 0) {
-          // Categorize by royalty type
-          const royaltyType = detectRoyaltyType(queryLower);
-          extracted.royalty_splits = { [royaltyType]: splits };
-          console.log(`[Context] Fallback extraction - extracted ${royaltyType} royalty_splits:`, splits);
-        }
+          return { ...prev, artists_discussed: updatedArtists };
+        });
       }
-    }
-    
-    // Extract parties/signatories
-    if (queryLower.includes('parties') || queryLower.includes('who signed') || queryLower.includes('signatories')) {
-      // Simple extraction - look for quoted names or bullet points
-      const partyMatches = answer.match(/"([^"]+)"|•\s*([^\n]+)/g);
-      if (partyMatches) {
-        extracted.parties = partyMatches.map(m => m.replace(/["•]/g, '').trim());
-      }
-    }
-    
-    // Extract payment terms
-    if (queryLower.includes('payment') || queryLower.includes('terms') || queryLower.includes('advance')) {
-      // Store a summary of payment-related answer
-      if (answer.length > 0 && answer.length < 500) {
-        extracted.payment_terms = answer;
-      }
-    }
-    
-    // Extract term length
-    if (queryLower.includes('term') || queryLower.includes('duration') || queryLower.includes('how long')) {
-      const termMatch = answer.match(/(\d+)\s*(year|month|day)s?/i);
-      if (termMatch) {
-        extracted.term_length = `${termMatch[1]} ${termMatch[2]}${parseInt(termMatch[1]) > 1 ? 's' : ''}`;
-      }
-    }
-    
-    return extracted;
-  };
 
-  // Extract artist data from answer for tracking
-  const extractArtistDataFromAnswer = (answer: string, query: string): ArtistDataExtracted => {
-    const extracted: ArtistDataExtracted = {};
-    const queryLower = query.toLowerCase();
-    
-    // Extract bio
-    if (queryLower.includes('bio')) {
-      // Simple extraction - the answer itself is likely the bio
-      if (answer.length > 0 && answer.length < 500 && !answer.includes('?')) {
-        extracted.bio = answer.trim();
-      }
-    }
-    
-    // Extract social media links
-    if (queryLower.includes('social')) {
-      const socialMedia: Record<string, string> = {};
-      const urlPattern = /https?:\/\/[^\s]+/g;
-      const urls = answer.match(urlPattern) || [];
-      
-      urls.forEach(url => {
-        if (url.includes('instagram')) socialMedia.instagram = url;
-        else if (url.includes('tiktok')) socialMedia.tiktok = url;
-        else if (url.includes('youtube')) socialMedia.youtube = url;
-        else if (url.includes('twitter') || url.includes('x.com')) socialMedia.twitter = url;
-        else if (url.includes('facebook')) socialMedia.facebook = url;
-      });
-      
-      if (Object.keys(socialMedia).length > 0) {
-        extracted.social_media = socialMedia;
-      }
-    }
-    
-    // Extract streaming links
-    if (queryLower.includes('streaming') || queryLower.includes('spotify') || queryLower.includes('apple music')) {
-      const streamingLinks: Record<string, string> = {};
-      const urlPattern = /https?:\/\/[^\s]+/g;
-      const urls = answer.match(urlPattern) || [];
-      
-      urls.forEach(url => {
-        if (url.includes('spotify')) streamingLinks.spotify = url;
-        else if (url.includes('apple') || url.includes('music.apple')) streamingLinks.apple_music = url;
-        else if (url.includes('soundcloud')) streamingLinks.soundcloud = url;
-      });
-      
-      if (Object.keys(streamingLinks).length > 0) {
-        extracted.streaming_links = streamingLinks;
-      }
-    }
-    
-    return extracted;
-  };
-
-  // Update artists_discussed when artist info is retrieved
-  const updateArtistsDiscussed = (answer: string, query: string, answeredFrom?: string, serverExtractedData?: ArtistDataExtracted) => {
-    // Only track if this was an artist-related query
-    if (answeredFrom !== 'artist_data' && answeredFrom !== 'artist_comparison') {
-      return;
-    }
-    
-    if (!selectedArtist || !selectedArtistName) {
-      return;
-    }
-    
-    // Use server-provided data if available, otherwise fall back to client-side extraction
-    const extractedData = serverExtractedData && Object.keys(serverExtractedData).length > 0
-      ? serverExtractedData
-      : extractArtistDataFromAnswer(answer, query);
-    
-    if (Object.keys(extractedData).length === 0) {
-      return;
-    }
-    
-    console.log('[Context] Updating artists_discussed with data:', extractedData, serverExtractedData ? '(from server)' : '(from client fallback)');
-    
-    setConversationContext(prev => {
-      const existingIndex = prev.artists_discussed.findIndex(a => a.id === selectedArtist);
-      
-      if (existingIndex >= 0) {
-        // Merge with existing artist data
-        const updatedArtists = [...prev.artists_discussed];
-        updatedArtists[existingIndex] = {
-          ...updatedArtists[existingIndex],
-          data_extracted: {
-            ...updatedArtists[existingIndex].data_extracted,
-            ...extractedData
-          }
-        };
-        
-        return {
-          ...prev,
-          artists_discussed: updatedArtists
-        };
-      } else {
-        // Add new artist
-        return {
-          ...prev,
-          artists_discussed: [
-            ...prev.artists_discussed,
-            {
-              id: selectedArtist,
-              name: selectedArtistName,
-              data_extracted: extractedData
+      if (!isArtistData && result.sources && result.sources.length > 0) {
+        const contractFiles = [...new Set(result.sources.map(s => s.contract_file))];
+        setConversationContext(prev => {
+          const updatedContracts = [...prev.contracts_discussed];
+          contractFiles.forEach(fileName => {
+            const idx = updatedContracts.findIndex(c => c.name === fileName);
+            if (idx >= 0) {
+              updatedContracts[idx] = {
+                ...updatedContracts[idx],
+                data_extracted: { ...updatedContracts[idx].data_extracted, ...result.extractedData as ExtractedContractData }
+              };
+            } else {
+              updatedContracts.push({ id: fileName, name: fileName, data_extracted: result.extractedData as ExtractedContractData });
             }
-          ]
-        };
-      }
-    });
-  };
-
-  // Update conversation context with extracted data from response
-  // Now prioritizes server-provided extracted_data over client-side extraction
-  const updateContextWithExtractedData = (
-    answer: string, 
-    query: string, 
-    sources?: Message['sources'],
-    answeredFrom?: string,
-    serverExtractedData?: ExtractedContractData | ArtistDataExtracted
-  ) => {
-    console.log('[Context] updateContextWithExtractedData called with sources:', sources, 'serverExtractedData:', serverExtractedData);
-    
-    // Update artist data if this was an artist query
-    // Pass serverExtractedData if it's artist data (has bio, social_media, etc.)
-    const isArtistData = serverExtractedData && ('bio' in serverExtractedData || 'social_media' in serverExtractedData || 'streaming_links' in serverExtractedData);
-    updateArtistsDiscussed(answer, query, answeredFrom, isArtistData ? serverExtractedData as ArtistDataExtracted : undefined);
-    
-    if (!sources || sources.length === 0) {
-      console.log('[Context] No sources provided, skipping contract context update');
-      return;
-    }
-    
-    // For contract data, only use serverExtractedData if it's NOT artist data
-    const contractData = (serverExtractedData && !isArtistData) ? serverExtractedData as ExtractedContractData : undefined;
-    
-    // Use server-provided contract data if available, otherwise fall back to client-side extraction
-    const extracted = contractData && Object.keys(contractData).length > 0 
-      ? contractData 
-      : extractDataFromAnswer(answer, query, sources);
-    
-    console.log('[Context] Using extracted data:', extracted, serverExtractedData ? '(from server)' : '(from client fallback)');
-    if (Object.keys(extracted).length === 0) {
-      console.log('[Context] No data extracted, skipping context update');
-      return;
-    }
-    
-    // Get unique contract files from sources
-    const contractFiles = [...new Set(sources.map(s => s.contract_file))];
-    console.log('[Context] Contract files from sources:', contractFiles);
-    
-    setConversationContext(prev => {
-      const updatedContracts = [...prev.contracts_discussed];
-      
-      contractFiles.forEach(fileName => {
-        const existingIndex = updatedContracts.findIndex(c => c.name === fileName);
-        if (existingIndex >= 0) {
-          const existingData = updatedContracts[existingIndex].data_extracted || {};
-          
-          // Deep merge royalty_splits to preserve different types (streaming, publishing, etc.)
-          const mergedRoyaltySplits: RoyaltySplitsByType = {
-            ...(existingData.royalty_splits || {}),
-            ...(extracted.royalty_splits || {})
-          };
-          
-          // Merge extracted data with existing, preserving typed royalty splits
-          updatedContracts[existingIndex] = {
-            ...updatedContracts[existingIndex],
-            data_extracted: {
-              ...existingData,
-              ...extracted,
-              // Only include royalty_splits if there's any data
-              ...(Object.keys(mergedRoyaltySplits).length > 0 ? { royalty_splits: mergedRoyaltySplits } : {})
-            }
-          };
-          console.log('[Context] Merged royalty_splits for', fileName, ':', mergedRoyaltySplits);
-        } else {
-          // Add new contract with extracted data
-          updatedContracts.push({
-            id: fileName, // Use filename as ID if we don't have the actual ID
-            name: fileName,
-            data_extracted: extracted
           });
-        }
-      });
-      
-      console.log('[Context] Updated contracts_discussed:', updatedContracts);
-      
-      return {
-        ...prev,
-        contracts_discussed: updatedContracts
-      };
-    });
-  };
+          return { ...prev, contracts_discussed: updatedContracts };
+        });
+      }
+    }
+  }, [sessionId, selectedArtist, selectedArtistName]);
 
-  const handleSendMessage = async () => {
+  const handleSendMessage = useCallback(async () => {
     if (!inputMessage.trim() || !user) {
       setError("Please enter a message");
       return;
     }
-    
-    // Need at least an artist selected
     if (!selectedArtist) {
       setError("Please select an artist first");
       return;
     }
-
-    // Check if conversation limit is reached
-    if (messages.length >= MAX_CONVERSATION_MESSAGES) {
+    if (isAtLimit) {
       setShowReloadDialog(true);
       return;
     }
 
-    const userMessage: Message = {
-      role: "user",
-      content: inputMessage,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
+    const query = inputMessage;
     setInputMessage("");
-    setIsLoading(true);
-    setError("");
 
-    try {
-      // Call backend chatbot API with session_id for conversation memory
-      const response = await fetch(`${API_URL}/zoe/ask`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: inputMessage,
-          project_id: selectedProject || null,
-          contract_ids: selectedContracts.length > 0 ? selectedContracts : null,
-          user_id: user.id,
-          session_id: sessionId,
-          artist_id: selectedArtist,
-          context: conversationContext, // Send conversation context
-          source_preference: null,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to get response from Zoe");
-      }
-
-      const data = await response.json();
-
-      // Update session_id from response if provided (for new sessions)
-      if (data.session_id && data.session_id !== sessionId) {
-        setSessionId(data.session_id);
-      }
-
-      // Handle context cleared scenario - show reload modal
-      if (data.context_cleared) {
-        setShowReloadDialog(true);
-        setIsLoading(false);
-        return;
-      }
-
-      const assistantMessage: Message = {
-        role: "assistant",
-        content: data.answer,
-        confidence: data.confidence,
-        sources: data.sources,
-        timestamp: new Date().toISOString(),
-        showQuickActions: data.show_quick_actions,
-        quickActions: data.quick_actions,
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-      
-      // Extract and store data from the response in context
-      // Use server-provided extracted_data if available
-      updateContextWithExtractedData(
-        data.answer, 
-        inputMessage, 
-        data.sources,
-        data.answered_from,
-        data.extracted_data
-      );
-    } catch (err) {
-      console.error("Error sending message:", err);
-      setError("Failed to get response from Zoe. Please try again.");
-      
-      // Add error message to chat
-      const errorMessage: Message = {
-        role: "assistant",
-        content: "I'm sorry, I encountered an error. Please try again.",
-        confidence: "error",
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    const result = await sendMessage(query, getChatParams());
+    handleSendResult(result);
+  }, [inputMessage, user, selectedArtist, isAtLimit, sendMessage, getChatParams, handleSendResult]);
 
   // Handle static quick action button clicks
-  const handleQuickAction = (question: string) => {
-    setInputMessage(question);
-    // Use setTimeout to ensure state is updated before sending
-    setTimeout(() => {
-      // Directly trigger the send with the question
-      sendMessageWithQuery(question);
-    }, 0);
-  };
+  const handleQuickAction = useCallback(async (question: string) => {
+    if (!selectedArtist || !user) return;
+    if (isAtLimit) { setShowReloadDialog(true); return; }
 
-  const handleAssistantQuickAction = (action: AssistantQuickAction) => {
+    const result = await sendMessage(question, getChatParams());
+    handleSendResult(result);
+  }, [selectedArtist, user, isAtLimit, sendMessage, getChatParams, handleSendResult]);
+
+  const handleAssistantQuickAction = useCallback(async (action: AssistantQuickAction) => {
     const queryToSend = action.query || inputMessage;
-    if (!queryToSend.trim()) return;
+    if (!queryToSend.trim() || !selectedArtist || !user) return;
 
-    sendMessageWithQuery(
-      queryToSend,
-      action.source_preference,
-      action.label
-    );
-  };
+    const result = await sendMessage(queryToSend, getChatParams(), {
+      sourcePreference: action.source_preference,
+      userDisplayMessage: action.label,
+      silent: !!action.source_preference,
+    });
+    handleSendResult(result);
+  }, [inputMessage, selectedArtist, user, sendMessage, getChatParams, handleSendResult]);
 
-  // Helper to send a specific query (used by quick actions)
-  const sendMessageWithQuery = async (
-    query: string,
-    sourcePreference?: SourcePreference,
-    userDisplayMessage?: string
-  ) => {
-    if (!query.trim() || !selectedArtist || !user) {
-      return;
-    }
+  const handleRetry = useCallback(async () => {
+    if (!selectedArtist || !user) return;
+    const result = await retryLastMessage(getChatParams());
+    if (result) handleSendResult(result);
+  }, [selectedArtist, user, retryLastMessage, getChatParams, handleSendResult]);
 
-    // Check if conversation limit is reached
-    if (messages.length >= MAX_CONVERSATION_MESSAGES) {
-      setShowReloadDialog(true);
-      return;
-    }
+  const handleCopyMessage = useCallback((content: string, messageId: string) => {
+    navigator.clipboard.writeText(content);
+    setCopiedMessageId(messageId);
+    setTimeout(() => setCopiedMessageId(null), 2000);
+  }, []);
 
-    // Only add user message to chat if NOT a silent quick action
-    if (!sourcePreference) {
-      const userMessage: Message = {
-        role: "user",
-        content: userDisplayMessage || query,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, userMessage]);
-    }
-    setInputMessage("");
-    setIsLoading(true);
-    setError("");
-
-    try {
-      const response = await fetch(`${API_URL}/zoe/ask`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: query,
-          project_id: selectedProject,
-          contract_ids: selectedContracts.length > 0 ? selectedContracts : null,
-          user_id: user.id,
-          session_id: sessionId,
-          artist_id: selectedArtist,
-          context: conversationContext, // Send conversation context
-          source_preference: sourcePreference || null,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to get response from Zoe");
-      }
-
-      const data = await response.json();
-
-      if (data.session_id && data.session_id !== sessionId) {
-        setSessionId(data.session_id);
-      }
-
-      // Handle context cleared scenario - show reload modal
-      if (data.context_cleared) {
-        setShowReloadDialog(true);
-        setIsLoading(false);
-        return;
-      }
-
-      const assistantMessage: Message = {
-        role: "assistant",
-        content: data.answer,
-        confidence: data.confidence,
-        sources: data.sources,
-        timestamp: new Date().toISOString(),
-        showQuickActions: data.show_quick_actions,
-        quickActions: data.quick_actions,
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-      
-      // Extract and store data from the response in context
-      // Use server-provided extracted_data if available
-      updateContextWithExtractedData(
-        data.answer,
-        query,
-        data.sources,
-        data.answered_from,
-        data.extracted_data
-      );
-    } catch (err) {
-      console.error("Error sending message:", err);
-      setError("Failed to get response from Zoe. Please try again.");
-      
-      const errorMessage: Message = {
-        role: "assistant",
-        content: "I'm sorry, I encountered an error. Please try again.",
-        confidence: "error",
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (!isLoading) {
+      if (!isStreaming) {
         handleSendMessage();
       }
     }
-  };
+  }, [isStreaming, handleSendMessage]);
 
   // Sidebar resize handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -1050,6 +704,12 @@ const Zoe = () => {
                   </>
                 )}
               </Badge>
+            )}
+            {messages.length > 0 && (
+              <Button variant="outline" onClick={handleNewConversation} size="sm" className="gap-2">
+                <RefreshCw className="w-4 h-4" />
+                <span className="hidden sm:inline">New Chat</span>
+              </Button>
             )}
             <Button variant="outline" onClick={() => navigate("/tools")} size="sm" className="gap-2">
               <ArrowLeft className="w-4 h-4" />
@@ -1261,253 +921,32 @@ const Zoe = () => {
 
         {/* Chat Area */}
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* Chat Messages */}
-          <ScrollArea className="flex-1">
-            <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-              <div className="space-y-4">
-                {messages.length === 0 ? (
-                  <div className="text-center py-16">
-                    <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
-                      <Bot className="w-8 h-8 text-primary" />
-                    </div>
-                    <h3 className="text-xl font-semibold mb-2">Hi, I'm Zoe!</h3>
-                    <p className="text-muted-foreground mb-8 max-w-md mx-auto">
-                      {!selectedArtist 
-                        ? "Select an artist from the sidebar to start asking questions."
-                        : selectedProject 
-                          ? "I can help you understand your contracts and artist info. Ask me about royalty splits, payment terms, or artist details."
-                          : `I can tell you about ${selectedArtistName || 'the artist'}. Select a project to also ask about contracts.`}
-                    </p>
-                    
-                    {/* Quick Action Buttons */}
-                    {selectedArtist && (
-                      <div className="flex flex-wrap justify-center gap-2 max-w-lg mx-auto">
-                        {/* Artist quick actions - always available when artist selected */}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleQuickAction("What are the artist's social media links?")}
-                          disabled={isLoading}
-                          className="text-sm"
-                        >
-                          📱 Social Media
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleQuickAction("Tell me about the artist")}
-                          disabled={isLoading}
-                          className="text-sm"
-                        >
-                          🎤 Artist Overview
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleQuickAction("What is the artist's bio?")}
-                          disabled={isLoading}
-                          className="text-sm"
-                        >
-                          📄 Artist Bio
-                        </Button>
-                        {/* Contract quick actions - only when project selected */}
-                        {selectedProject && (
-                          <>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleQuickAction("What are the streaming royalty splits in this contract?")}
-                              disabled={isLoading}
-                              className="text-sm"
-                            >
-                              💰 Royalty Splits
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleQuickAction("What are the payment terms in this contract?")}
-                              disabled={isLoading}
-                              className="text-sm"
-                            >
-                              📅 Payment Terms
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  messages.map((message, index) => (
-                    <div
-                      key={index}
-                      className={cn(
-                        "flex gap-3",
-                        message.role === "user" ? "justify-end" : message.role === "system" ? "justify-center" : "justify-start"
-                      )}
-                    >
-                      {/* System divider message */}
-                      {message.role === "system" && (
-                        <div className="flex items-center gap-2 py-2">
-                          <div className="h-px flex-1 bg-border" />
-                          <span className="text-xs text-muted-foreground px-2 whitespace-nowrap">
-                            {message.content.replace(/^---\s*|\s*---$/g, '')}
-                          </span>
-                          <div className="h-px flex-1 bg-border" />
-                        </div>
-                      )}
-                      
-                      {message.role === "assistant" && (
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-1">
-                          <Bot className="w-4 h-4 text-primary" />
-                        </div>
-                      )}
-                      
-                      <div
-                        className={cn(
-                          "max-w-[85%] rounded-2xl px-4 py-3",
-                          message.role === "user"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted"
-                        )}
-                      >
-                        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
-                          <ReactMarkdown>{message.content}</ReactMarkdown>
-                        </div>
-                        
-                        {/* Quick Action Buttons in greeting responses */}
-                        {message.role === "assistant" && message.quickActions && message.quickActions.length > 0 && (
-                          <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-border/50">
-                            {message.quickActions.map((action) => (
-                              <Button
-                                key={action.id}
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleAssistantQuickAction(action)}
-                                disabled={isLoading}
-                                className="text-xs h-7"
-                              >
-                                {action.label}
-                              </Button>
-                            ))}
-                          </div>
-                        )}
-
-                        {message.role === "assistant" && message.showQuickActions && (!message.quickActions || message.quickActions.length === 0) && (
-                          <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-border/50">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleQuickAction("What are the royalty splits in this contract?")}
-                              disabled={isLoading}
-                              className="text-xs h-7"
-                            >
-                              💰 Royalty Splits
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleQuickAction("Who are the parties involved in this contract?")}
-                              disabled={isLoading}
-                              className="text-xs h-7"
-                            >
-                              👥 Involved Parties
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleQuickAction("What are the payment terms in this contract?")}
-                              disabled={isLoading}
-                              className="text-xs h-7"
-                            >
-                              📅 Payment Terms
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-
-                      {message.role === "user" && (
-                        <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0 mt-1">
-                          <User className="w-4 h-4 text-primary-foreground" />
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-                
-                {isLoading && (
-                  <div className="flex gap-3 justify-start">
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-1">
-                      <Bot className="w-4 h-4 text-primary animate-pulse" />
-                    </div>
-                    <div className="bg-muted rounded-2xl px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                        <p className="text-sm text-muted-foreground">Thinking...</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                <div ref={messagesEndRef} />
-              </div>
-            </div>
-          </ScrollArea>
-
-          {/* Input Area */}
-          <div className="border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex-shrink-0">
-            <div className="max-w-3xl mx-auto p-4">
-              {error && (
-                <Alert variant="destructive" className="mb-4">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertTitle>Error</AlertTitle>
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-              
-              <div className="flex gap-2 items-center">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setUploadModalOpen(true)}
-                  disabled={!selectedProject}
-                  className="h-10 w-10 rounded-full flex-shrink-0 text-muted-foreground hover:text-foreground"
-                  title="Upload contract"
-                >
-                  <Paperclip className="w-5 h-5" />
-                </Button>
-                <Input
-                  placeholder={
-                    messages.length >= MAX_CONVERSATION_MESSAGES
-                      ? "Conversation limit reached. Please refresh the page."
-                      : !selectedArtist
-                        ? "Select an artist to start chatting..."
-                        : selectedProject
-                          ? "Ask about contracts or artist info..."
-                          : "Ask about the artist (select a project for contract questions)..."
-                  }
-                  value={inputMessage}
-                  onChange={(e) => setInputMessage(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  disabled={!selectedArtist || messages.length >= MAX_CONVERSATION_MESSAGES}
-                  className="flex-1 h-11 rounded-full px-4 bg-muted/50 border-muted"
-                />
-                <Button
-                  onClick={handleSendMessage}
-                  disabled={!selectedArtist || !inputMessage.trim() || isLoading || messages.length >= MAX_CONVERSATION_MESSAGES}
-                  size="icon"
-                  className="h-11 w-11 rounded-full flex-shrink-0"
-                >
-                  <Send className="w-4 h-4" />
-                </Button>
-              </div>
-              
-              <p className="text-[11px] text-center text-muted-foreground mt-2">
-                {messages.length >= MAX_CONVERSATION_MESSAGES 
-                  ? "Conversation limit reached. Please refresh the page to continue."
-                  : "Zoe answers based on your artist profile and uploaded contracts"}
-              </p>
-            </div>
-          </div>
+          <ZoeChatMessages
+            messages={messages}
+            isStreaming={isStreaming}
+            selectedArtist={selectedArtist}
+            selectedArtistName={selectedArtistName}
+            selectedProject={selectedProject}
+            copiedMessageId={copiedMessageId}
+            messagesEndRef={messagesEndRef}
+            onQuickAction={handleQuickAction}
+            onAssistantQuickAction={handleAssistantQuickAction}
+            onRetry={handleRetry}
+            onCopyMessage={handleCopyMessage}
+          />
+          <ZoeInputBar
+            inputMessage={inputMessage}
+            onInputChange={setInputMessage}
+            error={error}
+            isStreaming={isStreaming}
+            isAtLimit={isAtLimit}
+            selectedArtist={selectedArtist}
+            selectedProject={selectedProject}
+            onSend={handleSendMessage}
+            onStop={stopGeneration}
+            onKeyDown={handleKeyDown}
+            onUploadClick={() => setUploadModalOpen(true)}
+          />
         </main>
       </div>
 
@@ -1591,7 +1030,7 @@ const Zoe = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Session Refresh Required</AlertDialogTitle>
             <AlertDialogDescription>
-              {messages.length >= MAX_CONVERSATION_MESSAGES 
+              {isAtLimit
                 ? "You've reached the conversation limit. Please refresh the page to start a fresh session with Zoe."
                 : "The conversation context was reset. Please reload the page to start a fresh session with Zoe."}
             </AlertDialogDescription>
