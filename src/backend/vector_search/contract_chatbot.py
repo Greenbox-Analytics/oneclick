@@ -333,6 +333,7 @@ class InMemoryChatMessageHistory:
         """
         self._sessions: Dict[str, List[ChatMessage]] = defaultdict(list)
         self._session_timestamps: Dict[str, float] = {}
+        self._last_contract_ids: Dict[str, Optional[List[str]]] = {}
         self.max_messages = max_messages_per_session
         self.session_ttl = session_ttl_seconds
     
@@ -398,7 +399,17 @@ class InMemoryChatMessageHistory:
             del self._session_timestamps[session_id]
         if session_id in self._pending_suggestions:
             del self._pending_suggestions[session_id]
-    
+        if session_id in self._last_contract_ids:
+            del self._last_contract_ids[session_id]
+
+    def set_last_contract_ids(self, session_id: str, contract_ids: Optional[List[str]]) -> None:
+        """Store the contract_ids used for the last query in this session."""
+        self._last_contract_ids[session_id] = contract_ids
+
+    def get_last_contract_ids(self, session_id: str) -> Optional[List[str]]:
+        """Get the contract_ids used for the last query in this session."""
+        return self._last_contract_ids.get(session_id)
+
     def set_pending_suggestion(self, session_id: str, suggestion: str, context_hash: str) -> None:
         """
         Store a pending suggestion for the session.
@@ -858,7 +869,15 @@ class ContractChatbot:
                 return True
         
         return False
-    
+
+    def _no_result_message(self, contract_ids: Optional[List[str]] = None) -> str:
+        """Return a context-aware, actionable fallback message when no results are found."""
+        if contract_ids:
+            return ("I couldn't find that information in the selected contract(s). "
+                    "Try selecting a different contract or rephrasing your question.")
+        return ("I don't have the information needed to answer your question. "
+                "Please select the relevant contract(s) so I can retrieve the right information.")
+
     def _compute_context_hash(self, context: Optional[Dict]) -> str:
         """
         Compute a hash of key context entities to detect context changes.
@@ -2682,7 +2701,7 @@ INVALID suggestions (would require document lookup - DO NOT suggest these):
 
 CRITICAL RULES:
 1. ONLY answer based on the provided contract contracts - do not use external knowledge
-2. If the answer is not explicitly stated in the contracts, respond with: "I don't know based on the available documents."
+2. If the answer is not explicitly stated in the contracts, respond with: "I couldn't find that information in the provided contracts."
 3. Always cite the source (contract file name) when providing information
 4. Be precise with numbers, percentages, dates, and legal terms
 5. If multiple contracts contain relevant information, clearly distinguish between them
@@ -2740,7 +2759,7 @@ Your answers should be:
                 f"Matches: {len(search_results['matches'])}, Categories: {categories}"
             )
             return {
-                "answer": "I don't know based on the available documents.",
+                "answer": self._no_result_message(contract_ids=["active"]),
                 "confidence": "low",
                 "reason": "No sufficiently relevant information found (similarity threshold not met)",
                 "highest_score": highest,
@@ -2836,7 +2855,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 answer = (raw_answer or "").strip()
 
             if not answer:
-                answer = "I don't know based on the available documents."
+                answer = self._no_result_message(contract_ids=["active"])
 
             # Server-side extraction of structured data
             extracted_data = self._extract_structured_data(answer, query)
@@ -2853,7 +2872,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 for match in search_results["matches"]
             ]
 
-            is_fallback = answer == "I don't know based on the available documents."
+            is_fallback = "I couldn't find that information" in answer or "I don't have the information" in answer
             return {
                 "answer": answer,
                 "confidence": "low" if is_fallback else "high",
@@ -3095,7 +3114,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         
         # Step 4: If no results, return low confidence
         if not search_results["matches"]:
-            no_result_answer = "I don't know based on the available documents."
+            no_result_answer = self._no_result_message([contract_id] if contract_id else None)
             self._add_to_memory(session_id, "assistant", no_result_answer)
             return {
                 "query": query,
@@ -3491,7 +3510,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         
         # Step 4: If no results, return low confidence
         if not search_results["matches"]:
-            no_result_answer = "I don't know based on the available documents."
+            no_result_answer = self._no_result_message(contract_ids)
             self._add_to_memory(session_id, "assistant", no_result_answer)
             return {
                 "query": query,
@@ -3568,7 +3587,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         if not self._check_similarity_threshold(search_results):
             highest = search_results["matches"][0]["score"] if search_results["matches"] else 0.0
             yield self._sse_event("complete", {
-                "answer": "I don't know based on the available documents.",
+                "answer": self._no_result_message(contract_ids=["active"]),
                 "confidence": "low",
                 "sources": [],
                 "highest_score": highest
@@ -3664,12 +3683,12 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 answer = full_answer.strip()
 
             if not answer:
-                answer = "I don't know based on the available documents."
+                answer = self._no_result_message(contract_ids=["active"])
                 yield self._sse_event("token", {"content": answer})
 
             # Post-processing (after full answer is available)
             extracted_data = self._extract_structured_data(answer, query)
-            is_fallback = answer == "I don't know based on the available documents."
+            is_fallback = "I couldn't find that information" in answer or "I don't have the information" in answer
 
             yield self._sse_event("data", {
                 "extracted_data": extracted_data if extracted_data else None,
@@ -3889,6 +3908,18 @@ RULES:
 
         yield self._sse_event("start", {"session_id": session_id})
 
+        # Detect if contract selection changed since last query
+        current_ids = sorted(contract_ids) if contract_ids else None
+        last_ids = self.memory.get_last_contract_ids(session_id) if session_id else None
+        contracts_changed = (last_ids is not None and current_ids != last_ids)
+
+        if contracts_changed:
+            logger.info(f"[Stream] Contract selection changed: {last_ids} -> {current_ids}, skipping Tier 2 history and context")
+
+        # Update stored contract_ids for next comparison
+        if session_id:
+            self.memory.set_last_contract_ids(session_id, current_ids)
+
         # Summarize conversation history if token limit is approaching
         self._summarize_if_needed(session_id)
 
@@ -3927,9 +3958,9 @@ RULES:
             and self._is_artist_intent_query(query)
         )
 
-        # ── Tier 2: Try conversation history (skip for artist intent queries) ──
+        # ── Tier 2: Try conversation history (skip for artist intent queries and contract switches) ──
         skip_artist_disambiguation = False
-        if not is_artist_intent and (not source_preference or source_preference == "conversation_history"):
+        if not contracts_changed and not is_artist_intent and (not source_preference or source_preference == "conversation_history"):
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
                 logger.info("[Stream][History] Answered from conversation history")
@@ -3997,8 +4028,8 @@ RULES:
             })
             return
 
-        # ── Context-based answer ──
-        if self._should_answer_from_context(route_decision, context, contract_id):
+        # ── Context-based answer (skip when contracts just changed to force fresh retrieval) ──
+        if not contracts_changed and self._should_answer_from_context(route_decision, context, contract_id):
             yield from self._answer_from_context_stream(query, context, session_id)
             return
 
@@ -4037,7 +4068,7 @@ RULES:
             )
 
         if not search_results["matches"]:
-            no_result_answer = "I don't know based on the available documents."
+            no_result_answer = self._no_result_message(contract_ids)
             self._add_to_memory(session_id, "assistant", no_result_answer)
             yield self._sse_event("complete", {
                 "query": query, "answer": no_result_answer, "confidence": "low",

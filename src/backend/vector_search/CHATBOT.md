@@ -50,6 +50,7 @@ User Query
 - `_try_answer_from_history()` sends the query + conversation history to the LLM
 - If the LLM can answer from what's already been discussed, it does — avoiding a redundant Pinecone search
 - **Skipped for artist intent queries** to prevent history from intercepting profile questions (see below)
+- **Skipped when contracts change** — if the user switches contract selection between queries, Tier 2 is bypassed to force fresh retrieval on the new contract (prevents stale answers from old contract history)
 
 ### Tier 3: Vector Search + LLM
 - Pinecone semantic search with automatic query categorization
@@ -79,6 +80,9 @@ User Query
 - Similarity threshold check before generating answers — low-quality matches are rejected
 - LLM is instructed to answer ONLY from retrieved context — no hallucination
 - Extracted data (splits, terms, parties) stored in frontend context for follow-ups
+- **Actionable fallback messages** — when no results are found, the response guides the user:
+  - Contracts selected: *"I couldn't find that information in the selected contract(s). Try selecting a different contract or rephrasing your question."*
+  - No contracts: *"I don't have the information needed to answer your question. Please select the relevant contract(s) so I can retrieve the right information."*
 
 ## Context Tracking
 
@@ -92,19 +96,31 @@ The frontend sends a `ConversationContext` object with every request:
 This enables:
 - **Cross-contract comparisons** ("compare royalty splits between both contracts") answered from context — no re-search
 - **Follow-up questions** about previously extracted data
-- **Divider messages** in the chat when switching artists or projects
+- **Divider messages** in the chat when switching artists, projects, or contracts
+
+### Contract Switch Detection
+
+The backend tracks the last-used `contract_ids` per session (`InMemoryChatMessageHistory._last_contract_ids`). When a query arrives with different contract IDs than the previous query:
+
+1. Tier 2 (conversation history) is **skipped** — prevents stale answers from old contracts
+2. Context-based answer path is **skipped** — forces fresh retrieval
+3. The query goes straight to Tier 3 (vector search on the newly selected contract)
+4. Subsequent same-contract queries resume normal Tier 2 behavior
 
 ## Session Memory (Backend)
 
 - Conversation history stored per `session_id` via `_add_to_memory()` / `_get_conversation_context()`
 - Automatic summarization when approaching token limits (`_summarize_if_needed()`)
 - Pending suggestion tracking for affirmative responses ("yes", "sure")
-- `clear_session()` wipes history for a session
+- Last-used `contract_ids` tracked per session for contract switch detection
+- `clear_session()` wipes history, pending suggestions, and contract tracking for a session
 
 ## Frontend Features
 
 - **SSE streaming** — `useStreamingChat` hook parses SSE events, appends tokens to message bubbles in real-time
 - **Stop generation** — `AbortController` aborts the fetch; partial answer stays visible
+- **Contract chips** — selected contracts shown as dismissible badges above the chat input (like file attachments), with click-to-remove
+- **Context switch dividers** — visual separator inserted in chat when artist, project, or contract selection changes
 - **Copy response** — clipboard copy on hover of assistant messages
 - **Retry/regenerate** — re-sends the last user query, removes the previous answer
 - **Conversation persistence** — `useConversationPersistence` hook saves messages, session, and selections to `localStorage`

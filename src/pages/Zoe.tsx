@@ -148,6 +148,7 @@ const Zoe = () => {
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const [contractsOpen, setContractsOpen] = useState<boolean>(false);
   const prevContractsCountRef = useRef<number>(0);
+  const prevSelectedContractsRef = useRef<string[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
   // Chat state (via streaming hook)
@@ -374,12 +375,46 @@ const Zoe = () => {
 
   // Track contract selection changes for context
   useEffect(() => {
+    const prevIds = prevSelectedContractsRef.current;
+    const currentIds = selectedContracts;
+
+    // Detect if this is a contract switch (not just the initial selection)
+    const isContractSwitch = prevIds.length > 0
+      && (prevIds.length !== currentIds.length
+          || !prevIds.every(id => currentIds.includes(id)));
+
+    if (isContractSwitch) {
+      // Build display names for the divider message
+      const fromNames = prevIds.map(id => contracts.find(c => c.id === id)?.file_name || id);
+      const toNames = currentIds.map(id => contracts.find(c => c.id === id)?.file_name || id);
+
+      const dividerContent = currentIds.length === 1
+        ? `--- Switched to Contract: ${toNames[0]} ---`
+        : currentIds.length > 1
+          ? `--- Switched Contracts ---`
+          : `--- Deselected Contracts ---`;
+
+      const dividerMessage: Message = {
+        id: `divider-contract-${Date.now()}`,
+        role: "system",
+        content: dividerContent,
+        timestamp: new Date().toISOString(),
+      };
+      setMessages(prevMessages => [...prevMessages, dividerMessage]);
+
+      // Record in context_switches
+      setConversationContext(prev => ({
+        ...prev,
+        context_switches: [...prev.context_switches, {
+          timestamp: new Date().toISOString(),
+          type: 'contract' as const,
+          from: fromNames.join(', '),
+          to: toNames.join(', ')
+        }]
+      }));
+    }
+
     if (selectedContracts.length > 0) {
-      const selectedContractNames = selectedContracts.map(id => {
-        const contract = contracts.find(c => c.id === id);
-        return contract?.file_name || id;
-      });
-      
       // Add newly selected contracts to contracts_discussed if not already present
       setConversationContext(prev => {
         const existingIds = prev.contracts_discussed.map(c => c.id);
@@ -390,15 +425,17 @@ const Zoe = () => {
             name: contracts.find(c => c.id === id)?.file_name || id,
             data_extracted: {}
           }));
-        
+
         if (newContracts.length === 0) return prev;
-        
+
         return {
           ...prev,
           contracts_discussed: [...prev.contracts_discussed, ...newContracts]
         };
       });
     }
+
+    prevSelectedContractsRef.current = selectedContracts;
   }, [selectedContracts, contracts]);
 
   // Auto-scroll to bottom when new messages arrive
@@ -942,6 +979,9 @@ const Zoe = () => {
             isAtLimit={isAtLimit}
             selectedArtist={selectedArtist}
             selectedProject={selectedProject}
+            selectedContracts={selectedContracts}
+            contracts={contracts}
+            onDeselectContract={(id) => setSelectedContracts(prev => prev.filter(c => c !== id))}
             onSend={handleSendMessage}
             onStop={stopGeneration}
             onKeyDown={handleKeyDown}
