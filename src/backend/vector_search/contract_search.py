@@ -47,7 +47,7 @@ openai_client = OpenAI(
 
 # Configuration
 EMBEDDING_MODEL = "text-embedding-3-small"
-DEFAULT_TOP_K = 8
+DEFAULT_TOP_K = 10
 MIN_SIMILARITY_THRESHOLD = 0.50
 
 # Valid section categories (must match contract_ingestion.py)
@@ -384,9 +384,9 @@ class ContractSearch:
         # Step 2: Auto-adjust top_k based on query type (same as oneclick_retrieval.py)
         if top_k is None:
             if categorization['is_general']:
-                top_k = 5  # More context for general queries
+                top_k = 8  # More context for general queries
             else:
-                top_k = 3  # Focused results for specific queries
+                top_k = 5  # Enough coverage for multi-section questions
         
         logger.info(f"Top-K: {top_k} (auto-adjusted for {'general' if categorization['is_general'] else 'specific'} query)")
         

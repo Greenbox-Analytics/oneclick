@@ -509,7 +509,7 @@ openai_client = OpenAI(
 # Configuration
 DEFAULT_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")  # Updated to stable model
 MIN_SIMILARITY_THRESHOLD = 0.30
-DEFAULT_TOP_K = 8
+DEFAULT_TOP_K = 10
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
 
