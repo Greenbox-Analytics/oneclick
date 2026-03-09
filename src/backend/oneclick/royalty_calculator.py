@@ -20,7 +20,7 @@ import difflib
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from .contract_parser import MusicContractParser, ContractData
+from .contract_parser import MusicContractParser, ContractData, STREAMING_EQUIVALENT_TERMS
 from .helpers import normalize_title, find_matching_song, normalize_name, simplify_role
 
 import openpyxl
@@ -35,6 +35,13 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+def is_streaming_equivalent_royalty_type(royalty_type: str) -> bool:
+    """Treat master/producer-style royalties as streaming-equivalent payouts."""
+    if not royalty_type:
+        return False
+    normalized = royalty_type.lower()
+    return any(term in normalized for term in STREAMING_EQUIVALENT_TERMS)
 
 
 
@@ -492,7 +499,7 @@ class RoyaltyCalculator:
                 existing_share_for_party = None
                 
                 # Determine if current share is streaming-related
-                is_streaming_share = 'streaming' in share.royalty_type.lower() or 'digital' in share.royalty_type.lower()
+                is_streaming_share = is_streaming_equivalent_royalty_type(share.royalty_type)
                 
                 for existing in merged_royalty_shares:
                     if normalize_name(existing.party_name) == norm_name:
@@ -502,7 +509,7 @@ class RoyaltyCalculator:
                              # If one is "Publishing" and one is "Streaming", they are different entitlements
                              # even if they have the same percentage (e.g. 50% Pub / 50% Master).
                              
-                             is_existing_streaming = 'streaming' in existing.royalty_type.lower() or 'digital' in existing.royalty_type.lower()
+                             is_existing_streaming = is_streaming_equivalent_royalty_type(existing.royalty_type)
                              
                              # If both are streaming or both are NOT streaming (e.g. both publishing), likely a duplicate
                              if is_streaming_share == is_existing_streaming:
@@ -771,10 +778,10 @@ class RoyaltyCalculator:
         if not song_totals:
             raise ValueError("❌ No songs found in royalty statement")
         
-        # Filter for streaming royalties only
+        # Filter for streaming royalties (including equivalent master/producer labels)
         streaming_shares = [
             share for share in contract_data.royalty_shares
-            if 'streaming' in share.royalty_type.lower()
+            if is_streaming_equivalent_royalty_type(share.royalty_type)
         ]
         
         if not streaming_shares:

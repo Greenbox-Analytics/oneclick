@@ -48,6 +48,19 @@ openai_client = OpenAI(
 EMBEDDING_MODEL = "text-embedding-3-small"
 LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")
 INDEX_NAME = PINECONE_INDEX_NAME
+STREAMING_EQUIVALENT_TERMS = [
+    "streaming",
+    "digital",
+    "master",
+    "master royalties",
+    "producer",
+    "producer royalties",
+    "master points",
+    "royalty participation",
+    "revenue participation",
+    "net master revenue",
+    "sound recording royalty splits",
+]
 
 
 import logging
@@ -229,25 +242,19 @@ class MusicContractParser:
 
     def _query_pinecone(self, query: str, user_id: str, contract_id: str, top_k: int = 5, use_fast_categorization: bool = True) -> str:
         """
-        Query Pinecone and return concatenated context.
-        Over-fetches 2x chunks, reranks with LLM, and returns the top_k most relevant.
-        
-        Args:
-            query: Search query
-            user_id: User ID for namespace
-            contract_id: Contract ID for filtering
-            top_k: Number of final results to return after reranking
-            use_fast_categorization: If True, uses fast keyword matching instead of LLM (default: True)
-            
-        Returns:
-            Concatenated text from top results
+        Query Pinecone with separate paths for prose and table chunks.
+
+        Prose path: fetches 10 chunks directly by cosine similarity (no reranker).
+        Table path: fetches 20 chunks directly by cosine similarity, no reranker.
+
+        Both paths share the same query embedding and category filter.
+        Results are concatenated (prose first, then tables).
         """
+        PROSE_TOP_K = 10
+        TABLE_TOP_K = 20
+
         logger.info(f"\n   🧠 Categorizing query: '{query}'")
-        
-        # Over-fetch 2x for reranking, then trim back to top_k
-        fetch_k = top_k * 2
-        
-        # 1. Categorize the query (use fast keyword-based categorization by default)
+
         t_cat = time.time()
         categorization = categorize_query(query, self.openai_client, use_llm=not use_fast_categorization)
         logger.info(f"      → Categories: {categorization.get('categories')}")
@@ -255,15 +262,13 @@ class MusicContractParser:
         logger.info(f"      → Method: {'Keyword-based (fast)' if use_fast_categorization else 'LLM-based'}")
         logger.info(f"      ⏱️  Categorization took: {time.time() - t_cat:.2f}s")
 
-        # 2. Build metadata filter
-        filter_dict = build_metadata_filter(
+        base_filter = build_metadata_filter(
             categories=categorization.get('categories', []),
             is_general=categorization.get('is_general', False),
             user_id=None,
             contract_id=contract_id
         )
-        
-        # Create query embedding
+
         t_embed = time.time()
         response = self.openai_client.embeddings.create(
             model=EMBEDDING_MODEL,
@@ -272,69 +277,84 @@ class MusicContractParser:
         query_embedding = response.data[0].embedding
         logger.info(f"      ⏱️  Embedding creation took: {time.time() - t_embed:.2f}s")
 
-        # Query Pinecone (over-fetch for reranking)
         namespace = f"{user_id}-namespace"
-        
-        logger.info(f"      → Using filter: {filter_dict}")
-        logger.info(f"      → Fetching {fetch_k} chunks (2x over-fetch for reranking, returning top {top_k})")
-        
+
+        # --- Query 1: Prose (direct cosine similarity, no reranker) ---
+        prose_filter = dict(base_filter) if base_filter else {}
+        prose_filter["is_table"] = {"$ne": True}
+
+        logger.info(f"      → [Prose] filter={prose_filter}, top_k={PROSE_TOP_K}")
         t_query = time.time()
+        prose_chunks = self._fetch_chunks(namespace, query_embedding, prose_filter, PROSE_TOP_K, contract_id, label="Prose")
+        logger.info(f"      ⏱️  Prose query took: {time.time() - t_query:.2f}s")
+        logger.info(f"      → [Prose] {len(prose_chunks)} chunks (no reranking)")
+
+        # --- Query 2: Tables (direct cosine similarity, no reranker) ---
+        table_filter = dict(base_filter) if base_filter else {}
+        table_filter["is_table"] = {"$eq": True}
+
+        logger.info(f"      → [Table] filter={table_filter}, top_k={TABLE_TOP_K}")
+        t_query = time.time()
+        table_chunks = self._fetch_chunks(namespace, query_embedding, table_filter, TABLE_TOP_K, contract_id, label="Table")
+        logger.info(f"      ⏱️  Table query took: {time.time() - t_query:.2f}s")
+        logger.info(f"      → [Table] {len(table_chunks)} chunks (no reranking)")
+
+        all_chunks = prose_chunks + table_chunks
+        logger.info(f"      → Combined context: {len(prose_chunks)} prose + {len(table_chunks)} table = {len(all_chunks)} total")
+        return "\n\n".join(all_chunks)
+
+    def _fetch_chunks(self, namespace: str, query_embedding: List[float],
+                      filter_dict: dict, top_k: int, contract_id: str,
+                      label: str = "") -> List[str]:
+        """Run a single Pinecone query and return chunk texts. Falls back to
+        a broad contract_id-only filter if the category filter returns nothing."""
         try:
             results = self.index.query(
                 namespace=namespace,
                 vector=query_embedding,
-                top_k=fetch_k,
+                top_k=top_k,
                 filter=filter_dict,
                 include_metadata=True
             )
         except Exception as e:
-            logger.warning(f"      ⚠️ Error with filtered search: {e}. Falling back to broad search.")
+            logger.warning(f"      ⚠️ [{label}] Filtered search error: {e}. Falling back.")
             results = self.index.query(
                 namespace=namespace,
                 vector=query_embedding,
-                top_k=fetch_k,
+                top_k=top_k,
                 filter={"contract_id": contract_id},
                 include_metadata=True
             )
-        logger.info(f"      ⏱️  Pinecone query took: {time.time() - t_query:.2f}s")
 
-        # Collect raw chunks
-        raw_chunks = []
-        if hasattr(results, 'matches') and len(results.matches) > 0:
-            logger.info(f"   🔍 Retrieved {len(results.matches)} chunks for reranking")
+        chunks = []
+        if hasattr(results, 'matches') and results.matches:
             for i, match in enumerate(results.matches):
                 section = match.metadata.get("section_heading", "N/A")
                 category = match.metadata.get("section_category", "N/A")
-                score = match.score
-                logger.info(f"      Chunk {i+1}: Score={score:.4f} | Section='{section}' | Category='{category}'")
+                logger.info(f"      [{label}] Chunk {i+1}: Score={match.score:.4f} | Section='{section}' | Category='{category}'")
                 text = match.metadata.get("chunk_text", "")
                 if text:
-                    raw_chunks.append(text)
+                    chunks.append(text)
         else:
-            logger.warning("      ⚠️ No matches found with filters. Retrying without category filter.")
+            logger.warning(f"      ⚠️ [{label}] No matches. Retrying without category filter.")
+            fallback_filter = {"contract_id": contract_id}
+            if "is_table" in filter_dict:
+                fallback_filter["is_table"] = filter_dict["is_table"]
             results = self.index.query(
                 namespace=namespace,
                 vector=query_embedding,
-                top_k=fetch_k,
-                filter={"contract_id": contract_id},
+                top_k=top_k,
+                filter=fallback_filter,
                 include_metadata=True
             )
-            if hasattr(results, 'matches') and len(results.matches) > 0:
+            if hasattr(results, 'matches') and results.matches:
                 for i, match in enumerate(results.matches):
                     section = match.metadata.get("section_heading", "N/A")
-                    score = match.score
-                    logger.info(f"      Fallback Chunk {i+1}: Score={score:.4f} | Section='{section}'")
+                    logger.info(f"      [{label}] Fallback {i+1}: Score={match.score:.4f} | Section='{section}'")
                     text = match.metadata.get("chunk_text", "")
                     if text:
-                        raw_chunks.append(text)
-
-        # Rerank and trim to top_k
-        if len(raw_chunks) > 2:
-            reranked = self._rerank_results(query, raw_chunks, top_k)
-        else:
-            reranked = raw_chunks
-
-        return "\n\n".join(reranked)
+                        chunks.append(text)
+        return chunks
 
     def _rerank_results(self, query: str, chunks: List[str], top_k: int) -> List[str]:
         """
@@ -399,7 +419,18 @@ class MusicContractParser:
 
     def _extract_parties(self, user_id: str, contract_id: str) -> List[Party]:
         """Extract all parties/contributors from contract"""
-        question = "Identify all specific legal entities and individuals named as parties to this agreement. For each party, extract their full legal name AND the specific role or defined term assigned to them in the contract (e.g., 'Artist', 'Producer', 'Company', 'Licensor'). Do NOT list generic placeholders like 'The Artist', 'The Producer', or 'The Songwriter' as the name."
+        question_definitions = (
+            "Identify all specific legal entities and individuals named as parties to this agreement. "
+            "Prioritize sections such as recitals/opening paragraph ('by and between'), Definitions, "
+            "and signature blocks. Capture aliases like p/k/a, professionally known as, or d/b/a. "
+            "For each named party, extract every defined role/term assigned to that party "
+            "(e.g., Artist, Producer, Company, Licensor, Licensee, Publisher, Distributor)."
+        )
+        question_role_mapping = (
+            "Find clauses where parties are referenced by role labels only (e.g., 'Producer', 'Artist', "
+            "'Songwriter', 'Licensor'). Map each such role reference back to the previously defined named party. "
+            "Return only mappings that are explicitly supported by contract text."
+        )
         template = """You are a contract analyst. Use the context below to answer.
 
 Context:
@@ -411,24 +442,36 @@ Question:
 Instructions:
 1. Look for the introductory paragraph or "Parties" section where the agreement is made "by and between".
 2. Extract the exact defined term used for each party (e.g., "hereinafter referred to as 'Artist'").
-3. If a party has no specific defined role, use a generic description based on their function (e.g., "Label", "Distributor").
-4. Ignore generic references like "third parties" or "licensees" unless a specific name is attached.
+3. Track where named parties are later referenced only by role labels and merge those roles into the same party record.
+4. Include aliases in the name field when present (p/k/a, d/b/a, professionally known as).
+5. If a party has no specific defined role, use a generic description based on their function (e.g., "Label", "Distributor").
+6. Ignore generic references like "third parties" or "licensees" unless a specific name is attached.
+7. If one party has multiple roles, separate roles with semicolons.
 
 List each party strictly in this format:
 Name | Role
 
 Answer:
 """
-        context = self._query_pinecone(question, user_id, contract_id, top_k=5)
+        context_a = self._query_pinecone(question_definitions, user_id, contract_id, top_k=5)
+        context_b = self._query_pinecone(question_role_mapping, user_id, contract_id, top_k=5)
+        context = context_a + "\n\n" + context_b
+        question = question_definitions + " " + question_role_mapping
         result = self._ask_llm(context, question, template)
         
         parties = []
+        from oneclick.helpers import normalize_name
+        seen_party_names = set()
         for line in result.splitlines():
             if "|" in line:
                 parts = line.split("|", 1)
                 if len(parts) == 2:
                     name, role = [x.strip() for x in parts]
                     if name and role:
+                        key = normalize_name(name)
+                        if key in seen_party_names:
+                            continue
+                        seen_party_names.add(key)
                         parties.append(Party(name, role.lower()))
         
         logger.info(f"👥 Extracted {len(parties)} parties")
@@ -438,27 +481,62 @@ Answer:
 
     def _extract_works(self, user_id: str, contract_id: str) -> List[Work]:
         """Extract all songs/works from contract"""
-        question = "What is the specific musical work, song, or master recording being licensed or transferred in this agreement?"
+        question_primary = (
+            "Identify all musical works, compositions, masters, recordings, tracks, or releases covered by this agreement. "
+            "Search body clauses and schedules/exhibits/annexes/tables (track lists)."
+        )
+        question_variant_mapping = (
+            "Group references that point to the same underlying title despite formatting differences, "
+            "including parenthetical qualifiers like '(composition)', '(master recording)', quoted/unquoted forms, "
+            "or minor spelling/punctuation differences."
+        )
         template = """Context:
 {context}
 
 Question:
 {question}
 
-List each as: Title | Type (song, album, composition)
+Instructions:
+1. Return one line per observed work reference.
+2. Provide a canonical title that removes qualifiers/formatting noise.
+3. Keep observed variant exactly as shown in the contract.
+4. Include a specific work type (composition, master recording, song, album, release).
+5. Do not invent titles from generic placeholders.
+
+List each as: Canonical Title | Observed Variant | Type
 Answer:
 """
-        context = self._query_pinecone(question, user_id, contract_id, top_k=5)
+        context_a = self._query_pinecone(question_primary, user_id, contract_id, top_k=5)
+        context_b = self._query_pinecone(question_variant_mapping, user_id, contract_id, top_k=5)
+        context = context_a + "\n\n" + context_b
+        question = question_primary + " " + question_variant_mapping
         result = self._ask_llm(context, question, template)
         
         works = []
+        from oneclick.helpers import normalize_title
+        seen_works = {}
         for line in result.splitlines():
             if "|" in line:
-                parts = line.split("|", 1)
-                if len(parts) == 2:
-                    title, typ = [x.strip() for x in parts]
-                    if title:
-                        works.append(Work(title, typ.lower() or "song"))
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 3:
+                    canonical_title, observed_variant, typ = parts[:3]
+                    title = canonical_title or observed_variant
+                elif len(parts) == 2:
+                    title, typ = parts
+                else:
+                    continue
+
+                if title:
+                    normalized = normalize_title(title)
+                    work_type = typ.lower() or "song"
+                    if normalized in seen_works:
+                        existing = seen_works[normalized]
+                        if existing.work_type in ("song", "work") and work_type not in ("song", "work"):
+                            existing.work_type = work_type
+                    else:
+                        work_obj = Work(title, work_type)
+                        seen_works[normalized] = work_obj
+                        works.append(work_obj)
         
         logger.info(f"🎵 Extracted {len(works)} works")
         for i, work in enumerate(works):
@@ -477,10 +555,13 @@ Answer:
             for p in parties:
                 logger.info(f"      - {p.name} ({p.role})")
 
+        streaming_terms_str = ", ".join([f"'{term}'" for term in STREAMING_EQUIVALENT_TERMS])
         question = (
             "What are the explicit royalty percentage splits defined in the contract? "
-            "Look for terms like 'master royalties', 'producer royalties', 'streaming', 'master points', "
-            "'royalty participation', 'revenue participation', 'net master revenue', or 'sound recording royalty splits'. "
+            f"Look for terms like {streaming_terms_str}. "
+            "Prioritize schedules/exhibits/annexes/tables where economic terms are listed. "
+            "Also scan body clauses for wording such as 'shall receive', 'entitled to', 'payable', 'points', "
+            "'gross receipts', 'net receipts', and participation mechanics. "
             "Note that 'master' or 'producer royalties' typically encompass streaming revenue. "
             "Only list parties with a specific numeric percentage."
         )
