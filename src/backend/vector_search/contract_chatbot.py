@@ -508,9 +508,16 @@ openai_client = OpenAI(
 
 # Configuration
 DEFAULT_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")  # Updated to stable model
+DEFAULT_LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5")  # For multi-contract comparisons
 MIN_SIMILARITY_THRESHOLD = 0.30
 DEFAULT_TOP_K = 10
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
+
+# Load music industry knowledge context (cached once at module load)
+_MUSIC_CONTEXT_PATH = os.path.join(os.path.dirname(__file__), "music_context.md")
+with open(_MUSIC_CONTEXT_PATH, "r") as _f:
+    MUSIC_INDUSTRY_CONTEXT = _f.read()
+del _f
 
 
 class ContractChatbot:
@@ -1387,21 +1394,12 @@ Respond with ONLY one word: either "artist" or "contract"."""
         """
         Use LLM to decide route and whether to answer from context or retrieve.
         """
-        if source_preference == "artist_profile":
-            return RouteDecision(
-                route="artist",
-                answer_mode="context",
-                confidence=1.0,
-                reason="source_preference_artist",
-                retrieval_reason="none"
-            )
-
-        if source_preference == "contract_context":
+        if source_preference == "artist_profile" or source_preference == "contract_context":
             return RouteDecision(
                 route="contract",
                 answer_mode="context" if context else "retrieve",
                 confidence=1.0,
-                reason="source_preference_contract_context",
+                reason="source_preference_contract",
                 retrieval_reason="general_retrieval"
             )
 
@@ -1413,10 +1411,10 @@ Respond with ONLY one word: either "artist" or "contract"."""
             source_preference=source_preference
         )
 
-        system_prompt = """You are a routing planner for a music assistant.
+        system_prompt = """You are a routing planner for a music contract assistant.
 Given the user query and current state, return ONLY valid JSON with:
 {
-  "route": "artist" | "contract" | "disambiguate",
+  "route": "contract",
   "answer_mode": "context" | "retrieve",
   "confidence": number between 0 and 1,
   "reason": "short_snake_case_reason",
@@ -1424,13 +1422,11 @@ Given the user query and current state, return ONLY valid JSON with:
 }
 
 Rules:
-1) Prefer route="artist" for artist profile/social/bio/genre/link questions.
-2) Prefer route="contract" for legal/royalty/term/payment/party questions.
-3) For ambiguous artist+contract wording where user intent is truly unclear, use route="disambiguate".
-4) If the question can be answered from provided context/history, set answer_mode="context".
-5) If evidence likely needs contract retrieval, set answer_mode="retrieve".
-6) If selected contract exists and question is contract-specific, lean retrieve unless context clearly contains exact requested facts.
-7) Return JSON only, no markdown or prose."""
+1) route is always "contract" — all queries are answered from contract documents and conversation history.
+2) If the question can be answered from provided context/history, set answer_mode="context".
+3) If evidence likely needs contract retrieval, set answer_mode="retrieve".
+4) If selected contract exists and question is contract-specific, lean retrieve unless context clearly contains exact requested facts.
+5) Return JSON only, no markdown or prose."""
 
         user_prompt = f"""User Query:\n{query}\n\nState:\n{routing_context}"""
 
@@ -1455,8 +1451,8 @@ Rules:
             reason = parsed.get("reason", "llm_default")
             retrieval_reason = parsed.get("retrieval_reason", "general_retrieval")
 
-            if route not in {"artist", "contract", "disambiguate"}:
-                route = "contract"
+            # Always force contract route
+            route = "contract"
             if answer_mode not in {"context", "retrieve"}:
                 answer_mode = "retrieve"
             confidence = max(0.0, min(1.0, confidence))
@@ -2790,19 +2786,22 @@ Your answers should be:
 - Formatted using minimal markdown (**bold** for key terms, bullet points for lists, ### headers only when multiple sections are needed)
 - Format URLs as markdown links: [Display Text](url)"""
 
+        # Append music industry knowledge
+        system_prompt += f"\n\nMUSIC INDUSTRY KNOWLEDGE:\n{MUSIC_INDUSTRY_CONTEXT}"
+
         # Build messages list with conversation history
         messages = [{"role": "system", "content": system_prompt}]
-        
+
         # Add conversation history for context
         conversation_history = self._get_conversation_context(session_id, max_turns=5)
         if conversation_history:
             # Add a context separator
             messages.append({
-                "role": "system", 
+                "role": "system",
                 "content": "Previous conversation for context (use for understanding references and incorporating relevant prior information):"
             })
             messages.extend(conversation_history)
-        
+
         # Add current query with contract context
         user_prompt = f"""Based on the following contract documents, answer this question:
 
@@ -3165,7 +3164,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                            session_id: Optional[str] = None,
                            artist_data: Optional[Dict] = None,
                            context: Optional[Dict] = None,
-                           source_preference: Optional[str] = None) -> Dict:
+                           source_preference: Optional[str] = None,
+                           contract_markdowns: Optional[Dict[str, str]] = None) -> Dict:
         """
         Handle queries when no project is selected.
         Can answer artist-related queries or prompt to select a project for contract queries.
@@ -3316,7 +3316,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                    session_id: Optional[str] = None,
                    artist_data: Optional[Dict] = None,
                    context: Optional[Dict] = None,
-                   source_preference: Optional[str] = None) -> Dict:
+                   source_preference: Optional[str] = None,
+                   contract_markdowns: Optional[Dict[str, str]] = None) -> Dict:
         """
         Ask a question about a specific project's contracts using smart retrieval.
         
@@ -3352,7 +3353,8 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                               session_id: Optional[str] = None,
                               artist_data: Optional[Dict] = None,
                               context: Optional[Dict] = None,
-                              source_preference: Optional[str] = None) -> Dict:
+                              source_preference: Optional[str] = None,
+                              contract_markdowns: Optional[Dict[str, str]] = None) -> Dict:
         """
         Ask a question about multiple specific contracts using smart retrieval.
         Searches across all selected contracts similar to project-wide search.
@@ -3562,12 +3564,13 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         payload = {"type": event_type, **data}
         return f"data: {json.dumps(payload)}\n\n"
 
-    def _stream_llm_completion(self, messages: List[Dict], max_tokens: int = 1000):
+    def _stream_llm_completion(self, messages: List[Dict], max_tokens: int = 1000, model_override: Optional[str] = None):
         """
         Generator that yields token strings from an OpenAI streaming call.
         """
+        model = model_override or self.llm_model
         response = openai_client.chat.completions.create(
-            model=self.llm_model,
+            model=model,
             messages=messages,
             max_completion_tokens=max_tokens,
             stream=True
@@ -3636,6 +3639,9 @@ Your answers should be:
 - Clear, concise, and to the point — no filler or embellishment
 - Formatted using minimal markdown (**bold** for key terms, bullet points for lists, ### headers only when multiple sections are needed)
 - Format URLs as markdown links: [Display Text](url)"""
+
+        # Append music industry knowledge
+        system_prompt += f"\n\nMUSIC INDUSTRY KNOWLEDGE:\n{MUSIC_INDUSTRY_CONTEXT}"
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -3886,7 +3892,9 @@ RULES:
                    session_id: Optional[str] = None,
                    artist_data: Optional[Dict] = None,
                    context: Optional[Dict] = None,
-                   source_preference: Optional[str] = None):
+                   source_preference: Optional[str] = None,
+                   contract_markdowns: Optional[Dict[str, str]] = None,
+                   contract_names: Optional[Dict[str, str]] = None):
         """
         Unified streaming entry point for Zoe chatbot.
         Generator that yields SSE event strings.
@@ -3951,16 +3959,8 @@ RULES:
             yield self._sse_event("complete", result)
             return
 
-        # ── Detect artist intent early (before Tier 2) ──
-        is_artist_intent = (
-            not source_preference
-            and artist_data
-            and self._is_artist_intent_query(query)
-        )
-
-        # ── Tier 2: Try conversation history (skip for artist intent queries and contract switches) ──
-        skip_artist_disambiguation = False
-        if not contracts_changed and not is_artist_intent and (not source_preference or source_preference == "conversation_history"):
+        # ── Tier 2: Try conversation history (skip when contracts just changed) ──
+        if not contracts_changed and (not source_preference or source_preference == "conversation_history"):
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
                 logger.info("[Stream][History] Answered from conversation history")
@@ -3972,61 +3972,15 @@ RULES:
                     yield from self._answer_from_context_stream(query, context, session_id)
                     return
                 source_preference = None
-                skip_artist_disambiguation = True
 
-        # ── Routing decision ──
+        # ── Routing decision (always contract — no artist/disambiguation routes) ──
         contract_id = contract_ids[0] if contract_ids and len(contract_ids) == 1 else None
-        if not source_preference and artist_data and self._is_artist_intent_query(query):
-            route_decision = RouteDecision(
-                route="artist", answer_mode="context",
-                confidence=0.9, reason="keyword_artist_match"
-            )
-        else:
-            route_decision = self._llm_route_decision(
-                query=query, artist_data=artist_data, context=context,
-                source_preference=source_preference,
-                project_id=project_id,
-                contract_id=contract_id
-            )
-
-        # ── Disambiguation ──
-        if route_decision.route == "disambiguate":
-            yield self._sse_event("complete", self._build_source_selection_response(query, session_id))
-            return
-
-        # ── Artist route ──
-        if route_decision.route == "artist":
-            if artist_data:
-                if source_preference == "artist_profile":
-                    yield from self._handle_artist_query_stream(query, artist_data, session_id)
-                    return
-                if skip_artist_disambiguation:
-                    fallback_msg = "I wasn't able to find anything related to that in our conversation. Could you rephrase your question, or would you like me to look up the artist's profile instead?"
-                    self._add_to_memory(session_id, "user", query)
-                    self._add_to_memory(session_id, "assistant", fallback_msg)
-                    yield self._sse_event("complete", {
-                        "query": query, "answer": fallback_msg, "confidence": "low",
-                        "sources": [], "search_results_count": 0, "session_id": session_id,
-                        "answered_from": "conversation_history_insufficient",
-                        "show_quick_actions": False
-                    })
-                    return
-                history = self._get_conversation_context(session_id, max_turns=1)
-                if history:
-                    yield self._sse_event("complete", self._build_artist_source_selection_response(query, session_id))
-                    return
-                yield from self._handle_artist_query_stream(query, artist_data, session_id)
-                return
-
-            self._add_to_memory(session_id, "user", query)
-            response = "I don't have artist information available. Please select an artist from the sidebar."
-            self._add_to_memory(session_id, "assistant", response)
-            yield self._sse_event("complete", {
-                "query": query, "answer": response, "confidence": "needs_artist",
-                "sources": [], "search_results_count": 0, "session_id": session_id,
-                "show_quick_actions": True
-            })
-            return
+        route_decision = self._llm_route_decision(
+            query=query, artist_data=artist_data, context=context,
+            source_preference=source_preference,
+            project_id=project_id,
+            contract_id=contract_id
+        )
 
         # ── Context-based answer (skip when contracts just changed to force fresh retrieval) ──
         if not contracts_changed and self._should_answer_from_context(route_decision, context, contract_id):
@@ -4045,41 +3999,192 @@ RULES:
             })
             return
 
-        # ── Tier 3: Vector search + streaming LLM generation ──
+        # ── Tier 3: Full-document context OR vector search + streaming LLM generation ──
         self._add_to_memory(session_id, "user", query)
 
-        search_query = query
-        retrieval_reason = route_decision.retrieval_reason or "general_retrieval"
-        if retrieval_reason.startswith("missing_"):
-            search_query = self._get_targeted_query(retrieval_reason, query)
+        # Check if full document context is available and within token limits
+        use_full_doc = False
+        if contract_markdowns:
+            total_chars = sum(len(md) for md in contract_markdowns.values())
+            # ~100k tokens ≈ 400k chars — leave room for system prompt + history
+            if total_chars < 400_000:
+                use_full_doc = True
+                logger.info(f"[Stream] Using full document context ({total_chars} chars, {len(contract_markdowns)} contract(s))")
+            else:
+                logger.info(f"[Stream] Full document too large ({total_chars} chars), falling back to chunk retrieval")
 
-        # Perform search based on contract selection
-        if contract_ids and len(contract_ids) > 0:
-            search_results = self.search_engine.search_multiple_contracts(
-                query=search_query, user_id=user_id,
-                project_id=project_id, contract_ids=contract_ids,
-                top_k=top_k or DEFAULT_TOP_K
-            )
+        # Use larger model for multi-contract comparisons (2+ contracts)
+        multi_contract_model = DEFAULT_LLM_MODEL_LARGE if (contract_ids and len(contract_ids) >= 2) else None
+        if multi_contract_model:
+            logger.info(f"[Stream] Multi-contract detected ({len(contract_ids)} contracts) — using {multi_contract_model}")
+
+        if use_full_doc:
+            # Build full document context with filenames as labels
+            full_doc_context = ""
+            for cid, md in contract_markdowns.items():
+                label = contract_names.get(cid, cid) if contract_names else cid
+                full_doc_context += f"\n\n=== CONTRACT: {label} ===\n{md}\n"
+            full_doc_context = full_doc_context.strip()
+
+            # Stream answer using full document
+            yield from self._generate_answer_stream_full_doc(query, full_doc_context, session_id, model_override=multi_contract_model)
         else:
-            search_results = self.search_engine.smart_search(
-                query=search_query, user_id=user_id,
-                project_id=project_id, contract_id=contract_id,
-                top_k=top_k
-            )
+            search_query = query
+            retrieval_reason = route_decision.retrieval_reason or "general_retrieval"
+            if retrieval_reason.startswith("missing_"):
+                search_query = self._get_targeted_query(retrieval_reason, query)
 
-        if not search_results["matches"]:
-            no_result_answer = self._no_result_message(contract_ids)
-            self._add_to_memory(session_id, "assistant", no_result_answer)
-            yield self._sse_event("complete", {
-                "query": query, "answer": no_result_answer, "confidence": "low",
-                "sources": [], "search_results_count": 0, "session_id": session_id
+            # Perform search based on contract selection
+            if contract_ids and len(contract_ids) > 0:
+                search_results = self.search_engine.search_multiple_contracts(
+                    query=search_query, user_id=user_id,
+                    project_id=project_id, contract_ids=contract_ids,
+                    top_k=top_k or DEFAULT_TOP_K
+                )
+            else:
+                search_results = self.search_engine.smart_search(
+                    query=search_query, user_id=user_id,
+                    project_id=project_id, contract_id=contract_id,
+                    top_k=top_k
+                )
+
+            if not search_results["matches"]:
+                no_result_answer = self._no_result_message(contract_ids)
+                self._add_to_memory(session_id, "assistant", no_result_answer)
+                yield self._sse_event("complete", {
+                    "query": query, "answer": no_result_answer, "confidence": "low",
+                    "sources": [], "search_results_count": 0, "session_id": session_id
+                })
+                return
+
+            formatted_context = self._format_context(search_results)
+
+            # Stream the answer generation
+            yield from self._generate_answer_stream(query, formatted_context, search_results, session_id)
+
+    def _generate_answer_stream_full_doc(self, query: str, full_doc_context: str,
+                                          session_id: Optional[str] = None,
+                                          model_override: Optional[str] = None):
+        """
+        Stream LLM answer using the full contract document as context.
+        No similarity threshold check needed since we have the complete document.
+
+        Messages are structured for OpenAI prompt caching:
+        1. system: static instructions (cacheable)
+        2. system: contract documents (cacheable — stable across session)
+        3. user/assistant: conversation history
+        4. user: current query
+        """
+        # Yield empty sources (no chunk-based search was done)
+        yield self._sse_event("sources", {
+            "sources": [],
+            "highest_score": 1.0,
+            "search_results_count": 0
+        })
+
+        # --- Message 1: Static system prompt (cacheable prefix start) ---
+        system_prompt = """You are a legal contract analyst specializing in music industry agreements.
+You have the COMPLETE contract document(s) provided as context. Use them to answer accurately.
+
+CRITICAL RULES:
+1. Answer ONLY the specific question asked - nothing more, nothing less
+2. Do NOT automatically add comparisons, summaries, or extra information unless explicitly requested
+3. Do NOT reference or compare to previous topics in the conversation unless the user asks for it
+4. Be precise and only include information that is explicitly stated in the document
+5. If the answer is not in the document, say so clearly
+6. Do NOT suggest follow-up questions - the system handles this separately
+
+MULTI-CONTRACT COMPARISON RULES:
+- Always refer to contracts by their **filename** (shown after "CONTRACT:" in the document headers), not by internal titles or track names
+- If contracts cover different scopes (e.g., a management agreement vs a production agreement), explain clearly what each contract defines and why a direct comparison may not be meaningful — do not just say "cannot be determined"
+- Structure comparison answers with each contract filename as a **bold header** on its own line, followed by the findings on the next line, with a blank line between sections. End with a bold **Conclusion** header followed by the direct answer. Example format:
+
+  **ContractA.pdf**
+  [findings for contract A]
+
+  **ContractB.pdf**
+  [findings for contract B]
+
+  **Conclusion**
+  [direct answer to the question]
+
+CONVERSATION AWARENESS:
+- Use conversation history to understand context, pronouns, and references
+- If the conversation history contains relevant information, incorporate it
+
+Your answers should be:
+- Accurate and grounded in the provided text
+- Clear, concise, and to the point
+- Formatted with generous spacing between sections for readability
+- Use **bold** for key terms, percentages, and section headers; bullet points for lists
+- Format URLs as markdown links: [Display Text](url)"""
+
+        # Append music industry knowledge
+        system_prompt += f"\n\nMUSIC INDUSTRY KNOWLEDGE:\n{MUSIC_INDUSTRY_CONTEXT}"
+
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # --- Message 2: Contract documents (cacheable — identical for same contracts) ---
+        messages.append({
+            "role": "system",
+            "content": f"Complete contract document(s) for reference:\n\n{full_doc_context}"
+        })
+
+        # --- Messages 3+: Conversation history (varies per turn) ---
+        conversation_history = self._get_conversation_context(session_id, max_turns=5)
+        if conversation_history:
+            messages.extend(conversation_history)
+
+        # --- Final message: Current query ---
+        messages.append({
+            "role": "user",
+            "content": f"{query}\n\nRemember: Answer ONLY what was asked. Do not suggest follow-up questions."
+        })
+
+        effective_model = model_override or self.llm_model
+        logger.info(f"\n[Stream][FullDoc] Generating answer using {effective_model}...")
+
+        try:
+            full_answer = ""
+            for token in self._stream_llm_completion(messages, 2000, model_override=model_override):
+                full_answer += token
+                yield self._sse_event("token", {"content": token})
+
+            answer = full_answer.strip()
+
+            if not answer:
+                answer = "I couldn't generate an answer from the contract document. Please try rephrasing your question."
+                yield self._sse_event("token", {"content": answer})
+
+            # Post-processing
+            extracted_data = self._extract_structured_data(answer, query)
+            is_fallback = "I couldn't find that information" in answer or "I don't have the information" in answer
+
+            yield self._sse_event("data", {
+                "extracted_data": extracted_data if extracted_data else None,
+                "confidence": "low" if is_fallback else "high",
+                "highest_score": 1.0,
+                "model": effective_model,
+                "answered_from": "full_document"
             })
-            return
 
-        formatted_context = self._format_context(search_results)
+            # Store in memory
+            self._add_to_memory(session_id, "assistant", answer)
 
-        # Stream the answer generation
-        yield from self._generate_answer_stream(query, formatted_context, search_results, session_id)
+            # Generate follow-up suggestion
+            _clean_answer, suggestion = self._extract_suggestion_from_answer(answer)
+            if suggestion:
+                context_hash = None
+                self.memory.set_pending_suggestion(session_id, suggestion, context_hash)
+
+            yield self._sse_event("done", {
+                "session_id": session_id,
+                "pending_suggestion": suggestion
+            })
+
+        except Exception as e:
+            logger.error(f"[Stream][FullDoc] Error: {e}")
+            yield self._sse_event("error", {"message": str(e)})
 
     def clear_session(self, session_id: str) -> None:
         """Clear conversation history for a session."""

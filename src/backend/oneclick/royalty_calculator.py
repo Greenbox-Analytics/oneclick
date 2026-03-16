@@ -20,7 +20,7 @@ import difflib
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from .contract_parser import MusicContractParser, ContractData
+from .contract_parser import MusicContractParser, ContractData, STREAMING_EQUIVALENT_TERMS
 from .helpers import normalize_title, find_matching_song, normalize_name, simplify_role
 
 import openpyxl
@@ -35,6 +35,13 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+def is_streaming_equivalent_royalty_type(royalty_type: str) -> bool:
+    """Treat master/producer-style royalties as streaming-equivalent payouts."""
+    if not royalty_type:
+        return False
+    normalized = royalty_type.lower()
+    return any(term in normalized for term in STREAMING_EQUIVALENT_TERMS)
 
 
 
@@ -492,7 +499,7 @@ class RoyaltyCalculator:
                 existing_share_for_party = None
                 
                 # Determine if current share is streaming-related
-                is_streaming_share = 'streaming' in share.royalty_type.lower() or 'digital' in share.royalty_type.lower()
+                is_streaming_share = is_streaming_equivalent_royalty_type(share.royalty_type)
                 
                 for existing in merged_royalty_shares:
                     if normalize_name(existing.party_name) == norm_name:
@@ -502,7 +509,7 @@ class RoyaltyCalculator:
                              # If one is "Publishing" and one is "Streaming", they are different entitlements
                              # even if they have the same percentage (e.g. 50% Pub / 50% Master).
                              
-                             is_existing_streaming = 'streaming' in existing.royalty_type.lower() or 'digital' in existing.royalty_type.lower()
+                             is_existing_streaming = is_streaming_equivalent_royalty_type(existing.royalty_type)
                              
                              # If both are streaming or both are NOT streaming (e.g. both publishing), likely a duplicate
                              if is_streaming_share == is_existing_streaming:
@@ -544,7 +551,8 @@ class RoyaltyCalculator:
         user_id: str = None,
         contract_id: str = None,
         title_column: Optional[str] = None,
-        payable_column: Optional[str] = None
+        payable_column: Optional[str] = None,
+        full_text: str = None
     ) -> List[RoyaltyPayment]:
         """
         Calculate payments for single contract and statement.
@@ -566,13 +574,11 @@ class RoyaltyCalculator:
         
         total_start = time.time()
 
-        # Step 1: Parse contract from Pinecone
-        logger.info("\n📄 Step 1: Extracting contract data from Pinecone...")
+        # Step 1: Parse contract using full document text
+        logger.info(f"\n📄 Step 1: Extracting contract data from full document...")
         t0 = time.time()
         contract_data = self.contract_parser.parse_contract(
-            path=contract_path,
-            user_id=user_id,
-            contract_id=contract_id
+            full_text=full_text
         )
         logger.info(f"⏱️  Step 1 took: {time.time() - t0:.2f}s")
         
@@ -612,7 +618,8 @@ class RoyaltyCalculator:
         user_id: str,
         statement_path: str,
         title_column: Optional[str] = None,
-        payable_column: Optional[str] = None
+        payable_column: Optional[str] = None,
+        contract_markdowns: Dict[str, str] = None
     ) -> List[RoyaltyPayment]:
         """
         Parse multiple contracts from Pinecone in PARALLEL, merge their data, and calculate payments.
@@ -632,17 +639,17 @@ class RoyaltyCalculator:
         logger.info("="*80)
         
         # Step 1: Parse all contracts in PARALLEL
-        logger.info(f"\n📄 Step 1: Parsing {len(contract_ids)} contracts from Pinecone (Parallel)...")
+        logger.info(f"\n📄 Step 1: Parsing {len(contract_ids)} contracts (Parallel)...")
         all_contracts_data = []
-        
-        # Use ThreadPoolExecutor for parallel processing
-        # We limit max_workers to avoid hitting API rate limits too hard
+
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        
+
         with ThreadPoolExecutor(max_workers=4) as executor:
-            # Submit all tasks
             future_to_cid = {
-                executor.submit(self.contract_parser.parse_contract, path=None, user_id=user_id, contract_id=cid): cid 
+                executor.submit(
+                    self.contract_parser.parse_contract,
+                    full_text=contract_markdowns.get(cid) if contract_markdowns else None
+                ): cid
                 for cid in contract_ids
             }
             
@@ -771,10 +778,10 @@ class RoyaltyCalculator:
         if not song_totals:
             raise ValueError("❌ No songs found in royalty statement")
         
-        # Filter for streaming royalties only
+        # Filter for streaming royalties (including equivalent master/producer labels)
         streaming_shares = [
             share for share in contract_data.royalty_shares
-            if 'streaming' in share.royalty_type.lower()
+            if is_streaming_equivalent_royalty_type(share.royalty_type)
         ]
         
         if not streaming_shares:

@@ -97,8 +97,8 @@ export function ZoeInputBar({
                 : !selectedArtist
                   ? "Select an artist to start chatting..."
                   : selectedProject
-                    ? "Ask about contracts or artist info..."
-                    : "Ask about the artist (select a project for contract questions)..."
+                    ? "Ask about your contracts..."
+                    : "Select a project to ask about contracts..."
             }
             value={inputMessage}
             onChange={(e) => onInputChange(e.target.value)}
@@ -131,7 +131,7 @@ export function ZoeInputBar({
         <p className="text-[11px] text-center text-muted-foreground mt-2">
           {isAtLimit
             ? "Conversation limit reached. Please refresh the page to continue."
-            : "Zoe answers based on your artist profile and uploaded contracts"}
+            : "Zoe answers based on your uploaded contracts"}
         </p>
       </div>
     </div>

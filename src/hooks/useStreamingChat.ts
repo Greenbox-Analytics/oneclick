@@ -160,6 +160,7 @@ export function useStreamingChat() {
         contractIds?: string[];
         sessionId: string;
         context: ConversationContext;
+        contractMarkdowns?: Record<string, string>;
       },
       options: SendMessageOptions = {}
     ): Promise<{
@@ -227,6 +228,7 @@ export function useStreamingChat() {
             artist_id: params.artistId,
             context: params.context,
             source_preference: sourcePreference || null,
+            contract_markdowns: params.contractMarkdowns || null,
           }),
         });
 

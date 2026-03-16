@@ -137,6 +137,9 @@ const Zoe = () => {
   const [selectedProject, setSelectedProject] = useState<string>(restoredSession?.selectedProject || "");
   const [selectedContracts, setSelectedContracts] = useState<string[]>(restoredSession?.selectedContracts || []);
 
+  // Full contract markdown cache for full-document context
+  const [contractMarkdowns, setContractMarkdowns] = useState<Record<string, string>>({});
+
   // Create Project State
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [newProjectNameInput, setNewProjectNameInput] = useState("");
@@ -438,6 +441,39 @@ const Zoe = () => {
     prevSelectedContractsRef.current = selectedContracts;
   }, [selectedContracts, contracts]);
 
+  // Fetch full contract markdown when contracts are selected (for full-document context)
+  useEffect(() => {
+    if (!user || selectedContracts.length === 0) return;
+
+    const fetchMissing = async () => {
+      const missing = selectedContracts.filter(id => !contractMarkdowns[id]);
+      if (missing.length === 0) return;
+
+      const results: Record<string, string> = {};
+      await Promise.all(
+        missing.map(async (cid) => {
+          try {
+            const res = await fetch(`${API_URL}/contracts/${cid}/markdown?user_id=${user.id}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.markdown) {
+                results[cid] = data.markdown;
+              }
+            }
+          } catch (err) {
+            console.warn(`Failed to fetch markdown for contract ${cid}:`, err);
+          }
+        })
+      );
+
+      if (Object.keys(results).length > 0) {
+        setContractMarkdowns(prev => ({ ...prev, ...results }));
+      }
+    };
+
+    fetchMissing();
+  }, [selectedContracts, user]);
+
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -537,14 +573,25 @@ const Zoe = () => {
   };
 
   // ── Chat params helper (shared by all send functions) ──
-  const getChatParams = useCallback(() => ({
-    userId: user!.id,
-    artistId: selectedArtist,
-    projectId: selectedProject || undefined,
-    contractIds: selectedContracts.length > 0 ? selectedContracts : undefined,
-    sessionId,
-    context: conversationContext,
-  }), [user, selectedArtist, selectedProject, selectedContracts, sessionId, conversationContext]);
+  const getChatParams = useCallback(() => {
+    // Build markdowns map for only the selected contracts that are cached
+    const markdowns: Record<string, string> = {};
+    for (const cid of selectedContracts) {
+      if (contractMarkdowns[cid]) {
+        markdowns[cid] = contractMarkdowns[cid];
+      }
+    }
+
+    return {
+      userId: user!.id,
+      artistId: selectedArtist,
+      projectId: selectedProject || undefined,
+      contractIds: selectedContracts.length > 0 ? selectedContracts : undefined,
+      sessionId,
+      context: conversationContext,
+      contractMarkdowns: Object.keys(markdowns).length > 0 ? markdowns : undefined,
+    };
+  }, [user, selectedArtist, selectedProject, selectedContracts, sessionId, conversationContext, contractMarkdowns]);
 
   // Process the result returned from sendMessage (update session, context, etc.)
   const handleSendResult = useCallback((result: {
@@ -962,7 +1009,6 @@ const Zoe = () => {
             messages={messages}
             isStreaming={isStreaming}
             selectedArtist={selectedArtist}
-            selectedArtistName={selectedArtistName}
             selectedProject={selectedProject}
             copiedMessageId={copiedMessageId}
             messagesEndRef={messagesEndRef}
