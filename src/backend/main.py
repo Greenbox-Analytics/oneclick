@@ -154,6 +154,7 @@ class ZoeAskRequest(BaseModel):
     artist_id: Optional[str] = None  # Artist ID for artist-related queries
     context: Optional[ConversationContext] = None  # Conversation context for structured tracking
     source_preference: Optional[Literal["artist_profile", "contract_context", "conversation_history"]] = None
+    contract_markdowns: Optional[Dict[str, str]] = None  # Full contract markdown text keyed by contract_id
 
 
 class ZoeQuickAction(BaseModel):
@@ -623,6 +624,15 @@ async def upload_contract(
                 contract_filename=file.filename
             )
             
+            # Store full markdown text for full-document context
+            if stats.get("markdown_text"):
+                try:
+                    get_supabase_client().table("project_files").update(
+                        {"contract_markdown": stats["markdown_text"]}
+                    ).eq("id", contract_id).execute()
+                except Exception as md_err:
+                    print(f"Warning: Failed to store contract markdown: {md_err}")
+
             return ContractUploadResponse(
                 status="success",
                 contract_id=contract_id,
@@ -682,6 +692,50 @@ async def upload_multiple_contracts(
         "failed": len([r for r in results if r["status"] == "error"]),
         "results": results
     }
+
+@app.get("/contracts/{contract_id}/markdown")
+async def get_contract_markdown(contract_id: str, user_id: str):
+    """
+    Get the full markdown text of a contract for full-document context.
+    If markdown is not cached, lazily converts the PDF and caches the result.
+    """
+    try:
+        res = get_supabase_client().table("project_files").select(
+            "id, file_name, file_path, contract_markdown"
+        ).eq("id", contract_id).execute()
+
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Contract not found")
+
+        record = res.data[0]
+        markdown = record.get("contract_markdown")
+
+        if not markdown:
+            # Lazy migration: convert PDF to markdown and cache it
+            from vector_search.helpers import pdf_to_markdown
+            file_data = get_supabase_client().storage.from_("project-files").download(record["file_path"])
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                tmp.write(file_data)
+                tmp_path = tmp.name
+            try:
+                markdown = pdf_to_markdown(tmp_path)
+                # Cache for future requests
+                get_supabase_client().table("project_files").update(
+                    {"contract_markdown": markdown}
+                ).eq("id", contract_id).execute()
+            finally:
+                os.unlink(tmp_path)
+
+        return {
+            "contract_id": contract_id,
+            "contract_file": record.get("file_name", ""),
+            "markdown": markdown
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get contract markdown: {str(e)}")
+
 
 @app.delete("/contracts/{contract_id}", response_model=ContractDeleteResponse)
 async def delete_contract(contract_id: str, user_id: str = Form(...)):
@@ -783,7 +837,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 session_id=session_id,
                 artist_data=artist_data,
                 context=context_dict,
-                source_preference=request.source_preference
+                source_preference=request.source_preference,
+                contract_markdowns=request.contract_markdowns
             )
         elif request.contract_ids and len(request.contract_ids) > 0:
             # Multiple contracts selected - search across all of them
@@ -796,7 +851,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 session_id=session_id,
                 artist_data=artist_data,
                 context=context_dict,
-                source_preference=request.source_preference
+                source_preference=request.source_preference,
+                contract_markdowns=request.contract_markdowns
             )
         else:
             # Project-wide question
@@ -808,7 +864,8 @@ async def zoe_ask_question(request: ZoeAskRequest):
                 session_id=session_id,
                 artist_data=artist_data,
                 context=context_dict,
-                source_preference=request.source_preference
+                source_preference=request.source_preference,
+                contract_markdowns=request.contract_markdowns
             )
         
         # Format response - filter out sources with missing required fields
@@ -882,6 +939,15 @@ async def zoe_ask_stream(request: ZoeAskRequest):
         if request.context:
             context_dict = request.context.model_dump()
 
+        # Look up contract filenames for labeling in LLM context
+        contract_names = {}
+        if request.contract_ids:
+            try:
+                res = get_supabase_client().table("project_files").select("id, file_name").in_("id", request.contract_ids).execute()
+                contract_names = {r["id"]: r["file_name"] for r in (res.data or [])}
+            except Exception as e:
+                print(f"Warning: Could not fetch contract names: {e}")
+
         def generate():
             try:
                 for event in chatbot.ask_stream(
@@ -893,7 +959,9 @@ async def zoe_ask_stream(request: ZoeAskRequest):
                     session_id=session_id,
                     artist_data=artist_data,
                     context=context_dict,
-                    source_preference=request.source_preference
+                    source_preference=request.source_preference,
+                    contract_markdowns=request.contract_markdowns,
+                    contract_names=contract_names
                 ):
                     yield event
             except Exception as e:
@@ -1117,26 +1185,47 @@ async def oneclick_calculate_royalties_stream(
             yield f"data: {json.dumps({'type': 'status', 'message': 'Royalty statement downloaded', 'progress': 20, 'stage': 'downloading'})}\n\n"
             await asyncio.sleep(0.1)
             
-            # Step 2: Download contract
-            # Only download if single contract legacy mode, otherwise skip (Pinecone used)
-            if len(target_contract_ids) == 1 and contract_id:
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading contract...', 'progress': 25, 'stage': 'downloading'})}\n\n"
-                
-                contract_res = supabase.table("project_files").select("*").eq("id", target_contract_ids[0]).execute()
-                if not contract_res.data:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'Contract file not found'})}\n\n"
-                    return
-                
-                contract_file = contract_res.data[0]
-                contract_data = supabase.storage.from_("project-files").download(contract_file["file_path"])
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
-                    tmp_contract.write(contract_data)
-                    contract_path = tmp_contract.name
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Contract downloaded', 'progress': 30, 'stage': 'downloading'})}\n\n"
-            else:
-                yield f"data: {json.dumps({'type': 'status', 'message': f'Preparing {len(target_contract_ids)} contracts...', 'progress': 30, 'stage': 'downloading'})}\n\n"
+            # Step 2: Fetch full contract markdown for each contract
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Loading contract text...', 'progress': 25, 'stage': 'downloading'})}\n\n"
+
+            contract_markdowns = {}
+            for cid in target_contract_ids:
+                try:
+                    c_res = get_supabase_client().table("project_files").select(
+                        "id, file_path, contract_markdown"
+                    ).eq("id", cid).execute()
+                    if c_res.data:
+                        md = c_res.data[0].get("contract_markdown")
+                        if not md:
+                            # Lazy migration: convert PDF to markdown
+                            from vector_search.helpers import pdf_to_markdown
+                            pdf_data = get_supabase_client().storage.from_("project-files").download(c_res.data[0]["file_path"])
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
+                                tmp_pdf.write(pdf_data)
+                                tmp_pdf_path = tmp_pdf.name
+                            try:
+                                md = pdf_to_markdown(tmp_pdf_path)
+                                get_supabase_client().table("project_files").update(
+                                    {"contract_markdown": md}
+                                ).eq("id", cid).execute()
+                            finally:
+                                os.unlink(tmp_pdf_path)
+                        if md:
+                            contract_markdowns[cid] = md
+                except Exception as e:
+                    print(f"Warning: Could not fetch markdown for contract {cid}: {e}")
+
+            # Legacy: still download PDF for single contract if markdown unavailable
+            if len(target_contract_ids) == 1 and contract_id and not contract_markdowns:
+                contract_res = get_supabase_client().table("project_files").select("*").eq("id", target_contract_ids[0]).execute()
+                if contract_res.data:
+                    contract_file = contract_res.data[0]
+                    cd = get_supabase_client().storage.from_("project-files").download(contract_file["file_path"])
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_contract:
+                        tmp_contract.write(cd)
+                        contract_path = tmp_contract.name
+
+            yield f"data: {json.dumps({'type': 'status', 'message': f'Loaded {len(contract_markdowns)} contract(s)', 'progress': 30, 'stage': 'downloading'})}\n\n"
 
             await asyncio.sleep(0.1)
             
@@ -1165,7 +1254,8 @@ async def oneclick_calculate_royalties_stream(
                 statement_path=statement_path,
                 user_id=user_id,
                 contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
-                contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None
+                contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
+                contract_markdowns=contract_markdowns if contract_markdowns else None
             )
             
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"

@@ -10,7 +10,6 @@ interface ZoeChatMessagesProps {
   messages: Message[];
   isStreaming: boolean;
   selectedArtist: string;
-  selectedArtistName?: string;
   selectedProject: string;
   copiedMessageId: string | null;
   messagesEndRef: RefObject<HTMLDivElement>;
@@ -24,7 +23,6 @@ export function ZoeChatMessages({
   messages,
   isStreaming,
   selectedArtist,
-  selectedArtistName,
   selectedProject,
   copiedMessageId,
   messagesEndRef,
@@ -45,64 +43,42 @@ export function ZoeChatMessages({
               <h3 className="text-xl font-semibold mb-2">Hi, I'm Zoe!</h3>
               <p className="text-muted-foreground mb-8 max-w-md mx-auto">
                 {!selectedArtist
-                  ? "Select an artist from the sidebar to start asking questions."
+                  ? "Select an artist and project from the sidebar, then attach a contract to get started."
                   : selectedProject
-                    ? "I can help you understand your contracts and artist info. Ask me about royalty splits, payment terms, or artist details."
-                    : `I can tell you about ${selectedArtistName || "the artist"}. Select a project to also ask about contracts.`}
+                    ? "I can help you understand your contracts. Ask me about royalty splits, payment terms, parties involved, and more."
+                    : "Select a project and attach a contract to start asking questions."}
               </p>
 
               {/* Quick Action Buttons */}
-              {selectedArtist && (
+              {selectedArtist && selectedProject && (
                 <div className="flex flex-wrap justify-center gap-2 max-w-lg mx-auto">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => onQuickAction("What are the artist's social media links?")}
+                    onClick={() => onQuickAction("What are the streaming royalty splits in this contract?")}
                     disabled={isStreaming}
                     className="text-sm"
                   >
-                    📱 Social Media
+                    💰 Royalty Splits
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => onQuickAction("Tell me about the artist")}
+                    onClick={() => onQuickAction("What are the payment terms in this contract?")}
                     disabled={isStreaming}
                     className="text-sm"
                   >
-                    🎤 Artist Overview
+                    📅 Payment Terms
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => onQuickAction("What is the artist's bio?")}
+                    onClick={() => onQuickAction("Who are the parties involved in this contract?")}
                     disabled={isStreaming}
                     className="text-sm"
                   >
-                    📄 Artist Bio
+                    👥 Involved Parties
                   </Button>
-                  {selectedProject && (
-                    <>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onQuickAction("What are the streaming royalty splits in this contract?")}
-                        disabled={isStreaming}
-                        className="text-sm"
-                      >
-                        💰 Royalty Splits
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onQuickAction("What are the payment terms in this contract?")}
-                        disabled={isStreaming}
-                        className="text-sm"
-                      >
-                        📅 Payment Terms
-                      </Button>
-                    </>
-                  )}
                 </div>
               )}
             </div>
