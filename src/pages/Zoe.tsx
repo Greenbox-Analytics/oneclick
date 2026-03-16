@@ -1009,7 +1009,6 @@ const Zoe = () => {
             messages={messages}
             isStreaming={isStreaming}
             selectedArtist={selectedArtist}
-            selectedArtistName={selectedArtistName}
             selectedProject={selectedProject}
             copiedMessageId={copiedMessageId}
             messagesEndRef={messagesEndRef}
