@@ -112,6 +112,7 @@ ROLE_SIMPLIFICATIONS = {
     "lyrical writer": "writer",
     "lyrical writer (songwriter)": "writer",
     "lyrical writer (credited as a sole lyrical writer)": "writer",
+    "lyrical writer (credited as sole lyrical writer/songwriter)": "writer",
     "songwriter": "writer",
     "writer": "writer",
     "producer": "producer",
@@ -127,20 +128,52 @@ ROLE_SIMPLIFICATIONS = {
     "licensee": "licensee",
 }
 
+# Ordered keyword fallback for when exact dict lookup misses a variant
+ROLE_KEYWORDS = [
+    ("songwriter", "writer"),
+    ("writer", "writer"),
+    ("producer", "producer"),
+    ("artist", "artist"),
+    ("label", "label"),
+    ("company", "label"),
+    ("distributor", "distributor"),
+    ("manager", "manager"),
+    ("mixer", "mixer"),
+    ("remixer", "remixer"),
+    ("publisher", "publisher"),
+    ("licensor", "licensor"),
+    ("licensee", "licensee"),
+]
+
 
 def simplify_role(role: str) -> str:
     """
     Simplify a potentially verbose role string into concise, standardized terms.
     Handles combined roles separated by semicolons.
-    
+    Uses exact dict lookup first, then keyword substring fallback.
+
     Examples:
-        "lyrical writer (credited as a sole lyrical writer)" -> "Writer"
-        "producer; lyrical writer (songwriter)" -> "Producer; Writer"
+        "lyrical writer (credited as a sole lyrical writer)" -> "writer"
+        "producer; lyrical writer (songwriter)" -> "producer; writer"
     """
     parts = [r.strip() for r in role.split(";")]
     simplified = set()
     for part in parts:
-        simplified.add(ROLE_SIMPLIFICATIONS.get(part.lower(), part))
+        lower = part.lower()
+        # Fast path: exact match
+        match = ROLE_SIMPLIFICATIONS.get(lower)
+        if match:
+            simplified.add(match)
+            continue
+        # Fallback: keyword substring match
+        found = False
+        for keyword, simple in ROLE_KEYWORDS:
+            if keyword in lower:
+                simplified.add(simple)
+                found = True
+                break
+        if not found:
+            simplified.add(part)
     return "; ".join(sorted(simplified))
 
 

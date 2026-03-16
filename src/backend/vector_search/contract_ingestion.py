@@ -233,7 +233,8 @@ class ContractIngestion:
             "namespace": namespace,
             "index": self.index_name,
             "chunk_size": CHUNK_SIZE,
-            "chunk_overlap": CHUNK_OVERLAP
+            "chunk_overlap": CHUNK_OVERLAP,
+            "markdown_text": markdown_text
         }
         
         print("\n" + "=" * 80)

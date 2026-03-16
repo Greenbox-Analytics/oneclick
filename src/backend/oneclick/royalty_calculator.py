@@ -551,7 +551,8 @@ class RoyaltyCalculator:
         user_id: str = None,
         contract_id: str = None,
         title_column: Optional[str] = None,
-        payable_column: Optional[str] = None
+        payable_column: Optional[str] = None,
+        full_text: str = None
     ) -> List[RoyaltyPayment]:
         """
         Calculate payments for single contract and statement.
@@ -573,13 +574,11 @@ class RoyaltyCalculator:
         
         total_start = time.time()
 
-        # Step 1: Parse contract from Pinecone
-        logger.info("\n📄 Step 1: Extracting contract data from Pinecone...")
+        # Step 1: Parse contract using full document text
+        logger.info(f"\n📄 Step 1: Extracting contract data from full document...")
         t0 = time.time()
         contract_data = self.contract_parser.parse_contract(
-            path=contract_path,
-            user_id=user_id,
-            contract_id=contract_id
+            full_text=full_text
         )
         logger.info(f"⏱️  Step 1 took: {time.time() - t0:.2f}s")
         
@@ -619,7 +618,8 @@ class RoyaltyCalculator:
         user_id: str,
         statement_path: str,
         title_column: Optional[str] = None,
-        payable_column: Optional[str] = None
+        payable_column: Optional[str] = None,
+        contract_markdowns: Dict[str, str] = None
     ) -> List[RoyaltyPayment]:
         """
         Parse multiple contracts from Pinecone in PARALLEL, merge their data, and calculate payments.
@@ -639,17 +639,17 @@ class RoyaltyCalculator:
         logger.info("="*80)
         
         # Step 1: Parse all contracts in PARALLEL
-        logger.info(f"\n📄 Step 1: Parsing {len(contract_ids)} contracts from Pinecone (Parallel)...")
+        logger.info(f"\n📄 Step 1: Parsing {len(contract_ids)} contracts (Parallel)...")
         all_contracts_data = []
-        
-        # Use ThreadPoolExecutor for parallel processing
-        # We limit max_workers to avoid hitting API rate limits too hard
+
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        
+
         with ThreadPoolExecutor(max_workers=4) as executor:
-            # Submit all tasks
             future_to_cid = {
-                executor.submit(self.contract_parser.parse_contract, path=None, user_id=user_id, contract_id=cid): cid 
+                executor.submit(
+                    self.contract_parser.parse_contract,
+                    full_text=contract_markdowns.get(cid) if contract_markdowns else None
+                ): cid
                 for cid in contract_ids
             }
             
