@@ -1045,6 +1045,25 @@ async def confirm_calculation(request: ConfirmCalculationRequest):
     Save confirmed calculation results to the database.
     """
     try:
+        # 0. Delete old cached calculation for same statement + contracts (if any)
+        existing = get_supabase_client().table("royalty_calculations")\
+            .select("id")\
+            .eq("royalty_statement_id", request.royalty_statement_id)\
+            .execute()
+
+        for calc in existing.data:
+            contracts_res = get_supabase_client().table("royalty_calculation_contracts")\
+                .select("contract_id")\
+                .eq("calculation_id", calc['id'])\
+                .execute()
+            cached_ids = set(c['contract_id'] for c in contracts_res.data)
+            if cached_ids == set(request.contract_ids):
+                get_supabase_client().table("royalty_calculation_contracts")\
+                    .delete().eq("calculation_id", calc['id']).execute()
+                get_supabase_client().table("royalty_calculations")\
+                    .delete().eq("id", calc['id']).execute()
+                break
+
         # 1. Insert into royalty_calculations
         calc_res = get_supabase_client().table("royalty_calculations").insert({
             "royalty_statement_id": request.royalty_statement_id,
