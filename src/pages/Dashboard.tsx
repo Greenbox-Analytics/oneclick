@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, User, Users, Plus, LogOut } from "lucide-react";
+import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   DropdownMenu,
@@ -104,7 +104,7 @@ const Dashboard = () => {
           <p className="text-muted-foreground">Manage your artists and calculate royalty splits</p>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-2 mb-8">
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 mb-8">
           <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/tools")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
@@ -131,6 +131,21 @@ const Dashboard = () => {
             <CardContent>
               <Button variant="outline" className="w-full">
                 View Artists
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/workspace")}>
+            <CardHeader>
+              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
+                <LayoutGrid className="w-6 h-6 text-primary" />
+              </div>
+              <CardTitle>Workspace</CardTitle>
+              <CardDescription>Project boards, integrations, and connected services</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full">
+                Open Workspace
               </Button>
             </CardContent>
           </Card>

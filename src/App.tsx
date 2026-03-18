@@ -16,6 +16,8 @@ import OneClick from "./pages/OneClick";
 import OneClickDocuments from "./pages/OneClickDocuments";
 import Zoe from "./pages/Zoe";
 import Profile from "./pages/Profile";
+import Workspace from "./pages/Workspace";
+import WorkspaceBoards from "./pages/WorkspaceBoards";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -99,6 +101,30 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Profile />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/workspace"
+              element={
+                <ProtectedRoute>
+                  <Workspace />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/workspace/boards"
+              element={
+                <ProtectedRoute>
+                  <WorkspaceBoards />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/workspace/boards/:artistId"
+              element={
+                <ProtectedRoute>
+                  <WorkspaceBoards />
                 </ProtectedRoute>
               }
             />
