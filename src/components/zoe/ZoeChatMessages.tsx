@@ -11,6 +11,7 @@ interface ZoeChatMessagesProps {
   isStreaming: boolean;
   selectedArtist: string;
   selectedProject: string;
+  selectedContracts: string[];
   copiedMessageId: string | null;
   messagesEndRef: RefObject<HTMLDivElement>;
   onQuickAction: (question: string) => void;
@@ -24,6 +25,7 @@ export function ZoeChatMessages({
   isStreaming,
   selectedArtist,
   selectedProject,
+  selectedContracts,
   copiedMessageId,
   messagesEndRef,
   onQuickAction,
@@ -41,16 +43,21 @@ export function ZoeChatMessages({
                 <Bot className="w-8 h-8 text-primary" />
               </div>
               <h3 className="text-xl font-semibold mb-2">Hi, I'm Zoe!</h3>
-              <p className="text-muted-foreground mb-8 max-w-md mx-auto">
+              <p className="text-muted-foreground mb-2 max-w-md mx-auto">
                 {!selectedArtist
-                  ? "Select an artist and project from the sidebar, then attach a contract to get started."
-                  : selectedProject
-                    ? "I can help you understand your contracts. Ask me about royalty splits, payment terms, parties involved, and more."
-                    : "Select a project and attach a contract to start asking questions."}
+                  ? "Select an artist and project from the sidebar, then select contracts to get started."
+                  : !selectedProject
+                    ? "Select a project and choose contracts to start asking questions."
+                    : selectedContracts.length === 0
+                      ? "Select one or more contracts from the sidebar to get started. I answer questions based on your selected contracts."
+                      : "I'm ready to answer questions about your selected contracts. Ask me about royalty splits, payment terms, parties involved, and more."}
+              </p>
+              <p className="text-xs text-muted-foreground/70 mb-8 max-w-md mx-auto">
+                Zoe's answers are based on your selected contracts.
               </p>
 
               {/* Quick Action Buttons */}
-              {selectedArtist && selectedProject && (
+              {selectedArtist && selectedProject && selectedContracts.length > 0 && (
                 <div className="flex flex-wrap justify-center gap-2 max-w-lg mx-auto">
                   <Button
                     variant="outline"

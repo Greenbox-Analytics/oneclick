@@ -1000,6 +1000,9 @@ const Zoe = () => {
                 )}
               </div>
             </ScrollArea>
+            <p className="text-[11px] text-center text-muted-foreground px-4 py-2 border-t border-border">
+              Select contracts to ask Zoe about them
+            </p>
           </div>
         </aside>
 
@@ -1010,6 +1013,7 @@ const Zoe = () => {
             isStreaming={isStreaming}
             selectedArtist={selectedArtist}
             selectedProject={selectedProject}
+            selectedContracts={selectedContracts}
             copiedMessageId={copiedMessageId}
             messagesEndRef={messagesEndRef}
             onQuickAction={handleQuickAction}
