@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -39,8 +39,14 @@ export function TasksOverview() {
   const [newParentTitle, setNewParentTitle] = useState("");
   const [activeParentId, setActiveParentId] = useState<string | null>(null);
 
-  const debouncedSearch = searchQuery;
-  const { parents, ungrouped, isLoading, createParent, deleteParent } = useParentTasks(
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 1000);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const { parents, isLoading, createParent, deleteParent } = useParentTasks(
     debouncedSearch || undefined,
     artistFilter || undefined
   );

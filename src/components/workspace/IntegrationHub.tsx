@@ -1,6 +1,5 @@
 import { IntegrationCard } from "./IntegrationCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
-import { HardDrive, MessageSquare, FileText, LayoutGrid } from "lucide-react";
 import type { IntegrationProvider, ConnectionStatus } from "@/types/integrations";
 
 const INTEGRATIONS = [
@@ -8,28 +7,28 @@ const INTEGRATIONS = [
     provider: "google_drive" as IntegrationProvider,
     name: "Google Drive",
     description: "Sync contracts and royalty statements with Google Drive",
-    icon: <HardDrive className="w-6 h-6" />,
+    icon: <img src="/drive.webp" alt="Google Drive" className="w-6 h-6 object-contain" />,
     color: "#4285F4",
   },
   {
     provider: "slack" as IntegrationProvider,
     name: "Slack",
     description: "Get notifications and sync updates to Slack channels",
-    icon: <MessageSquare className="w-6 h-6" />,
+    icon: <img src="/slack.png" alt="Slack" className="w-6 h-6 object-contain" />,
     color: "#4A154B",
   },
   {
     provider: "notion" as IntegrationProvider,
     name: "Notion",
     description: "Sync project boards and tasks with Notion databases",
-    icon: <FileText className="w-6 h-6" />,
+    icon: <img src="/Notion_app_logo.png" alt="Notion" className="w-6 h-6 object-contain" />,
     color: "#000000",
   },
   {
     provider: "monday" as IntegrationProvider,
     name: "Monday.com",
     description: "Sync project boards and tasks with Monday.com boards",
-    icon: <LayoutGrid className="w-6 h-6" />,
+    icon: <img src="/mondaycom.png" alt="Monday.com" className="w-6 h-6 object-contain" />,
     color: "#FF3D57",
   },
 ];
