@@ -1,7 +1,8 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Calendar, MoreHorizontal, Trash2, ExternalLink, Users, CornerDownRight } from "lucide-react";
+import { Calendar, MoreHorizontal, Trash2, ExternalLink, Users, CornerDownRight, AlertCircle } from "lucide-react";
+import { format } from "date-fns";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +45,8 @@ export function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
     borderLeftWidth: task.color ? 3 : 1,
   };
 
+  const isDueToday = task.due_date === format(new Date(), "yyyy-MM-dd");
+
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return null;
     return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -69,7 +72,7 @@ export function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
     >
       <CardContent className="p-3 space-y-2">
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             {task.parent_title && (
               <p className="text-[10px] text-muted-foreground flex items-center gap-0.5 mb-0.5">
                 <CornerDownRight className="h-2.5 w-2.5" />
@@ -78,6 +81,12 @@ export function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
             )}
             <p className="text-sm font-medium leading-snug">{task.title}</p>
           </div>
+          {isDueToday && (
+            <Badge className="bg-red-500 text-white text-[10px] px-1.5 py-0 shrink-0 hover:bg-red-600">
+              <AlertCircle className="h-3 w-3 mr-0.5" />
+              Due Today
+            </Badge>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button

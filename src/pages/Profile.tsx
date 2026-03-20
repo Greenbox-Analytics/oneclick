@@ -3,7 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Music, Loader2 } from "lucide-react";
+import { Music, Loader2, Sun, Moon } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -14,6 +15,23 @@ const Profile = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("theme") === "dark" || document.documentElement.classList.contains("dark");
+    }
+    return false;
+  });
+
+  const toggleTheme = (dark: boolean) => {
+    setIsDark(dark);
+    if (dark) {
+      document.documentElement.classList.add("dark");
+      localStorage.setItem("theme", "dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+      localStorage.setItem("theme", "light");
+    }
+  };
   const [formData, setFormData] = useState({
     full_name: "",
     email: "",
@@ -177,6 +195,27 @@ const Profile = () => {
                   "Save Changes"
                 )}
               </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Appearance</CardTitle>
+            <CardDescription>Customize the look and feel</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {isDark ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
+                <div>
+                  <Label>Dark Mode</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {isDark ? "Dark theme is active" : "Light theme is active"}
+                  </p>
+                </div>
+              </div>
+              <Switch checked={isDark} onCheckedChange={toggleTheme} />
             </div>
           </CardContent>
         </Card>

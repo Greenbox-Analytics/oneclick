@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -9,7 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Search, Loader2 } from "lucide-react";
+import { Plus, Search, Loader2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   DndContext,
@@ -46,7 +46,7 @@ export function TasksOverview() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const { parents, isLoading, createParent, deleteParent } = useParentTasks(
+  const { parents, ungrouped, isLoading, createParent, deleteParent } = useParentTasks(
     debouncedSearch || undefined,
     artistFilter || undefined
   );
@@ -191,15 +191,22 @@ export function TasksOverview() {
           ) : (
             <Button size="sm" onClick={() => setIsCreatingParent(true)}>
               <Plus className="h-4 w-4 mr-1" />
-              New Parent Task
+              New Epic
             </Button>
           )}
         </div>
 
-        {parents.length === 0 && ungrouped.length === 0 && (
+        {parents.length === 0 && ungrouped.length === 0 && !artistFilter && (
           <div className="text-center py-12 text-muted-foreground">
-            <p className="text-lg font-semibold mb-2">No parent tasks yet</p>
-            <p>Create a parent task to start organizing your work</p>
+            <p className="text-lg font-semibold mb-2">No epics yet</p>
+            <p>Create an epic to start organizing your work</p>
+          </div>
+        )}
+
+        {parents.length === 0 && artistFilter && (
+          <div className="flex items-center gap-2 rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950/30 px-4 py-3 text-sm text-yellow-800 dark:text-yellow-200">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <p>No epics found for the selected artist. Try selecting a different artist or create a new epic.</p>
           </div>
         )}
 
@@ -253,7 +260,7 @@ export function TasksOverview() {
           <>
             <Separator />
             <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-              Parent Tasks with Subtasks
+              Epics with Subtasks
             </h4>
             <div className="space-y-3">
               {parents.map((parent) => (

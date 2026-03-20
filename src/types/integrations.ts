@@ -63,6 +63,7 @@ export interface BoardTask {
   external_url?: string;
   last_synced_at?: string;
   sync_hash?: string;
+  completed_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -122,6 +123,18 @@ export interface MondayBoard {
   state: string;
   kind: string;
   columns: { id: string; title: string; type: string }[];
+}
+
+export interface WorkspaceSettings {
+  id: string;
+  user_id: string;
+  board_period: "weekly" | "biweekly" | "monthly" | "custom";
+  custom_period_days?: number;
+  calendar_view?: "day" | "week" | "month" | "year";
+  timezone?: string;
+  use_24h_time: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface NotificationSetting {

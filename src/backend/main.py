@@ -36,12 +36,14 @@ from integrations.slack.router import router as slack_router
 from integrations.notion.router import router as notion_router
 from integrations.monday.router import router as monday_router
 from boards.router import router as boards_router
+from settings.router import router as settings_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
 app.include_router(notion_router, prefix="/integrations/notion", tags=["Notion"])
 app.include_router(monday_router, prefix="/integrations/monday", tags=["Monday.com"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
+app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])
 
 # Configure CORS - support multiple origins from environment variable
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")]

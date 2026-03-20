@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, MoreHorizontal, Trash2 } from "lucide-react";
+import { Plus, MoreHorizontal, Trash2, Pencil } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,6 +28,7 @@ interface KanbanColumnProps {
   onCreateParent: (data: { title: string }) => void;
   onDeleteTask: (taskId: string) => void;
   onDeleteColumn: (columnId: string) => void;
+  onUpdateColumn: (data: { id: string; title?: string }) => void;
   onTaskClick: (taskId: string) => void;
 }
 
@@ -39,12 +40,23 @@ export function KanbanColumn({
   onCreateParent,
   onDeleteTask,
   onDeleteColumn,
+  onUpdateColumn,
   onTaskClick,
 }: KanbanColumnProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [isParent, setIsParent] = useState(false);
   const [selectedParentId, setSelectedParentId] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameTitle, setRenameTitle] = useState(column.title);
+
+  const handleRename = () => {
+    const trimmed = renameTitle.trim();
+    if (trimmed && trimmed !== column.title) {
+      onUpdateColumn({ id: column.id, title: trimmed });
+    }
+    setIsRenaming(false);
+  };
 
   const { setNodeRef, isOver } = useDroppable({
     id: `column-${column.id}`,
@@ -89,25 +101,51 @@ export function KanbanColumn({
     >
       {/* Column header */}
       <div className="flex items-center justify-between px-3 py-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           {column.color && (
             <div
               className="w-2.5 h-2.5 rounded-full shrink-0"
               style={{ backgroundColor: column.color }}
             />
           )}
-          <h4 className="text-sm font-semibold">{column.title}</h4>
-          <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5">
+          {isRenaming ? (
+            <Input
+              value={renameTitle}
+              onChange={(e) => setRenameTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRename();
+                if (e.key === "Escape") {
+                  setRenameTitle(column.title);
+                  setIsRenaming(false);
+                }
+              }}
+              onBlur={handleRename}
+              autoFocus
+              className="h-6 text-sm font-semibold px-1 py-0"
+            />
+          ) : (
+            <h4 className="text-sm font-semibold truncate">{column.title}</h4>
+          )}
+          <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 shrink-0">
             {columnTasks.length}
           </span>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7">
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0">
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={() => {
+                setRenameTitle(column.title);
+                setIsRenaming(true);
+              }}
+            >
+              <Pencil className="h-4 w-4 mr-2" />
+              Rename column
+            </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive"
               onClick={() => onDeleteColumn(column.id)}
@@ -162,7 +200,7 @@ export function KanbanColumn({
                   if (checked) setSelectedParentId("");
                 }}
               />
-              Make this a parent task
+              Make this an epic
             </label>
 
             {/* Link to parent dropdown (only if not making a parent) */}

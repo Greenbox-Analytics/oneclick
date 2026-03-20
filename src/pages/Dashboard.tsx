@@ -12,13 +12,45 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/contexts/AuthContext";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [profile, setProfile] = useState<{ full_name: string | null; avatar_url: string | null } | null>(null);
+  const [now, setNow] = useState(new Date());
+  const { settings } = useWorkspaceSettings();
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formattedDateTime = useMemo(() => {
+    const tz = settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const use24h = settings?.use_24h_time ?? false;
+    const dateStr = now.toLocaleDateString("en-US", {
+      timeZone: tz,
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const timeStr = now.toLocaleTimeString("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: !use24h,
+    });
+    const tzAbbr = now.toLocaleTimeString("en-US", {
+      timeZone: tz,
+      timeZoneName: "short",
+    }).split(" ").pop() || "";
+    return `${dateStr} · ${timeStr} ${tzAbbr}`;
+  }, [now, settings?.timezone, settings?.use_24h_time]);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -101,7 +133,8 @@ const Dashboard = () => {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-foreground mb-2">Dashboard</h2>
-          <p className="text-muted-foreground">Manage your artists and calculate royalty splits</p>
+          <p className="text-sm text-muted-foreground">{formattedDateTime}</p>
+          <p className="text-muted-foreground mt-1">Manage your artists and calculate royalty splits</p>
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 mb-8">

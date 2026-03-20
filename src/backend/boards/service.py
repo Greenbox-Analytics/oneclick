@@ -1,6 +1,7 @@
 """Business logic for the Kanban board feature."""
 
 from typing import Optional, List
+from datetime import date, datetime, timezone
 from supabase import Client
 from integrations import events
 
@@ -135,6 +136,9 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
     project_ids = data.pop("project_ids", [])
     contract_ids = data.pop("contract_ids", [])
 
+    if not data.get("start_date"):
+        data["start_date"] = str(date.today())
+
     data["user_id"] = user_id
     result = supabase.table("board_tasks").insert(data).execute()
     task = result.data[0] if result.data else {}
@@ -166,11 +170,27 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
     if "column_id" in data and data["column_id"] == "":
         data["column_id"] = None
 
+    # Handle completed_at based on column change
+    if "column_id" in data and data["column_id"] is not None:
+        col_result = (
+            supabase.table("board_columns")
+            .select("title")
+            .eq("id", data["column_id"])
+            .single()
+            .execute()
+        )
+        if col_result.data:
+            col_title = col_result.data.get("title", "").lower()
+            if col_title == "done":
+                data["completed_at"] = datetime.now(timezone.utc).isoformat()
+            else:
+                data["completed_at"] = None
+
     # Build update dict — include explicit None for column_id to clear it
     clean = {}
     for k, v in data.items():
-        if k == "column_id":
-            clean[k] = v  # Allow None to clear column_id
+        if k in ("column_id", "completed_at"):
+            clean[k] = v  # Allow None to clear these fields
         elif v is not None:
             clean[k] = v
     if clean:
@@ -334,12 +354,68 @@ async def get_tasks_by_date_range(supabase: Client, user_id: str, start: str, en
     return _enrich_tasks(supabase, tasks)
 
 
+# --- Period-based Tasks ---
+
+async def get_tasks_by_period(
+    supabase: Client, user_id: str, period_start: str, period_end: str, is_current: bool = True
+) -> list:
+    """Get tasks filtered by period for date-based board views."""
+    try:
+        if is_current:
+            # Current period: single query — all tasks except those completed before this period
+            result = (
+                supabase.table("board_tasks")
+                .select("*")
+                .eq("user_id", user_id)
+                .or_("is_parent.eq.false,is_parent.is.null")
+                .or_(f"completed_at.is.null,completed_at.gte.{period_start}")
+                .order("position")
+                .execute()
+            )
+            tasks = result.data or []
+        else:
+            # Past period: done tasks completed in period + tasks created in period
+            done_result = (
+                supabase.table("board_tasks")
+                .select("*")
+                .eq("user_id", user_id)
+                .or_("is_parent.eq.false,is_parent.is.null")
+                .filter("completed_at", "not.is", "null")
+                .gte("completed_at", period_start)
+                .lte("completed_at", period_end)
+                .execute()
+            )
+            created_result = (
+                supabase.table("board_tasks")
+                .select("*")
+                .eq("user_id", user_id)
+                .or_("is_parent.eq.false,is_parent.is.null")
+                .gte("created_at", period_start)
+                .lte("created_at", period_end)
+                .execute()
+            )
+            seen = set()
+            tasks = []
+            for task in (done_result.data or []) + (created_result.data or []):
+                if task["id"] not in seen:
+                    seen.add(task["id"])
+                    tasks.append(task)
+    except Exception:
+        # Fallback: if completed_at column missing or other error, return all tasks
+        return await get_tasks(supabase, user_id)
+
+    return _enrich_tasks(supabase, tasks)
+
+
 # --- Parent Tasks ---
 
 async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict:
     """Create a parent task (no column_id, is_parent=True)."""
     artist_ids = data.pop("artist_ids", [])
     project_ids = data.pop("project_ids", [])
+
+    if not data.get("start_date"):
+        data["start_date"] = str(date.today())
 
     data["user_id"] = user_id
     data["is_parent"] = True

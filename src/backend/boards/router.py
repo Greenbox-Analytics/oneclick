@@ -118,6 +118,22 @@ async def calendar_tasks(
     return {"tasks": tasks}
 
 
+# --- Period-based Tasks (must come before /tasks/{task_id} routes) ---
+
+@router.get("/tasks/period")
+async def period_tasks(
+    user_id: str = Query(...),
+    period_start: str = Query(..., description="Period start date YYYY-MM-DD"),
+    period_end: str = Query(..., description="Period end date YYYY-MM-DD"),
+    is_current: bool = Query(True, description="Whether this is the current period"),
+):
+    """Get tasks within a period for date-based board views."""
+    tasks = await service.get_tasks_by_period(
+        _get_supabase(), user_id, period_start, period_end, is_current
+    )
+    return {"tasks": tasks}
+
+
 # --- Reorder (must come before /tasks/{task_id} routes) ---
 
 @router.put("/tasks/reorder")

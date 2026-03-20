@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2 } from "lucide-react";
+import { Plus, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -20,23 +20,45 @@ import { TaskDetailPanel } from "./TaskDetailPanel";
 import { TasksOverview } from "./TasksOverview";
 import { useBoards } from "@/hooks/useBoards";
 import { useParentTasks } from "@/hooks/useParentTasks";
+import { useBoardPeriod } from "@/hooks/useBoardPeriod";
+import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 
 interface KanbanBoardProps {
   artistId?: string;
 }
 
 export function KanbanBoard({ artistId }: KanbanBoardProps) {
+  const { settings } = useWorkspaceSettings();
+  const {
+    periodStart,
+    periodEnd,
+    periodLabel,
+    isCurrentPeriod,
+    goToPrevPeriod,
+    goToNextPeriod,
+    goToCurrentPeriod,
+  } = useBoardPeriod({
+    boardPeriod: settings?.board_period || "monthly",
+    customPeriodDays: settings?.custom_period_days ?? 14,
+  });
+
   const {
     columns,
     tasks,
     isLoading,
     createColumn,
+    updateColumn,
     deleteColumn,
     createTask,
     deleteTask,
     reorderTasks,
     createDefaults,
-  } = useBoards(artistId);
+  } = useBoards({
+    artistId,
+    periodStart,
+    periodEnd,
+    isCurrentPeriod,
+  });
 
   const { parents, createParent } = useParentTasks();
 
@@ -147,6 +169,24 @@ export function KanbanBoard({ artistId }: KanbanBoardProps) {
 
   return (
     <>
+      {/* Period navigation */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={goToPrevPeriod}>
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" size="icon" onClick={goToNextPeriod}>
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          <h3 className="text-lg font-semibold ml-2">{periodLabel}</h3>
+        </div>
+        {!isCurrentPeriod && (
+          <Button variant="outline" size="sm" onClick={goToCurrentPeriod}>
+            Current
+          </Button>
+        )}
+      </div>
+
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -167,6 +207,7 @@ export function KanbanBoard({ artistId }: KanbanBoardProps) {
                 onCreateParent={createParent}
                 onDeleteTask={deleteTask}
                 onDeleteColumn={deleteColumn}
+                onUpdateColumn={updateColumn}
                 onTaskClick={setSelectedTaskId}
               />
             ))}
@@ -222,9 +263,9 @@ export function KanbanBoard({ artistId }: KanbanBoardProps) {
       {/* Parent tasks section */}
       <Separator className="my-8" />
       <div className="mb-4">
-        <h3 className="text-lg font-semibold mb-1">Parent Tasks</h3>
+        <h3 className="text-lg font-semibold mb-1">Epics</h3>
         <p className="text-sm text-muted-foreground">
-          Group and organize subtasks under parent tasks
+          Group and organize subtasks under epics
         </p>
       </div>
       <TasksOverview />

@@ -1,10 +1,22 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import type { BoardColumn, BoardTask } from "@/types/integrations";
 
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
-export function useBoards(artistId?: string) {
+interface UseBoardsOptions {
+  artistId?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  isCurrentPeriod?: boolean;
+}
+
+export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
+  const options: UseBoardsOptions = typeof artistIdOrOptions === "string"
+    ? { artistId: artistIdOrOptions }
+    : artistIdOrOptions || {};
+  const { artistId, periodStart, periodEnd, isCurrentPeriod } = options;
+
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
@@ -22,16 +34,35 @@ export function useBoards(artistId?: string) {
     enabled: !!user?.id,
   });
 
+  const hasPeriod = !!(periodStart && periodEnd);
+
+  const tasksQueryKey = hasPeriod
+    ? ["board-tasks", user?.id, periodStart, periodEnd, isCurrentPeriod]
+    : ["board-tasks", user?.id];
+
   const tasksQuery = useQuery<BoardTask[]>({
-    queryKey: ["board-tasks", user?.id],
+    queryKey: tasksQueryKey,
     queryFn: async () => {
       if (!user?.id) return [];
+      if (hasPeriod) {
+        const params = new URLSearchParams({
+          user_id: user.id,
+          period_start: periodStart!,
+          period_end: periodEnd!,
+          is_current: String(isCurrentPeriod ?? true),
+        });
+        const res = await fetch(`${API_URL}/boards/tasks/period?${params}`);
+        if (!res.ok) throw new Error("Failed to fetch period tasks");
+        const data = await res.json();
+        return data.tasks;
+      }
       const res = await fetch(`${API_URL}/boards/tasks?user_id=${user.id}`);
       if (!res.ok) throw new Error("Failed to fetch tasks");
       const data = await res.json();
       return data.tasks;
     },
     enabled: !!user?.id,
+    placeholderData: keepPreviousData,
   });
 
   const createColumnMutation = useMutation({
@@ -101,7 +132,10 @@ export function useBoards(artistId?: string) {
       if (!res.ok) throw new Error("Failed to create task");
       return res.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["board-tasks"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["board-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["board-tasks-calendar"] });
+    },
   });
 
   const updateTaskMutation = useMutation({
@@ -124,12 +158,12 @@ export function useBoards(artistId?: string) {
       // Cancel outgoing refetches
       await queryClient.cancelQueries({ queryKey: ["board-tasks"] });
       await queryClient.cancelQueries({ queryKey: ["parent-tasks"] });
-      // Snapshot previous
-      const prevTasks = queryClient.getQueryData<BoardTask[]>(["board-tasks", user?.id]);
+      // Snapshot previous using the active query key (period-aware)
+      const prevTasks = queryClient.getQueryData<BoardTask[]>(tasksQueryKey);
       // Optimistically update board-tasks cache
       if (prevTasks) {
         queryClient.setQueryData<BoardTask[]>(
-          ["board-tasks", user?.id],
+          tasksQueryKey,
           prevTasks.map((t) => (t.id === id ? { ...t, ...data } : t))
         );
       }
@@ -138,7 +172,7 @@ export function useBoards(artistId?: string) {
     onError: (_err, _vars, context) => {
       // Rollback on error
       if (context?.prevTasks) {
-        queryClient.setQueryData(["board-tasks", user?.id], context.prevTasks);
+        queryClient.setQueryData(tasksQueryKey, context.prevTasks);
       }
     },
     onSettled: () => {
@@ -172,7 +206,7 @@ export function useBoards(artistId?: string) {
     },
     onMutate: async (reorders) => {
       await queryClient.cancelQueries({ queryKey: ["board-tasks"] });
-      const prevTasks = queryClient.getQueryData<BoardTask[]>(["board-tasks", user?.id]);
+      const prevTasks = queryClient.getQueryData<BoardTask[]>(tasksQueryKey);
       // Optimistically move tasks to new columns/positions
       if (prevTasks) {
         const updated = [...prevTasks];
@@ -182,13 +216,13 @@ export function useBoards(artistId?: string) {
             updated[idx] = { ...updated[idx], column_id: r.target_column_id, position: r.position };
           }
         }
-        queryClient.setQueryData<BoardTask[]>(["board-tasks", user?.id], updated);
+        queryClient.setQueryData<BoardTask[]>(tasksQueryKey, updated);
       }
       return { prevTasks };
     },
     onError: (_err, _vars, context) => {
       if (context?.prevTasks) {
-        queryClient.setQueryData(["board-tasks", user?.id], context.prevTasks);
+        queryClient.setQueryData(tasksQueryKey, context.prevTasks);
       }
     },
     onSettled: () => {

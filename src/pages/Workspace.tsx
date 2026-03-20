@@ -1,10 +1,12 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useEffect } from "react";
-import { Music, ArrowLeft, LayoutGrid, HardDrive, Bell, CalendarDays } from "lucide-react";
+import { useEffect, useState, useMemo } from "react";
+import { Music, ArrowLeft, LayoutGrid, HardDrive, Bell, CalendarDays, Settings } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
+import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 import { IntegrationHub } from "@/components/workspace/IntegrationHub";
+import { WorkspaceSettings } from "@/components/workspace/WorkspaceSettings";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
 import { CalendarView } from "@/components/workspace/boards/CalendarView";
 import { toast } from "sonner";
@@ -13,6 +15,37 @@ const Workspace = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [now, setNow] = useState(new Date());
+  const { settings } = useWorkspaceSettings();
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formattedDateTime = useMemo(() => {
+    const tz = settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const use24h = settings?.use_24h_time ?? false;
+    const dateStr = now.toLocaleDateString("en-US", {
+      timeZone: tz,
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const timeStr = now.toLocaleTimeString("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: !use24h,
+    });
+    const tzAbbr = now.toLocaleTimeString("en-US", {
+      timeZone: tz,
+      timeZoneName: "short",
+    }).split(" ").pop() || "";
+    return `${dateStr} · ${timeStr} ${tzAbbr}`;
+  }, [now, settings?.timezone, settings?.use_24h_time]);
 
   // Handle OAuth callback success
   useEffect(() => {
@@ -59,7 +92,10 @@ const Workspace = () => {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <h2 className="text-3xl font-bold text-foreground mb-2">Workspace</h2>
-          <p className="text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
+            {formattedDateTime}
+          </p>
+          <p className="text-muted-foreground mt-1">
             Manage integrations, project boards, and notifications
           </p>
         </div>
@@ -82,6 +118,10 @@ const Workspace = () => {
               <Bell className="w-4 h-4" />
               Notifications
             </TabsTrigger>
+            <TabsTrigger value="settings" className="gap-2">
+              <Settings className="w-4 h-4" />
+              Settings
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="integrations">
@@ -102,6 +142,10 @@ const Workspace = () => {
               <h3 className="text-lg font-semibold mb-2">Notification Settings</h3>
               <p>Connect Slack, Notion, or Monday.com to configure notifications</p>
             </div>
+          </TabsContent>
+
+          <TabsContent value="settings">
+            <WorkspaceSettings />
           </TabsContent>
         </Tabs>
       </main>
