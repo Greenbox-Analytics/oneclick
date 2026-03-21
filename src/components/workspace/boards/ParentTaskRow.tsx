@@ -39,6 +39,7 @@ export function ParentTaskRow({
   onDelete,
 }: ParentTaskRowProps) {
   const [expanded, setExpanded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [newTitle, setNewTitle] = useState("");
 
@@ -173,9 +174,20 @@ export function ParentTaskRow({
               No subtasks yet
             </p>
           )}
-          {children.map((child) => (
+          {(showAll ? children : children.slice(0, 5)).map((child) => (
             <ChildRow key={child.id} child={child} onClick={onTaskClick} />
           ))}
+          {children.length > 5 && (
+            <button
+              className="w-full text-xs text-muted-foreground hover:text-foreground py-2 border-t transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowAll(!showAll);
+              }}
+            >
+              {showAll ? "Show less" : `Show ${children.length - 5} more`}
+            </button>
+          )}
 
           {/* Add subtask */}
           <div className="px-4 py-2 border-t">

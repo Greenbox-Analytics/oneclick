@@ -31,7 +31,7 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const artistId of artistIds) {
-          const res = await fetch(`${API_URL}/artists/${artistId}/projects`);
+          const res = await fetch(`${API_URL}/artists/${artistId}/projects?user_id=${user.id}`);
           if (!res.ok) continue;
           const data = await res.json();
           const projects = Array.isArray(data) ? data : data.projects || data.data || [];
@@ -69,7 +69,7 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const projId of projectIds) {
-          const res = await fetch(`${API_URL}/projects/${projId}/contracts`);
+          const res = await fetch(`${API_URL}/projects/${projId}/contracts?user_id=${user.id}`);
           if (!res.ok) continue;
           const data = await res.json();
           const files = Array.isArray(data) ? data : data.contracts || data.data || [];
@@ -90,7 +90,7 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const proj of projects) {
-          const res = await fetch(`${API_URL}/projects/${proj.id}/contracts`);
+          const res = await fetch(`${API_URL}/projects/${proj.id}/contracts?user_id=${user.id}`);
           if (!res.ok) continue;
           const data = await res.json();
           const files = Array.isArray(data) ? data : data.contracts || data.data || [];

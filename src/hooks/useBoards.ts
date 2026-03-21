@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-import type { BoardColumn, BoardTask } from "@/types/integrations";
+import type { BoardColumn, BoardTask, ParentTaskWithChildren } from "@/types/integrations";
 
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
@@ -132,9 +132,85 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       if (!res.ok) throw new Error("Failed to create task");
       return res.json();
     },
-    onSuccess: () => {
+    onMutate: async (data) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ["board-tasks"] });
+      await queryClient.cancelQueries({ queryKey: ["parent-tasks"] });
+      await queryClient.cancelQueries({ queryKey: ["board-task-detail"] });
+
+      // Snapshot previous caches for rollback
+      const prevTasks = queryClient.getQueryData<BoardTask[]>(tasksQueryKey);
+      const prevParentQueries = queryClient.getQueriesData<{ parents: ParentTaskWithChildren[]; ungrouped: BoardTask[] }>({ queryKey: ["parent-tasks"] });
+
+      // Create temporary optimistic task
+      const tempTask: BoardTask = {
+        id: `temp-${Date.now()}`,
+        user_id: user?.id || "",
+        title: data.title,
+        position: 0,
+        column_id: data.column_id,
+        parent_task_id: data.parent_task_id,
+        is_parent: data.is_parent,
+        priority: data.priority as BoardTask["priority"],
+        color: data.color,
+        start_date: data.start_date,
+        due_date: data.due_date,
+        description: data.description,
+        labels: data.labels,
+        artist_ids: data.artist_ids || [],
+        project_ids: data.project_ids || [],
+        contract_ids: data.contract_ids || [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      // Optimistically add to board-tasks cache
+      if (prevTasks) {
+        queryClient.setQueryData<BoardTask[]>(tasksQueryKey, [...prevTasks, tempTask]);
+      }
+
+      // Optimistically add subtask to parent's children in all parent-tasks caches
+      if (data.parent_task_id) {
+        for (const [key, value] of prevParentQueries) {
+          if (!value) continue;
+          queryClient.setQueryData(key, {
+            ...value,
+            parents: value.parents.map((p: ParentTaskWithChildren) =>
+              p.id === data.parent_task_id
+                ? { ...p, children: [...(p.children || []), tempTask], child_count: (p.child_count || 0) + 1 }
+                : p
+            ),
+          });
+        }
+
+        // Optimistically add to task detail cache if viewing the parent
+        const detailData = queryClient.getQueryData<{ children?: BoardTask[] }>(["board-task-detail", data.parent_task_id]);
+        if (detailData) {
+          queryClient.setQueryData(["board-task-detail", data.parent_task_id], {
+            ...detailData,
+            children: [...(detailData.children || []), tempTask],
+          });
+        }
+      }
+
+      return { prevTasks, prevParentQueries };
+    },
+    onError: (_err, _vars, context) => {
+      // Rollback on error
+      if (context?.prevTasks) {
+        queryClient.setQueryData(tasksQueryKey, context.prevTasks);
+      }
+      if (context?.prevParentQueries) {
+        for (const [key, value] of context.prevParentQueries) {
+          queryClient.setQueryData(key, value);
+        }
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["board-tasks"] });
       queryClient.invalidateQueries({ queryKey: ["board-tasks-calendar"] });
+      queryClient.invalidateQueries({ queryKey: ["parent-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["board-task-detail"] });
     },
   });
 
@@ -144,6 +220,7 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       priority?: string; position?: number; start_date?: string; due_date?: string;
       color?: string; artist_ids?: string[]; project_ids?: string[];
       contract_ids?: string[]; assignee_name?: string; labels?: string[];
+      parent_task_id?: string | null;
     }) => {
       if (!user?.id) throw new Error("Not authenticated");
       const res = await fetch(`${API_URL}/boards/tasks/${id}?user_id=${user.id}`, {
@@ -191,7 +268,49 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       });
       if (!res.ok) throw new Error("Failed to delete task");
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["board-tasks"] }),
+    onMutate: async (taskId) => {
+      await queryClient.cancelQueries({ queryKey: ["board-tasks"] });
+      await queryClient.cancelQueries({ queryKey: ["parent-tasks"] });
+
+      const prevTasks = queryClient.getQueryData<BoardTask[]>(tasksQueryKey);
+      if (prevTasks) {
+        queryClient.setQueryData<BoardTask[]>(
+          tasksQueryKey,
+          prevTasks.filter((t) => t.id !== taskId)
+        );
+      }
+
+      // Also remove from parent-tasks caches (if it's a child, remove from parent's children)
+      const prevParentQueries = queryClient.getQueriesData<{ parents: ParentTaskWithChildren[]; ungrouped: BoardTask[] }>({ queryKey: ["parent-tasks"] });
+      for (const [key, value] of prevParentQueries) {
+        if (!value) continue;
+        queryClient.setQueryData(key, {
+          ...value,
+          parents: value.parents.map((p: ParentTaskWithChildren) => ({
+            ...p,
+            children: p.children.filter((c: BoardTask) => c.id !== taskId),
+          })),
+        });
+      }
+
+      return { prevTasks, prevParentQueries };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.prevTasks) {
+        queryClient.setQueryData(tasksQueryKey, context.prevTasks);
+      }
+      if (context?.prevParentQueries) {
+        for (const [key, value] of context.prevParentQueries) {
+          queryClient.setQueryData(key, value);
+        }
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["board-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["board-tasks-calendar"] });
+      queryClient.invalidateQueries({ queryKey: ["parent-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["board-task-detail"] });
+    },
   });
 
   const reorderTasksMutation = useMutation({

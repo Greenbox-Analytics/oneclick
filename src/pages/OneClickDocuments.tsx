@@ -155,7 +155,7 @@ const OneClickDocuments = () => {
       return projectFilesById[projectId];
     }
 
-    const response = await fetch(`${API_URL}/files/${projectId}`);
+    const response = await fetch(`${API_URL}/files/${projectId}?user_id=${user?.id}`);
     if (!response.ok) {
       throw new Error("Failed to load existing files for duplicate check");
     }
@@ -186,7 +186,7 @@ const OneClickDocuments = () => {
   // Fetch Projects on Mount
   useEffect(() => {
     if (artistId) {
-      fetch(`${API_URL}/projects/${artistId}`)
+      fetch(`${API_URL}/projects/${artistId}?user_id=${user?.id}`)
         .then(res => res.json())
         .then(data => setProjects(data))
         .catch(err => console.error("Error fetching projects:", err));
@@ -206,7 +206,7 @@ const OneClickDocuments = () => {
       setSelectedExistingContracts([]);
       
       setIsLoadingProjectFiles(true);
-      fetch(`${API_URL}/files/${selectedContractProject}`)
+      fetch(`${API_URL}/files/${selectedContractProject}?user_id=${user?.id}`)
         .then(res => res.json())
         .then((data: ArtistFile[]) => {
             setProjectFilesById(prev => ({ ...prev, [selectedContractProject]: data }));
@@ -231,7 +231,7 @@ const OneClickDocuments = () => {
       setSelectedExistingRoyaltyStatement(null);
       
       setIsLoadingProjectFiles(true);
-      fetch(`${API_URL}/files/${selectedRoyaltyStatementProject}`)
+      fetch(`${API_URL}/files/${selectedRoyaltyStatementProject}?user_id=${user?.id}`)
         .then(res => res.json())
         .then((data: ArtistFile[]) => {
             setProjectFilesById(prev => ({ ...prev, [selectedRoyaltyStatementProject]: data }));
@@ -337,7 +337,8 @@ const OneClickDocuments = () => {
             body: JSON.stringify({
                 artist_id: artistId,
                 name: newProjectNameInput,
-                description: "Created via OneClick"
+                description: "Created via OneClick",
+                user_id: user?.id
             })
         });
         
@@ -458,6 +459,7 @@ const OneClickDocuments = () => {
              formData.append("file", royaltyStatementFile);
              formData.append("artist_id", artistId);
              formData.append("category", "royalty_statement");
+             formData.append("user_id", user.id);
              const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
              if (targetProjectId) formData.append("project_id", targetProjectId);
 

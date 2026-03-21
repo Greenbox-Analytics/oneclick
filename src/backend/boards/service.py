@@ -139,6 +139,19 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
     if not data.get("start_date"):
         data["start_date"] = str(date.today())
 
+    # Auto-assign subtasks to the first board column so they appear on the main board
+    if data.get("parent_task_id") and not data.get("column_id"):
+        first_col = (
+            supabase.table("board_columns")
+            .select("id")
+            .eq("user_id", user_id)
+            .order("position")
+            .limit(1)
+            .execute()
+        )
+        if first_col.data:
+            data["column_id"] = first_col.data[0]["id"]
+
     data["user_id"] = user_id
     result = supabase.table("board_tasks").insert(data).execute()
     task = result.data[0] if result.data else {}
@@ -189,7 +202,7 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
     # Build update dict — include explicit None for column_id to clear it
     clean = {}
     for k, v in data.items():
-        if k in ("column_id", "completed_at"):
+        if k in ("column_id", "completed_at", "parent_task_id"):
             clean[k] = v  # Allow None to clear these fields
         elif v is not None:
             clean[k] = v

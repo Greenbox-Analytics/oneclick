@@ -66,13 +66,15 @@ export function KanbanColumn({
   const handleAddTask = () => {
     if (!newTaskTitle.trim()) return;
 
+    const today = new Date().toISOString().split("T")[0];
     if (isParent) {
-      onCreateParent({ title: newTaskTitle.trim() });
+      onCreateParent({ title: newTaskTitle.trim(), start_date: today });
     } else {
       onCreateTask({
         column_id: column.id,
         title: newTaskTitle.trim(),
         parent_task_id: selectedParentId || undefined,
+        start_date: today,
       });
     }
 

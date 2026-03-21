@@ -59,13 +59,13 @@ export function TasksOverview() {
 
   const handleCreateParent = () => {
     if (!newParentTitle.trim()) return;
-    createParent({ title: newParentTitle.trim() });
+    createParent({ title: newParentTitle.trim(), start_date: new Date().toISOString().split("T")[0] });
     setNewParentTitle("");
     setIsCreatingParent(false);
   };
 
   const handleAddSubtask = (parentId: string, title: string) => {
-    createTask({ title, parent_task_id: parentId });
+    createTask({ title, parent_task_id: parentId, start_date: new Date().toISOString().split("T")[0] });
   };
 
   const handleParentDragStart = useCallback((event: DragStartEvent) => {
@@ -255,27 +255,32 @@ export function TasksOverview() {
           </DndContext>
         )}
 
-        {/* Collapsible parent + children list */}
-        {parents.length > 0 && (
-          <>
-            <Separator />
-            <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-              Epics with Subtasks
-            </h4>
-            <div className="space-y-3">
-              {parents.map((parent) => (
-                <ParentTaskRow
-                  key={parent.id}
-                  parent={parent}
-                  onTaskClick={setSelectedTaskId}
-                  onParentClick={setSelectedTaskId}
-                  onAddSubtask={handleAddSubtask}
-                  onDelete={deleteParent}
-                />
-              ))}
-            </div>
-          </>
-        )}
+        {/* Active epic tasks list (excludes done epics) */}
+        {(() => {
+          const activeParents = parents.filter(
+            (p) => p.column_title?.toLowerCase() !== "done"
+          );
+          return activeParents.length > 0 ? (
+            <>
+              <Separator />
+              <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+                Active Epic Tasks
+              </h4>
+              <div className="space-y-3">
+                {activeParents.map((parent) => (
+                  <ParentTaskRow
+                    key={parent.id}
+                    parent={parent}
+                    onTaskClick={setSelectedTaskId}
+                    onParentClick={setSelectedTaskId}
+                    onAddSubtask={handleAddSubtask}
+                    onDelete={deleteParent}
+                  />
+                ))}
+              </div>
+            </>
+          ) : null;
+        })()}
 
       </div>
 

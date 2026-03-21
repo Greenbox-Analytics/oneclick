@@ -77,6 +77,33 @@ def get_supabase_client() -> Client:
 def normalize_file_name(file_name: str) -> str:
     return file_name.strip().lower()
 
+# --- Ownership verification helpers ---
+
+def verify_user_owns_artist(user_id: str, artist_id: str) -> bool:
+    """Verify the artist belongs to the user."""
+    res = get_supabase_client().table("artists").select("id").eq("id", artist_id).eq("user_id", user_id).execute()
+    return bool(res.data)
+
+def get_user_artist_ids(user_id: str) -> list:
+    """Get all artist IDs belonging to a user."""
+    res = get_supabase_client().table("artists").select("id").eq("user_id", user_id).execute()
+    return [a["id"] for a in (res.data or [])]
+
+def verify_user_owns_project(user_id: str, project_id: str) -> bool:
+    """Verify the project belongs to one of the user's artists."""
+    artist_ids = get_user_artist_ids(user_id)
+    if not artist_ids:
+        return False
+    res = get_supabase_client().table("projects").select("id").eq("id", project_id).in_("artist_id", artist_ids).execute()
+    return bool(res.data)
+
+def verify_user_owns_contract(user_id: str, contract_id: str) -> bool:
+    """Verify the contract belongs to one of the user's projects/artists."""
+    contract_res = get_supabase_client().table("project_files").select("project_id").eq("id", contract_id).execute()
+    if not contract_res.data:
+        return False
+    return verify_user_owns_project(user_id, contract_res.data[0]["project_id"])
+
 def file_name_exists_in_project(project_id: str, file_name: str) -> bool:
     existing_files = get_supabase_client().table("project_files").select("file_name").eq("project_id", project_id).execute()
     target_name = normalize_file_name(file_name)
@@ -286,42 +313,43 @@ def health_check():
     }
 
 @app.get("/artists")
-async def get_artists(user_id: Optional[str] = None):
+async def get_artists(user_id: str):
     """
-    Fetch artists. If user_id is provided, filter by that user's artists only.
+    Fetch artists belonging to the authenticated user.
     """
     try:
-        query = get_supabase_client().table("artists").select("*")
-        
-        # Filter by user_id if provided
-        if user_id:
-            query = query.eq("user_id", user_id)
-        
-        response = query.execute()
+        response = get_supabase_client().table("artists").select("*").eq("user_id", user_id).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/artists/{artist_id}")
-async def get_artist_by_id(artist_id: str):
+async def get_artist_by_id(artist_id: str, user_id: str):
     """
-    Fetch a single artist by ID with all their details.
+    Fetch a single artist by ID, verifying user ownership.
     """
     try:
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("artists").select("*").eq("id", artist_id).single().execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{artist_id}")
-async def get_projects(artist_id: str):
+async def get_projects(artist_id: str, user_id: str):
     """
-    Fetch projects for a specific artist.
+    Fetch projects for a specific artist, verifying user ownership.
     """
     try:
-        # artist_id is UUID in DB, but passed as string here
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("projects").select("*").eq("artist_id", artist_id).execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -329,41 +357,50 @@ class ProjectCreateRequest(BaseModel):
     artist_id: str
     name: str
     description: Optional[str] = None
+    user_id: str
 
 @app.post("/projects")
 async def create_project(project: ProjectCreateRequest):
     """
-    Create a new project for an artist.
+    Create a new project for an artist, verifying user ownership.
     """
     try:
-        res = supabase.table("projects").insert({
+        if not verify_user_owns_artist(project.user_id, project.artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+        res = get_supabase_client().table("projects").insert({
             "artist_id": project.artist_id,
             "name": project.name,
             "description": project.description
         }).execute()
         return res.data[0]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/{project_id}")
-async def get_project_files(project_id: str):
+async def get_project_files(project_id: str, user_id: str):
     """
-    Fetch files associated with a specific project.
+    Fetch files associated with a specific project, verifying user ownership.
     """
     try:
+        if not verify_user_owns_project(user_id, project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("project_files").select("*").eq("project_id", project_id).execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/artist/{artist_id}/category/{category}")
-async def get_artist_files_by_category(artist_id: str, category: str):
+async def get_artist_files_by_category(artist_id: str, category: str, user_id: str):
     """
-    Fetch all files for an artist filtered by category (across all projects or independent).
-    Note: Since files are linked to projects, we might need to join tables or filter differently.
-    This implementation finds all projects for the artist, then finds files in those projects with the category.
+    Fetch all files for an artist filtered by category, verifying user ownership.
     """
     try:
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         # 1. Get all project IDs for the artist
         projects_res = get_supabase_client().table("projects").select("id").eq("artist_id", artist_id).execute()
         project_ids = [p['id'] for p in projects_res.data]
@@ -382,22 +419,26 @@ async def get_artist_files_by_category(artist_id: str, category: str):
 
         files_res = get_supabase_client().table("project_files").select("*").in_("project_id", project_ids).eq("folder_category", db_category).execute()
         return files_res.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload")
 async def upload_file(
-    file: UploadFile = File(...), 
+    file: UploadFile = File(...),
     artist_id: str = Form(...),
     category: str = Form(...), # 'contract' or 'royalty_statement'
-    project_id: Optional[str] = Form(None)
+    project_id: Optional[str] = Form(None),
+    user_id: str = Form(...)
 ):
     """
     Uploads a file to Supabase Storage and creates a record in project_files.
-    If project_id is not provided, it requires logic to handle 'orphaned' files or create a default project.
-    For this implementation, we'll enforce project_id or create a 'General' project if missing.
+    Verifies user owns the artist before uploading.
     """
     try:
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         if not project_id or project_id == "none" or project_id == "":
             # Check if a "General" project exists for this artist, if not create one
             res = get_supabase_client().table("projects").select("id").eq("artist_id", artist_id).eq("name", "General Uploads").execute()
@@ -483,35 +524,46 @@ async def upload_file(
 # --- Zoe AI Chatbot Endpoints ---
 
 @app.get("/projects")
-async def get_all_projects():
+async def get_all_projects(user_id: str):
     """
-    Fetch all projects (for Zoe project selection).
+    Fetch projects belonging to the authenticated user's artists.
     """
     try:
-        response = get_supabase_client().table("projects").select("*").execute()
+        artist_ids = get_user_artist_ids(user_id)
+        if not artist_ids:
+            return []
+        response = get_supabase_client().table("projects").select("*").in_("artist_id", artist_ids).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/artists/{artist_id}/projects")
-async def get_artist_projects(artist_id: str):
+async def get_artist_projects(artist_id: str, user_id: str):
     """
-    Fetch projects for a specific artist (for Zoe artist-based filtering).
+    Fetch projects for a specific artist, verifying user ownership.
     """
     try:
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("projects").select("*").eq("artist_id", artist_id).execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/contracts")
-async def get_project_contracts(project_id: str):
+async def get_project_contracts(project_id: str, user_id: str):
     """
-    Fetch contracts (PDF files) for a specific project.
+    Fetch contracts (PDF files) for a specific project, verifying user ownership.
     """
     try:
+        if not verify_user_owns_project(user_id, project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("project_files").select("*").eq("project_id", project_id).eq("folder_category", "contract").execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -562,7 +614,11 @@ async def upload_contract(
         # Validate file type
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
-        
+
+        # Verify user owns the project
+        if not verify_user_owns_project(user_id, project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
         # Get project details
         project_res = get_supabase_client().table("projects").select("name").eq("id", project_id).execute()
         if not project_res.data:
@@ -715,6 +771,10 @@ async def get_contract_markdown(contract_id: str, user_id: str):
     If markdown is not cached, lazily converts the PDF and caches the result.
     """
     try:
+        # Verify user owns the contract
+        if not verify_user_owns_contract(user_id, contract_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
         res = get_supabase_client().table("project_files").select(
             "id, file_name, file_path, contract_markdown"
         ).eq("id", contract_id).execute()
@@ -765,14 +825,18 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
         Deletion confirmation
     """
     try:
+        # Verify user owns the contract
+        if not verify_user_owns_contract(user_id, contract_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
         # 1. Get contract details from database
         contract_res = get_supabase_client().table("project_files").select("*").eq("id", contract_id).execute()
-        
+
         if not contract_res.data:
             raise HTTPException(status_code=404, detail="Contract not found")
-        
+
         contract = contract_res.data[0]
-        
+
         # 2. Delete from Pinecone
         ingestion = get_contract_ingestion()
         delete_result = ingestion.delete_contract(user_id=user_id, contract_id=contract_id)

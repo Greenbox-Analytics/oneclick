@@ -48,6 +48,7 @@ export function TaskDetailPanel({ taskId, onClose, onNavigateToTask }: TaskDetai
   const { parents } = useParentTasks();
   const { artists } = useArtistsList();
   const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
+  const [showAllSubtasks, setShowAllSubtasks] = useState(false);
   const [linkSearchOpen, setLinkSearchOpen] = useState(false);
   const [linkSearch, setLinkSearch] = useState("");
 
@@ -521,27 +522,51 @@ export function TaskDetailPanel({ taskId, onClose, onNavigateToTask }: TaskDetai
                     Subtasks ({task.children?.length || 0})
                   </Label>
                   {task.children && task.children.length > 0 && (
-                    <div className="space-y-1 rounded-lg border divide-y">
-                      {task.children.map((child) => (
-                        <button
+                    <div className="rounded-lg border divide-y">
+                      {(showAllSubtasks ? task.children : task.children.slice(0, 5)).map((child) => (
+                        <div
                           key={child.id}
-                          className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted/50 transition-colors text-left text-sm"
-                          onClick={() => {
-                            if (onNavigateToTask) onNavigateToTask(child.id);
-                          }}
+                          className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 transition-colors text-sm group"
                         >
-                          <CornerDownRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          {child.color && (
-                            <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: child.color }} />
-                          )}
-                          <span className="flex-1 truncate">{child.title}</span>
-                          {child.priority && (
-                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                              {child.priority}
-                            </Badge>
-                          )}
-                        </button>
+                          <button
+                            className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                            onClick={() => {
+                              if (onNavigateToTask) onNavigateToTask(child.id);
+                            }}
+                          >
+                            <CornerDownRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                            {child.color && (
+                              <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: child.color }} />
+                            )}
+                            <span className="flex-1 truncate">{child.title}</span>
+                            {child.priority && (
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                {child.priority}
+                              </Badge>
+                            )}
+                          </button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateTask({ id: child.id, parent_task_id: null });
+                            }}
+                            title="Unlink subtask"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       ))}
+                      {task.children.length > 5 && (
+                        <button
+                          className="w-full text-xs text-muted-foreground hover:text-foreground py-2 transition-colors"
+                          onClick={() => setShowAllSubtasks(!showAllSubtasks)}
+                        >
+                          {showAllSubtasks ? "Show less" : `Show ${task.children.length - 5} more`}
+                        </button>
+                      )}
                     </div>
                   )}
                   <div className="flex gap-2">

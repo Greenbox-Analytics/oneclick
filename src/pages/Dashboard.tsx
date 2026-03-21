@@ -259,10 +259,10 @@ const Dashboard = () => {
           </Card>
         </div>
 
-        <Card>
+        <Card className="border-primary/40">
           <CardHeader>
             <div className="flex items-center gap-2">
-              <Clock className="w-5 h-5 text-muted-foreground" />
+              <Clock className="w-5 h-5 text-primary" />
               <CardTitle>Recently Used</CardTitle>
             </div>
             <CardDescription>Quick access to your recent tools</CardDescription>

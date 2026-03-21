@@ -50,6 +50,7 @@ export function useParentTasks(search?: string, artistId?: string) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["parent-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["board-tasks"] });
     },
   });
 
@@ -62,9 +63,35 @@ export function useParentTasks(search?: string, artistId?: string) {
       );
       if (!res.ok) throw new Error("Failed to delete parent task");
     },
-    onSuccess: () => {
+    onMutate: async (taskId) => {
+      await queryClient.cancelQueries({ queryKey: ["parent-tasks"] });
+      await queryClient.cancelQueries({ queryKey: ["board-tasks"] });
+
+      // Snapshot all parent-tasks caches for rollback
+      const prevParentQueries = queryClient.getQueriesData<ParentsResponse>({ queryKey: ["parent-tasks"] });
+
+      // Optimistically remove the parent from all parent-tasks caches
+      for (const [key, value] of prevParentQueries) {
+        if (!value) continue;
+        queryClient.setQueryData(key, {
+          ...value,
+          parents: value.parents.filter((p: ParentTaskWithChildren) => p.id !== taskId),
+        });
+      }
+
+      return { prevParentQueries };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.prevParentQueries) {
+        for (const [key, value] of context.prevParentQueries) {
+          queryClient.setQueryData(key, value);
+        }
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["parent-tasks"] });
       queryClient.invalidateQueries({ queryKey: ["board-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["board-task-detail"] });
     },
   });
 

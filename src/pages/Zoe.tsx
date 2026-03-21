@@ -246,7 +246,7 @@ const Zoe = () => {
   // Fetch projects when artist is selected
   useEffect(() => {
     if (selectedArtist) {
-      fetch(`${API_URL}/artists/${selectedArtist}/projects`)
+      fetch(`${API_URL}/artists/${selectedArtist}/projects?user_id=${user?.id}`)
         .then((res) => res.json())
         .then((data) => setProjects(data))
         .catch((err) => {
@@ -262,7 +262,7 @@ const Zoe = () => {
   // Fetch contracts when project is selected
   const fetchContracts = () => {
     if (selectedProject) {
-      fetch(`${API_URL}/projects/${selectedProject}/contracts`)
+      fetch(`${API_URL}/projects/${selectedProject}/contracts?user_id=${user?.id}`)
         .then((res) => res.json())
         .then((data) => setContracts(data))
         .catch((err) => {
@@ -506,7 +506,8 @@ const Zoe = () => {
             body: JSON.stringify({
                 artist_id: selectedArtist,
                 name: newProjectNameInput,
-                description: "Created via Zoe"
+                description: "Created via Zoe",
+                user_id: user?.id
             })
         });
         
@@ -658,6 +659,14 @@ const Zoe = () => {
       setError("Please select an artist first");
       return;
     }
+    if (!selectedProject) {
+      setError("Please select a project first");
+      return;
+    }
+    if (selectedContracts.length === 0) {
+      addSystemMessage("Please select the contracts you'd like to discuss before asking a question.");
+      return;
+    }
     if (isAtLimit) {
       setShowReloadDialog(true);
       return;
@@ -668,20 +677,30 @@ const Zoe = () => {
 
     const result = await sendMessage(query, getChatParams());
     handleSendResult(result);
-  }, [inputMessage, user, selectedArtist, isAtLimit, sendMessage, getChatParams, handleSendResult]);
+  }, [inputMessage, user, selectedArtist, selectedProject, selectedContracts, isAtLimit, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
 
   // Handle static quick action button clicks
   const handleQuickAction = useCallback(async (question: string) => {
     if (!selectedArtist || !user) return;
+    if (!selectedProject) { setError("Please select a project first"); return; }
+    if (selectedContracts.length === 0) {
+      addSystemMessage("Please select the contracts you'd like to discuss before asking a question.");
+      return;
+    }
     if (isAtLimit) { setShowReloadDialog(true); return; }
 
     const result = await sendMessage(question, getChatParams());
     handleSendResult(result);
-  }, [selectedArtist, user, isAtLimit, sendMessage, getChatParams, handleSendResult]);
+  }, [selectedArtist, selectedProject, selectedContracts, user, isAtLimit, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
 
   const handleAssistantQuickAction = useCallback(async (action: AssistantQuickAction) => {
     const queryToSend = action.query || inputMessage;
     if (!queryToSend.trim() || !selectedArtist || !user) return;
+    if (!selectedProject) { setError("Please select a project first"); return; }
+    if (selectedContracts.length === 0) {
+      addSystemMessage("Please select the contracts you'd like to discuss before asking a question.");
+      return;
+    }
 
     const result = await sendMessage(queryToSend, getChatParams(), {
       sourcePreference: action.source_preference,
@@ -689,7 +708,7 @@ const Zoe = () => {
       silent: !!action.source_preference,
     });
     handleSendResult(result);
-  }, [inputMessage, selectedArtist, user, sendMessage, getChatParams, handleSendResult]);
+  }, [inputMessage, selectedArtist, selectedProject, selectedContracts, user, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
 
   const handleRetry = useCallback(async () => {
     if (!selectedArtist || !user) return;

@@ -53,7 +53,7 @@ export const ContractUploadModal = ({
   };
 
   const getProjectFileNames = async (): Promise<Set<string>> => {
-    const response = await fetch(`${API_URL}/files/${projectId}`);
+    const response = await fetch(`${API_URL}/files/${projectId}?user_id=${user?.id}`);
     if (!response.ok) {
       throw new Error("Failed to check existing project files");
     }

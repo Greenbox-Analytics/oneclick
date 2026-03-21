@@ -45,7 +45,9 @@ export function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
     borderLeftWidth: task.color ? 3 : 1,
   };
 
-  const isDueToday = task.due_date === format(new Date(), "yyyy-MM-dd");
+  const today = format(new Date(), "yyyy-MM-dd");
+  const isDueToday = task.due_date === today;
+  const isOverdue = !!(task.due_date && task.due_date < today && !task.completed_at);
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return null;
@@ -85,6 +87,12 @@ export function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
             <Badge className="bg-red-500 text-white text-[10px] px-1.5 py-0 shrink-0 hover:bg-red-600">
               <AlertCircle className="h-3 w-3 mr-0.5" />
               Due Today
+            </Badge>
+          )}
+          {isOverdue && (
+            <Badge className="bg-orange-500 text-white text-[10px] px-1.5 py-0 shrink-0 hover:bg-orange-600">
+              <AlertCircle className="h-3 w-3 mr-0.5" />
+              Overdue
             </Badge>
           )}
           <DropdownMenu>
