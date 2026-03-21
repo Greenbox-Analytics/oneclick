@@ -198,7 +198,7 @@ const Dashboard = () => {
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-8">
-          <Card className="border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/tools", "Tools")}>
+          <Card className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/tools", "Tools")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Calculator className="w-6 h-6 text-primary" />
@@ -206,14 +206,14 @@ const Dashboard = () => {
               <CardTitle>Tools</CardTitle>
               <CardDescription>Access OneClick and other management tools</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto">
               <Button variant="outline" className="w-full">
                 Open Tools
               </Button>
             </CardContent>
           </Card>
 
-          <Card className="border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/artists", "Artist Profiles")}>
+          <Card className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/artists", "Artist Profiles")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Users className="w-6 h-6 text-primary" />
@@ -221,14 +221,14 @@ const Dashboard = () => {
               <CardTitle>Artist Profiles</CardTitle>
               <CardDescription>View and manage your artist roster</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto">
               <Button variant="outline" className="w-full">
                 View Artists
               </Button>
             </CardContent>
           </Card>
 
-          <Card className="border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/workspace", "Workspace")}>
+          <Card className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/workspace", "Workspace")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <LayoutGrid className="w-6 h-6 text-primary" />
@@ -236,14 +236,14 @@ const Dashboard = () => {
               <CardTitle>Workspace</CardTitle>
               <CardDescription>Project boards, integrations, and connected services</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto">
               <Button variant="outline" className="w-full">
                 Open Workspace
               </Button>
             </CardContent>
           </Card>
 
-          <Card className="border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/portfolio", "Portfolio")}>
+          <Card className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/portfolio", "Portfolio")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Folder className="w-6 h-6 text-primary" />
@@ -251,7 +251,7 @@ const Dashboard = () => {
               <CardTitle>Portfolio</CardTitle>
               <CardDescription>Your profile organized by year, artist, and project</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto">
               <Button variant="outline" className="w-full">
                 View Portfolio
               </Button>
