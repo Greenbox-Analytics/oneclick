@@ -25,3 +25,7 @@ notion-client
 cryptography
 PyJWT
 httpx
+
+# Split sheet generator
+reportlab
+python-docx
