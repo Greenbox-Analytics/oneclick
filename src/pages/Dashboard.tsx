@@ -198,7 +198,7 @@ const Dashboard = () => {
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-8">
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/tools", "Tools")}>
+          <Card className="border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/tools", "Tools")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Calculator className="w-6 h-6 text-primary" />
@@ -213,7 +213,7 @@ const Dashboard = () => {
             </CardContent>
           </Card>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/artists", "Artist Profiles")}>
+          <Card className="border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/artists", "Artist Profiles")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Users className="w-6 h-6 text-primary" />
@@ -228,7 +228,7 @@ const Dashboard = () => {
             </CardContent>
           </Card>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/workspace", "Workspace")}>
+          <Card className="border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/workspace", "Workspace")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <LayoutGrid className="w-6 h-6 text-primary" />
@@ -243,7 +243,7 @@ const Dashboard = () => {
             </CardContent>
           </Card>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/portfolio", "Portfolio")}>
+          <Card className="border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/portfolio", "Portfolio")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Folder className="w-6 h-6 text-primary" />
@@ -279,7 +279,7 @@ const Dashboard = () => {
                     <Button
                       key={tool.route}
                       variant="outline"
-                      className="gap-2 border-primary/40 hover:border-primary hover:bg-primary/5 transition-colors"
+                      className="gap-2 border-primary/40 hover:border-primary hover:bg-primary/5 hover:text-foreground transition-colors"
                       onClick={() => handleNavigate(tool.route, tool.name)}
                     >
                       <IconComponent className="w-4 h-4 text-primary" />

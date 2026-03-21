@@ -660,7 +660,7 @@ const Zoe = () => {
       return;
     }
     if (!selectedProject) {
-      setError("Please select a project first");
+      toast({ title: "Please select a project first", variant: "destructive" });
       return;
     }
     if (selectedContracts.length === 0) {
@@ -682,7 +682,7 @@ const Zoe = () => {
   // Handle static quick action button clicks
   const handleQuickAction = useCallback(async (question: string) => {
     if (!selectedArtist || !user) return;
-    if (!selectedProject) { setError("Please select a project first"); return; }
+    if (!selectedProject) { toast({ title: "Please select a project first", variant: "destructive" }); return; }
     if (selectedContracts.length === 0) {
       addSystemMessage("Please select the contracts you'd like to discuss before asking a question.");
       return;
@@ -696,7 +696,7 @@ const Zoe = () => {
   const handleAssistantQuickAction = useCallback(async (action: AssistantQuickAction) => {
     const queryToSend = action.query || inputMessage;
     if (!queryToSend.trim() || !selectedArtist || !user) return;
-    if (!selectedProject) { setError("Please select a project first"); return; }
+    if (!selectedProject) { toast({ title: "Please select a project first", variant: "destructive" }); return; }
     if (selectedContracts.length === 0) {
       addSystemMessage("Please select the contracts you'd like to discuss before asking a question.");
       return;
