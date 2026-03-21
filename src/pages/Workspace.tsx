@@ -63,6 +63,7 @@ const Workspace = () => {
   }, [searchParams, setSearchParams]);
 
   const defaultTab = searchParams.get("tab") || "integrations";
+  const initialTaskId = searchParams.get("taskId") || undefined;
 
   return (
     <div className="min-h-screen bg-background">
@@ -129,7 +130,7 @@ const Workspace = () => {
           </TabsContent>
 
           <TabsContent value="boards">
-            <KanbanBoard />
+            <KanbanBoard initialSelectedTaskId={initialTaskId} />
           </TabsContent>
 
           <TabsContent value="calendar">

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Plus, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
@@ -25,9 +25,10 @@ import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 
 interface KanbanBoardProps {
   artistId?: string;
+  initialSelectedTaskId?: string;
 }
 
-export function KanbanBoard({ artistId }: KanbanBoardProps) {
+export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProps) {
   const { settings } = useWorkspaceSettings();
   const {
     periodStart,
@@ -62,7 +63,14 @@ export function KanbanBoard({ artistId }: KanbanBoardProps) {
 
   const { parents, createParent } = useParentTasks();
 
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialSelectedTaskId || null);
+
+  useEffect(() => {
+    if (initialSelectedTaskId) {
+      setSelectedTaskId(initialSelectedTaskId);
+    }
+  }, [initialSelectedTaskId]);
+
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const [newColumnTitle, setNewColumnTitle] = useState("");

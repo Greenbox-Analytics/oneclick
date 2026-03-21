@@ -18,6 +18,7 @@ import Zoe from "./pages/Zoe";
 import Profile from "./pages/Profile";
 import Workspace from "./pages/Workspace";
 import WorkspaceBoards from "./pages/WorkspaceBoards";
+import Portfolio from "./pages/Portfolio";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -125,6 +126,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <WorkspaceBoards />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/portfolio"
+              element={
+                <ProtectedRoute>
+                  <Portfolio />
                 </ProtectedRoute>
               }
             />

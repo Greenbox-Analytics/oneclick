@@ -2,9 +2,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Music, Calculator, ArrowRight, ArrowLeft, Bot } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { trackToolUsage } from "@/pages/Dashboard";
 
 const Tools = () => {
   const navigate = useNavigate();
+
+  const handleNavigate = (route: string, label: string) => {
+    trackToolUsage(label, route);
+    navigate(route);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -34,7 +40,7 @@ const Tools = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {/* OneClick Tool Card */}
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => navigate("/tools/oneclick")}>
+          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleNavigate("/tools/oneclick", "OneClick")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
                 <Calculator className="w-6 h-6 text-primary" />
@@ -55,7 +61,7 @@ const Tools = () => {
           </Card>
 
           {/* Zoe AI Chatbot Tool Card */}
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => navigate("/tools/zoe")}>
+          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleNavigate("/tools/zoe", "Zoe")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
                 <Bot className="w-6 h-6 text-primary" />

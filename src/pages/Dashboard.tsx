@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid } from "lucide-react";
+import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   DropdownMenu,
@@ -12,15 +12,55 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/contexts/AuthContext";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
+
+// Tool registry for Recently Used
+const TOOL_REGISTRY: Record<string, { icon: typeof Calculator; label: string }> = {
+  "/tools": { icon: Calculator, label: "Tools" },
+  "/artists": { icon: Users, label: "Artist Profiles" },
+  "/workspace": { icon: LayoutGrid, label: "Workspace" },
+  "/portfolio": { icon: Folder, label: "Portfolio" },
+  "/artists/new": { icon: Plus, label: "Add Artist" },
+  "/tools/oneclick": { icon: Calculator, label: "OneClick" },
+  "/tools/zoe": { icon: Bot, label: "Zoe" },
+  "/profile": { icon: User, label: "Profile" },
+};
+
+interface RecentTool {
+  route: string;
+  name: string;
+  timestamp: number;
+}
+
+function getRecentTools(): RecentTool[] {
+  try {
+    const raw = localStorage.getItem("msanii_recent_tools");
+    if (!raw) return [];
+    return JSON.parse(raw) as RecentTool[];
+  } catch {
+    return [];
+  }
+}
+
+export function trackToolUsage(name: string, route: string) {
+  const tools = getRecentTools().filter((t) => t.route !== route);
+  tools.unshift({ route, name, timestamp: Date.now() });
+  localStorage.setItem("msanii_recent_tools", JSON.stringify(tools.slice(0, 10)));
+}
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [profile, setProfile] = useState<{ full_name: string | null; avatar_url: string | null } | null>(null);
+  const [profile, setProfile] = useState<{
+    full_name: string | null;
+    avatar_url: string | null;
+    given_name: string | null;
+    first_name: string | null;
+  } | null>(null);
   const [now, setNow] = useState(new Date());
+  const [recentTools, setRecentTools] = useState<RecentTool[]>(getRecentTools());
   const { settings } = useWorkspaceSettings();
 
   useEffect(() => {
@@ -55,18 +95,22 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchProfile = async () => {
       if (!user) return;
-      
-      const { data } = await supabase
+
+      const { data, error } = await supabase
         .from("profiles")
-        .select("full_name, avatar_url")
+        .select("*")
         .eq("id", user.id)
         .single();
-        
+
+      if (error) {
+        console.error("Dashboard profile fetch error:", error);
+      }
       if (data) {
+        console.log("Dashboard profile data:", { given_name: data.given_name, first_name: data.first_name, full_name: data.full_name });
         setProfile(data);
       }
     };
-    
+
     fetchProfile();
   }, [user]);
 
@@ -83,11 +127,27 @@ const Dashboard = () => {
     return user?.email?.substring(0, 2).toUpperCase() || "U";
   };
 
+  const greeting = useMemo(() => {
+    // Priority: preferred name > first name only > first word of full name > email prefix
+    const givenName = profile?.given_name?.trim();
+    const firstName = profile?.first_name?.trim();
+    const fullNameFirst = profile?.full_name?.trim().split(/[\s.]+/)[0];
+    const emailPrefix = user?.email?.split("@")[0];
+    const name = givenName || firstName || fullNameFirst || emailPrefix || "there";
+    return `Welcome back, ${name}!`;
+  }, [profile, user]);
+
+  const handleNavigate = useCallback((route: string, label: string) => {
+    trackToolUsage(label, route);
+    setRecentTools(getRecentTools());
+    navigate(route);
+  }, [navigate]);
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div 
+          <div
             className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
             onClick={() => navigate("/dashboard")}
           >
@@ -96,7 +156,7 @@ const Dashboard = () => {
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="relative h-10 w-10 rounded-full bg-primary hover:bg-primary/90">
@@ -133,12 +193,12 @@ const Dashboard = () => {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-foreground mb-2">Dashboard</h2>
+          <p className="text-lg text-foreground/80">{greeting}</p>
           <p className="text-sm text-muted-foreground">{formattedDateTime}</p>
-          <p className="text-muted-foreground mt-1">Manage your artists and calculate royalty splits</p>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 mb-8">
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/tools")}>
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-8">
+          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/tools", "Tools")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Calculator className="w-6 h-6 text-primary" />
@@ -153,7 +213,7 @@ const Dashboard = () => {
             </CardContent>
           </Card>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/artists")}>
+          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/artists", "Artist Profiles")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Users className="w-6 h-6 text-primary" />
@@ -168,7 +228,7 @@ const Dashboard = () => {
             </CardContent>
           </Card>
 
-          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate("/workspace")}>
+          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/workspace", "Workspace")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <LayoutGrid className="w-6 h-6 text-primary" />
@@ -182,22 +242,53 @@ const Dashboard = () => {
               </Button>
             </CardContent>
           </Card>
+
+          <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/portfolio", "Portfolio")}>
+            <CardHeader>
+              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
+                <Folder className="w-6 h-6 text-primary" />
+              </div>
+              <CardTitle>Portfolio</CardTitle>
+              <CardDescription>Your profile organized by year, artist, and project</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" className="w-full">
+                View Portfolio
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Get started with common tasks</CardDescription>
+            <div className="flex items-center gap-2">
+              <Clock className="w-5 h-5 text-muted-foreground" />
+              <CardTitle>Recently Used</CardTitle>
+            </div>
+            <CardDescription>Quick access to your recent tools</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-3">
-            <Button onClick={() => navigate("/artists/new")}>
-              <Plus className="w-4 h-4 mr-2" />
-              Add New Artist
-            </Button>
-            <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
-              <Calculator className="w-4 h-4 mr-2" />
-              OneClick
-            </Button>
+          <CardContent>
+            {recentTools.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">No recent activity yet</p>
+            ) : (
+              <div className="flex flex-wrap gap-3">
+                {recentTools.map((tool) => {
+                  const registry = TOOL_REGISTRY[tool.route];
+                  const IconComponent = registry?.icon || Calculator;
+                  return (
+                    <Button
+                      key={tool.route}
+                      variant="outline"
+                      className="gap-2 border-primary/40 hover:border-primary hover:bg-primary/5 transition-colors"
+                      onClick={() => handleNavigate(tool.route, tool.name)}
+                    >
+                      <IconComponent className="w-4 h-4 text-primary" />
+                      {registry?.label || tool.name}
+                    </Button>
+                  );
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
       </main>
