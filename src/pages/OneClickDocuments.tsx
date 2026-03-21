@@ -210,8 +210,8 @@ const OneClickDocuments = () => {
         .then(res => res.json())
         .then((data: ArtistFile[]) => {
             setProjectFilesById(prev => ({ ...prev, [selectedContractProject]: data }));
-            // Filter contracts
-            const contracts = data.filter(f => f.folder_category === 'contract');
+            // Filter contracts and split sheets
+            const contracts = data.filter(f => f.folder_category === 'contract' || f.folder_category === 'split_sheet');
             setExistingContracts(contracts);
             setIsLoadingProjectFiles(false);
         })
@@ -380,7 +380,7 @@ const OneClickDocuments = () => {
     const hasRoyaltyStatement = royaltyStatementFile !== null || selectedExistingRoyaltyStatement !== null;
     
     if (!hasContracts || !hasRoyaltyStatement) {
-        toast.error("Please provide both contracts and a royalty statement.");
+        toast.error("Please provide both contracts/split sheets and a royalty statement.");
         return;
     }
 
@@ -397,8 +397,8 @@ const OneClickDocuments = () => {
         if (contractFiles.length > 0) {
             // Upload new contracts
             if (!newContractProjectId || newContractProjectId === "none") {
-                 toast.error("Please select a project to save the new contract.");
-                 throw new Error("You must select a project to save the new contract to.");
+                 toast.error("Please select a project to save the new document.");
+                 throw new Error("You must select a project to save the new document to.");
              }
 
            const duplicateNamesInContractSelection = findDuplicateFileNames(contractFiles);
@@ -816,9 +816,9 @@ const OneClickDocuments = () => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileSignature className="w-5 h-5 text-primary" />
-                Upload Contract
+                Upload Contracts
               </CardTitle>
-              <CardDescription>Upload artist contract documents</CardDescription>
+              <CardDescription>Upload or select contract documents</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <Tabs value={contractTabValue} onValueChange={setContractTabValue} className="w-full">
@@ -830,7 +830,7 @@ const OneClickDocuments = () => {
                 <TabsContent value="upload" className="space-y-4 mt-4">
                   <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
                     <FileSignature className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                    <p className="text-foreground font-medium mb-2 text-sm">Upload Contract</p>
+                    <p className="text-foreground font-medium mb-2 text-sm">Upload Contract or Split Sheet</p>
                     <div className="flex items-center justify-center gap-2 mb-4">
                       <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-md">
                         <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
@@ -880,7 +880,7 @@ const OneClickDocuments = () => {
                           <Plus className="h-4 w-4" />
                         </Button>
                       </div>
-                      <p className="text-xs text-muted-foreground">Select a project to save the contract.</p>
+                      <p className="text-xs text-muted-foreground">Select a project to save the document.</p>
                     </div>
                   )}
 
@@ -920,7 +920,7 @@ const OneClickDocuments = () => {
                     <div className="space-y-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm font-medium text-foreground">
-                          Contracts in {projects.find(p => p.id === selectedContractProject)?.name}:
+                          Documents in {projects.find(p => p.id === selectedContractProject)?.name}:
                         </p>
                         <Button variant="ghost" size="sm" onClick={() => setSelectedContractProject(null)} className="text-xs h-8">
                           Change Project
@@ -940,7 +940,7 @@ const OneClickDocuments = () => {
                       {isLoadingProjectFiles ? (
                         <div className="text-center py-8">
                           <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
-                          <p className="text-sm text-muted-foreground">Loading contracts...</p>
+                          <p className="text-sm text-muted-foreground">Loading documents...</p>
                         </div>
                       ) : existingContracts.length > 0 ? (
                         <div className="space-y-2 max-h-[300px] overflow-y-auto">
@@ -969,11 +969,11 @@ const OneClickDocuments = () => {
                           {existingContracts.filter(contract => 
                             contract.file_name.toLowerCase().includes(contractSearchTerm.toLowerCase())
                           ).length === 0 && (
-                             <p className="text-sm text-muted-foreground text-center py-4">No matching contracts found.</p>
+                             <p className="text-sm text-muted-foreground text-center py-4">No matching documents found.</p>
                           )}
                         </div>
                       ) : (
-                        <p className="text-sm text-muted-foreground text-center py-4">No contracts found in this project.</p>
+                        <p className="text-sm text-muted-foreground text-center py-4">No contracts or split sheets found in this project.</p>
                       )}
                     </div>
                   )}
@@ -989,7 +989,7 @@ const OneClickDocuments = () => {
                 <Receipt className="w-5 h-5 text-primary" />
                 Upload Royalty Statement
               </CardTitle>
-              <CardDescription>Upload royalty statement documents</CardDescription>
+              <CardDescription>Upload or select royalty statement documents</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <Tabs value={royaltyStatementTabValue} onValueChange={setRoyaltyStatementTabValue} className="w-full">

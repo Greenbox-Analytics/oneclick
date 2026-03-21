@@ -19,6 +19,7 @@ import Profile from "./pages/Profile";
 import Workspace from "./pages/Workspace";
 import WorkspaceBoards from "./pages/WorkspaceBoards";
 import Portfolio from "./pages/Portfolio";
+import SplitSheet from "./pages/SplitSheet";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -134,6 +135,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Portfolio />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/tools/split-sheet"
+              element={
+                <ProtectedRoute>
+                  <SplitSheet />
                 </ProtectedRoute>
               }
             />
