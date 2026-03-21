@@ -926,8 +926,8 @@ const Portfolio = () => {
         onUploadComplete={() => refetchFiles()}
       />
       <RoyaltyStatementUploadModal
-        isOpen={royaltyStatementUploadModalOpen}
-        onClose={() => setRoyaltyStatementUploadModalOpen(false)}
+        open={royaltyStatementUploadModalOpen}
+        onOpenChange={(open) => { if (!open) setRoyaltyStatementUploadModalOpen(false); }}
         projectId={royaltyStatementUploadProjectId}
         onUploadComplete={() => refetchFiles()}
       />
