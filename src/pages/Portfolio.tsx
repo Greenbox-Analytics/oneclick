@@ -920,8 +920,8 @@ const Portfolio = () => {
 
       {/* === UPLOAD MODALS === */}
       <ContractUploadModal
-        isOpen={contractUploadModalOpen}
-        onClose={() => setContractUploadModalOpen(false)}
+        open={contractUploadModalOpen}
+        onOpenChange={(open) => { if (!open) setContractUploadModalOpen(false); }}
         projectId={contractUploadProjectId}
         onUploadComplete={() => refetchFiles()}
       />
