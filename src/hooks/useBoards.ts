@@ -66,7 +66,7 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   });
 
   const createColumnMutation = useMutation({
-    mutationFn: async (data: { title: string; color?: string; artist_id?: string }) => {
+    mutationFn: async (data: { title: string; color?: string; artist_id?: string; position?: number }) => {
       if (!user?.id) throw new Error("Not authenticated");
       const res = await fetch(`${API_URL}/boards/columns?user_id=${user.id}`, {
         method: "POST",
