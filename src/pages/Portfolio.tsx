@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -7,6 +7,10 @@ import { usePortfolioData } from "@/hooks/usePortfolioData";
 import type { Tables } from "@/integrations/supabase/types";
 import { ContractUploadModal } from "@/components/ContractUploadModal";
 import { RoyaltyStatementUploadModal } from "@/components/RoyaltyStatementUploadModal";
+import { ProjectFormDialog } from "@/components/ProjectFormDialog";
+import { AudioSection } from "@/components/AudioSection";
+import { FileShareDialog } from "@/components/FileShareDialog";
+import { useAudioData } from "@/hooks/useAudioData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,12 +54,38 @@ import {
   ArrowUpDown,
   ChevronDown,
   ChevronUp,
+  Plus,
+  Pencil,
+  MoreVertical,
+  Send,
 } from "lucide-react";
 
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
+const ARTIST_COLORS = [
+  { border: "border-l-rose-500", bg: "bg-rose-500/5", avatar: "bg-rose-500/15 text-rose-700 dark:text-rose-300" },
+  { border: "border-l-sky-500", bg: "bg-sky-500/5", avatar: "bg-sky-500/15 text-sky-700 dark:text-sky-300" },
+  { border: "border-l-amber-500", bg: "bg-amber-500/5", avatar: "bg-amber-500/15 text-amber-700 dark:text-amber-300" },
+  { border: "border-l-emerald-500", bg: "bg-emerald-500/5", avatar: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
+  { border: "border-l-violet-500", bg: "bg-violet-500/5", avatar: "bg-violet-500/15 text-violet-700 dark:text-violet-300" },
+  { border: "border-l-orange-500", bg: "bg-orange-500/5", avatar: "bg-orange-500/15 text-orange-700 dark:text-orange-300" },
+  { border: "border-l-teal-500", bg: "bg-teal-500/5", avatar: "bg-teal-500/15 text-teal-700 dark:text-teal-300" },
+  { border: "border-l-pink-500", bg: "bg-pink-500/5", avatar: "bg-pink-500/15 text-pink-700 dark:text-pink-300" },
+  { border: "border-l-indigo-500", bg: "bg-indigo-500/5", avatar: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300" },
+  { border: "border-l-lime-500", bg: "bg-lime-500/5", avatar: "bg-lime-500/15 text-lime-700 dark:text-lime-300" },
+];
+
+function getArtistColor(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return ARTIST_COLORS[Math.abs(hash) % ARTIST_COLORS.length];
+}
+
 const Portfolio = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -82,8 +112,11 @@ const Portfolio = () => {
     return user?.email?.substring(0, 2).toUpperCase() || "U";
   };
 
-  // Filter state
-  const [selectedArtistIds, setSelectedArtistIds] = useState<string[]>([]);
+  // Filter state — initialize from ?artist= query param if present
+  const initialArtistId = searchParams.get("artist");
+  const [selectedArtistIds, setSelectedArtistIds] = useState<string[]>(
+    initialArtistId ? [initialArtistId] : []
+  );
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -111,6 +144,16 @@ const Portfolio = () => {
   // Ticket expansion state per project
   const [expandedTickets, setExpandedTickets] = useState<Record<string, boolean>>({});
 
+  // Project CRUD state
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<{ id: string; name: string; description: string | null; artist_id: string } | null>(null);
+  const [defaultArtistIdForProject, setDefaultArtistIdForProject] = useState<string | undefined>();
+  const [projectToDelete, setProjectToDelete] = useState<{ id: string; name: string } | null>(null);
+
+  // File sharing state
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [filesToShare, setFilesToShare] = useState<{ file_name: string; file_path: string; file_source: "project_file" | "audio_file"; file_id: string }[]>([]);
+
   // Debounce search
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchInput), 300);
@@ -128,13 +171,27 @@ const Portfolio = () => {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const { years, allArtists, isLoading, refetchFiles } = usePortfolioData({
+  const { years, allArtists, isLoading, refetchFiles, refetchProjects } = usePortfolioData({
     selectedArtistIds,
     searchQuery: debouncedSearch,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
     sortOrder,
   });
+
+  // Derive IDs for audio data hook
+  const allArtistIds = useMemo(() => allArtists.map((a) => a.id), [allArtists]);
+  const allProjectIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const yg of years) {
+      for (const ag of yg.artists) {
+        for (const p of ag.projects) ids.push(p.id);
+      }
+    }
+    return ids;
+  }, [years]);
+
+  const audioData = useAudioData(allArtistIds, allProjectIds);
 
   const hasActiveFilters = selectedArtistIds.length > 0 || debouncedSearch || dateFrom || dateTo;
 
@@ -145,6 +202,71 @@ const Portfolio = () => {
     setDateFrom("");
     setDateTo("");
     setArtistSearchInput("");
+  };
+
+  // --- Project CRUD handlers ---
+
+  const handleAddProject = (artistId?: string) => {
+    setEditingProject(null);
+    setDefaultArtistIdForProject(artistId);
+    setProjectDialogOpen(true);
+  };
+
+  const handleEditProject = (project: { id: string; name: string; description: string | null; artist_id: string }) => {
+    setEditingProject(project);
+    setDefaultArtistIdForProject(undefined);
+    setProjectDialogOpen(true);
+  };
+
+  const handleSaveProject = async (data: { name: string; description: string; artist_id: string }) => {
+    if (editingProject) {
+      const { error } = await supabase
+        .from("projects")
+        .update({ name: data.name, description: data.description || null })
+        .eq("id", editingProject.id);
+      if (error) throw error;
+      toast({ title: "Success", description: "Project updated" });
+    } else {
+      const { error } = await supabase
+        .from("projects")
+        .insert({ name: data.name, description: data.description || null, artist_id: data.artist_id });
+      if (error) throw error;
+      toast({ title: "Success", description: "Project created" });
+    }
+    refetchProjects();
+  };
+
+  const handleDeleteProject = async () => {
+    if (!projectToDelete) return;
+    try {
+      // Delete all project files from storage and DB first
+      const { data: files } = await supabase
+        .from("project_files")
+        .select("*")
+        .eq("project_id", projectToDelete.id);
+
+      if (files && files.length > 0) {
+        const storagePaths = files
+          .map(f => (f as any).file_path as string | undefined)
+          .filter((p): p is string => !!p);
+        if (storagePaths.length > 0) {
+          await supabase.storage.from("project-files").remove(storagePaths);
+        }
+        await supabase.from("project_files").delete().eq("project_id", projectToDelete.id);
+      }
+
+      const { error } = await supabase.from("projects").delete().eq("id", projectToDelete.id);
+      if (error) throw error;
+
+      refetchProjects();
+      refetchFiles();
+      toast({ title: "Success", description: "Project deleted" });
+    } catch (error: any) {
+      console.error("Error deleting project:", error);
+      toast({ title: "Error", description: error.message || "Failed to delete project", variant: "destructive" });
+    } finally {
+      setProjectToDelete(null);
+    }
   };
 
   // Artist search suggestions (top 5 closest matches)
@@ -394,14 +516,20 @@ const Portfolio = () => {
 
       <main className="container mx-auto px-4 py-8">
         {/* === PAGE TITLE === */}
-        <div className="flex items-center gap-3 mb-6">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div>
-            <h2 className="text-3xl font-bold text-foreground">Portfolio</h2>
-            <p className="text-muted-foreground">Your profile organized by year, artist, and project</p>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <div>
+              <h2 className="text-3xl font-bold text-foreground">Portfolio</h2>
+              <p className="text-muted-foreground">Your profile organized by year, artist, and project</p>
+            </div>
           </div>
+          <Button onClick={() => handleAddProject()} className="gap-2">
+            <Plus className="w-4 h-4" />
+            Add Project
+          </Button>
         </div>
 
         {/* === FILTER BAR (sticky) === */}
@@ -567,28 +695,71 @@ const Portfolio = () => {
                       </AccordionTrigger>
                       <AccordionContent className="px-3 pt-2 pb-3">
                     <Accordion type="multiple" className="space-y-2">
-                      {letterGroup.artists.map((artistGroup) => (
+                      {letterGroup.artists.map((artistGroup) => {
+                        const artistColor = getArtistColor(artistGroup.artist.name);
+                        return (
                         <AccordionItem
                           key={artistGroup.artist.id}
                           value={`artist-${artistGroup.artist.id}-${yearGroup.year}`}
-                          className="border rounded-lg px-3"
+                          className={`border rounded-lg px-3 border-l-4 ${artistColor.border} ${artistColor.bg}`}
                         >
-                          <AccordionTrigger className="hover:no-underline py-3">
+                          <div className="flex items-center">
+                          <AccordionTrigger className="hover:no-underline py-3 flex-1">
                             <div className="flex items-center gap-3">
                               <Avatar className="h-8 w-8">
                                 <AvatarImage src={artistGroup.artist.avatar || ""} />
-                                <AvatarFallback className="text-xs bg-primary/10">
+                                <AvatarFallback className={`text-xs ${artistColor.avatar}`}>
                                   {artistGroup.artist.name.slice(0, 2).toUpperCase()}
                                 </AvatarFallback>
                               </Avatar>
-                              <span className="font-semibold">{artistGroup.artist.name}</span>
+                              <span
+                                className="font-semibold hover:underline cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigate(`/artists/${artistGroup.artist.id}`);
+                                }}
+                              >
+                                {artistGroup.artist.name}
+                              </span>
                               <Badge variant="outline" className="text-xs">
                                 {artistGroup.projects.length} project
                                 {artistGroup.projects.length !== 1 ? "s" : ""}
                               </Badge>
                             </div>
                           </AccordionTrigger>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 ml-2"
+                            title="Add project for this artist"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleAddProject(artistGroup.artist.id);
+                            }}
+                          >
+                            <Plus className="w-4 h-4" />
+                          </Button>
+                          </div>
                           <AccordionContent className="pb-3 space-y-3">
+                            {/* === PROJECT CARDS === */}
+                            {/* === AUDIO SECTION (per artist) === */}
+                            <AudioSection
+                              artistId={artistGroup.artist.id}
+                              folders={audioData.foldersByArtist.get(artistGroup.artist.id) || []}
+                              filesByFolder={audioData.filesByFolder}
+                              projectsByAudioFile={audioData.projectsByAudioFile}
+                              artistProjects={artistGroup.projects.map((p) => ({ id: p.id, name: p.name }))}
+                              onCreateFolder={audioData.createFolder}
+                              onRenameFolder={audioData.renameFolder}
+                              onDeleteFolder={audioData.deleteFolder}
+                              onUploadFile={audioData.uploadAudioFile}
+                              onDeleteFile={audioData.deleteAudioFile}
+                              onLinkAudio={audioData.linkAudioToProject}
+                              onUnlinkAudio={audioData.unlinkAudioFromProject}
+                            />
+
+                            <Separator className="my-3" />
+
                             {/* === PROJECT CARDS === */}
                             {artistGroup.projects.map((project) => {
                               const isTicketsExpanded = expandedTickets[project.id] || false;
@@ -598,200 +769,260 @@ const Portfolio = () => {
                               const hasMoreTasks = project.tasks.length > 5;
 
                               return (
-                                <Card key={project.id} className="border-border/50">
-                                  <CardHeader className="pb-3">
-                                    <div className="flex items-center justify-between">
-                                      <div>
-                                        <CardTitle className="text-base">{project.name}</CardTitle>
-                                        <p className="text-xs text-muted-foreground mt-1">
-                                          Created {new Date(project.created_at).toLocaleDateString()}
+                                <Card key={project.id} className="group/card border-0 bg-gradient-to-br from-card to-card/80 shadow-sm hover:shadow-md transition-all duration-300 rounded-xl overflow-hidden ring-1 ring-border/50 hover:ring-border">
+                                  <CardHeader className="pb-2 pt-4 px-5">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2">
+                                          <CardTitle className="text-base font-semibold tracking-tight truncate">{project.name}</CardTitle>
+                                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal text-muted-foreground border-border/60 flex-shrink-0">
+                                            {Object.values(project.files).flat().length} files
+                                          </Badge>
+                                        </div>
+                                        {project.description && (
+                                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{project.description}</p>
+                                        )}
+                                        <p className="text-[11px] text-muted-foreground/70 mt-1.5">
+                                          {new Date(project.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                                         </p>
                                       </div>
+                                      <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                          <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover/card:opacity-100 transition-opacity">
+                                            <MoreVertical className="w-4 h-4" />
+                                          </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                          <DropdownMenuItem onClick={() => handleEditProject({
+                                            id: project.id,
+                                            name: project.name,
+                                            description: project.description,
+                                            artist_id: project.artist_id,
+                                          })}>
+                                            <Pencil className="w-4 h-4 mr-2" />
+                                            Edit Project
+                                          </DropdownMenuItem>
+                                          <DropdownMenuItem
+                                            onClick={() => {
+                                              const allProjectFiles = Object.values(project.files)
+                                                .flat()
+                                                .map((f) => {
+                                                  let path = (f as any).file_path || "";
+                                                  if (!path && f.file_url) {
+                                                    const marker = "/object/public/project-files/";
+                                                    const idx = f.file_url.indexOf(marker);
+                                                    if (idx >= 0) path = decodeURIComponent(f.file_url.slice(idx + marker.length));
+                                                  }
+                                                  return {
+                                                    file_name: f.file_name,
+                                                    file_path: path,
+                                                    file_source: "project_file" as const,
+                                                    file_id: f.id,
+                                                  };
+                                                });
+                                              if (allProjectFiles.length > 0) {
+                                                setFilesToShare(allProjectFiles);
+                                                setShareDialogOpen(true);
+                                              }
+                                            }}
+                                            disabled={Object.values(project.files).flat().length === 0}
+                                          >
+                                            <Send className="w-4 h-4 mr-2" />
+                                            Share Files
+                                          </DropdownMenuItem>
+                                          <DropdownMenuItem
+                                            className="text-destructive focus:text-destructive"
+                                            onClick={() => setProjectToDelete({ id: project.id, name: project.name })}
+                                          >
+                                            <Trash2 className="w-4 h-4 mr-2" />
+                                            Delete Project
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
                                     </div>
                                   </CardHeader>
-                                  <CardContent className="space-y-4">
-                                    {/* FILE GRID (2x2) — collapsible */}
-                                    <Accordion type="multiple" defaultValue={["files-grid"]}>
-                                      <AccordionItem value="files-grid" className="border-none">
-                                        <AccordionTrigger className="hover:no-underline py-1 text-sm font-medium">
-                                          Files
-                                        </AccordionTrigger>
-                                        <AccordionContent>
-                                          <div className="grid grid-cols-2 gap-3 pt-2">
-                                            {[
-                                              { name: "Contracts", color: "amber", category: "contract" },
-                                              { name: "Split Sheets", color: "blue", category: "split_sheet" },
-                                              {
-                                                name: "Royalty Statements",
-                                                color: "green",
-                                                category: "royalty_statement",
-                                              },
-                                              { name: "Other Files", color: "purple", category: "other" },
-                                            ].map((folder) => {
-                                              const fileCount = (project.files[folder.category] || []).length;
-                                              const isUploading =
-                                                uploadingFile === `${project.id}-${folder.category}`;
-                                              return (
-                                                <div key={folder.category} className="relative">
-                                                  {folder.category !== "contract" &&
-                                                    folder.category !== "royalty_statement" && (
-                                                      <input
-                                                        type="file"
-                                                        id={`upload-${project.id}-${folder.category}`}
-                                                        className="hidden"
-                                                        onChange={(e) =>
-                                                          handleFileUpload(project.id, folder.category, e)
-                                                        }
-                                                        disabled={isUploading}
-                                                      />
-                                                    )}
-                                                  <div
-                                                    className="p-3 border border-border rounded-md hover:bg-muted/50 transition-colors cursor-pointer group"
-                                                    onClick={() => {
-                                                      setSelectedProject(project.id);
-                                                      setSelectedFileType(folder.category);
-                                                      setFileSearchQuery("");
-                                                    }}
-                                                  >
-                                                    <div className="flex items-center justify-between mb-2">
-                                                      <div className="flex items-center gap-2 text-sm font-medium">
-                                                        <Folder className={`w-4 h-4 text-${folder.color}-500`} />
-                                                        {folder.name}
-                                                      </div>
-                                                      <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                                                        onClick={(e) => {
-                                                          e.stopPropagation();
-                                                          if (folder.category === "contract")
-                                                            handleContractUploadClick(project.id);
-                                                          else if (folder.category === "royalty_statement")
-                                                            handleRoyaltyStatementUploadClick(project.id);
-                                                          else
-                                                            document
-                                                              .getElementById(
-                                                                `upload-${project.id}-${folder.category}`
-                                                              )
-                                                              ?.click();
-                                                        }}
-                                                        disabled={isUploading}
-                                                      >
-                                                        {isUploading ? (
-                                                          <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                                                        ) : (
-                                                          <Upload className="w-3 h-3" />
-                                                        )}
-                                                      </Button>
-                                                    </div>
-                                                    <p className="text-xs text-muted-foreground">
-                                                      {fileCount} file{fileCount !== 1 ? "s" : ""}
-                                                    </p>
-                                                  </div>
-                                                </div>
-                                              );
-                                            })}
+                                  <CardContent className="space-y-3 px-5 pb-5">
+                                    {/* FILE GRID (2x2) */}
+                                    <div className="grid grid-cols-2 gap-2">
+                                      {[
+                                        { name: "Contracts", category: "contract" },
+                                        { name: "Split Sheets", category: "split_sheet" },
+                                        { name: "Royalty Statements", category: "royalty_statement" },
+                                        { name: "Other", category: "other" },
+                                      ].map((folder) => {
+                                        const fileCount = (project.files[folder.category] || []).length;
+                                        const isUploading =
+                                          uploadingFile === `${project.id}-${folder.category}`;
+                                        return (
+                                          <div key={folder.category} className="relative">
+                                            {folder.category !== "contract" &&
+                                              folder.category !== "royalty_statement" && (
+                                                <input
+                                                  type="file"
+                                                  id={`upload-${project.id}-${folder.category}`}
+                                                  className="hidden"
+                                                  onChange={(e) =>
+                                                    handleFileUpload(project.id, folder.category, e)
+                                                  }
+                                                  disabled={isUploading}
+                                                />
+                                              )}
+                                            <div
+                                              className="p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors cursor-pointer group/folder"
+                                              onClick={() => {
+                                                setSelectedProject(project.id);
+                                                setSelectedFileType(folder.category);
+                                                setFileSearchQuery("");
+                                              }}
+                                            >
+                                              <div className="flex items-center justify-between mb-1.5">
+                                                <Folder className="w-4 h-4 text-muted-foreground" />
+                                                <Button
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  className="h-5 w-5 opacity-0 group-hover/folder:opacity-100 transition-opacity"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (folder.category === "contract")
+                                                      handleContractUploadClick(project.id);
+                                                    else if (folder.category === "royalty_statement")
+                                                      handleRoyaltyStatementUploadClick(project.id);
+                                                    else
+                                                      document
+                                                        .getElementById(
+                                                          `upload-${project.id}-${folder.category}`
+                                                        )
+                                                        ?.click();
+                                                  }}
+                                                  disabled={isUploading}
+                                                >
+                                                  {isUploading ? (
+                                                    <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                                  ) : (
+                                                    <Upload className="w-3 h-3" />
+                                                  )}
+                                                </Button>
+                                              </div>
+                                              <p className="text-xs font-medium">{folder.name}</p>
+                                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                                {fileCount} {fileCount === 1 ? "file" : "files"}
+                                              </p>
+                                            </div>
                                           </div>
-                                        </AccordionContent>
-                                      </AccordionItem>
-                                    </Accordion>
+                                        );
+                                            })}
+                                    </div>
 
                                     {/* TICKETS SECTION */}
-                                    <Separator />
-                                    <div>
-                                      <h4 className="text-sm font-medium flex items-center gap-2 mb-2">
-                                        <CheckSquare className="w-4 h-4 text-muted-foreground" />
-                                        Tickets
-                                        {project.tasks.length > 0 && (
-                                          <Badge variant="secondary" className="text-xs">
+                                    {project.tasks.length > 0 && (
+                                      <div className="pt-1">
+                                        <div className="flex items-center gap-2 mb-2">
+                                          <CheckSquare className="w-3.5 h-3.5 text-muted-foreground/70" />
+                                          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Tickets</span>
+                                          <span className="text-[10px] text-muted-foreground/60 bg-muted rounded-full px-1.5 py-0.5 leading-none">
                                             {project.tasks.length}
-                                          </Badge>
-                                        )}
-                                      </h4>
-                                      {project.tasks.length === 0 ? (
-                                        <p className="text-xs text-muted-foreground py-2">No tickets linked</p>
-                                      ) : (
-                                        <>
-                                          <div className="space-y-1.5">
-                                            {visibleTasks.map((task) => (
-                                              <div
-                                                key={task.id}
-                                                className="flex items-center justify-between p-2 rounded-md border border-border hover:bg-muted/50 transition-colors cursor-pointer"
-                                                onClick={() =>
-                                                  navigate(
-                                                    `/workspace?tab=boards&taskId=${task.id}`
-                                                  )
-                                                }
-                                              >
-                                                <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                  <span className="text-sm truncate">{task.title}</span>
-                                                </div>
-                                                <div className="flex items-center gap-2 flex-shrink-0">
-                                                  {task.priority && (
-                                                    <Badge
-                                                      variant="outline"
-                                                      className={`text-xs ${
-                                                        task.priority === "urgent"
-                                                          ? "border-red-500 text-red-500"
-                                                          : task.priority === "high"
-                                                          ? "border-orange-500 text-orange-500"
-                                                          : task.priority === "medium"
-                                                          ? "border-yellow-500 text-yellow-500"
-                                                          : "border-green-500 text-green-500"
-                                                      }`}
-                                                    >
-                                                      {task.priority}
-                                                    </Badge>
-                                                  )}
-                                                  {task.due_date && (
-                                                    <span className="text-xs text-muted-foreground">
-                                                      {new Date(task.due_date).toLocaleDateString()}
-                                                    </span>
-                                                  )}
-                                                  {task.column_title && (
-                                                    <Badge variant="secondary" className="text-xs">
-                                                      {task.column_title}
-                                                    </Badge>
-                                                  )}
-                                                </div>
-                                              </div>
-                                            ))}
-                                          </div>
-                                          {hasMoreTasks && (
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              className="w-full mt-2 text-xs"
+                                          </span>
+                                        </div>
+                                        <div className="space-y-1">
+                                          {visibleTasks.map((task) => (
+                                            <div
+                                              key={task.id}
+                                              className="flex items-center justify-between py-1.5 px-2.5 rounded-lg hover:bg-muted/60 transition-colors cursor-pointer group/task"
                                               onClick={() =>
-                                                setExpandedTickets((prev) => ({
-                                                  ...prev,
-                                                  [project.id]: !prev[project.id],
-                                                }))
+                                                navigate(
+                                                  `/workspace?tab=boards&taskId=${task.id}`
+                                                )
                                               }
                                             >
-                                              {isTicketsExpanded ? (
-                                                <>
-                                                  <ChevronUp className="w-3 h-3 mr-1" />
-                                                  Show less
-                                                </>
-                                              ) : (
-                                                <>
-                                                  <ChevronDown className="w-3 h-3 mr-1" />
-                                                  Show all {project.tasks.length} tickets
-                                                </>
-                                              )}
-                                            </Button>
-                                          )}
-                                        </>
-                                      )}
-                                    </div>
+                                              <span className="text-sm truncate flex-1 min-w-0">{task.title}</span>
+                                              <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                                                {task.priority && (
+                                                  <span
+                                                    className={`w-1.5 h-1.5 rounded-full ${
+                                                      task.priority === "urgent"
+                                                        ? "bg-red-500"
+                                                        : task.priority === "high"
+                                                        ? "bg-orange-500"
+                                                        : task.priority === "medium"
+                                                        ? "bg-yellow-500"
+                                                        : "bg-green-500"
+                                                    }`}
+                                                    title={task.priority}
+                                                  />
+                                                )}
+                                                {task.column_title && (
+                                                  <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                                                    {task.column_title}
+                                                  </span>
+                                                )}
+                                                {task.due_date && (
+                                                  <span className="text-[10px] text-muted-foreground/70">
+                                                    {new Date(task.due_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                        {hasMoreTasks && (
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="w-full mt-1 text-xs text-muted-foreground h-7"
+                                            onClick={() =>
+                                              setExpandedTickets((prev) => ({
+                                                ...prev,
+                                                [project.id]: !prev[project.id],
+                                              }))
+                                            }
+                                          >
+                                            {isTicketsExpanded ? (
+                                              <>
+                                                <ChevronUp className="w-3 h-3 mr-1" />
+                                                Show less
+                                              </>
+                                            ) : (
+                                              <>
+                                                <ChevronDown className="w-3 h-3 mr-1" />
+                                                {project.tasks.length - 5} more
+                                              </>
+                                            )}
+                                          </Button>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {/* LINKED AUDIO FILES */}
+                                    {(audioData.audioLinksByProject.get(project.id) || []).length > 0 && (
+                                      <div className="pt-1">
+                                        <div className="flex items-center gap-2 mb-2">
+                                          <Music className="w-3.5 h-3.5 text-muted-foreground/70" />
+                                          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Linked Audio</span>
+                                          <span className="text-[10px] text-muted-foreground/60 bg-muted rounded-full px-1.5 py-0.5 leading-none">
+                                            {(audioData.audioLinksByProject.get(project.id) || []).length}
+                                          </span>
+                                        </div>
+                                        <div className="space-y-0.5">
+                                          {(audioData.audioLinksByProject.get(project.id) || []).map((audioFile) => (
+                                            <div
+                                              key={audioFile.id}
+                                              className="flex items-center gap-2 py-1.5 px-2.5 rounded-lg text-sm text-muted-foreground hover:bg-muted/40 transition-colors"
+                                            >
+                                              <Music className="w-3 h-3 flex-shrink-0 text-emerald-500/70" />
+                                              <span className="truncate">{audioFile.file_name}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
                                   </CardContent>
                                 </Card>
                               );
                             })}
                           </AccordionContent>
                         </AccordionItem>
-                      ))}
+                        );
+                      })}
                     </Accordion>
                       </AccordionContent>
                     </AccordionItem>
@@ -872,6 +1103,28 @@ const Portfolio = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Share"
+                      onClick={() => {
+                        let path = (file as any).file_path || "";
+                        if (!path && file.file_url) {
+                          const marker = "/object/public/project-files/";
+                          const idx = file.file_url.indexOf(marker);
+                          if (idx >= 0) path = decodeURIComponent(file.file_url.slice(idx + marker.length));
+                        }
+                        setFilesToShare([{
+                          file_name: file.file_name,
+                          file_path: path,
+                          file_source: "project_file",
+                          file_id: file.id,
+                        }]);
+                        setShareDialogOpen(true);
+                      }}
+                    >
+                      <Send className="w-4 h-4" />
+                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => handleFileDownload(file)} title="Download">
                       <Upload className="w-4 h-4 rotate-180" />
                     </Button>
@@ -930,6 +1183,47 @@ const Portfolio = () => {
         onOpenChange={(open) => { if (!open) setRoyaltyStatementUploadModalOpen(false); }}
         projectId={royaltyStatementUploadProjectId}
         onUploadComplete={() => refetchFiles()}
+      />
+
+      {/* === PROJECT FORM DIALOG === */}
+      <ProjectFormDialog
+        open={projectDialogOpen}
+        onOpenChange={setProjectDialogOpen}
+        project={editingProject}
+        artists={allArtists}
+        defaultArtistId={defaultArtistIdForProject}
+        onSave={handleSaveProject}
+      />
+
+      {/* === DELETE PROJECT CONFIRMATION === */}
+      <AlertDialog
+        open={projectToDelete !== null}
+        onOpenChange={(open) => { if (!open) setProjectToDelete(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>{projectToDelete?.name}</strong> and all its files. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteProject}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete Project
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* === FILE SHARE DIALOG === */}
+      <FileShareDialog
+        open={shareDialogOpen}
+        onOpenChange={setShareDialogOpen}
+        files={filesToShare}
       />
     </div>
   );

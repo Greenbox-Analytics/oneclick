@@ -29,3 +29,6 @@ httpx==0.28.1
 # Split sheet generator
 reportlab==4.4.10
 python-docx==1.2.0
+
+# Email
+resend==2.7.0
