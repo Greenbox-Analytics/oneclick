@@ -244,5 +244,6 @@ export function usePortfolioData(filters: PortfolioFilters) {
     allFiles: filesQuery.data || [],
     isLoading: artistsQuery.isLoading || projectsQuery.isLoading || filesQuery.isLoading || tasksQuery.isLoading,
     refetchFiles: filesQuery.refetch,
+    refetchProjects: projectsQuery.refetch,
   };
 }
