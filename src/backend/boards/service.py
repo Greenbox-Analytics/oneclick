@@ -585,10 +585,11 @@ async def batch_reorder(supabase: Client, user_id: str, reorders: List[dict]) ->
 async def create_default_columns(supabase: Client, user_id: str, artist_id: Optional[str] = None) -> list:
     """Create default Kanban columns for a new board."""
     defaults = [
-        {"title": "To Do", "position": 0, "color": "#6366f1"},
-        {"title": "In Progress", "position": 1, "color": "#f59e0b"},
-        {"title": "Review", "position": 2, "color": "#3b82f6"},
-        {"title": "Done", "position": 3, "color": "#10b981"},
+        {"title": "Backlog", "position": 0, "color": "#8b5cf6"},
+        {"title": "To Do", "position": 1, "color": "#6366f1"},
+        {"title": "In Progress", "position": 2, "color": "#f59e0b"},
+        {"title": "Review", "position": 3, "color": "#3b82f6"},
+        {"title": "Done", "position": 4, "color": "#10b981"},
     ]
     columns = []
     for col in defaults:

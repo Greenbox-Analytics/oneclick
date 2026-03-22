@@ -571,6 +571,29 @@ async def get_project_contracts(project_id: str, user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/projects/{project_id}/documents")
+async def get_project_documents(project_id: str, user_id: str):
+    """
+    Fetch contracts and split sheets for a project (used by Zoe).
+    """
+    try:
+        if not verify_user_owns_project(user_id, project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+        response = (
+            get_supabase_client()
+            .table("project_files")
+            .select("*")
+            .eq("project_id", project_id)
+            .in_("folder_category", ["contract", "split_sheet"])
+            .execute()
+        )
+        return response.data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- Contract Upload/Deletion Endpoints ---
 
 class ContractUploadRequest(BaseModel):

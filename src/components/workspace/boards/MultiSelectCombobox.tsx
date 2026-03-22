@@ -5,7 +5,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { ChevronsUpDown, X } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface Option {
   id: string;
@@ -70,7 +69,7 @@ export function MultiSelectCombobox({
             onChange={(e) => setSearch(e.target.value)}
             className="mb-2 h-8"
           />
-          <ScrollArea className="max-h-[200px]">
+          <div className="max-h-[240px] overflow-y-auto">
             {filtered.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">
                 No results
@@ -91,7 +90,7 @@ export function MultiSelectCombobox({
                 ))}
               </div>
             )}
-          </ScrollArea>
+          </div>
         </PopoverContent>
       </Popover>
 

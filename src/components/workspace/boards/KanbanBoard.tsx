@@ -71,6 +71,22 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
     }
   }, [initialSelectedTaskId]);
 
+  // Auto-add Backlog column if it doesn't exist yet
+  const [backlogChecked, setBacklogChecked] = useState(false);
+  useEffect(() => {
+    if (backlogChecked || isLoading || columns.length === 0) return;
+    const hasBacklog = columns.some((c: any) => c.title === "Backlog");
+    if (!hasBacklog) {
+      // Bump existing column positions by 1
+      columns.forEach((col: any) => {
+        updateColumn({ id: col.id, position: (col.position ?? 0) + 1 });
+      });
+      // Create Backlog at position 0
+      createColumn({ title: "Backlog", color: "#8b5cf6", position: 0, artist_id: artistId });
+    }
+    setBacklogChecked(true);
+  }, [columns, isLoading, backlogChecked]);
+
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const [newColumnTitle, setNewColumnTitle] = useState("");
