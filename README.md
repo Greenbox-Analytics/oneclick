@@ -104,12 +104,77 @@ The following routes require authentication:
 - ✅ Responsive design with Tailwind CSS
 - ✅ Modern UI components with shadcn/ui
 
+## 🚢 Deployment
+
+### Environments
+
+| Environment | Frontend | Backend | Trigger |
+|-------------|----------|---------|---------|
+| **Dev** | Vercel (auto-deploy from `main`) | Cloud Run (`msanii-backend-dev`) | Push to `main` |
+| **Prod** | Vercel (CLI deploy) | Cloud Run (`msanii-backend`) | Published tag release (`v*`) |
+
+Both environments share the same Supabase database — data is user-scoped so there is no cross-contamination.
+
+### Deploy to Dev
+
+Push or merge to `main`. Everything is automatic:
+- Frontend: Vercel auto-deploys from `main`
+- Backend: GitHub Actions builds and deploys `msanii-backend-dev` to Cloud Run
+
+```bash
+git checkout main
+git merge your-feature-branch
+git push origin main
+```
+
+### Deploy to Prod
+
+Create and publish a tag release. Both prod workflows trigger automatically:
+
+```bash
+git checkout main
+git tag v1.0.0
+git push origin v1.0.0
+```
+This can also be done via GitHub desktop while on main.
+
+Recommended:
+Create a release through GitHub: Releases → Draft a new release → Choose tag → Publish.
+
+
+This triggers:
+- `deploy-backend.yml` → deploys `msanii-backend` to Cloud Run
+- `deploy-frontend-prod.yml` → deploys to prod Vercel via CLI
+
+### Workflow Files
+
+| Workflow | File | Trigger |
+|----------|------|---------|
+| Dev backend | `.github/workflows/deploy-backend-dev.yml` | Push to `main` (paths: `src/backend/**`) |
+| Prod backend | `.github/workflows/deploy-backend.yml` | Tag push `v*` |
+| Prod frontend | `.github/workflows/deploy-frontend-prod.yml` | Tag push `v*` |
+
+### Required GitHub Secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `GCP_PROJECT_ID` | GCP project for Cloud Run |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | GCP auth (WIF) |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | GCP auth (WIF) |
+| `DEV_ALLOWED_ORIGINS` | Dev Vercel URL for CORS |
+| `PROD_ALLOWED_ORIGINS` | Prod Vercel URL for CORS |
+| `VERCEL_PROD_TOKEN` | Vercel API token for prod deploys |
+| `VERCEL_ORG_ID` | Vercel org ID |
+| `VERCEL_PROJECT_ID` | Vercel prod project ID |
+
 ## 🤝 Contributing
 
-1. Create a feature branch
+1. Create a feature branch from `main`
 2. Make your changes
 3. Test thoroughly
-4. Submit a pull request
+4. Submit a pull request to `main`
+5. Once merged, changes auto-deploy to dev
+6. When ready for prod, create a tag release
 
 ## 📝 License
 
