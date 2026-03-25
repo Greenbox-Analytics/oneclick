@@ -1,27 +1,29 @@
-name: Deploy Backend to Cloud Run
+name: Deploy Dev Backend to Cloud Run
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:  # Allow manual triggering
+    branches:
+      - main
+    paths:
+      - 'src/backend/**'
+      - '.github/workflows/deploy-backend-dev.yml'
+  workflow_dispatch:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  SERVICE_NAME: msanii-backend
+  SERVICE_NAME: msanii-backend-dev
   REGION: northamerica-northeast2
-  IMAGE_NAME: gcr.io/${{ secrets.GCP_PROJECT_ID }}/msanii-backend
+  IMAGE_NAME: gcr.io/${{ secrets.GCP_PROJECT_ID }}/msanii-backend-dev
 
-# Required for Workload Identity Federation
 permissions:
   contents: read
   id-token: write
 
 jobs:
   deploy:
-    name: Build and Deploy to Cloud Run
+    name: Build and Deploy Dev Backend
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -54,7 +56,6 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
-          # Check if service exists, if not it will be created automatically
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image ${{ env.IMAGE_NAME }}:${{ github.sha }} \
             --region ${{ env.REGION }} \
@@ -66,7 +67,7 @@ jobs:
             --timeout 300 \
             --max-instances 10 \
             --min-instances 0 \
-            --set-env-vars ALLOWED_ORIGINS=https://oneclick-three.vercel.app
+            --set-env-vars ALLOWED_ORIGINS=${{ secrets.DEV_ALLOWED_ORIGINS }}
 
       - name: Get Cloud Run URL
         id: get-url
@@ -79,12 +80,12 @@ jobs:
 
       - name: Test health endpoint
         run: |
-          sleep 10  # Wait for service to be ready
+          sleep 10
           curl -f ${{ steps.get-url.outputs.url }}/health || exit 1
 
       - name: Deployment Summary
         run: |
-          echo "✅ Deployment successful!"
+          echo "✅ Dev deployment successful!"
           echo "🌐 Service URL: ${{ steps.get-url.outputs.url }}"
           echo "📦 Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
           echo "🏷️ Commit: ${{ github.sha }}"
