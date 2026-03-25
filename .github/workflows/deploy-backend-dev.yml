@@ -67,7 +67,7 @@ jobs:
             --timeout 300 \
             --max-instances 10 \
             --min-instances 0 \
-            --set-env-vars ALLOWED_ORIGINS=${{ secrets.DEV_ALLOWED_ORIGINS }}
+            --update-env-vars ALLOWED_ORIGINS=${{ secrets.DEV_ALLOWED_ORIGINS }}
 
       - name: Get Cloud Run URL
         id: get-url
