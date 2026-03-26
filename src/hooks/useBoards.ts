@@ -244,12 +244,31 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
           prevTasks.map((t) => (t.id === id ? { ...t, ...data } : t))
         );
       }
-      return { prevTasks };
+      // Optimistically update all parent-tasks caches (for epic board)
+      const prevParentQueries = queryClient.getQueriesData<{ parents: ParentTaskWithChildren[]; ungrouped: BoardTask[] }>({ queryKey: ["parent-tasks"] });
+      for (const [key, value] of prevParentQueries) {
+        if (!value) continue;
+        queryClient.setQueryData(key, {
+          ...value,
+          parents: value.parents.map((p: ParentTaskWithChildren) =>
+            p.id === id ? { ...p, ...data } : p
+          ),
+          ungrouped: value.ungrouped.map((t: BoardTask) =>
+            t.id === id ? { ...t, ...data } : t
+          ),
+        });
+      }
+      return { prevTasks, prevParentQueries };
     },
     onError: (_err, _vars, context) => {
       // Rollback on error
       if (context?.prevTasks) {
         queryClient.setQueryData(tasksQueryKey, context.prevTasks);
+      }
+      if (context?.prevParentQueries) {
+        for (const [key, value] of context.prevParentQueries) {
+          queryClient.setQueryData(key, value);
+        }
       }
     },
     onSettled: () => {
