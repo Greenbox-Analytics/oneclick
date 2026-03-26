@@ -1,0 +1,33 @@
+# This is a general list of all the libraries used without verisons
+
+fastapi
+uvicorn
+supabase
+openpyxl
+python-multipart
+python-dotenv
+certifi
+pip-system-certs
+pinecone
+langchain
+langchain-community
+langchain-openai
+langchain-text-splitters
+pymupdf
+pymupdf4llm
+tiktoken
+openai
+
+# Integration dependencies
+google-api-python-client
+google-auth
+google-auth-oauthlib
+slack-sdk
+notion-client
+cryptography
+PyJWT
+httpx
+
+# Split sheet generator
+reportlab
+python-docx

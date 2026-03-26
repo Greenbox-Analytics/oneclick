@@ -1,10 +1,16 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, ArrowRight, ArrowLeft, Bot } from "lucide-react";
+import { Music, Calculator, ArrowRight, ArrowLeft, Bot, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { trackToolUsage } from "@/pages/Dashboard";
 
 const Tools = () => {
   const navigate = useNavigate();
+
+  const handleNavigate = (route: string, label: string) => {
+    trackToolUsage(label, route);
+    navigate(route);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -34,7 +40,7 @@ const Tools = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {/* OneClick Tool Card */}
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => navigate("/tools/oneclick")}>
+          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleNavigate("/tools/oneclick", "OneClick")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
                 <Calculator className="w-6 h-6 text-primary" />
@@ -55,7 +61,7 @@ const Tools = () => {
           </Card>
 
           {/* Zoe AI Chatbot Tool Card */}
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => navigate("/tools/zoe")}>
+          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleNavigate("/tools/zoe", "Zoe")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
                 <Bot className="w-6 h-6 text-primary" />
@@ -75,17 +81,25 @@ const Tools = () => {
             </CardContent>
           </Card>
 
-          {/* Future tools placeholder */}
-          <Card className="border-dashed opacity-60">
+          {/* Split Sheet Generator Tool Card */}
+          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => navigate("/tools/split-sheet")}>
             <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center mb-4">
-                <Music className="w-6 h-6 text-muted-foreground" />
+              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
+                <FileText className="w-6 h-6 text-primary" />
               </div>
-              <CardTitle>Coming Soon</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                Split Sheet
+                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-[-10px] group-hover:translate-x-0" />
+              </CardTitle>
               <CardDescription>
-                More powerful tools for music management are currently in development.
+                Generate professional split sheet agreements to document royalty ownership for your music.
               </CardDescription>
             </CardHeader>
+            <CardContent>
+              <Button variant="ghost" className="w-full justify-start p-0 hover:bg-transparent hover:text-primary">
+                Launch Tool →
+              </Button>
+            </CardContent>
           </Card>
         </div>
       </main>

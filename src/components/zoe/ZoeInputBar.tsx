@@ -131,7 +131,9 @@ export function ZoeInputBar({
         <p className="text-[11px] text-center text-muted-foreground mt-2">
           {isAtLimit
             ? "Conversation limit reached. Please refresh the page to continue."
-            : "Zoe answers based on your uploaded contracts"}
+            : selectedContracts.length > 0
+              ? `Answering based on ${selectedContracts.length} selected contract${selectedContracts.length > 1 ? 's' : ''}`
+              : "Select contracts from the sidebar to get started"}
         </p>
       </div>
     </div>

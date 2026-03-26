@@ -16,6 +16,10 @@ import OneClick from "./pages/OneClick";
 import OneClickDocuments from "./pages/OneClickDocuments";
 import Zoe from "./pages/Zoe";
 import Profile from "./pages/Profile";
+import Workspace from "./pages/Workspace";
+import WorkspaceBoards from "./pages/WorkspaceBoards";
+import Portfolio from "./pages/Portfolio";
+import SplitSheet from "./pages/SplitSheet";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -102,6 +106,46 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/workspace"
+              element={
+                <ProtectedRoute>
+                  <Workspace />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/workspace/boards"
+              element={
+                <ProtectedRoute>
+                  <WorkspaceBoards />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/workspace/boards/:artistId"
+              element={
+                <ProtectedRoute>
+                  <WorkspaceBoards />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/portfolio"
+              element={
+                <ProtectedRoute>
+                  <Portfolio />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/tools/split-sheet"
+              element={
+                <ProtectedRoute>
+                  <SplitSheet />
+                </ProtectedRoute>
+              }
+            />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
@@ -112,3 +156,4 @@ const App = () => (
 );
 
 export default App;
+

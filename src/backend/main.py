@@ -9,11 +9,13 @@ import io
 import uuid
 import time
 import tempfile
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import sys
 from pathlib import Path
 import json
 import asyncio
+import resend
 
 # Add the backend directory to Python path for module resolution
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -29,6 +31,23 @@ from vector_search.helpers import calculate_royalty_payments
 load_dotenv()
 
 app = FastAPI()
+
+# --- Mount Integration & Board Routers ---
+from integrations.google_drive.router import router as google_drive_router
+from integrations.slack.router import router as slack_router
+from integrations.notion.router import router as notion_router
+from integrations.monday.router import router as monday_router
+from boards.router import router as boards_router
+from settings.router import router as settings_router
+from splitsheet.router import router as splitsheet_router
+
+app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
+app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
+app.include_router(notion_router, prefix="/integrations/notion", tags=["Notion"])
+app.include_router(monday_router, prefix="/integrations/monday", tags=["Monday.com"])
+app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
+app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])
+app.include_router(splitsheet_router, prefix="/splitsheet", tags=["Split Sheet"])
 
 # Configure CORS - support multiple origins from environment variable
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")]
@@ -61,6 +80,33 @@ def get_supabase_client() -> Client:
 
 def normalize_file_name(file_name: str) -> str:
     return file_name.strip().lower()
+
+# --- Ownership verification helpers ---
+
+def verify_user_owns_artist(user_id: str, artist_id: str) -> bool:
+    """Verify the artist belongs to the user."""
+    res = get_supabase_client().table("artists").select("id").eq("id", artist_id).eq("user_id", user_id).execute()
+    return bool(res.data)
+
+def get_user_artist_ids(user_id: str) -> list:
+    """Get all artist IDs belonging to a user."""
+    res = get_supabase_client().table("artists").select("id").eq("user_id", user_id).execute()
+    return [a["id"] for a in (res.data or [])]
+
+def verify_user_owns_project(user_id: str, project_id: str) -> bool:
+    """Verify the project belongs to one of the user's artists."""
+    artist_ids = get_user_artist_ids(user_id)
+    if not artist_ids:
+        return False
+    res = get_supabase_client().table("projects").select("id").eq("id", project_id).in_("artist_id", artist_ids).execute()
+    return bool(res.data)
+
+def verify_user_owns_contract(user_id: str, contract_id: str) -> bool:
+    """Verify the contract belongs to one of the user's projects/artists."""
+    contract_res = get_supabase_client().table("project_files").select("project_id").eq("id", contract_id).execute()
+    if not contract_res.data:
+        return False
+    return verify_user_owns_project(user_id, contract_res.data[0]["project_id"])
 
 def file_name_exists_in_project(project_id: str, file_name: str) -> bool:
     existing_files = get_supabase_client().table("project_files").select("file_name").eq("project_id", project_id).execute()
@@ -271,42 +317,43 @@ def health_check():
     }
 
 @app.get("/artists")
-async def get_artists(user_id: Optional[str] = None):
+async def get_artists(user_id: str):
     """
-    Fetch artists. If user_id is provided, filter by that user's artists only.
+    Fetch artists belonging to the authenticated user.
     """
     try:
-        query = get_supabase_client().table("artists").select("*")
-        
-        # Filter by user_id if provided
-        if user_id:
-            query = query.eq("user_id", user_id)
-        
-        response = query.execute()
+        response = get_supabase_client().table("artists").select("*").eq("user_id", user_id).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/artists/{artist_id}")
-async def get_artist_by_id(artist_id: str):
+async def get_artist_by_id(artist_id: str, user_id: str):
     """
-    Fetch a single artist by ID with all their details.
+    Fetch a single artist by ID, verifying user ownership.
     """
     try:
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("artists").select("*").eq("id", artist_id).single().execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{artist_id}")
-async def get_projects(artist_id: str):
+async def get_projects(artist_id: str, user_id: str):
     """
-    Fetch projects for a specific artist.
+    Fetch projects for a specific artist, verifying user ownership.
     """
     try:
-        # artist_id is UUID in DB, but passed as string here
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("projects").select("*").eq("artist_id", artist_id).execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -314,41 +361,50 @@ class ProjectCreateRequest(BaseModel):
     artist_id: str
     name: str
     description: Optional[str] = None
+    user_id: str
 
 @app.post("/projects")
 async def create_project(project: ProjectCreateRequest):
     """
-    Create a new project for an artist.
+    Create a new project for an artist, verifying user ownership.
     """
     try:
-        res = supabase.table("projects").insert({
+        if not verify_user_owns_artist(project.user_id, project.artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+        res = get_supabase_client().table("projects").insert({
             "artist_id": project.artist_id,
             "name": project.name,
             "description": project.description
         }).execute()
         return res.data[0]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/{project_id}")
-async def get_project_files(project_id: str):
+async def get_project_files(project_id: str, user_id: str):
     """
-    Fetch files associated with a specific project.
+    Fetch files associated with a specific project, verifying user ownership.
     """
     try:
+        if not verify_user_owns_project(user_id, project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("project_files").select("*").eq("project_id", project_id).execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/artist/{artist_id}/category/{category}")
-async def get_artist_files_by_category(artist_id: str, category: str):
+async def get_artist_files_by_category(artist_id: str, category: str, user_id: str):
     """
-    Fetch all files for an artist filtered by category (across all projects or independent).
-    Note: Since files are linked to projects, we might need to join tables or filter differently.
-    This implementation finds all projects for the artist, then finds files in those projects with the category.
+    Fetch all files for an artist filtered by category, verifying user ownership.
     """
     try:
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         # 1. Get all project IDs for the artist
         projects_res = get_supabase_client().table("projects").select("id").eq("artist_id", artist_id).execute()
         project_ids = [p['id'] for p in projects_res.data]
@@ -367,22 +423,26 @@ async def get_artist_files_by_category(artist_id: str, category: str):
 
         files_res = get_supabase_client().table("project_files").select("*").in_("project_id", project_ids).eq("folder_category", db_category).execute()
         return files_res.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload")
 async def upload_file(
-    file: UploadFile = File(...), 
+    file: UploadFile = File(...),
     artist_id: str = Form(...),
     category: str = Form(...), # 'contract' or 'royalty_statement'
-    project_id: Optional[str] = Form(None)
+    project_id: Optional[str] = Form(None),
+    user_id: str = Form(...)
 ):
     """
     Uploads a file to Supabase Storage and creates a record in project_files.
-    If project_id is not provided, it requires logic to handle 'orphaned' files or create a default project.
-    For this implementation, we'll enforce project_id or create a 'General' project if missing.
+    Verifies user owns the artist before uploading.
     """
     try:
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         if not project_id or project_id == "none" or project_id == "":
             # Check if a "General" project exists for this artist, if not create one
             res = get_supabase_client().table("projects").select("id").eq("artist_id", artist_id).eq("name", "General Uploads").execute()
@@ -468,35 +528,69 @@ async def upload_file(
 # --- Zoe AI Chatbot Endpoints ---
 
 @app.get("/projects")
-async def get_all_projects():
+async def get_all_projects(user_id: str):
     """
-    Fetch all projects (for Zoe project selection).
+    Fetch projects belonging to the authenticated user's artists.
     """
     try:
-        response = get_supabase_client().table("projects").select("*").execute()
+        artist_ids = get_user_artist_ids(user_id)
+        if not artist_ids:
+            return []
+        response = get_supabase_client().table("projects").select("*").in_("artist_id", artist_ids).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/artists/{artist_id}/projects")
-async def get_artist_projects(artist_id: str):
+async def get_artist_projects(artist_id: str, user_id: str):
     """
-    Fetch projects for a specific artist (for Zoe artist-based filtering).
+    Fetch projects for a specific artist, verifying user ownership.
     """
     try:
+        if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("projects").select("*").eq("artist_id", artist_id).execute()
         return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/contracts")
-async def get_project_contracts(project_id: str):
+async def get_project_contracts(project_id: str, user_id: str):
     """
-    Fetch contracts (PDF files) for a specific project.
+    Fetch contracts (PDF files) for a specific project, verifying user ownership.
     """
     try:
+        if not verify_user_owns_project(user_id, project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         response = get_supabase_client().table("project_files").select("*").eq("project_id", project_id).eq("folder_category", "contract").execute()
         return response.data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/projects/{project_id}/documents")
+async def get_project_documents(project_id: str, user_id: str):
+    """
+    Fetch contracts and split sheets for a project (used by Zoe).
+    """
+    try:
+        if not verify_user_owns_project(user_id, project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+        response = (
+            get_supabase_client()
+            .table("project_files")
+            .select("*")
+            .eq("project_id", project_id)
+            .in_("folder_category", ["contract", "split_sheet"])
+            .execute()
+        )
+        return response.data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -547,7 +641,11 @@ async def upload_contract(
         # Validate file type
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
-        
+
+        # Verify user owns the project
+        if not verify_user_owns_project(user_id, project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
         # Get project details
         project_res = get_supabase_client().table("projects").select("name").eq("id", project_id).execute()
         if not project_res.data:
@@ -700,6 +798,10 @@ async def get_contract_markdown(contract_id: str, user_id: str):
     If markdown is not cached, lazily converts the PDF and caches the result.
     """
     try:
+        # Verify user owns the contract
+        if not verify_user_owns_contract(user_id, contract_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
         res = get_supabase_client().table("project_files").select(
             "id, file_name, file_path, contract_markdown"
         ).eq("id", contract_id).execute()
@@ -750,14 +852,18 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
         Deletion confirmation
     """
     try:
+        # Verify user owns the contract
+        if not verify_user_owns_contract(user_id, contract_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
         # 1. Get contract details from database
         contract_res = get_supabase_client().table("project_files").select("*").eq("id", contract_id).execute()
-        
+
         if not contract_res.data:
             raise HTTPException(status_code=404, detail="Contract not found")
-        
+
         contract = contract_res.data[0]
-        
+
         # 2. Delete from Pinecone
         ingestion = get_contract_ingestion()
         delete_result = ingestion.delete_contract(user_id=user_id, contract_id=contract_id)
@@ -1484,3 +1590,183 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to calculate royalties: {str(e)}")
+
+
+# ─── File Sharing via Resend ────────────────────────────────────────────────
+
+class ShareFileItem(BaseModel):
+    file_name: str
+    file_path: str
+    file_source: Literal["project_file", "audio_file"]
+    file_id: str
+
+class ShareFilesRequest(BaseModel):
+    user_id: str
+    contact_id: Optional[str] = None
+    recipient_email: str
+    recipient_name: Optional[str] = None
+    files: List[ShareFileItem]
+    message: Optional[str] = None
+
+@app.post("/share/files")
+async def share_files(req: ShareFilesRequest):
+    """Generate signed download URLs and send them via Resend email."""
+    try:
+        if not req.files:
+            raise HTTPException(status_code=400, detail="No files to share")
+
+        api_key = os.getenv("RESEND_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="Email service not configured")
+
+        resend.api_key = api_key
+        sb = get_supabase_client()
+
+        # All files are stored in the project-files bucket
+        def bucket_for(source: str) -> str:
+            return "project-files"
+
+        # Generate signed URLs (7 days = 604800 seconds) with download option
+        expiry_seconds = 7 * 24 * 60 * 60
+        link_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expiry_seconds)
+        file_links: list[dict] = []
+
+        for f in req.files:
+            bucket = bucket_for(f.file_source)
+            print(f"DEBUG share: bucket={bucket}, file_path='{f.file_path}', file_name='{f.file_name}'")
+            if not f.file_path:
+                print(f"Warning: Empty file_path for {f.file_name}, skipping")
+                continue
+            try:
+                signed = sb.storage.from_(bucket).create_signed_url(
+                    f.file_path, expiry_seconds, options={"download": True}
+                )
+                signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
+                if not signed_url:
+                    print(f"Warning: Empty signed URL for {f.file_name}, response: {signed}")
+                    continue
+            except Exception as e:
+                print(f"Warning: Failed to create signed URL for {f.file_name}: {e}")
+                continue
+
+            file_links.append({
+                "name": f.file_name,
+                "url": signed_url,
+                "source": f.file_source,
+                "file_id": f.file_id,
+            })
+
+        if not file_links:
+            file_names = [f.file_name for f in req.files]
+            file_paths = [f.file_path for f in req.files]
+            print(f"ERROR: No signed URLs generated. Files: {file_names}, Paths: {file_paths}")
+            raise HTTPException(status_code=400, detail=f"Could not generate download links for any files. Check that file paths are valid.")
+
+        # Fetch sender profile name
+        sender_name = "Someone"
+        try:
+            profile = sb.table("profiles").select("full_name").eq("id", req.user_id).single().execute()
+            if profile.data and profile.data.get("full_name"):
+                sender_name = profile.data["full_name"]
+        except Exception:
+            pass
+
+        # Build email HTML with auto-download links
+        greeting = f"Hi{' ' + req.recipient_name if req.recipient_name else ''},"
+        file_rows = ""
+        for fl in file_links:
+            download_url = fl["url"]
+            file_rows += f"""
+            <tr>
+              <td style="padding: 10px 16px; border-bottom: 1px solid #eee;">
+                <a href="{download_url}" style="color: #16a34a; text-decoration: none; font-weight: 500;">
+                  {fl['name']}
+                </a>
+              </td>
+              <td style="padding: 10px 16px; border-bottom: 1px solid #eee; text-align: right;">
+                <a href="{download_url}"
+                   style="display: inline-block; padding: 6px 14px; background: #16a34a; color: white;
+                          border-radius: 6px; text-decoration: none; font-size: 13px;">
+                  Download
+                </a>
+              </td>
+            </tr>"""
+
+        message_block = ""
+        if req.message:
+            message_block = f"""
+            <div style="background: #f9fafb; border-left: 3px solid #16a34a; padding: 12px 16px;
+                        margin: 16px 0; border-radius: 4px; font-style: italic; color: #555;">
+              {req.message}
+            </div>"""
+
+        html_body = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    max-width: 560px; margin: 0 auto; padding: 24px;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <h2 style="color: #111; margin: 0;">Msanii</h2>
+            <p style="color: #888; font-size: 13px; margin: 4px 0 0;">Music Portfolio</p>
+          </div>
+          <p style="color: #333; line-height: 1.6;">{greeting}</p>
+          <p style="color: #333; line-height: 1.6;">
+            <strong>{sender_name}</strong> has shared {len(file_links)} file{"s" if len(file_links) > 1 else ""} with you.
+            Click below to download.
+          </p>
+          {message_block}
+          <table style="width: 100%; border-collapse: collapse; margin: 20px 0; background: #fff;
+                        border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
+            <thead>
+              <tr style="background: #f8f8f8;">
+                <th style="padding: 10px 16px; text-align: left; font-size: 13px; color: #666;">File</th>
+                <th style="padding: 10px 16px; text-align: right; font-size: 13px; color: #666;"></th>
+              </tr>
+            </thead>
+            <tbody>{file_rows}</tbody>
+          </table>
+          <p style="color: #999; font-size: 12px; margin-top: 24px;">
+            These links will expire in 7 days.
+          </p>
+        </div>
+        """
+
+        # Send email via Resend
+        # Use onboarding@resend.dev as from address until a custom domain is verified
+        from_address = os.getenv("RESEND_FROM_EMAIL", "Msanii <onboarding@resend.dev>")
+        try:
+            email_response = resend.Emails.send({
+                "from": from_address,
+                "to": [req.recipient_email],
+                "subject": f"{sender_name} shared files with you — Msanii",
+                "html": html_body,
+            })
+        except Exception as e:
+            print(f"Resend error: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+
+        # Record shares in DB
+        for fl in file_links:
+            try:
+                sb.table("file_shares").insert({
+                    "user_id": req.user_id,
+                    "contact_id": req.contact_id,
+                    "recipient_email": req.recipient_email,
+                    "recipient_name": req.recipient_name,
+                    "file_name": fl["name"],
+                    "file_source": fl["source"],
+                    "file_id": fl["file_id"],
+                    "message": req.message,
+                    "link_expires_at": link_expires_at.isoformat(),
+                    "status": "sent",
+                }).execute()
+            except Exception as e:
+                print(f"Warning: Failed to record share in DB: {e}")
+
+        return {"status": "ok", "shared": len(file_links)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Unexpected error in share_files: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to share files: {str(e)}")

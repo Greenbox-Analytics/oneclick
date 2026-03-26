@@ -55,6 +55,7 @@ interface Contract {
   id: string;
   file_name: string;
   project_id: string;
+  folder_category?: string;
 }
 
 // Message, SourcePreference, AssistantQuickAction types imported from useStreamingChat
@@ -246,7 +247,7 @@ const Zoe = () => {
   // Fetch projects when artist is selected
   useEffect(() => {
     if (selectedArtist) {
-      fetch(`${API_URL}/artists/${selectedArtist}/projects`)
+      fetch(`${API_URL}/artists/${selectedArtist}/projects?user_id=${user?.id}`)
         .then((res) => res.json())
         .then((data) => setProjects(data))
         .catch((err) => {
@@ -259,14 +260,14 @@ const Zoe = () => {
     }
   }, [selectedArtist]);
 
-  // Fetch contracts when project is selected
+  // Fetch contracts and split sheets when project is selected
   const fetchContracts = () => {
     if (selectedProject) {
-      fetch(`${API_URL}/projects/${selectedProject}/contracts`)
+      fetch(`${API_URL}/projects/${selectedProject}/documents?user_id=${user?.id}`)
         .then((res) => res.json())
         .then((data) => setContracts(data))
         .catch((err) => {
-          console.error("Error fetching contracts:", err);
+          console.error("Error fetching documents:", err);
           setContracts([]);
         });
     } else {
@@ -506,7 +507,8 @@ const Zoe = () => {
             body: JSON.stringify({
                 artist_id: selectedArtist,
                 name: newProjectNameInput,
-                description: "Created via Zoe"
+                description: "Created via Zoe",
+                user_id: user?.id
             })
         });
         
@@ -658,6 +660,14 @@ const Zoe = () => {
       setError("Please select an artist first");
       return;
     }
+    if (!selectedProject) {
+      toast({ title: "Please select a project first", variant: "destructive" });
+      return;
+    }
+    if (selectedContracts.length === 0) {
+      addSystemMessage("Please select the documents you'd like to discuss before asking a question.");
+      return;
+    }
     if (isAtLimit) {
       setShowReloadDialog(true);
       return;
@@ -668,20 +678,30 @@ const Zoe = () => {
 
     const result = await sendMessage(query, getChatParams());
     handleSendResult(result);
-  }, [inputMessage, user, selectedArtist, isAtLimit, sendMessage, getChatParams, handleSendResult]);
+  }, [inputMessage, user, selectedArtist, selectedProject, selectedContracts, isAtLimit, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
 
   // Handle static quick action button clicks
   const handleQuickAction = useCallback(async (question: string) => {
     if (!selectedArtist || !user) return;
+    if (!selectedProject) { toast({ title: "Please select a project first", variant: "destructive" }); return; }
+    if (selectedContracts.length === 0) {
+      addSystemMessage("Please select the documents you'd like to discuss before asking a question.");
+      return;
+    }
     if (isAtLimit) { setShowReloadDialog(true); return; }
 
     const result = await sendMessage(question, getChatParams());
     handleSendResult(result);
-  }, [selectedArtist, user, isAtLimit, sendMessage, getChatParams, handleSendResult]);
+  }, [selectedArtist, selectedProject, selectedContracts, user, isAtLimit, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
 
   const handleAssistantQuickAction = useCallback(async (action: AssistantQuickAction) => {
     const queryToSend = action.query || inputMessage;
     if (!queryToSend.trim() || !selectedArtist || !user) return;
+    if (!selectedProject) { toast({ title: "Please select a project first", variant: "destructive" }); return; }
+    if (selectedContracts.length === 0) {
+      addSystemMessage("Please select the documents you'd like to discuss before asking a question.");
+      return;
+    }
 
     const result = await sendMessage(queryToSend, getChatParams(), {
       sourcePreference: action.source_preference,
@@ -689,7 +709,7 @@ const Zoe = () => {
       silent: !!action.source_preference,
     });
     handleSendResult(result);
-  }, [inputMessage, selectedArtist, user, sendMessage, getChatParams, handleSendResult]);
+  }, [inputMessage, selectedArtist, selectedProject, selectedContracts, user, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
 
   const handleRetry = useCallback(async () => {
     if (!selectedArtist || !user) return;
@@ -784,7 +804,7 @@ const Zoe = () => {
                 {selectedContracts.length > 0 && (
                   <>
                     <span className="text-muted-foreground">•</span>
-                    <span>{selectedContracts.length} contracts</span>
+                    <span>{selectedContracts.length} docs</span>
                   </>
                 )}
               </Badge>
@@ -882,13 +902,13 @@ const Zoe = () => {
                   </div>
                 </div>
 
-                {/* Contracts Section */}
+                {/* Documents Section (Contracts & Split Sheets) */}
                 {selectedProject && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                         <FileText className="w-3.5 h-3.5" />
-                        Contracts {contracts.length > 0 && `(${contracts.length})`}
+                        Documents {contracts.length > 0 && `(${contracts.length})`}
                       </div>
                       <Button
                         variant="ghost"
@@ -901,18 +921,18 @@ const Zoe = () => {
                       </Button>
                     </div>
 
-                    {/* Collapsible contracts list */}
+                    {/* Collapsible documents list */}
                     <Collapsible open={contractsOpen} onOpenChange={setContractsOpen}>
                       <CollapsibleTrigger asChild>
                         <Button variant="secondary" size="sm" className="w-full justify-between h-9">
                           {selectedContracts.length > 0
                             ? `${selectedContracts.length} selected`
-                            : "All contracts"}
+                            : "All documents"}
                           <ChevronDown className={cn("ml-2 h-4 w-4 transition-transform", contractsOpen && "rotate-180")} />
                         </Button>
                       </CollapsibleTrigger>
                       <CollapsibleContent>
-                        <div className="bg-background rounded-lg border mt-2 max-h-48 overflow-y-auto">
+                        <div className="bg-background rounded-lg border mt-2 max-h-64 overflow-y-auto">
                           {contracts.length > 0 ? (
                             <div className="p-2 space-y-1">
                               {selectedContracts.length > 0 && (
@@ -925,41 +945,84 @@ const Zoe = () => {
                                   Clear selection
                                 </Button>
                               )}
-                              {contracts.map((contract) => (
-                                <div key={contract.id} className="flex items-center justify-between gap-2 group px-2 py-1.5 rounded hover:bg-muted/50">
-                                  <div className="flex items-center space-x-2 flex-1 min-w-0">
-                                    <Checkbox
-                                      id={contract.id}
-                                      checked={selectedContracts.includes(contract.id)}
-                                      onCheckedChange={(checked) => {
-                                        if (checked) {
-                                          setSelectedContracts([...selectedContracts, contract.id]);
-                                        } else {
-                                          setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
-                                        }
-                                      }}
-                                    />
-                                    <label
-                                      htmlFor={contract.id}
-                                      className="text-xs font-medium leading-none cursor-pointer truncate"
-                                    >
-                                      {contract.file_name}
-                                    </label>
-                                  </div>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleDeleteClick(contract)}
-                                    className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                                  >
-                                    <Trash2 className="w-3 h-3 text-destructive" />
-                                  </Button>
-                                </div>
-                              ))}
+                              {/* Contracts group */}
+                              {contracts.filter(c => c.folder_category === "contract").length > 0 && (
+                                <>
+                                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 pt-1">Contracts</p>
+                                  {contracts.filter(c => c.folder_category === "contract").map((contract) => (
+                                    <div key={contract.id} className="flex items-center justify-between gap-2 group px-2 py-1.5 rounded hover:bg-muted/50">
+                                      <div className="flex items-center space-x-2 flex-1 min-w-0">
+                                        <Checkbox
+                                          id={contract.id}
+                                          checked={selectedContracts.includes(contract.id)}
+                                          onCheckedChange={(checked) => {
+                                            if (checked) {
+                                              setSelectedContracts([...selectedContracts, contract.id]);
+                                            } else {
+                                              setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
+                                            }
+                                          }}
+                                        />
+                                        <label
+                                          htmlFor={contract.id}
+                                          className="text-xs font-medium leading-none cursor-pointer truncate"
+                                        >
+                                          {contract.file_name}
+                                        </label>
+                                      </div>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleDeleteClick(contract)}
+                                        className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      >
+                                        <Trash2 className="w-3 h-3 text-destructive" />
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </>
+                              )}
+                              {/* Split Sheets group */}
+                              {contracts.filter(c => c.folder_category === "split_sheet").length > 0 && (
+                                <>
+                                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 pt-2">Split Sheets</p>
+                                  {contracts.filter(c => c.folder_category === "split_sheet").map((contract) => (
+                                    <div key={contract.id} className="flex items-center justify-between gap-2 group px-2 py-1.5 rounded hover:bg-muted/50">
+                                      <div className="flex items-center space-x-2 flex-1 min-w-0">
+                                        <Checkbox
+                                          id={contract.id}
+                                          checked={selectedContracts.includes(contract.id)}
+                                          onCheckedChange={(checked) => {
+                                            if (checked) {
+                                              setSelectedContracts([...selectedContracts, contract.id]);
+                                            } else {
+                                              setSelectedContracts(selectedContracts.filter(id => id !== contract.id));
+                                            }
+                                          }}
+                                        />
+                                        <label
+                                          htmlFor={contract.id}
+                                          className="text-xs font-medium leading-none cursor-pointer truncate"
+                                        >
+                                          {contract.file_name}
+                                        </label>
+                                      </div>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleDeleteClick(contract)}
+                                        className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      >
+                                        <Trash2 className="w-3 h-3 text-destructive" />
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </>
+                              )}
                             </div>
                           ) : (
                             <div className="p-4 text-center">
-                              <p className="text-xs text-muted-foreground mb-2">No contracts yet</p>
+                              <p className="text-xs text-muted-foreground mb-2">No documents yet</p>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -977,9 +1040,9 @@ const Zoe = () => {
 
                     {/* Search scope indicator */}
                     <Badge variant="outline" className="w-full justify-center text-xs py-1.5">
-                      {selectedContracts.length > 0 
-                        ? `🎯 Searching ${selectedContracts.length} contract${selectedContracts.length > 1 ? 's' : ''}`
-                        : `📁 All project contracts`}
+                      {selectedContracts.length > 0
+                        ? `Searching ${selectedContracts.length} document${selectedContracts.length > 1 ? 's' : ''}`
+                        : `All project documents`}
                     </Badge>
                   </div>
                 )}
@@ -988,7 +1051,7 @@ const Zoe = () => {
                 {!selectedProject && selectedArtist && (
                   <div className="rounded-lg border border-dashed border-muted-foreground/25 p-4 text-center">
                     <FolderOpen className="w-8 h-8 mx-auto mb-2 text-muted-foreground/50" />
-                    <p className="text-xs text-muted-foreground">Select a project to view contracts</p>
+                    <p className="text-xs text-muted-foreground">Select a project to view documents</p>
                   </div>
                 )}
 
@@ -1000,6 +1063,9 @@ const Zoe = () => {
                 )}
               </div>
             </ScrollArea>
+            <p className="text-[11px] text-center text-muted-foreground px-4 py-2 border-t border-border">
+              Select documents to ask Zoe about them
+            </p>
           </div>
         </aside>
 
@@ -1010,6 +1076,7 @@ const Zoe = () => {
             isStreaming={isStreaming}
             selectedArtist={selectedArtist}
             selectedProject={selectedProject}
+            selectedContracts={selectedContracts}
             copiedMessageId={copiedMessageId}
             messagesEndRef={messagesEndRef}
             onQuickAction={handleQuickAction}

@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from vector_search.contract_search import ContractSearch
 from oneclick.helpers import normalize_name
+from vector_search.helpers import detect_and_extract_tables, linearize_table
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -880,10 +881,9 @@ class ContractChatbot:
     def _no_result_message(self, contract_ids: Optional[List[str]] = None) -> str:
         """Return a context-aware, actionable fallback message when no results are found."""
         if contract_ids:
-            return ("I couldn't find that information in the selected contract(s). "
-                    "Try selecting a different contract or rephrasing your question.")
-        return ("I don't have the information needed to answer your question. "
-                "Please select the relevant contract(s) so I can retrieve the right information.")
+            return ("I couldn't find relevant information in your selected contracts. "
+                    "Try rephrasing your question or selecting different contracts.")
+        return ("Please select one or more contracts from the sidebar so I can answer your question.")
 
     def _compute_context_hash(self, context: Optional[Dict]) -> str:
         """
@@ -3959,21 +3959,20 @@ RULES:
             yield self._sse_event("complete", result)
             return
 
-        # ── Tier 2: Try conversation history (skip when contracts just changed) ──
-        if not contracts_changed and (not source_preference or source_preference == "conversation_history"):
+        # ── Tier 2 (history) only when explicitly requested via source_preference ──
+        if source_preference == "conversation_history" and not contracts_changed:
             history_answer = self._try_answer_from_history(query, session_id, context)
             if history_answer:
-                logger.info("[Stream][History] Answered from conversation history")
+                logger.info("[Stream][History] Answered from conversation history (explicit preference)")
                 yield self._sse_event("complete", history_answer)
                 return
-            if source_preference == "conversation_history":
-                can_use_context, _reason = self._should_use_context(query, context)
-                if can_use_context:
-                    yield from self._answer_from_context_stream(query, context, session_id)
-                    return
-                source_preference = None
+            can_use_context, _reason = self._should_use_context(query, context)
+            if can_use_context:
+                yield from self._answer_from_context_stream(query, context, session_id)
+                return
+            source_preference = None
 
-        # ── Routing decision (always contract — no artist/disambiguation routes) ──
+        # ── Routing decision (for search query refinement only) ──
         contract_id = contract_ids[0] if contract_ids and len(contract_ids) == 1 else None
         route_decision = self._llm_route_decision(
             query=query, artist_data=artist_data, context=context,
@@ -3981,11 +3980,6 @@ RULES:
             project_id=project_id,
             contract_id=contract_id
         )
-
-        # ── Context-based answer (skip when contracts just changed to force fresh retrieval) ──
-        if not contracts_changed and self._should_answer_from_context(route_decision, context, contract_id):
-            yield from self._answer_from_context_stream(query, context, session_id)
-            return
 
         # ── Need a project for contract search ──
         if not project_id:
@@ -4019,9 +4013,22 @@ RULES:
             logger.info(f"[Stream] Multi-contract detected ({len(contract_ids)} contracts) — using {multi_contract_model}")
 
         if use_full_doc:
+            # Linearize tables for clearer LLM comprehension
+            processed_markdowns = {}
+            for cid, md in contract_markdowns.items():
+                has_tables, table_blocks, text_without_tables = detect_and_extract_tables(md)
+                if has_tables:
+                    processed = text_without_tables
+                    for tb in table_blocks:
+                        linearized = linearize_table(tb.raw_text, tb.preceding_context)
+                        processed = processed.replace("[TABLE_REMOVED]", linearized, 1)
+                    processed_markdowns[cid] = processed
+                else:
+                    processed_markdowns[cid] = md
+
             # Build full document context with filenames as labels
             full_doc_context = ""
-            for cid, md in contract_markdowns.items():
+            for cid, md in processed_markdowns.items():
                 label = contract_names.get(cid, cid) if contract_names else cid
                 full_doc_context += f"\n\n=== CONTRACT: {label} ===\n{md}\n"
             full_doc_context = full_doc_context.strip()
@@ -4049,6 +4056,14 @@ RULES:
                 )
 
             if not search_results["matches"]:
+                # ── Fallback: try conversation history before giving up ──
+                if not contracts_changed:
+                    history_answer = self._try_answer_from_history(query, session_id, context)
+                    if history_answer:
+                        logger.info("[Stream][Fallback] No contract matches, answered from history")
+                        yield self._sse_event("complete", history_answer)
+                        return
+                # Neither contracts nor history could answer
                 no_result_answer = self._no_result_message(contract_ids)
                 self._add_to_memory(session_id, "assistant", no_result_answer)
                 yield self._sse_event("complete", {
