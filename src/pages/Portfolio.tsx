@@ -1045,7 +1045,7 @@ const Portfolio = () => {
           }
         }}
       >
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
           <DialogHeader>
             <div className="flex items-center justify-between">
               <DialogTitle className="flex items-center gap-2">
@@ -1066,7 +1066,7 @@ const Portfolio = () => {
               </div>
             </div>
           </DialogHeader>
-          <div className="space-y-2">
+          <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
             <Button
               variant="outline"
               size="sm"

@@ -154,6 +154,27 @@ This triggers:
 | Prod backend | `.github/workflows/deploy-backend.yml` | Tag push `v*` |
 | Prod frontend | `.github/workflows/deploy-frontend-prod.yml` | Tag push `v*` |
 
+### Updating Vercel Environment Variables
+
+The frontend connects to the backend via the `VITE_BACKEND_API_URL` environment variable. After deploying a new Cloud Run service or if the backend URL changes, you need to update this in Vercel:
+
+1. **Get the dev Cloud Run URL:**
+   ```bash
+   gcloud run services describe msanii-backend-dev --region=northamerica-northeast2 --format='value(status.url)'
+   ```
+
+2. **Set the variable in Vercel:**
+   - Go to the [Vercel Dashboard](https://vercel.com) → your project → **Settings** → **Environment Variables**
+   - Add or update `VITE_BACKEND_API_URL` with the Cloud Run URL (e.g. `https://msanii-backend-dev-xxx-nn.a.run.app`)
+   - Scope it to **Preview** and **Development** for the dev backend, or **Production** for the prod backend
+
+3. **Update CORS (if the Vercel URL changed):**
+   - Go to GitHub → repo **Settings** → **Secrets and variables** → **Actions**
+   - Update `DEV_ALLOWED_ORIGINS` to include the new Vercel dev URL
+   - Re-run the backend deploy workflow so Cloud Run picks up the updated CORS origins
+
+4. **Redeploy the frontend** to pick up the new environment variable — either push a new commit to `main` or trigger a redeploy from the Vercel dashboard.
+
 ### Required GitHub Secrets
 
 | Secret | Purpose |

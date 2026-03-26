@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from vector_search.contract_search import ContractSearch
 from oneclick.helpers import normalize_name
+from vector_search.helpers import detect_and_extract_tables, linearize_table
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -4012,9 +4013,22 @@ RULES:
             logger.info(f"[Stream] Multi-contract detected ({len(contract_ids)} contracts) — using {multi_contract_model}")
 
         if use_full_doc:
+            # Linearize tables for clearer LLM comprehension
+            processed_markdowns = {}
+            for cid, md in contract_markdowns.items():
+                has_tables, table_blocks, text_without_tables = detect_and_extract_tables(md)
+                if has_tables:
+                    processed = text_without_tables
+                    for tb in table_blocks:
+                        linearized = linearize_table(tb.raw_text, tb.preceding_context)
+                        processed = processed.replace("[TABLE_REMOVED]", linearized, 1)
+                    processed_markdowns[cid] = processed
+                else:
+                    processed_markdowns[cid] = md
+
             # Build full document context with filenames as labels
             full_doc_context = ""
-            for cid, md in contract_markdowns.items():
+            for cid, md in processed_markdowns.items():
                 label = contract_names.get(cid, cid) if contract_names else cid
                 full_doc_context += f"\n\n=== CONTRACT: {label} ===\n{md}\n"
             full_doc_context = full_doc_context.strip()
