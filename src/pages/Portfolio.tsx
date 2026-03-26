@@ -220,6 +220,18 @@ const Portfolio = () => {
 
   const handleSaveProject = async (data: { name: string; description: string; artist_id: string }) => {
     if (editingProject) {
+      // Check for duplicate name (excluding current project)
+      const { data: existing } = await supabase
+        .from("projects")
+        .select("id")
+        .eq("artist_id", data.artist_id)
+        .ilike("name", data.name.trim())
+        .neq("id", editingProject.id)
+        .limit(1);
+      if (existing && existing.length > 0) {
+        toast({ title: "Duplicate project name", description: `A project named "${data.name.trim()}" already exists for this artist.`, className: "bg-white text-black border border-border" });
+        return;
+      }
       const { error } = await supabase
         .from("projects")
         .update({ name: data.name, description: data.description || null })
@@ -227,6 +239,17 @@ const Portfolio = () => {
       if (error) throw error;
       toast({ title: "Success", description: "Project updated" });
     } else {
+      // Check for duplicate name
+      const { data: existing } = await supabase
+        .from("projects")
+        .select("id")
+        .eq("artist_id", data.artist_id)
+        .ilike("name", data.name.trim())
+        .limit(1);
+      if (existing && existing.length > 0) {
+        toast({ title: "Duplicate project name", description: `A project named "${data.name.trim()}" already exists for this artist.`, className: "bg-white text-black border border-border" });
+        return;
+      }
       const { error } = await supabase
         .from("projects")
         .insert({ name: data.name, description: data.description || null, artist_id: data.artist_id });
@@ -325,8 +348,7 @@ const Portfolio = () => {
         toast({
           title: "Duplicate file name",
           description: `A file named "${file.name}" already exists in this project.`,
-          variant: "destructive",
-          duration: Number.POSITIVE_INFINITY,
+          className: "bg-white text-black border border-border",
         });
         event.target.value = "";
         return;
@@ -363,8 +385,7 @@ const Portfolio = () => {
           toast({
             title: "Duplicate file name",
             description: `A file named "${file.name}" already exists in this project.`,
-            variant: "destructive",
-            duration: Number.POSITIVE_INFINITY,
+            className: "bg-white text-black border border-border",
           });
           return;
         }
@@ -761,6 +782,7 @@ const Portfolio = () => {
                             <Separator className="my-3" />
 
                             {/* === PROJECT CARDS === */}
+                            <Accordion type="multiple" className="space-y-3">
                             {artistGroup.projects.map((project) => {
                               const isTicketsExpanded = expandedTickets[project.id] || false;
                               const visibleTasks = isTicketsExpanded
@@ -769,23 +791,26 @@ const Portfolio = () => {
                               const hasMoreTasks = project.tasks.length > 5;
 
                               return (
-                                <Card key={project.id} className="group/card border-0 bg-gradient-to-br from-card to-card/80 shadow-sm hover:shadow-md transition-all duration-300 rounded-xl overflow-hidden ring-1 ring-border/50 hover:ring-border">
-                                  <CardHeader className="pb-2 pt-4 px-5">
+                                <AccordionItem key={project.id} value={`project-${project.id}`} className="border-0">
+                                <Card className="group/card border-0 bg-gradient-to-br from-card to-card/80 shadow-sm hover:shadow-md transition-all duration-300 rounded-xl overflow-hidden ring-1 ring-border/50 hover:ring-border">
+                                  <CardHeader className="pb-0 pt-4 px-5">
                                     <div className="flex items-start justify-between gap-3">
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2">
-                                          <CardTitle className="text-base font-semibold tracking-tight truncate">{project.name}</CardTitle>
-                                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal text-muted-foreground border-border/60 flex-shrink-0">
-                                            {Object.values(project.files).flat().length} files
-                                          </Badge>
+                                      <AccordionTrigger className="hover:no-underline p-0 flex-1 min-w-0">
+                                        <div className="flex-1 min-w-0 text-left">
+                                          <div className="flex items-center gap-2">
+                                            <CardTitle className="text-base font-semibold tracking-tight truncate">{project.name}</CardTitle>
+                                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal text-muted-foreground border-border/60 flex-shrink-0">
+                                              {Object.values(project.files).flat().length} files
+                                            </Badge>
+                                          </div>
+                                          {project.description && (
+                                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{project.description}</p>
+                                          )}
+                                          <p className="text-[11px] text-muted-foreground/70 mt-1.5">
+                                            {new Date(project.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                          </p>
                                         </div>
-                                        {project.description && (
-                                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{project.description}</p>
-                                        )}
-                                        <p className="text-[11px] text-muted-foreground/70 mt-1.5">
-                                          {new Date(project.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                                        </p>
-                                      </div>
+                                      </AccordionTrigger>
                                       <DropdownMenu>
                                         <DropdownMenuTrigger asChild>
                                           <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover/card:opacity-100 transition-opacity">
@@ -841,7 +866,8 @@ const Portfolio = () => {
                                       </DropdownMenu>
                                     </div>
                                   </CardHeader>
-                                  <CardContent className="space-y-3 px-5 pb-5">
+                                  <AccordionContent>
+                                  <CardContent className="space-y-3 px-5 pb-5 pt-3">
                                     {/* FILE GRID (2x2) */}
                                     <div className="grid grid-cols-2 gap-2">
                                       {[
@@ -1016,9 +1042,12 @@ const Portfolio = () => {
                                       </div>
                                     )}
                                   </CardContent>
+                                  </AccordionContent>
                                 </Card>
+                                </AccordionItem>
                               );
                             })}
+                            </Accordion>
                           </AccordionContent>
                         </AccordionItem>
                         );
@@ -1047,7 +1076,7 @@ const Portfolio = () => {
       >
         <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
           <DialogHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between pr-8">
               <DialogTitle className="flex items-center gap-2">
                 <Folder className="w-5 h-5" />
                 {selectedFileType === "contract" && "Contracts"}

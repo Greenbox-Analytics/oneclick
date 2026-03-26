@@ -129,6 +129,16 @@ export function useAudioData(artistIds: string[], projectIds: string[]) {
   // --- Mutation helpers ---
 
   const createFolder = async (artistId: string, name: string) => {
+    // Check for duplicate folder name for this artist
+    const { data: existing } = await sb
+      .from("audio_folders")
+      .select("id")
+      .eq("artist_id", artistId)
+      .ilike("name", name.trim())
+      .limit(1);
+    if (existing && existing.length > 0) {
+      throw new Error(`DUPLICATE:An audio folder named "${name.trim()}" already exists for this artist.`);
+    }
     const { error } = await sb
       .from("audio_folders")
       .insert({ artist_id: artistId, name: name.trim() });
@@ -160,6 +170,19 @@ export function useAudioData(artistIds: string[], projectIds: string[]) {
   };
 
   const uploadAudioFile = async (folderId: string, artistId: string, file: File) => {
+    // Check for duplicate file name in this folder
+    const { data: existingFiles } = await sb
+      .from("audio_files")
+      .select("id, file_name")
+      .eq("folder_id", folderId);
+    if (existingFiles) {
+      const hasDuplicate = existingFiles.some(
+        (f: any) => f.file_name.trim().toLowerCase() === file.name.trim().toLowerCase()
+      );
+      if (hasDuplicate) {
+        throw new Error(`DUPLICATE:An audio file named "${file.name}" already exists in this folder.`);
+      }
+    }
     const filePath = `${artistId}/${folderId}/${Date.now()}_${file.name}`;
     const { error: uploadError } = await supabase.storage
       .from("audio-files")

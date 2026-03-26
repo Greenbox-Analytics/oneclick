@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -88,6 +89,7 @@ export const AudioSection = ({
   onLinkAudio,
   onUnlinkAudio,
 }: AudioSectionProps) => {
+  const { toast } = useToast();
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
@@ -109,8 +111,11 @@ export const AudioSection = ({
       await onCreateFolder(artistId, newFolderName);
       setNewFolderName("");
       setCreatingFolder(false);
-    } catch {
-      // toast handled by parent
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg.startsWith("DUPLICATE:")) {
+        toast({ title: "Duplicate folder name", description: msg.replace("DUPLICATE:", ""), className: "bg-white text-black border border-border" });
+      }
     } finally {
       setSaving(false);
     }
@@ -147,8 +152,11 @@ export const AudioSection = ({
     setUploading(folderId);
     try {
       await onUploadFile(folderId, artistId, file);
-    } catch {
-      // handled by parent
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg.startsWith("DUPLICATE:")) {
+        toast({ title: "Duplicate file name", description: msg.replace("DUPLICATE:", ""), className: "bg-white text-black border border-border" });
+      }
     } finally {
       setUploading(null);
       e.target.value = "";
