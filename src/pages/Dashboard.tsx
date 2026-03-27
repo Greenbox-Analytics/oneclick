@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot } from "lucide-react";
+import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   DropdownMenu,
@@ -26,6 +26,7 @@ const TOOL_REGISTRY: Record<string, { icon: typeof Calculator; label: string }> 
   "/tools/oneclick": { icon: Calculator, label: "OneClick" },
   "/tools/zoe": { icon: Bot, label: "Zoe" },
   "/profile": { icon: User, label: "Profile" },
+  "/docs": { icon: BookOpen, label: "Documentation" },
 };
 
 interface RecentTool {

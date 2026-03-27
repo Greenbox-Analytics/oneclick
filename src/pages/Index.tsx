@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Music, FolderOpen, TrendingUp, Shield, FileText, Users } from "lucide-react";
+import { Music, FolderOpen, TrendingUp, Shield, FileText, Users, BookOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 const Index = () => {
@@ -56,6 +56,9 @@ const Index = () => {
             
             {/* Navigation Buttons */}
             <div className="flex items-center gap-3">
+              <Button variant="ghost" onClick={() => navigate("/docs")}>
+                Docs
+              </Button>
               <Button onClick={() => navigate("/auth")} className="text-base">
                 Sign In
               </Button>
@@ -123,6 +126,7 @@ const Index = () => {
               &copy; {new Date().getFullYear()} Greenbox Analytics Inc.
             </p>
             <div className="flex gap-6">
+              <a href="/docs" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Docs</a>
               <a href="/about" className="text-sm text-muted-foreground hover:text-foreground transition-colors">About</a>
               <a href="/contact" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Contact</a>
               <a href="/privacy" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Privacy</a>
