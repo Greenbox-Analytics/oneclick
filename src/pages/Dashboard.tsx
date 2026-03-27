@@ -15,6 +15,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
+import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
+import { useWalkthrough } from "@/hooks/useWalkthrough";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 // Tool registry for Recently Used
 const TOOL_REGISTRY: Record<string, { icon: typeof Calculator; label: string }> = {
@@ -63,6 +66,17 @@ const Dashboard = () => {
   const [now, setNow] = useState(new Date());
   const [recentTools, setRecentTools] = useState<RecentTool[]>(getRecentTools());
   const { settings } = useWorkspaceSettings();
+  const { walkthroughCompleted } = useOnboardingStatus();
+  const walkthrough = useWalkthrough();
+
+  // Auto-start walkthrough for first-time users
+  useEffect(() => {
+    if (walkthroughCompleted === false && !walkthrough.isActive) {
+      // Small delay to ensure DOM elements are rendered
+      const timer = setTimeout(() => walkthrough.start(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [walkthroughCompleted]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -199,7 +213,7 @@ const Dashboard = () => {
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-8">
-          <Card className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/tools", "Tools")}>
+          <Card data-walkthrough="tools" className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/tools", "Tools")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Calculator className="w-6 h-6 text-primary" />
@@ -214,7 +228,7 @@ const Dashboard = () => {
             </CardContent>
           </Card>
 
-          <Card className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/artists", "Artist Profiles")}>
+          <Card data-walkthrough="artists" className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/artists", "Artist Profiles")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Users className="w-6 h-6 text-primary" />
@@ -229,7 +243,7 @@ const Dashboard = () => {
             </CardContent>
           </Card>
 
-          <Card className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/workspace", "Workspace")}>
+          <Card data-walkthrough="workspace" className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/workspace", "Workspace")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <LayoutGrid className="w-6 h-6 text-primary" />
@@ -244,7 +258,7 @@ const Dashboard = () => {
             </CardContent>
           </Card>
 
-          <Card className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/portfolio", "Portfolio")}>
+          <Card data-walkthrough="portfolio" className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/portfolio", "Portfolio")}>
             <CardHeader>
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
                 <Folder className="w-6 h-6 text-primary" />
@@ -293,6 +307,14 @@ const Dashboard = () => {
           </CardContent>
         </Card>
       </main>
+      <WalkthroughProvider
+        isActive={walkthrough.isActive}
+        currentStep={walkthrough.currentStep}
+        currentStepIndex={walkthrough.currentStepIndex}
+        totalSteps={walkthrough.totalSteps}
+        onNext={walkthrough.next}
+        onSkip={walkthrough.skip}
+      />
     </div>
   );
 };

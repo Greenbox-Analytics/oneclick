@@ -1,14 +1,18 @@
-import { Navigate } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
+import { Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
+  skipOnboardingCheck?: boolean;
 }
 
-export const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
-  const { user, loading } = useAuth();
+export const ProtectedRoute = ({ children, skipOnboardingCheck = false }: ProtectedRouteProps) => {
+  const { user, loading: authLoading } = useAuth();
+  const { onboardingCompleted, loading: onboardingLoading } = useOnboardingStatus();
+  const location = useLocation();
 
-  if (loading) {
+  if (authLoading || (!skipOnboardingCheck && onboardingLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
@@ -18,6 +22,10 @@ export const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
 
   if (!user) {
     return <Navigate to="/auth" replace />;
+  }
+
+  if (!skipOnboardingCheck && !onboardingCompleted && location.pathname !== "/onboarding") {
+    return <Navigate to="/onboarding" replace />;
   }
 
   return <>{children}</>;
