@@ -88,10 +88,13 @@ export type Database = {
           full_name: string | null
           given_name: string | null
           id: string
+          industry: string | null
           last_name: string | null
+          onboarding_completed: boolean
           phone: string | null
           updated_at: string | null
           username: string | null
+          walkthrough_completed: boolean
           website: string | null
         }
         Insert: {
@@ -101,10 +104,13 @@ export type Database = {
           full_name?: string | null
           given_name?: string | null
           id: string
+          industry?: string | null
           last_name?: string | null
+          onboarding_completed?: boolean
           phone?: string | null
           updated_at?: string | null
           username?: string | null
+          walkthrough_completed?: boolean
           website?: string | null
         }
         Update: {
@@ -114,10 +120,13 @@ export type Database = {
           full_name?: string | null
           given_name?: string | null
           id?: string
+          industry?: string | null
           last_name?: string | null
+          onboarding_completed?: boolean
           phone?: string | null
           updated_at?: string | null
           username?: string | null
+          walkthrough_completed?: boolean
           website?: string | null
         }
         Relationships: [
