@@ -20,6 +20,7 @@ import Workspace from "./pages/Workspace";
 import WorkspaceBoards from "./pages/WorkspaceBoards";
 import Portfolio from "./pages/Portfolio";
 import SplitSheet from "./pages/SplitSheet";
+import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -34,6 +35,14 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
+            <Route
+              path="/onboarding"
+              element={
+                <ProtectedRoute skipOnboardingCheck>
+                  <Onboarding />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/dashboard"
               element={

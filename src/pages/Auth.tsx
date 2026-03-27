@@ -48,9 +48,10 @@ const Auth = () => {
     try {
       await signUp(signUpEmail, signUpPassword, signUpName);
       toast({
-        title: "Success!",
-        description: "Account created! Please check your email to verify your account.",
+        title: "Welcome!",
+        description: "Account created! Let's set up your profile.",
       });
+      navigate("/onboarding");
     } catch (error: any) {
       toast({
         title: "Error",
