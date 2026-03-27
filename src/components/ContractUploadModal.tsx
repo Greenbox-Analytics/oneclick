@@ -299,7 +299,7 @@ export const ContractUploadModal = ({
                         </p>
                       )}
 
-                      {result.status === "success" && result.total_chunks && (
+                      {result.status === "success" && (
                         <p className="text-xs text-green-600 mt-1">
                           ✓ Uploaded successfully
                         </p>

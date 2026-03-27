@@ -23,8 +23,6 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from vector_search.contract_chatbot import ContractChatbot
-from vector_search.contract_ingestion import ContractIngestion
-from vector_search.contract_search import ContractSearch
 from vector_search.helpers import calculate_royalty_payments
 
 # Load environment variables
@@ -280,9 +278,8 @@ class ZoeAskResponse(BaseModel):
     needs_clarification: Optional[bool] = None  # True if query is ambiguous
     clarification_options: Optional[List[str]] = None  # Options for disambiguation
 
-# Initialize Zoe chatbot and contract ingestion (singletons)
+# Initialize Zoe chatbot (singleton)
 zoe_chatbot = None
-contract_ingestion = None
 
 def get_zoe_chatbot():
     """Get or create Zoe chatbot instance"""
@@ -290,13 +287,6 @@ def get_zoe_chatbot():
     if zoe_chatbot is None:
         zoe_chatbot = ContractChatbot()
     return zoe_chatbot
-
-def get_contract_ingestion():
-    """Get or create contract ingestion instance"""
-    global contract_ingestion
-    if contract_ingestion is None:
-        contract_ingestion = ContractIngestion()
-    return contract_ingestion
 
 # --- Endpoints ---
 
@@ -711,32 +701,26 @@ async def upload_contract(
             tmp_path = tmp_file.name
         
         try:
-            # 4. Process and ingest to Pinecone
-            ingestion = get_contract_ingestion()
-            stats = ingestion.ingest_contract(
-                pdf_path=tmp_path,
-                user_id=user_id,
-                project_id=project_id,
-                project_name=project_name,
-                contract_id=contract_id,
-                contract_filename=file.filename
-            )
-            
-            # Store full markdown text for full-document context
-            if stats.get("markdown_text"):
-                try:
-                    get_supabase_client().table("project_files").update(
-                        {"contract_markdown": stats["markdown_text"]}
-                    ).eq("id", contract_id).execute()
-                except Exception as md_err:
-                    print(f"Warning: Failed to store contract markdown: {md_err}")
+            # 4. Convert PDF to markdown and store (skip Pinecone)
+            from vector_search.helpers import pdf_to_markdown
+            markdown_text = pdf_to_markdown(tmp_path)
+
+            if not markdown_text.strip():
+                raise ValueError("No text content found in PDF")
+
+            try:
+                get_supabase_client().table("project_files").update(
+                    {"contract_markdown": markdown_text}
+                ).eq("id", contract_id).execute()
+            except Exception as md_err:
+                print(f"Warning: Failed to store contract markdown: {md_err}")
 
             return ContractUploadResponse(
                 status="success",
                 contract_id=contract_id,
                 contract_filename=file.filename,
-                total_chunks=stats["total_chunks"],
-                message=f"Contract uploaded and processed successfully. {stats['total_chunks']} chunks created."
+                total_chunks=0,
+                message="Contract uploaded successfully."
             )
         finally:
             # Clean up temporary file
@@ -864,13 +848,8 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
 
         contract = contract_res.data[0]
 
-        # 2. Delete from Pinecone
-        ingestion = get_contract_ingestion()
-        delete_result = ingestion.delete_contract(user_id=user_id, contract_id=contract_id)
-        
-        if delete_result["status"] != "success":
-            raise HTTPException(status_code=500, detail=f"Failed to delete vectors: {delete_result.get('error')}")
-        
+        # 2. (Pinecone deletion removed — vectors are no longer created)
+
         # 3. Delete from Supabase Storage
         if contract.get("file_path"):
             try:
@@ -892,123 +871,6 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
     except Exception as e:
         print(f"Error deleting contract: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete contract: {str(e)}")
-
-@app.post("/zoe/ask", response_model=ZoeAskResponse)
-async def zoe_ask_question(request: ZoeAskRequest):
-    """
-    Zoe AI Chatbot endpoint - Ask questions about contracts and artists.
-    
-    Rules:
-    1. Always filters by user_id and project_id
-    2. If contract_ids are provided, filters by specific contracts and uses top_k=8
-    3. If no contract_ids, searches all contracts in project with top_k=8
-    4. Only answers if highest similarity ≥ 0.75
-    5. Returns answer with source citations
-    6. Maintains conversation history per session for context-aware responses
-    7. If artist_id is provided, can also answer questions about the artist
-    8. If no project_id but artist_id is provided, can answer artist-related questions only
-    """
-    try:
-        # Get Zoe chatbot instance
-        chatbot = get_zoe_chatbot()
-        
-        # Use top_k=8 for both project-wide and multi-contract searches
-        top_k = 8
-        
-        # Generate session_id if not provided (for new conversations)
-        session_id = request.session_id or str(uuid.uuid4())
-        
-        # Fetch artist data if artist_id is provided
-        artist_data = None
-        if request.artist_id:
-            try:
-                artist_response = get_supabase_client().table("artists").select("*").eq("id", request.artist_id).single().execute()
-                artist_data = artist_response.data
-            except Exception as e:
-                print(f"Warning: Could not fetch artist data: {e}")
-        
-        # Convert context to dict for chatbot methods
-        context_dict = None
-        if request.context:
-            context_dict = request.context.model_dump()
-            print(f"[Context] Received context with {len(context_dict.get('contracts_discussed', []))} contracts discussed")
-            for c in context_dict.get('contracts_discussed', []):
-                print(f"[Context]   - {c.get('name')}: {c.get('data_extracted', {})}")
-        
-        # Handle case where no project is selected (artist-only queries)
-        if not request.project_id:
-            result = chatbot.ask_without_project(
-                query=request.query,
-                user_id=request.user_id,
-                session_id=session_id,
-                artist_data=artist_data,
-                context=context_dict,
-                source_preference=request.source_preference,
-                contract_markdowns=request.contract_markdowns
-            )
-        elif request.contract_ids and len(request.contract_ids) > 0:
-            # Multiple contracts selected - search across all of them
-            result = chatbot.ask_multiple_contracts(
-                query=request.query,
-                user_id=request.user_id,
-                project_id=request.project_id,
-                contract_ids=request.contract_ids,
-                top_k=top_k,
-                session_id=session_id,
-                artist_data=artist_data,
-                context=context_dict,
-                source_preference=request.source_preference,
-                contract_markdowns=request.contract_markdowns
-            )
-        else:
-            # Project-wide question
-            result = chatbot.ask_project(
-                query=request.query,
-                user_id=request.user_id,
-                project_id=request.project_id,
-                top_k=top_k,
-                session_id=session_id,
-                artist_data=artist_data,
-                context=context_dict,
-                source_preference=request.source_preference,
-                contract_markdowns=request.contract_markdowns
-            )
-        
-        # Format response - filter out sources with missing required fields
-        valid_sources = []
-        for source in result.get("sources", []):
-            zoe_source = ZoeSource.from_dict(source)
-            if zoe_source is not None:
-                valid_sources.append(zoe_source)
-        
-        # Pass extracted_data through as raw dict (supports both contract and artist payloads)
-        extracted_data = result.get("extracted_data")
-
-        quick_actions = None
-        if result.get("quick_actions"):
-            quick_actions = [ZoeQuickAction(**action) for action in result.get("quick_actions", [])]
-        
-        return ZoeAskResponse(
-            query=result["query"],
-            answer=result["answer"],
-            confidence=result["confidence"],
-            sources=valid_sources,
-            search_results_count=result.get("search_results_count", 0),
-            highest_score=result.get("highest_score"),
-            session_id=session_id,
-            show_quick_actions=result.get("show_quick_actions", False),
-            answered_from=result.get("answered_from"),
-            extracted_data=extracted_data,
-            pending_suggestion=result.get("pending_suggestion"),
-            context_cleared=result.get("context_cleared"),
-            needs_source_selection=result.get("needs_source_selection"),
-            quick_actions=quick_actions
-        )
-        
-    except Exception as e:
-        print(f"Error in Zoe chatbot: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
-
 
 @app.post("/zoe/ask-stream")
 async def zoe_ask_stream(request: ZoeAskRequest):

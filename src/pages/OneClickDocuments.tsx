@@ -1339,12 +1339,10 @@ const OneClickDocuments = () => {
               </div>
               
               <div className="flex gap-2">
-                  {calculationResult.is_cached && (
-                      <Button variant="outline" onClick={() => handleCalculateRoyalties(true)} disabled={isUploading}>
-                          <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
-                          Recalculate
-                      </Button>
-                  )}
+                  <Button variant="outline" onClick={() => handleCalculateRoyalties(true)} disabled={isUploading}>
+                      <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
+                      Recalculate
+                  </Button>
               </div>
             </div>
             

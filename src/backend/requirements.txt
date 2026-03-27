@@ -6,11 +6,6 @@ python-multipart==0.0.22
 python-dotenv==1.2.2
 certifi==2026.2.25
 pip-system-certs==5.3
-pinecone==8.1.0
-langchain==1.2.13
-langchain-community==0.4.1
-langchain-openai==1.1.11
-langchain-text-splitters==1.1.1
 pymupdf==1.27.2.2
 pymupdf4llm==1.27.2.2
 tiktoken==0.12.0
