@@ -1,0 +1,53 @@
+{
+  "planPath": "docs/superpowers/plans/2026-03-27-user-onboarding.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Database Schema & TypeScript Types",
+      "status": "pending",
+      "description": "**Goal:** Add `industry`, `onboarding_completed`, and `walkthrough_completed` columns to the profiles table and update TypeScript types.\n\n**Files:**\n- Modify: `src/integrations/supabase/types.ts:83-132`\n- Run SQL in Supabase dashboard\n\n**Acceptance Criteria:**\n- profiles table has new columns\n- TypeScript types updated\n- Existing profiles default to false\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/integrations/supabase/types.ts\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"profiles table has new columns\", \"TypeScript types updated\", \"Existing profiles default to false\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: Onboarding Status Hook",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** Create useOnboardingStatus hook.\n\n**Files:**\n- Create: `src/hooks/useOnboardingStatus.ts`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/hooks/useOnboardingStatus.ts\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"Returns correct status shape\", \"Queries profiles table\", \"Handles loading state\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Onboarding Step Components",
+      "status": "pending",
+      "description": "**Goal:** Build the four step components plus progress indicator.\n\n**Files:**\n- Create: `src/components/onboarding/OnboardingProgress.tsx`\n- Create: `src/components/onboarding/StepWelcome.tsx`\n- Create: `src/components/onboarding/StepName.tsx`\n- Create: `src/components/onboarding/StepPreferences.tsx`\n- Create: `src/components/onboarding/StepReady.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/components/onboarding/OnboardingProgress.tsx\", \"src/components/onboarding/StepWelcome.tsx\", \"src/components/onboarding/StepName.tsx\", \"src/components/onboarding/StepPreferences.tsx\", \"src/components/onboarding/StepReady.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"All 5 components created\", \"Clean minimal design\", \"Form validation works\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Onboarding Page",
+      "status": "pending",
+      "blockedBy": [1, 2],
+      "description": "**Goal:** Build the main Onboarding page.\n\n**Files:**\n- Create: `src/pages/Onboarding.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/pages/Onboarding.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"Multi-step form works\", \"Profile saved to Supabase\", \"Redirects to dashboard\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Route Integration & Onboarding Gate",
+      "status": "pending",
+      "blockedBy": [1, 3],
+      "description": "**Goal:** Wire onboarding into router and gate ProtectedRoute.\n\n**Files:**\n- Modify: `src/App.tsx`\n- Modify: `src/components/ProtectedRoute.tsx`\n- Modify: `src/pages/Auth.tsx`\n- Modify: `src/contexts/AuthContext.tsx`\n- Modify: `src/pages/Onboarding.tsx`\n\n**Verify:** Full signup flow test\n\n```json:metadata\n{\"files\": [\"src/App.tsx\", \"src/components/ProtectedRoute.tsx\", \"src/pages/Auth.tsx\", \"src/contexts/AuthContext.tsx\", \"src/pages/Onboarding.tsx\"], \"verifyCommand\": \"npm run dev\", \"acceptanceCriteria\": [\"Route exists\", \"Gate works\", \"Signup redirects correctly\", \"Returning users skip onboarding\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Walkthrough Hook & Provider",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** Build walkthrough system with spotlight overlay and tooltips.\n\n**Files:**\n- Create: `src/hooks/useWalkthrough.ts`\n- Create: `src/components/walkthrough/WalkthroughProvider.tsx`\n- Create: `src/components/walkthrough/WalkthroughTooltip.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/hooks/useWalkthrough.ts\", \"src/components/walkthrough/WalkthroughProvider.tsx\", \"src/components/walkthrough/WalkthroughTooltip.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"Spotlight overlay works\", \"Tooltip positions correctly\", \"State persists to Supabase\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Dashboard Walkthrough Integration",
+      "status": "pending",
+      "blockedBy": [4, 5],
+      "description": "**Goal:** Add walkthrough to Dashboard for first-time users.\n\n**Files:**\n- Modify: `src/pages/Dashboard.tsx`\n\n**Verify:** `npm run dev` — full end-to-end test\n\n```json:metadata\n{\"files\": [\"src/pages/Dashboard.tsx\"], \"verifyCommand\": \"npm run dev\", \"acceptanceCriteria\": [\"Data attributes on cards\", \"Auto-starts for new users\", \"Persists completion\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-03-27T00:00:00.000Z"
+}
