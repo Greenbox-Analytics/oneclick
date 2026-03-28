@@ -80,7 +80,7 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="zoe-upload"]',
         title: "Upload Contracts",
         description:
-          "Upload contracts here — PDF, DOCX, or plain text. Zoe will index them for analysis.",
+          "Upload PDF contracts here — Zoe will index them for analysis.",
         placement: "bottom",
       },
       {
@@ -186,7 +186,14 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="workspace-boards"]',
         title: "Project Boards",
         description:
-          "Manage tasks with drag-and-drop Kanban boards. Create epics, add subtasks, and link tasks to artists and projects.",
+          "Manage tasks on Kanban boards that iterate by month. Incomplete tasks carry forward to the next period — completed ones don't. Filter back to find previously completed tasks. You can change the iteration window in Settings.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="workspace-calendar"]',
+        title: "Calendar",
+        description:
+          "View all your tasks and their due dates on a calendar. Flip back to see previous tasks and plan ahead.",
         placement: "bottom",
       },
       {

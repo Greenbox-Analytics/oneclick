@@ -78,7 +78,8 @@ const Workspace = () => {
     onComplete: () => markToolCompleted("workspace"),
     onBeforeStep: (stepIndex) => {
       if (stepIndex === 1) setActiveTab("boards");
-      if (stepIndex === 2) setActiveTab("integrations");
+      if (stepIndex === 2) setActiveTab("calendar");
+      if (stepIndex === 3) setActiveTab("integrations");
     },
   });
 
@@ -158,7 +159,7 @@ const Workspace = () => {
             <KanbanBoard initialSelectedTaskId={initialTaskId} />
           </TabsContent>
 
-          <TabsContent value="calendar">
+          <TabsContent value="calendar" data-walkthrough="workspace-calendar">
             <CalendarView />
           </TabsContent>
 
