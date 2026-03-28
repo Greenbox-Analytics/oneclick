@@ -131,10 +131,21 @@ User clicks ? button
 - Exposes: `phase`, `currentStepIndex`, `currentStep`, `totalSteps`, `next()`, `skip()`, `replay()`
 - `replay()` re-enters `modal` phase with `isReplay = true`
 - When `isReplay` is true, skip/complete does not call `markToolCompleted`
+- On each step transition: runs `beforeStep()` if defined, waits a tick, then checks `skipIfMissing` — if target is absent, advances to the next step automatically
+- `totalSteps` reflects only the steps that will actually be shown (adjusted dynamically as steps are skipped)
 
 ### Config Shape
 
 ```typescript
+interface WalkthroughStep {
+  targetSelector: string;
+  title: string;
+  description: string;
+  placement: "top" | "bottom" | "left" | "right";
+  skipIfMissing?: boolean;        // skip this step if target element isn't in the DOM
+  beforeStep?: () => void;        // callback to run before spotlighting (e.g., switch tabs)
+}
+
 interface ToolWalkthroughConfig {
   key: string;                    // matches DB column prefix: "oneclick", "zoe", etc.
   intro: {
@@ -142,9 +153,15 @@ interface ToolWalkthroughConfig {
     title: string;
     description: string;
   };
-  steps: WalkthroughStep[];       // reuses existing WalkthroughStep type
+  steps: WalkthroughStep[];
 }
 ```
+
+### Step Resilience
+
+**`skipIfMissing`** — When `true`, the walkthrough hook checks `document.querySelector(step.targetSelector)` before entering the step. If the element isn't in the DOM (e.g., no artist cards on first visit, no year groups in an empty portfolio), the step is silently skipped. The step counter adjusts to reflect only visible steps. Steps that target elements which may not exist on an empty page must set `skipIfMissing: true`.
+
+**`beforeStep`** — A synchronous callback executed before the spotlight targets the step's element. Used when the target lives inside a tab or collapsible that may not be visible. For Workspace, this switches to the correct tab before spotlighting its content. The hook waits a short tick after `beforeStep` executes to allow the DOM to update before querying the target.
 
 ---
 
@@ -185,32 +202,32 @@ interface ToolWalkthroughConfig {
 
 **Intro:** "Your artist roster -- create profiles, store DSP links, contracts, and project files all in one place."
 
-| # | Target Selector | Title | Description | Placement |
-|---|----------------|-------|-------------|-----------|
-| 1 | `[data-walkthrough="artists-add"]` | Add Artist | Add new artists to your roster here. Each artist gets their own profile for contracts, projects, and links. | bottom |
-| 2 | `[data-walkthrough="artists-search"]` | Search | Quickly find artists by name as your roster grows. | bottom |
-| 3 | `[data-walkthrough="artists-card"]` | Artist Card | Each card shows the artist's name, genres, and contract status. Click 'View Profile' to see everything. | bottom |
+| # | Target Selector | Title | Description | Placement | Flags |
+|---|----------------|-------|-------------|-----------|-------|
+| 1 | `[data-walkthrough="artists-add"]` | Add Artist | Add new artists to your roster here. Each artist gets their own profile for contracts, projects, and links. | bottom | |
+| 2 | `[data-walkthrough="artists-search"]` | Search | Quickly find artists by name as your roster grows. | bottom | |
+| 3 | `[data-walkthrough="artists-card"]` | Artist Card | Each card shows the artist's name, genres, and contract status. Click 'View Profile' to see everything. | bottom | `skipIfMissing` |
 
 ### Workspace (`Workspace.tsx`) — 3 steps
 
 **Intro:** "Your project management hub -- manage tasks, create epics with subtasks, and efficiently organize your projects. Link tasks to artists and projects to keep everything connected."
 
-| # | Target Selector | Title | Description | Placement |
-|---|----------------|-------|-------------|-----------|
-| 1 | `[data-walkthrough="workspace-tabs"]` | Navigation | Switch between Integrations, Project Boards, Calendar, Notifications, and Settings. | bottom |
-| 2 | `[data-walkthrough="workspace-boards"]` | Project Boards | Manage tasks with drag-and-drop Kanban boards. Create epics, add subtasks, and link tasks to artists and projects. | bottom |
-| 3 | `[data-walkthrough="workspace-integrations"]` | Integrations | Connect Google Drive, Slack, Notion, and Monday.com to bring your tools together. | bottom |
+| # | Target Selector | Title | Description | Placement | Flags |
+|---|----------------|-------|-------------|-----------|-------|
+| 1 | `[data-walkthrough="workspace-tabs"]` | Navigation | Switch between Integrations, Project Boards, Calendar, Notifications, and Settings. | bottom | |
+| 2 | `[data-walkthrough="workspace-boards"]` | Project Boards | Manage tasks with drag-and-drop Kanban boards. Create epics, add subtasks, and link tasks to artists and projects. | bottom | `beforeStep`: switch to "boards" tab |
+| 3 | `[data-walkthrough="workspace-integrations"]` | Integrations | Connect Google Drive, Slack, Notion, and Monday.com to bring your tools together. | bottom | `beforeStep`: switch to "integrations" tab |
 
 ### Portfolio (`Portfolio.tsx`) — 4 steps
 
 **Intro:** "Manage all your assets in one place. The page is organized per year, with each project created in that year shown per artist -- giving you a clear, structured view of everything."
 
-| # | Target Selector | Title | Description | Placement |
-|---|----------------|-------|-------------|-----------|
-| 1 | `[data-walkthrough="portfolio-filters"]` | Filter Bar | Filter by artist, search projects, set date ranges, or change sort order. | bottom |
-| 2 | `[data-walkthrough="portfolio-add"]` | Add Project | Create projects per artist. Each project holds documents, audio files, and linked tasks. | bottom |
-| 3 | `[data-walkthrough="portfolio-year"]` | Year Groups | Projects are organized by year, then by artist. Click to expand any section. | bottom |
-| 4 | `[data-walkthrough="portfolio-folders"]` | Project Assets | Each project has four document folders (Contracts, Split Sheets, Royalty Statements, Other), audio files/folders, and tasks created for the project. | bottom |
+| # | Target Selector | Title | Description | Placement | Flags |
+|---|----------------|-------|-------------|-----------|-------|
+| 1 | `[data-walkthrough="portfolio-filters"]` | Filter Bar | Filter by artist, search projects, set date ranges, or change sort order. | bottom | |
+| 2 | `[data-walkthrough="portfolio-add"]` | Add Project | Create projects per artist. Each project holds documents, audio files, and linked tasks. | bottom | |
+| 3 | `[data-walkthrough="portfolio-year"]` | Year Groups | Projects are organized by year, then by artist. Click to expand any section. | bottom | `skipIfMissing` |
+| 4 | `[data-walkthrough="portfolio-folders"]` | Project Assets | Each project has four document folders (Contracts, Split Sheets, Royalty Statements, Other), audio files/folders, and tasks created for the project. | bottom | `skipIfMissing` |
 
 ---
 
@@ -261,7 +278,7 @@ Plus `data-walkthrough` attributes on key DOM elements as defined per tool above
 |--------|--------|
 | New DB table | `user_onboarding` -- 1 row per user, 1 boolean column per tool |
 | New files | 5 (2 hooks, 2 components, 1 config) |
-| Modified files | 8 (types + 7 tool pages) |
+| Modified files | 7 (types + 6 tool pages) |
 | Unchanged files | ProtectedRoute, useOnboardingStatus, Dashboard, App |
 | Total spotlight steps | 20 across 6 tools |
 | Intro modals | 6 (one per tool) |
