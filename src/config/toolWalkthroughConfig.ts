@@ -197,6 +197,13 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         placement: "bottom",
       },
       {
+        targetSelector: '[data-walkthrough="workspace-settings"]',
+        title: "Settings",
+        description:
+          "Configure your workspace — change the board iteration window, set your timezone, and customize how your workspace behaves.",
+        placement: "bottom",
+      },
+      {
         targetSelector: '[data-walkthrough="workspace-integrations"]',
         title: "Integrations",
         description:

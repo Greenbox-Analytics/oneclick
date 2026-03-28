@@ -79,7 +79,8 @@ const Workspace = () => {
     onBeforeStep: (stepIndex) => {
       if (stepIndex === 1) setActiveTab("boards");
       if (stepIndex === 2) setActiveTab("calendar");
-      if (stepIndex === 3) setActiveTab("integrations");
+      if (stepIndex === 3) setActiveTab("settings");
+      if (stepIndex === 4) setActiveTab("integrations");
     },
   });
 
@@ -171,7 +172,7 @@ const Workspace = () => {
             </div>
           </TabsContent>
 
-          <TabsContent value="settings">
+          <TabsContent value="settings" data-walkthrough="workspace-settings">
             <WorkspaceSettings />
           </TabsContent>
         </Tabs>
