@@ -1,0 +1,81 @@
+{
+  "planPath": "docs/superpowers/plans/2026-03-27-per-tool-walkthrough.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Database Schema & TypeScript Types",
+      "status": "pending",
+      "description": "**Goal:** Create the `user_onboarding` table in Supabase and add TypeScript types.\n\n**Files:**\n- Modify: `src/integrations/supabase/types.ts`\n- Run SQL in Supabase dashboard\n\n**Acceptance Criteria:**\n- user_onboarding table exists with user_id PK and 6 boolean columns\n- TypeScript types added for Row, Insert, Update\n- RLS policy: users read/write own row only\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/integrations/supabase/types.ts\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"user_onboarding table exists\", \"TypeScript types added\", \"RLS policy set\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: useToolOnboardingStatus Hook",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** Create hook that queries user_onboarding table and returns per-tool completion status.\n\n**Files:**\n- Create: `src/hooks/useToolOnboardingStatus.ts`\n\n**Acceptance Criteria:**\n- Returns statuses Record with all 6 tool keys\n- Returns loading boolean\n- Exposes markToolCompleted(toolKey) function\n- No row = all false\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/hooks/useToolOnboardingStatus.ts\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"Returns per-tool status\", \"markToolCompleted upserts row\", \"Handles no-row case\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Tool Walkthrough Config & Extended Step Type",
+      "status": "pending",
+      "description": "**Goal:** Create static config file with all 6 tool walkthrough definitions and extended step type.\n\n**Files:**\n- Create: `src/config/toolWalkthroughConfig.ts`\n\n**Acceptance Criteria:**\n- ToolWalkthroughStep type with skipIfMissing\n- All 6 tool configs defined\n- Steps with skipIfMissing set on empty-state targets\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/config/toolWalkthroughConfig.ts\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"All 6 tool configs defined\", \"skipIfMissing set on empty-state steps\", \"Types exported\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: ToolIntroModal & ToolHelpButton Components",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** Build intro modal overlay and help/replay button.\n\n**Files:**\n- Create: `src/components/walkthrough/ToolIntroModal.tsx`\n- Create: `src/components/walkthrough/ToolHelpButton.tsx`\n\n**Acceptance Criteria:**\n- ToolIntroModal shows icon, title, description, Start Tour and Skip\n- ToolHelpButton renders HelpCircle with tooltip\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/components/walkthrough/ToolIntroModal.tsx\", \"src/components/walkthrough/ToolHelpButton.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"Modal renders with config props\", \"Help button triggers replay\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: useToolWalkthrough Hook",
+      "status": "pending",
+      "blockedBy": [1, 2, 3],
+      "description": "**Goal:** Create orchestration hook managing modal -> spotlight -> done with skipIfMissing and onBeforeStep.\n\n**Files:**\n- Create: `src/hooks/useToolWalkthrough.ts`\n\n**Acceptance Criteria:**\n- Manages phase: idle | modal | spotlight | done\n- Auto-starts when completed === false\n- skipIfMissing skips absent targets\n- onBeforeStep callback called before each step\n- replay mode no DB write\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/hooks/useToolWalkthrough.ts\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"Phase management works\", \"skipIfMissing skips absent targets\", \"onBeforeStep callback called\", \"replay mode no DB write\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: OneClickDocuments Walkthrough Integration",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Add walkthrough to OneClickDocuments page.\n\n**Files:**\n- Modify: `src/pages/OneClickDocuments.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/pages/OneClickDocuments.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"3 data-walkthrough attributes\", \"Auto-triggers first visit\", \"Help button present\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Zoe Walkthrough Integration",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Add walkthrough to Zoe page.\n\n**Files:**\n- Modify: `src/pages/Zoe.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/pages/Zoe.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"4 data-walkthrough attributes\", \"Auto-triggers first visit\", \"Help button present\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: SplitSheet Walkthrough Integration",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Add walkthrough to SplitSheet page.\n\n**Files:**\n- Modify: `src/pages/SplitSheet.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/pages/SplitSheet.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"3 data-walkthrough attributes\", \"Auto-triggers first visit\", \"Help button present\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: Artists Walkthrough Integration",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Add walkthrough to Artists page with skipIfMissing on artist card.\n\n**Files:**\n- Modify: `src/pages/Artists.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/pages/Artists.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"3 data-walkthrough attributes\", \"Artist card step skips if empty\", \"Help button present\"]}\n```"
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: Workspace Walkthrough Integration",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Add walkthrough to Workspace with controlled Tabs for beforeStep tab switching.\n\n**Files:**\n- Modify: `src/pages/Workspace.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/pages/Workspace.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"Controlled Tabs\", \"beforeStep tab switching\", \"3 data-walkthrough attributes\", \"Help button present\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 10: Portfolio Walkthrough Integration",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Add walkthrough to Portfolio page with skipIfMissing on data-dependent steps.\n\n**Files:**\n- Modify: `src/pages/Portfolio.tsx`\n\n**Verify:** `npx tsc --noEmit`\n\n```json:metadata\n{\"files\": [\"src/pages/Portfolio.tsx\"], \"verifyCommand\": \"npx tsc --noEmit\", \"acceptanceCriteria\": [\"4 data-walkthrough attributes\", \"Year/folder steps skip if empty\", \"Help button present\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-03-28T00:00:00.000Z"
+}
