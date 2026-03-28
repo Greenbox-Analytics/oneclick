@@ -16,7 +16,7 @@ const StepWelcome = ({ onNext }: StepWelcomeProps) => {
           Welcome to Msanii
         </h1>
         <p className="text-lg text-muted-foreground max-w-md">
-          Your all-in-one platform for managing artists, royalties, contracts, and creative projects.
+          Your all-in-one management platform for managing artists, royalties, contracts, and more.
         </p>
       </div>
       <p className="text-sm text-muted-foreground">

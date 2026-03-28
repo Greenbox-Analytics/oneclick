@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -65,18 +65,24 @@ const Dashboard = () => {
   } | null>(null);
   const [now, setNow] = useState(new Date());
   const [recentTools, setRecentTools] = useState<RecentTool[]>(getRecentTools());
+  const location = useLocation();
   const { settings } = useWorkspaceSettings();
   const { walkthroughCompleted } = useOnboardingStatus();
   const walkthrough = useWalkthrough();
 
+  // Optimistic: if we just came from onboarding, start walkthrough immediately
+  // without waiting for the Supabase query to resolve.
+  const fromOnboarding = (location.state as any)?.fromOnboarding === true;
+
   // Auto-start walkthrough for first-time users
   useEffect(() => {
-    if (walkthroughCompleted === false && !walkthrough.isActive) {
+    const shouldStart = fromOnboarding || walkthroughCompleted === false;
+    if (shouldStart && !walkthrough.isActive) {
       // Small delay to ensure DOM elements are rendered
-      const timer = setTimeout(() => walkthrough.start(), 500);
+      const timer = setTimeout(() => walkthrough.start(), 300);
       return () => clearTimeout(timer);
     }
-  }, [walkthroughCompleted]);
+  }, [fromOnboarding, walkthroughCompleted]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);

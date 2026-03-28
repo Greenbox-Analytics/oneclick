@@ -397,7 +397,7 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="zoe-upload"]',
         title: "Upload Contracts",
         description:
-          "Upload contracts here — PDF, DOCX, or plain text. Zoe will index them for analysis.",
+          "Upload PDF contracts here — Zoe will index them for analysis.",
         placement: "bottom",
       },
       {

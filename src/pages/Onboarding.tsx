@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { Music } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { useToast } from "@/hooks/use-toast";
 import OnboardingProgress from "@/components/onboarding/OnboardingProgress";
 import StepWelcome from "@/components/onboarding/StepWelcome";
 import StepName from "@/components/onboarding/StepName";
@@ -15,9 +14,7 @@ const TOTAL_STEPS = 4;
 const Onboarding = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     firstName: "",
@@ -81,37 +78,30 @@ const Onboarding = () => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleFinish = async () => {
+  const handleFinish = () => {
     if (!user) return;
-    setIsLoading(true);
 
-    try {
-      const fullName = `${formData.firstName} ${formData.lastName}`.trim();
-      const { error } = await supabase.from("profiles").upsert({
-        id: user.id,
-        first_name: formData.firstName,
-        last_name: formData.lastName,
-        given_name: formData.preferredName || null,
-        full_name: fullName,
-        industry: formData.industry || null,
-        company: formData.company || null,
-        onboarding_completed: true,
-        updated_at: new Date().toISOString(),
-      });
+    // Navigate immediately — optimistic UI. The user sees the dashboard
+    // instantly while the profile upsert runs in the background.
+    navigate("/dashboard", { replace: true, state: { fromOnboarding: true } });
 
-      if (error) throw error;
-
-      navigate("/dashboard", { replace: true });
-    } catch (error: any) {
-      console.error("Error saving onboarding profile:", error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to save profile. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
-    }
+    // Fire-and-forget: persist profile in the background
+    const fullName = `${formData.firstName} ${formData.lastName}`.trim();
+    supabase.from("profiles").upsert({
+      id: user.id,
+      first_name: formData.firstName,
+      last_name: formData.lastName,
+      given_name: formData.preferredName || null,
+      full_name: fullName,
+      industry: formData.industry || null,
+      company: formData.company || null,
+      onboarding_completed: true,
+      updated_at: new Date().toISOString(),
+    }).then(({ error }) => {
+      if (error) {
+        console.error("Background profile save failed:", error);
+      }
+    });
   };
 
   return (
@@ -160,7 +150,7 @@ const Onboarding = () => {
             preferredName={formData.preferredName}
             firstName={formData.firstName}
             onFinish={handleFinish}
-            isLoading={isLoading}
+            isLoading={false}
           />
         )}
       </div>

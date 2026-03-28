@@ -184,7 +184,7 @@ interface ToolWalkthroughConfig {
 | # | Target Selector | Title | Description | Placement |
 |---|----------------|-------|-------------|-----------|
 | 1 | `[data-walkthrough="zoe-sidebar"]` | Select Context | Start by selecting an artist, project, and the documents you want Zoe to analyze. | right |
-| 2 | `[data-walkthrough="zoe-upload"]` | Upload Contracts | Upload contracts here -- PDF, DOCX, or plain text. Zoe will index them for analysis. | bottom |
+| 2 | `[data-walkthrough="zoe-upload"]` | Upload Contracts | Upload PDF contracts here -- Zoe will index them for analysis. | bottom |
 | 3 | `[data-walkthrough="zoe-chat"]` | Ask Anything | Ask Zoe anything about your contracts. She'll answer with source citations you can verify. | top |
 | 4 | `[data-walkthrough="zoe-newchat"]` | New Chat | Start a fresh conversation anytime. Your previous chats are saved automatically. | bottom |
 
