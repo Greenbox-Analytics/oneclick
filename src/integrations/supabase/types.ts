@@ -139,6 +139,47 @@ export type Database = {
           },
         ]
       }
+      user_onboarding: {
+        Row: {
+          user_id: string
+          oneclick_completed: boolean
+          zoe_completed: boolean
+          splitsheet_completed: boolean
+          artists_completed: boolean
+          workspace_completed: boolean
+          portfolio_completed: boolean
+          created_at: string
+        }
+        Insert: {
+          user_id: string
+          oneclick_completed?: boolean
+          zoe_completed?: boolean
+          splitsheet_completed?: boolean
+          artists_completed?: boolean
+          workspace_completed?: boolean
+          portfolio_completed?: boolean
+          created_at?: string
+        }
+        Update: {
+          user_id?: string
+          oneclick_completed?: boolean
+          zoe_completed?: boolean
+          splitsheet_completed?: boolean
+          artists_completed?: boolean
+          workspace_completed?: boolean
+          portfolio_completed?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_onboarding_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_files: {
         Row: {
           created_at: string
