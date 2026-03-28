@@ -10,6 +10,12 @@ import { WorkspaceSettings } from "@/components/workspace/WorkspaceSettings";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
 import { CalendarView } from "@/components/workspace/boards/CalendarView";
 import { toast } from "sonner";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import { ToolIntroModal } from "@/components/walkthrough/ToolIntroModal";
+import { ToolHelpButton } from "@/components/walkthrough/ToolHelpButton";
+import { WalkthroughProvider } from "@/components/walkthrough/WalkthroughProvider";
 
 const Workspace = () => {
   const navigate = useNavigate();
@@ -63,7 +69,23 @@ const Workspace = () => {
   }, [searchParams, setSearchParams]);
 
   const defaultTab = searchParams.get("tab") || "integrations";
+  const [activeTab, setActiveTab] = useState(defaultTab);
   const initialTaskId = searchParams.get("taskId") || undefined;
+
+  // Tool walkthrough
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(
+    TOOL_CONFIGS.workspace,
+    statuses.workspace,
+    onboardingLoading,
+    () => markToolCompleted("workspace"),
+    {
+      onBeforeStep: (stepIndex) => {
+        if (stepIndex === 1) setActiveTab("boards");
+        if (stepIndex === 2) setActiveTab("integrations");
+      },
+    }
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -87,6 +109,7 @@ const Workspace = () => {
               <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
           </div>
+          <ToolHelpButton onClick={walkthrough.replay} />
         </div>
       </header>
 
@@ -101,8 +124,8 @@ const Workspace = () => {
           </p>
         </div>
 
-        <Tabs defaultValue={defaultTab}>
-          <TabsList className="mb-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="mb-6" data-walkthrough="workspace-tabs">
             <TabsTrigger value="integrations" className="gap-2">
               <HardDrive className="w-4 h-4" />
               Integrations
@@ -125,11 +148,11 @@ const Workspace = () => {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="integrations">
+          <TabsContent value="integrations" data-walkthrough="workspace-integrations">
             <IntegrationHub />
           </TabsContent>
 
-          <TabsContent value="boards">
+          <TabsContent value="boards" data-walkthrough="workspace-boards">
             <KanbanBoard initialSelectedTaskId={initialTaskId} />
           </TabsContent>
 
@@ -149,6 +172,21 @@ const Workspace = () => {
             <WorkspaceSettings />
           </TabsContent>
         </Tabs>
+
+        <ToolIntroModal
+          config={TOOL_CONFIGS.workspace}
+          isOpen={walkthrough.phase === "modal"}
+          onStartTour={walkthrough.startSpotlight}
+          onSkip={walkthrough.skip}
+        />
+        <WalkthroughProvider
+          isActive={walkthrough.phase === "spotlight"}
+          currentStep={walkthrough.currentStep}
+          currentStepIndex={walkthrough.visibleStepIndex}
+          totalSteps={walkthrough.totalSteps}
+          onNext={walkthrough.next}
+          onSkip={walkthrough.skip}
+        />
       </main>
     </div>
   );
