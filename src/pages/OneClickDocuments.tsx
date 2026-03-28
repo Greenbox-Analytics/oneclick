@@ -18,6 +18,12 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { toPng } from 'html-to-image';
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -119,6 +125,15 @@ const OneClickDocuments = () => {
   
   // Ref to track if auto-save has been triggered for current result
   const autoSaveTriggeredRef = useRef<string | null>(null);
+
+  // Tool walkthrough
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(
+    TOOL_CONFIGS.oneclick,
+    statuses.oneclick,
+    onboardingLoading,
+    () => markToolCompleted("oneclick")
+  );
 
   const normalizeFileName = (name: string) => name.trim().toLowerCase();
 
@@ -795,10 +810,13 @@ const OneClickDocuments = () => {
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Artist Selection
-          </Button>
+          <div className="flex items-center gap-2">
+            <ToolHelpButton onClick={walkthrough.replay} />
+            <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back to Artist Selection
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -812,7 +830,7 @@ const OneClickDocuments = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
           {/* Contract Upload Card */}
-          <Card>
+          <Card data-walkthrough="oneclick-contracts">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileSignature className="w-5 h-5 text-primary" />
@@ -983,7 +1001,7 @@ const OneClickDocuments = () => {
           </Card>
 
           {/* Royalty Statement Upload Card */}
-          <Card>
+          <Card data-walkthrough="oneclick-royalty">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-primary" />
@@ -1154,9 +1172,10 @@ const OneClickDocuments = () => {
 
         <div className="flex gap-3 justify-center mb-8">
           <Button
+            data-walkthrough="oneclick-calculate"
             onClick={() => handleCalculateRoyalties(false)}
-            disabled={((contractFiles.length === 0 && selectedExistingContracts.length === 0) || 
-                       (royaltyStatementFile === null && selectedExistingRoyaltyStatement === null)) || 
+            disabled={((contractFiles.length === 0 && selectedExistingContracts.length === 0) ||
+                       (royaltyStatementFile === null && selectedExistingRoyaltyStatement === null)) ||
                        isUploading}
             size="lg"
             className="w-full max-w-sm"
@@ -1463,6 +1482,20 @@ const OneClickDocuments = () => {
             </Card>
           </div>
         )}
+        <ToolIntroModal
+          config={TOOL_CONFIGS.oneclick}
+          isOpen={walkthrough.phase === "modal"}
+          onStartTour={walkthrough.startSpotlight}
+          onSkip={walkthrough.skip}
+        />
+        <WalkthroughProvider
+          isActive={walkthrough.phase === "spotlight"}
+          currentStep={walkthrough.currentStep}
+          currentStepIndex={walkthrough.visibleStepIndex}
+          totalSteps={walkthrough.totalSteps}
+          onNext={walkthrough.next}
+          onSkip={walkthrough.skip}
+        />
       </main>
     </div>
   );
