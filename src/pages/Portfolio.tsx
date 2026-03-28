@@ -11,6 +11,12 @@ import { ProjectFormDialog } from "@/components/ProjectFormDialog";
 import { AudioSection } from "@/components/AudioSection";
 import { FileShareDialog } from "@/components/FileShareDialog";
 import { useAudioData } from "@/hooks/useAudioData";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import { ToolIntroModal } from "@/components/walkthrough/ToolIntroModal";
+import { ToolHelpButton } from "@/components/walkthrough/ToolHelpButton";
+import { WalkthroughProvider } from "@/components/walkthrough/WalkthroughProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -122,6 +128,18 @@ const Portfolio = () => {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [sortOrder, setSortOrder] = useState<"alpha" | "newest" | "oldest">("alpha");
+
+  // Tool walkthrough
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(
+    TOOL_CONFIGS.portfolio,
+    statuses.portfolio,
+    onboardingLoading,
+    () => markToolCompleted("portfolio")
+  );
+
+  // Ref to track first folder grid for walkthrough attribute
+  const firstFolderGridRef = useRef(true);
 
   // Artist search state
   const [artistSearchInput, setArtistSearchInput] = useState("");
@@ -504,7 +522,9 @@ const Portfolio = () => {
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
 
-          <DropdownMenu>
+          <div className="flex items-center gap-2">
+            <ToolHelpButton onClick={walkthrough.replay} />
+            <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="relative h-10 w-10 rounded-full bg-primary hover:bg-primary/90">
                 <Avatar className="h-10 w-10">
@@ -532,6 +552,7 @@ const Portfolio = () => {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         </div>
       </header>
 
@@ -547,14 +568,14 @@ const Portfolio = () => {
               <p className="text-muted-foreground">Your profile organized by year, artist, and project</p>
             </div>
           </div>
-          <Button onClick={() => handleAddProject()} className="gap-2">
+          <Button data-walkthrough="portfolio-add" onClick={() => handleAddProject()} className="gap-2">
             <Plus className="w-4 h-4" />
             Add Project
           </Button>
         </div>
 
         {/* === FILTER BAR (sticky) === */}
-        <div className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-4 mb-6 border-b border-border">
+        <div data-walkthrough="portfolio-filters" className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-4 mb-6 border-b border-border">
           <div className="flex flex-wrap items-end gap-4">
             {/* Artist search with suggestions */}
             <div className="w-64 relative" ref={artistSearchRef}>
@@ -688,8 +709,8 @@ const Portfolio = () => {
 
         {/* === YEAR ACCORDION === */}
         <Accordion type="multiple" defaultValue={years.map((y) => `year-${y.year}`)} className="space-y-4">
-          {years.map((yearGroup) => (
-            <AccordionItem key={yearGroup.year} value={`year-${yearGroup.year}`} className="border rounded-lg px-4">
+          {years.map((yearGroup, index) => (
+            <AccordionItem key={yearGroup.year} value={`year-${yearGroup.year}`} data-walkthrough={index === 0 ? "portfolio-year" : undefined} className="border rounded-lg px-4">
               <AccordionTrigger className="hover:no-underline py-4">
                 <div className="flex items-center gap-3">
                   <span className="text-xl font-bold">{yearGroup.year}</span>
@@ -869,7 +890,11 @@ const Portfolio = () => {
                                   <AccordionContent>
                                   <CardContent className="space-y-3 px-5 pb-5 pt-3">
                                     {/* FILE GRID (2x2) */}
-                                    <div className="grid grid-cols-2 gap-2">
+                                    <div
+                                      data-walkthrough={firstFolderGridRef.current ? "portfolio-folders" : undefined}
+                                      ref={(el) => { if (el && firstFolderGridRef.current) firstFolderGridRef.current = false; }}
+                                      className="grid grid-cols-2 gap-2"
+                                    >
                                       {[
                                         { name: "Contracts", category: "contract" },
                                         { name: "Split Sheets", category: "split_sheet" },
@@ -1061,6 +1086,20 @@ const Portfolio = () => {
             </AccordionItem>
           ))}
         </Accordion>
+        <ToolIntroModal
+          config={TOOL_CONFIGS.portfolio}
+          isOpen={walkthrough.phase === "modal"}
+          onStartTour={walkthrough.startSpotlight}
+          onSkip={walkthrough.skip}
+        />
+        <WalkthroughProvider
+          isActive={walkthrough.phase === "spotlight"}
+          currentStep={walkthrough.currentStep}
+          currentStepIndex={walkthrough.visibleStepIndex}
+          totalSteps={walkthrough.totalSteps}
+          onNext={walkthrough.next}
+          onSkip={walkthrough.skip}
+        />
       </main>
 
       {/* === FILE VIEWER DIALOG === */}
