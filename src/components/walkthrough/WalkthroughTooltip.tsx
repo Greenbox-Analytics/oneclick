@@ -24,39 +24,49 @@ const WalkthroughTooltip = ({
     const target = document.querySelector(step.targetSelector);
     if (!target) return;
 
-    const rect = target.getBoundingClientRect();
-    const tooltipWidth = 320;
-    const gap = 12;
-
-    let top = 0;
-    let left = 0;
-
-    switch (step.placement) {
-      case "bottom":
-        top = rect.bottom + gap + window.scrollY;
-        left = rect.left + rect.width / 2 - tooltipWidth / 2 + window.scrollX;
-        break;
-      case "top":
-        top = rect.top - gap + window.scrollY;
-        left = rect.left + rect.width / 2 - tooltipWidth / 2 + window.scrollX;
-        break;
-      case "right":
-        top = rect.top + rect.height / 2 + window.scrollY;
-        left = rect.right + gap + window.scrollX;
-        break;
-      case "left":
-        top = rect.top + rect.height / 2 + window.scrollY;
-        left = rect.left - tooltipWidth - gap + window.scrollX;
-        break;
-    }
-
-    // Clamp to viewport
-    left = Math.max(16, Math.min(left, window.innerWidth - tooltipWidth - 16));
-
-    setPosition({ top, left });
-
-    // Scroll target into view
+    // Scroll target into view first, then position after layout settles
     target.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    const positionTooltip = () => {
+      const rect = target.getBoundingClientRect();
+      const tooltipWidth = 320;
+      const tooltipHeight = tooltipRef.current?.offsetHeight || 200;
+      const gap = 12;
+      const padding = 16;
+
+      let top = 0;
+      let left = 0;
+
+      // position: fixed uses viewport coordinates — no scroll offsets needed
+      switch (step.placement) {
+        case "bottom":
+          top = rect.bottom + gap;
+          left = rect.left + rect.width / 2 - tooltipWidth / 2;
+          break;
+        case "top":
+          top = rect.top - gap - tooltipHeight;
+          left = rect.left + rect.width / 2 - tooltipWidth / 2;
+          break;
+        case "right":
+          top = rect.top + rect.height / 2 - tooltipHeight / 2;
+          left = rect.right + gap;
+          break;
+        case "left":
+          top = rect.top + rect.height / 2 - tooltipHeight / 2;
+          left = rect.left - tooltipWidth - gap;
+          break;
+      }
+
+      // Clamp to viewport
+      left = Math.max(padding, Math.min(left, window.innerWidth - tooltipWidth - padding));
+      top = Math.max(padding, Math.min(top, window.innerHeight - tooltipHeight - padding));
+
+      setPosition({ top, left });
+    };
+
+    // Small delay to let scroll complete and measure tooltip height
+    const timer = setTimeout(positionTooltip, 100);
+    return () => clearTimeout(timer);
   }, [step]);
 
   const isLast = stepIndex === totalSteps - 1;
