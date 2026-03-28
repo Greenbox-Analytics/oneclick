@@ -21,9 +21,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
-import { ToolIntroModal } from "@/components/walkthrough/ToolIntroModal";
-import { ToolHelpButton } from "@/components/walkthrough/ToolHelpButton";
-import { WalkthroughProvider } from "@/components/walkthrough/WalkthroughProvider";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 interface Artist {
   id: string;
@@ -44,12 +44,16 @@ const Artists = () => {
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
-  const walkthrough = useToolWalkthrough(
-    TOOL_CONFIGS.artists,
-    statuses.artists,
-    onboardingLoading,
-    () => markToolCompleted("artists")
-  );
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.artists, {
+    onComplete: () => markToolCompleted("artists"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.artists && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.artists]);
 
   useEffect(() => {
     const fetchArtists = async () => {

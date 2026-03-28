@@ -13,9 +13,9 @@ import { toast } from "sonner";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
-import { ToolIntroModal } from "@/components/walkthrough/ToolIntroModal";
-import { ToolHelpButton } from "@/components/walkthrough/ToolHelpButton";
-import { WalkthroughProvider } from "@/components/walkthrough/WalkthroughProvider";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 const Workspace = () => {
   const navigate = useNavigate();
@@ -74,18 +74,20 @@ const Workspace = () => {
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
-  const walkthrough = useToolWalkthrough(
-    TOOL_CONFIGS.workspace,
-    statuses.workspace,
-    onboardingLoading,
-    () => markToolCompleted("workspace"),
-    {
-      onBeforeStep: (stepIndex) => {
-        if (stepIndex === 1) setActiveTab("boards");
-        if (stepIndex === 2) setActiveTab("integrations");
-      },
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.workspace, {
+    onComplete: () => markToolCompleted("workspace"),
+    onBeforeStep: (stepIndex) => {
+      if (stepIndex === 1) setActiveTab("boards");
+      if (stepIndex === 2) setActiveTab("integrations");
+    },
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.workspace && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
     }
-  );
+  }, [onboardingLoading, statuses.workspace]);
 
   return (
     <div className="min-h-screen bg-background">

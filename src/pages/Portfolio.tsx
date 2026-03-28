@@ -14,9 +14,9 @@ import { useAudioData } from "@/hooks/useAudioData";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
-import { ToolIntroModal } from "@/components/walkthrough/ToolIntroModal";
-import { ToolHelpButton } from "@/components/walkthrough/ToolHelpButton";
-import { WalkthroughProvider } from "@/components/walkthrough/WalkthroughProvider";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -131,12 +131,16 @@ const Portfolio = () => {
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
-  const walkthrough = useToolWalkthrough(
-    TOOL_CONFIGS.portfolio,
-    statuses.portfolio,
-    onboardingLoading,
-    () => markToolCompleted("portfolio")
-  );
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.portfolio, {
+    onComplete: () => markToolCompleted("portfolio"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.portfolio && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.portfolio]);
 
   // Ref to track first folder grid for walkthrough attribute
   const firstFolderGridRef = useRef(true);

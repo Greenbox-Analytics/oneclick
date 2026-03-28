@@ -128,12 +128,16 @@ const OneClickDocuments = () => {
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
-  const walkthrough = useToolWalkthrough(
-    TOOL_CONFIGS.oneclick,
-    statuses.oneclick,
-    onboardingLoading,
-    () => markToolCompleted("oneclick")
-  );
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.oneclick, {
+    onComplete: () => markToolCompleted("oneclick"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.oneclick && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.oneclick]);
 
   const normalizeFileName = (name: string) => name.trim().toLowerCase();
 

@@ -39,9 +39,9 @@ import { cn } from "@/lib/utils";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
-import { ToolIntroModal } from "@/components/walkthrough/ToolIntroModal";
-import { ToolHelpButton } from "@/components/walkthrough/ToolHelpButton";
-import { WalkthroughProvider } from "@/components/walkthrough/WalkthroughProvider";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 // Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -209,12 +209,16 @@ const Zoe = () => {
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
-  const walkthrough = useToolWalkthrough(
-    TOOL_CONFIGS.zoe,
-    statuses.zoe,
-    onboardingLoading,
-    () => markToolCompleted("zoe")
-  );
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.zoe, {
+    onComplete: () => markToolCompleted("zoe"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.zoe && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.zoe]);
 
   // Restore messages from saved session on mount
   useEffect(() => {

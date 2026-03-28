@@ -4,9 +4,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
-import { ToolIntroModal } from "@/components/walkthrough/ToolIntroModal";
-import { ToolHelpButton } from "@/components/walkthrough/ToolHelpButton";
-import { WalkthroughProvider } from "@/components/walkthrough/WalkthroughProvider";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -120,12 +120,16 @@ const SplitSheet = () => {
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
-  const walkthrough = useToolWalkthrough(
-    TOOL_CONFIGS.splitsheet,
-    statuses.splitsheet,
-    onboardingLoading,
-    () => markToolCompleted("splitsheet")
-  );
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.splitsheet, {
+    onComplete: () => markToolCompleted("splitsheet"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.splitsheet && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.splitsheet]);
 
   // Fetch artists
   useEffect(() => {

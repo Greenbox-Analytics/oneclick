@@ -1,10 +1,11 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { ToolWalkthroughStep, ToolWalkthroughConfig } from "@/config/toolWalkthroughConfig";
 
 type Phase = "idle" | "modal" | "spotlight" | "done";
 
 interface UseToolWalkthroughOptions {
   onBeforeStep?: (stepIndex: number) => void;
+  onComplete?: () => void;
 }
 
 interface UseToolWalkthroughReturn {
@@ -13,32 +14,26 @@ interface UseToolWalkthroughReturn {
   currentStep: ToolWalkthroughStep | null;
   totalSteps: number;
   visibleStepIndex: number;
+  startModal: () => void;
+  startSpotlight: () => void;
   next: () => void;
   skip: () => void;
   replay: () => void;
-  startSpotlight: () => void;
 }
 
 export const useToolWalkthrough = (
   config: ToolWalkthroughConfig,
-  completed: boolean,
-  loading: boolean,
-  markCompleted: () => Promise<void>,
   options?: UseToolWalkthroughOptions
 ): UseToolWalkthroughReturn => {
   const [phase, setPhase] = useState<Phase>("idle");
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [visibleStepCount, setVisibleStepCount] = useState(config.steps.length);
   const isReplayRef = useRef(false);
-  const hasAutoStarted = useRef(false);
-
-  // Auto-start when completed is false and loading is done
-  useEffect(() => {
-    if (loading || completed || hasAutoStarted.current) return;
-    hasAutoStarted.current = true;
-    const timer = setTimeout(() => setPhase("modal"), 500);
-    return () => clearTimeout(timer);
-  }, [loading, completed]);
+  // Store callbacks in refs to avoid dependency chains
+  const onCompleteRef = useRef(options?.onComplete);
+  const onBeforeStepRef = useRef(options?.onBeforeStep);
+  onCompleteRef.current = options?.onComplete;
+  onBeforeStepRef.current = options?.onBeforeStep;
 
   const findNextVisibleStep = useCallback(
     (fromIndex: number): number | null => {
@@ -55,11 +50,17 @@ export const useToolWalkthrough = (
     [config.steps]
   );
 
+  const fireComplete = useCallback(() => {
+    if (!isReplayRef.current && onCompleteRef.current) {
+      onCompleteRef.current();
+    }
+  }, []);
+
   const goToStep = useCallback(
     (index: number) => {
       const step = config.steps[index];
-      if (options?.onBeforeStep) {
-        options.onBeforeStep(index);
+      if (onBeforeStepRef.current) {
+        onBeforeStepRef.current(index);
       }
 
       // Wait a tick for DOM to update after beforeStep (e.g., tab switch)
@@ -72,7 +73,7 @@ export const useToolWalkthrough = (
               goToStep(nextVisible);
             } else {
               setPhase("done");
-              if (!isReplayRef.current) markCompleted();
+              fireComplete();
             }
             return;
           }
@@ -80,11 +81,15 @@ export const useToolWalkthrough = (
         setCurrentStepIndex(index);
       }, 50);
     },
-    [config.steps, options, findNextVisibleStep, markCompleted]
+    [config.steps, findNextVisibleStep, fireComplete]
   );
 
+  const startModal = useCallback(() => {
+    isReplayRef.current = false;
+    setPhase("modal");
+  }, []);
+
   const startSpotlight = useCallback(() => {
-    // Count visible steps for the counter
     let visible = 0;
     for (let i = 0; i < config.steps.length; i++) {
       const step = config.steps[i];
@@ -99,13 +104,13 @@ export const useToolWalkthrough = (
     const firstVisible = findNextVisibleStep(0);
     if (firstVisible === null) {
       setPhase("done");
-      if (!isReplayRef.current) markCompleted();
+      fireComplete();
       return;
     }
 
     setPhase("spotlight");
     goToStep(firstVisible);
-  }, [config.steps, findNextVisibleStep, goToStep, markCompleted]);
+  }, [config.steps, findNextVisibleStep, goToStep, fireComplete]);
 
   const next = useCallback(() => {
     const nextVisible = findNextVisibleStep(currentStepIndex + 1);
@@ -113,14 +118,14 @@ export const useToolWalkthrough = (
       goToStep(nextVisible);
     } else {
       setPhase("done");
-      if (!isReplayRef.current) markCompleted();
+      fireComplete();
     }
-  }, [currentStepIndex, findNextVisibleStep, goToStep, markCompleted]);
+  }, [currentStepIndex, findNextVisibleStep, goToStep, fireComplete]);
 
   const skip = useCallback(() => {
     setPhase("done");
-    if (!isReplayRef.current) markCompleted();
-  }, [markCompleted]);
+    fireComplete();
+  }, [fireComplete]);
 
   const replay = useCallback(() => {
     isReplayRef.current = true;
@@ -128,7 +133,7 @@ export const useToolWalkthrough = (
     setPhase("modal");
   }, []);
 
-  // Calculate visible step index for display ("2 / 4" not "3 / 6")
+  // Calculate visible step index for display
   let visibleStepIndex = 0;
   for (let i = 0; i < currentStepIndex; i++) {
     const step = config.steps[i];
@@ -145,9 +150,10 @@ export const useToolWalkthrough = (
     currentStep: phase === "spotlight" ? config.steps[currentStepIndex] : null,
     totalSteps: visibleStepCount,
     visibleStepIndex,
+    startModal,
+    startSpotlight,
     next,
     skip,
     replay,
-    startSpotlight,
   };
 };
