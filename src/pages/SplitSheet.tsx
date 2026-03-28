@@ -1,6 +1,12 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import { ToolIntroModal } from "@/components/walkthrough/ToolIntroModal";
+import { ToolHelpButton } from "@/components/walkthrough/ToolHelpButton";
+import { WalkthroughProvider } from "@/components/walkthrough/WalkthroughProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -111,6 +117,15 @@ const SplitSheet = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [hasGenerated, setHasGenerated] = useState(false);
   const [generatedBlob, setGeneratedBlob] = useState<Blob | null>(null);
+
+  // Tool walkthrough
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(
+    TOOL_CONFIGS.splitsheet,
+    statuses.splitsheet,
+    onboardingLoading,
+    () => markToolCompleted("splitsheet")
+  );
 
   // Fetch artists
   useEffect(() => {
@@ -266,10 +281,13 @@ const SplitSheet = () => {
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          <Button variant="outline" onClick={() => navigate("/tools")}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Tools
-          </Button>
+          <div className="flex items-center gap-2">
+            <ToolHelpButton onClick={walkthrough.replay} />
+            <Button variant="outline" onClick={() => navigate("/tools")}>
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back to Tools
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -282,7 +300,7 @@ const SplitSheet = () => {
         </div>
 
         {/* Explainer */}
-        <div className="flex gap-2 items-start mb-6 px-4 py-3 rounded-lg bg-primary/5 border border-primary/20">
+        <div data-walkthrough="splitsheet-info" className="flex gap-2 items-start mb-6 px-4 py-3 rounded-lg bg-primary/5 border border-primary/20">
           <Info className="w-4 h-4 text-primary mt-0.5 shrink-0" />
           <p className="text-xs text-muted-foreground leading-relaxed">
             A <span className="font-medium text-foreground">split sheet</span> documents who owns what
@@ -292,7 +310,7 @@ const SplitSheet = () => {
         </div>
 
         {/* Step Indicator */}
-        <div className="flex items-center justify-center mb-8 gap-2">
+        <div data-walkthrough="splitsheet-steps" className="flex items-center justify-center mb-8 gap-2">
           {STEPS.map((s, i) => {
             const Icon = s.icon;
             const isActive = i === step;
@@ -391,7 +409,7 @@ const SplitSheet = () => {
                 </div>
 
                 {/* Split Type */}
-                <div>
+                <div data-walkthrough="splitsheet-royalty-type">
                   <label className="text-sm font-medium mb-2 block">
                     Royalty Type <Req />
                   </label>
@@ -746,6 +764,20 @@ const SplitSheet = () => {
             )}
           </div>
         )}
+        <ToolIntroModal
+          config={TOOL_CONFIGS.splitsheet}
+          isOpen={walkthrough.phase === "modal"}
+          onStartTour={walkthrough.startSpotlight}
+          onSkip={walkthrough.skip}
+        />
+        <WalkthroughProvider
+          isActive={walkthrough.phase === "spotlight"}
+          currentStep={walkthrough.currentStep}
+          currentStepIndex={walkthrough.visibleStepIndex}
+          totalSteps={walkthrough.totalSteps}
+          onNext={walkthrough.next}
+          onSkip={walkthrough.skip}
+        />
       </main>
     </div>
   );
