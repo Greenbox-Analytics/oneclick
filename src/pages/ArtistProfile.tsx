@@ -9,9 +9,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2 } from "lucide-react";
+import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useQuery } from "@tanstack/react-query";
+import NotesView from "@/components/notes/NotesView";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -68,6 +70,28 @@ const ArtistProfile = () => {
   });
   
   const [originalData, setOriginalData] = useState(formData);
+
+  const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+
+  // Fetch TeamCard overlay for verified artists
+  const teamcardQuery = useQuery({
+    queryKey: ["artist-teamcard", id],
+    queryFn: async () => {
+      if (!user?.id || !id) return null;
+      const res = await fetch(`${API_URL}/registry/artists/${id}/with-teamcard?user_id=${user.id}`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!user?.id && !!id,
+  });
+
+  const teamcard = teamcardQuery.data?.teamcard;
+  const isVerified = teamcardQuery.data?.verified === true;
+
+  // Display fields: prefer TeamCard data when verified
+  const displayName = (isVerified && teamcard?.display_name) || formData.name;
+  const displayBio = (isVerified && teamcard?.bio) || formData.bio;
+  const displayAvatar = (isVerified && teamcard?.avatar_url) || formData.avatar;
 
   // Fetch artist data from Supabase
   useEffect(() => {
@@ -397,9 +421,9 @@ const ArtistProfile = () => {
             <div className="flex items-start gap-6">
               <div className="relative group">
                 <Avatar className="w-28 h-28 ring-4 ring-primary/10">
-                  <AvatarImage src={formData.avatar} alt={formData.name} />
+                  <AvatarImage src={displayAvatar} alt={displayName} />
                   <AvatarFallback className="bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-3xl">
-                    {formData.name.charAt(0)}
+                    {displayName.charAt(0)}
                   </AvatarFallback>
                 </Avatar>
                 {isEditMode && (
@@ -409,13 +433,20 @@ const ArtistProfile = () => {
                 )}
               </div>
               <div className="flex-1">
-                <h2 className="text-4xl font-bold text-foreground mb-3 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">{formData.name}</h2>
+                <div className="flex items-center gap-3 mb-3">
+                  <h2 className="text-4xl font-bold text-foreground bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">{displayName}</h2>
+                  {isVerified && (
+                    <Badge className="bg-green-100 text-green-800 flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> Verified
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2 mb-3">
                   {formData.genres.map(genre => (
                     <Badge key={genre} variant="secondary" className="px-3 py-1 text-sm">{genre}</Badge>
                   ))}
                 </div>
-                <p className="text-muted-foreground text-sm line-clamp-2">{formData.bio}</p>
+                <p className="text-muted-foreground text-sm line-clamp-2">{displayBio}</p>
               </div>
             </div>
           </CardContent>
@@ -914,6 +945,20 @@ const ArtistProfile = () => {
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          {/* My Notes -- private to you */}
+          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+            <CardHeader className="bg-gradient-to-r from-amber-500/5 to-transparent">
+              <div className="flex items-center gap-2">
+                <Music2 className="w-5 h-5 text-amber-500" />
+                <CardTitle>My Notes</CardTitle>
+              </div>
+              <CardDescription>Private notes about this artist</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <NotesView scope={{ artistId: id }} />
             </CardContent>
           </Card>
 

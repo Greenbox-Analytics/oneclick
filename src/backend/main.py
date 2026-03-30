@@ -38,6 +38,7 @@ from integrations.monday.router import router as monday_router
 from boards.router import router as boards_router
 from settings.router import router as settings_router
 from splitsheet.router import router as splitsheet_router
+from registry.router import router as registry_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
@@ -46,6 +47,7 @@ app.include_router(monday_router, prefix="/integrations/monday", tags=["Monday.c
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
 app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])
 app.include_router(splitsheet_router, prefix="/splitsheet", tags=["Split Sheet"])
+app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"])
 
 # Configure CORS - support multiple origins from environment variable
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")]

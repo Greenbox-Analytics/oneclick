@@ -1,0 +1,89 @@
+{
+  "planPath": "docs/superpowers/plans/2026-03-28-rights-registry.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Database Schema with Collaboration Layer",
+      "status": "completed",
+      "description": "**Goal:** Create 5 tables with collaborator-aware RLS and approval workflow\n\n**Files:**\n- Create: `supabase/migrations/20260329000000_create_rights_registry.sql`\n\n```json:metadata\n{\"files\": [\"supabase/migrations/20260329000000_create_rights_registry.sql\"], \"verifyCommand\": \"supabase db push\", \"acceptanceCriteria\": [\"5 tables created\", \"Collaborator-aware RLS active\", \"project_id NOT NULL\", \"Status workflow includes pending_approval\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Backend Models & Service with Collaboration Logic",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Pydantic models + service with invite/confirm/dispute/auto-status\n\n**Files:**\n- Create: `src/backend/registry/__init__.py`, `models.py`, `service.py`\n\n```json:metadata\n{\"files\": [\"src/backend/registry/__init__.py\", \"src/backend/registry/models.py\", \"src/backend/registry/service.py\"], \"verifyCommand\": \"cd src/backend && python -c \\\"from registry.models import CollaboratorInvite; print('OK')\\\"\", \"acceptanceCriteria\": [\"All models importable\", \"Collaboration service works\", \"Auto-status transition logic\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Backend Router with Collaboration Endpoints",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** FastAPI router with CRUD + collaboration endpoints, mounted in main.py\n\n**Files:**\n- Create: `src/backend/registry/router.py`\n- Modify: `src/backend/main.py`\n\n```json:metadata\n{\"files\": [\"src/backend/registry/router.py\", \"src/backend/main.py\"], \"verifyCommand\": \"cd src/backend && python -c \\\"from registry.router import router; print('OK')\\\"\", \"acceptanceCriteria\": [\"All CRUD + collaboration endpoints\", \"Router mounted in main.py\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Backend Email Invitations via Resend",
+      "status": "pending",
+      "blockedBy": [3],
+      "description": "**Goal:** Send invitation emails to collaborators with claim links\n\n**Files:**\n- Create: `src/backend/registry/emails.py`\n- Modify: `src/backend/registry/router.py`\n\n```json:metadata\n{\"files\": [\"src/backend/registry/emails.py\", \"src/backend/registry/router.py\"], \"verifyCommand\": \"cd src/backend && python -c \\\"from registry.emails import send_invitation_email; print('OK')\\\"\", \"acceptanceCriteria\": [\"Email function exists\", \"HTML template with claim link\", \"Follows resend pattern\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Backend Proof of Ownership PDF with Approval Status",
+      "status": "pending",
+      "blockedBy": [3],
+      "description": "**Goal:** PDF showing ownership + approval status per stakeholder\n\n**Files:**\n- Create: `src/backend/registry/pdf_generator.py`\n- Modify: `src/backend/registry/router.py`\n\n```json:metadata\n{\"files\": [\"src/backend/registry/pdf_generator.py\", \"src/backend/registry/router.py\"], \"verifyCommand\": \"cd src/backend && python -c \\\"from registry.pdf_generator import generate_proof_of_ownership_pdf; print('OK')\\\"\", \"acceptanceCriteria\": [\"PDF generates\", \"Approval status per stakeholder\", \"Export endpoint works\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Frontend Types, Hook & Navigation",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** TypeScript types for 5 tables, useRegistry hook with collaboration mutations, routing, tool card\n\n**Files:**\n- Modify: `src/integrations/supabase/types.ts`\n- Create: `src/hooks/useRegistry.ts`\n- Modify: `src/App.tsx`\n- Modify: `src/pages/Tools.tsx`\n\n```json:metadata\n{\"files\": [\"src/integrations/supabase/types.ts\", \"src/hooks/useRegistry.ts\", \"src/App.tsx\", \"src/pages/Tools.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"Types for 5 tables\", \"All hooks exported\", \"Invite route registered\", \"Tool card on Tools page\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Frontend Registry List Page with Pending Reviews",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** Registry page with My Works + Pending Your Review sections\n\n**Files:**\n- Create: `src/pages/Registry.tsx`\n\n```json:metadata\n{\"files\": [\"src/pages/Registry.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"My Works section\", \"Pending Review section\", \"Create dialog requires project\", \"Status badges\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: Frontend Work Detail with Approval Workflow",
+      "status": "pending",
+      "blockedBy": [6, 3],
+      "description": "**Goal:** Work detail with owner/collaborator views, approval workflow, confirm/dispute\n\n**Files:**\n- Create: `src/pages/WorkDetail.tsx`\n- Create: `src/components/registry/OwnershipPanel.tsx`\n- Create: `src/components/registry/LicensingPanel.tsx`\n- Create: `src/components/registry/AgreementsPanel.tsx`\n- Create: `src/components/registry/CollaborationStatus.tsx`\n\n```json:metadata\n{\"files\": [\"src/pages/WorkDetail.tsx\", \"src/components/registry/OwnershipPanel.tsx\", \"src/components/registry/LicensingPanel.tsx\", \"src/components/registry/AgreementsPanel.tsx\", \"src/components/registry/CollaborationStatus.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"Owner/collaborator views\", \"Approval workflow UI\", \"Confirm/dispute works\", \"Collaboration status display\"]}\n```"
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: Frontend Invitation Flow & Claim Handler",
+      "status": "pending",
+      "blockedBy": [6, 4],
+      "description": "**Goal:** Invite modal + invitation claim route with auth redirect\n\n**Files:**\n- Create: `src/pages/InviteClaim.tsx`\n- Create: `src/components/registry/InviteCollaboratorModal.tsx`\n\n```json:metadata\n{\"files\": [\"src/pages/InviteClaim.tsx\", \"src/components/registry/InviteCollaboratorModal.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"Invite modal works\", \"Claim route redirects\", \"Auth redirect preserves URL\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 10: Frontend Proof of Ownership Export",
+      "status": "pending",
+      "blockedBy": [8, 5],
+      "description": "**Goal:** Export button + invite button on work detail header\n\n**Files:**\n- Create: `src/components/registry/ProofOfOwnership.tsx`\n- Modify: `src/pages/WorkDetail.tsx`\n\n```json:metadata\n{\"files\": [\"src/components/registry/ProofOfOwnership.tsx\", \"src/pages/WorkDetail.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"Export button renders\", \"PDF downloads\", \"Invite button in header\", \"Loading state shows\"]}\n```"
+    },
+    {
+      "id": 11,
+      "subject": "Task 11: Workspace Notifications Integration",
+      "status": "pending",
+      "blockedBy": [6, 3],
+      "description": "**Goal:** Wire registry notifications into Workspace Notifications tab\n\n**Files:**\n- Create: `src/hooks/useRegistryNotifications.ts`\n- Create: `src/components/workspace/RegistryNotifications.tsx`\n- Modify: `src/pages/Workspace.tsx`\n\n```json:metadata\n{\"files\": [\"src/hooks/useRegistryNotifications.ts\", \"src/components/workspace/RegistryNotifications.tsx\", \"src/pages/Workspace.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"Notifications hook works\", \"Workspace tab shows events\", \"Unread count badge\", \"Mark all read\"]}\n```"
+    },
+    {
+      "id": 12,
+      "subject": "Task 12: Artist Profile Claiming Flow",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Make artist profiles claimable with auto-claim on invite\n\n**Files:**\n- Create: `supabase/migrations/20260329100000_add_artist_claim.sql` (done)\n- Modify: `src/backend/registry/service.py`\n- Modify: `src/backend/registry/router.py`\n- Modify: `src/integrations/supabase/types.ts`\n- Modify: `src/pages/ArtistProfile.tsx`\n- Modify: `src/components/registry/InviteCollaboratorModal.tsx`\n\n```json:metadata\n{\"files\": [\"supabase/migrations/20260329100000_add_artist_claim.sql\", \"src/backend/registry/service.py\", \"src/backend/registry/router.py\", \"src/integrations/supabase/types.ts\", \"src/pages/ArtistProfile.tsx\", \"src/components/registry/InviteCollaboratorModal.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"Migration applies\", \"Claimed user can edit profile\", \"Auto-claim on matching email\", \"Roster selector in invite modal\", \"Claim status badge on profile\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-03-28T04:00:00Z"
+}

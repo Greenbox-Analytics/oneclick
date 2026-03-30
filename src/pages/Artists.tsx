@@ -4,7 +4,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Music, Plus, Search, FileText, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Music, Plus, Search, FileText, Trash2, CheckCircle } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   AlertDialog,
@@ -31,16 +33,50 @@ interface Artist {
   genres: string[];
   has_contract: boolean;
   avatar_url: string | null;
+  verified?: boolean;
+  teamcard?: {
+    display_name?: string;
+    avatar_url?: string;
+    bio?: string;
+  };
 }
+
+const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
 const Artists = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
-  const [artists, setArtists] = useState<Artist[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [artistToDelete, setArtistToDelete] = useState<Artist | null>(null);
+
+  // Fetch artists with TeamCard overlay for verified artists
+  const { data: artists = [], isLoading, refetch } = useQuery<Artist[]>({
+    queryKey: ["artists-with-teamcards", user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      // Try batch overlay endpoint first, fall back to direct Supabase query
+      try {
+        const res = await fetch(`${API_URL}/registry/artists/with-teamcards?user_id=${user.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          return data.artists || [];
+        }
+      } catch {
+        // Fall back to direct Supabase query
+      }
+      const { data, error } = await supabase
+        .from('artists')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) {
+        console.error('Error fetching artists:', error);
+        return [];
+      }
+      return data || [];
+    },
+    enabled: !!user?.id,
+  });
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
@@ -54,35 +90,6 @@ const Artists = () => {
       return () => clearTimeout(timer);
     }
   }, [onboardingLoading, statuses.artists]);
-
-  useEffect(() => {
-    const fetchArtists = async () => {
-      if (!user) {
-        setIsLoading(false);
-        return;
-      }
-
-      // RLS policies will automatically filter by user_id
-      const { data, error } = await supabase
-        .from('artists')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Error fetching artists:', error);
-        toast({
-          title: "Error",
-          description: "Failed to load artists",
-          variant: "destructive",
-        });
-      } else if (data) {
-        setArtists(data);
-      }
-      setIsLoading(false);
-    };
-
-    fetchArtists();
-  }, [user, toast]);
 
   const handleDeleteArtist = async () => {
     if (!artistToDelete) return;
@@ -99,7 +106,7 @@ const Artists = () => {
         variant: "destructive",
       });
     } else {
-      setArtists(artists.filter(a => a.id !== artistToDelete.id));
+      refetch();
       toast({
         title: "Success",
         description: `${artistToDelete.name} has been deleted.`,
@@ -165,24 +172,36 @@ const Artists = () => {
         ) : (
           <>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {filteredArtists.map((artist, index) => (
+              {filteredArtists.map((artist, index) => {
+                const cardDisplayName = artist.teamcard?.display_name || artist.name;
+                const cardDisplayAvatar = artist.teamcard?.avatar_url || artist.avatar_url;
+                const cardIsVerified = artist.verified === true;
+
+                return (
                 <Card key={artist.id} className="hover:shadow-lg transition-shadow" data-walkthrough={index === 0 ? "artists-card" : undefined}>
                   <CardHeader>
                     <div className="flex items-start justify-between mb-4">
                       <Avatar className="w-16 h-16">
-                        <AvatarImage src={artist.avatar_url || undefined} alt={artist.name} />
+                        <AvatarImage src={cardDisplayAvatar || undefined} alt={cardDisplayName} />
                         <AvatarFallback className="bg-primary text-primary-foreground text-xl">
-                          {artist.name.charAt(0)}
+                          {cardDisplayName.charAt(0)}
                         </AvatarFallback>
                       </Avatar>
-                      {artist.has_contract && (
-                        <div className="flex items-center gap-1 text-xs text-success bg-success/10 px-2 py-1 rounded-full">
-                          <FileText className="w-3 h-3" />
-                          Contract
-                        </div>
-                      )}
+                      <div className="flex flex-col items-end gap-1">
+                        {cardIsVerified && (
+                          <Badge className="bg-green-100 text-green-800 text-xs flex items-center gap-1">
+                            <CheckCircle className="w-3 h-3" /> Verified
+                          </Badge>
+                        )}
+                        {artist.has_contract && (
+                          <div className="flex items-center gap-1 text-xs text-success bg-success/10 px-2 py-1 rounded-full">
+                            <FileText className="w-3 h-3" />
+                            Contract
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <CardTitle>{artist.name}</CardTitle>
+                    <CardTitle>{cardDisplayName}</CardTitle>
                     <CardDescription>{artist.genres.join(', ')}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-2">
@@ -206,7 +225,8 @@ const Artists = () => {
                     </Button>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
 
             {filteredArtists.length === 0 && !isLoading && (

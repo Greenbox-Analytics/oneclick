@@ -23,6 +23,10 @@ import SplitSheet from "./pages/SplitSheet";
 import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/NotFound";
 import Documentation from "./pages/Documentation";
+import Registry from "./pages/Registry";
+import WorkDetail from "./pages/WorkDetail";
+import InviteClaim from "./pages/InviteClaim";
+import ProjectDetail from "./pages/ProjectDetail";
 
 const queryClient = new QueryClient();
 
@@ -157,6 +161,10 @@ const App = () => (
               }
             />
             <Route path="/docs" element={<Documentation />} />
+            <Route path="/tools/registry" element={<ProtectedRoute><Registry /></ProtectedRoute>} />
+            <Route path="/tools/registry/invite/:token" element={<ProtectedRoute><InviteClaim /></ProtectedRoute>} />
+            <Route path="/tools/registry/:workId" element={<ProtectedRoute><WorkDetail /></ProtectedRoute>} />
+            <Route path="/projects/:projectId" element={<ProtectedRoute><ProjectDetail /></ProtectedRoute>} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

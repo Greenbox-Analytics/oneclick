@@ -10,6 +10,8 @@ import { WorkspaceSettings } from "@/components/workspace/WorkspaceSettings";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
 import { CalendarView } from "@/components/workspace/boards/CalendarView";
 import { toast } from "sonner";
+import { RegistryNotifications } from "@/components/workspace/RegistryNotifications";
+import { useUnreadCount } from "@/hooks/useRegistryNotifications";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -23,6 +25,7 @@ const Workspace = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [now, setNow] = useState(new Date());
   const { settings } = useWorkspaceSettings();
+  const unreadNotifications = useUnreadCount();
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -145,6 +148,11 @@ const Workspace = () => {
             <TabsTrigger value="notifications" className="gap-2">
               <Bell className="w-4 h-4" />
               Notifications
+              {unreadNotifications > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-destructive text-destructive-foreground rounded-full">
+                  {unreadNotifications}
+                </span>
+              )}
             </TabsTrigger>
             <TabsTrigger value="settings" className="gap-2">
               <Settings className="w-4 h-4" />
@@ -165,11 +173,7 @@ const Workspace = () => {
           </TabsContent>
 
           <TabsContent value="notifications">
-            <div className="text-center py-12 text-muted-foreground">
-              <Bell className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <h3 className="text-lg font-semibold mb-2">Notification Settings</h3>
-              <p>Connect Slack, Notion, or Monday.com to configure notifications</p>
-            </div>
+            <RegistryNotifications />
           </TabsContent>
 
           <TabsContent value="settings" data-walkthrough="workspace-settings">

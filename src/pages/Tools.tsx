@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, ArrowRight, ArrowLeft, Bot, FileText } from "lucide-react";
+import { Music, Calculator, ArrowRight, ArrowLeft, Bot, FileText, Shield } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
 
@@ -98,6 +98,27 @@ const Tools = () => {
             <CardContent>
               <Button variant="ghost" className="w-full justify-start p-0 hover:bg-transparent hover:text-primary">
                 Launch Tool →
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Rights Registry Tool Card */}
+          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleNavigate("/tools/registry", "Registry")}>
+            <CardHeader>
+              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
+                <Shield className="w-6 h-6 text-primary" />
+              </div>
+              <CardTitle className="flex items-center gap-2">
+                Rights Registry
+                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-[-10px] group-hover:translate-x-0" />
+              </CardTitle>
+              <CardDescription>
+                Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button variant="ghost" className="w-full justify-start p-0 hover:bg-transparent hover:text-primary">
+                Launch Tool
               </Button>
             </CardContent>
           </Card>
