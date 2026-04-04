@@ -200,6 +200,7 @@ export type Database = {
       }
       project_files: {
         Row: {
+          content_hash: string | null
           created_at: string
           file_name: string
           file_size: number | null
@@ -211,6 +212,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          content_hash?: string | null
           created_at?: string
           file_name: string
           file_size?: number | null
@@ -222,6 +224,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          content_hash?: string | null
           created_at?: string
           file_name?: string
           file_size?: number | null
@@ -283,19 +286,22 @@ export type Database = {
       works_registry: {
         Row: {
           id: string; user_id: string; artist_id: string; project_id: string
-          title: string; work_type: string; isrc: string | null; iswc: string | null
+          title: string; work_type: string; custom_work_type: string | null
+          isrc: string | null; iswc: string | null
           upc: string | null; release_date: string | null; status: string
           notes: string | null; created_at: string; updated_at: string
         }
         Insert: {
           id?: string; user_id?: string; artist_id: string; project_id: string
-          title: string; work_type?: string; isrc?: string | null; iswc?: string | null
+          title: string; work_type?: string; custom_work_type?: string | null
+          isrc?: string | null; iswc?: string | null
           upc?: string | null; release_date?: string | null; status?: string
           notes?: string | null; created_at?: string; updated_at?: string
         }
         Update: {
           id?: string; user_id?: string; artist_id?: string; project_id?: string
-          title?: string; work_type?: string; isrc?: string | null; iswc?: string | null
+          title?: string; work_type?: string; custom_work_type?: string | null
+          isrc?: string | null; iswc?: string | null
           upc?: string | null; release_date?: string | null; status?: string
           notes?: string | null; created_at?: string; updated_at?: string
         }
@@ -371,19 +377,19 @@ export type Database = {
         Row: {
           id: string; work_id: string; stake_id: string | null; invited_by: string
           collaborator_user_id: string | null; email: string; name: string; role: string
-          status: string; invite_token: string; dispute_reason: string | null
+          status: string; invite_token: string
           expires_at: string; invited_at: string; responded_at: string | null
         }
         Insert: {
           id?: string; work_id: string; stake_id?: string | null; invited_by?: string
           collaborator_user_id?: string | null; email: string; name: string; role: string
-          status?: string; invite_token?: string; dispute_reason?: string | null
+          status?: string; invite_token?: string
           expires_at?: string; invited_at?: string; responded_at?: string | null
         }
         Update: {
           id?: string; work_id?: string; stake_id?: string | null; invited_by?: string
           collaborator_user_id?: string | null; email?: string; name?: string; role?: string
-          status?: string; invite_token?: string; dispute_reason?: string | null
+          status?: string; invite_token?: string
           expires_at?: string; invited_at?: string; responded_at?: string | null
         }
         Relationships: []
@@ -448,6 +454,108 @@ export type Database = {
           id?: string; user_id?: string; artist_id?: string | null; project_id?: string | null
           name?: string; parent_folder_id?: string | null; sort_order?: number
           created_at?: string; updated_at?: string
+        }
+        Relationships: []
+      }
+      project_members: {
+        Row: {
+          id: string
+          project_id: string
+          user_id: string
+          role: string
+          invited_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          user_id: string
+          role: string
+          invited_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          user_id?: string
+          role?: string
+          invited_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      pending_project_invites: {
+        Row: {
+          id: string
+          project_id: string
+          email: string
+          role: string
+          invited_by: string
+          created_at: string
+          expires_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          email: string
+          role: string
+          invited_by: string
+          created_at?: string
+          expires_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          email?: string
+          role?: string
+          invited_by?: string
+          created_at?: string
+          expires_at?: string
+        }
+        Relationships: []
+      }
+      work_files: {
+        Row: {
+          id: string
+          work_id: string
+          file_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          work_id: string
+          file_id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          work_id?: string
+          file_id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      work_audio_links: {
+        Row: {
+          id: string
+          work_id: string
+          audio_file_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          work_id: string
+          audio_file_id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          work_id?: string
+          audio_file_id?: string
+          created_at?: string
         }
         Relationships: []
       }
