@@ -1,0 +1,64 @@
+<h2>Design Approaches: Works + Portfolio + Access Control</h2>
+<p class="subtitle">Three approaches to integrating work creation into Portfolio, ownership tracking into Registry, and dual-layer access control</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Portfolio-First (Recommended)</h3>
+      <p><strong>Portfolio is the creation hub. Registry is the tracking hub.</strong></p>
+      <ul style="text-align:left; margin-top:8px; font-size:14px; color:#ccc;">
+        <li><strong>Portfolio page:</strong> Create projects, add works (hybrid batch + one-by-one), link audio files, manage project files, configure project roles via a Settings tab</li>
+        <li><strong>Registry page:</strong> Read-only dashboard of "everything I'm involved in" — my works, my stakes, pending reviews, ownership percentages across all projects. Click through to WorkDetail for actions.</li>
+        <li><strong>Project Settings tab:</strong> Manage members (add/remove, set roles with color-coded badges), project-level permissions. Small tab icon on each project card.</li>
+        <li><strong>WorkDetail page:</strong> Unchanged — confirm/dispute stakes, manage licensing, agreements, export proof</li>
+        <li><strong>File dedup:</strong> SHA-256 hash on upload, prompt if duplicate detected</li>
+      </ul>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Pros</h4><ul><li>Clear mental model: Portfolio = create & organize, Registry = track & verify</li><li>Minimal changes to existing Registry flow</li><li>Natural workflow: you're in your project, you add works</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Registry becomes more passive — some users may expect to create works there too</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Dual Entry Points</h3>
+      <p><strong>Create works from Portfolio OR Registry. Both are active hubs.</strong></p>
+      <ul style="text-align:left; margin-top:8px; font-size:14px; color:#ccc;">
+        <li><strong>Portfolio page:</strong> Same as A — project-centric work creation, audio linking, project roles</li>
+        <li><strong>Registry page:</strong> Keeps existing "Create Work" dialog AND adds ownership dashboard. Users can create works from either location.</li>
+        <li><strong>Shared components:</strong> Work creation form is a reusable component used by both pages</li>
+        <li><strong>Project Settings:</strong> Same as A — tab on project card</li>
+      </ul>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Pros</h4><ul><li>No breaking change — existing Registry create flow stays</li><li>Flexible: users choose their preferred entry point</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Two places to create works = potential confusion</li><li>More UI surface to maintain</li><li>Harder to keep consistent</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Unified Project View</h3>
+      <p><strong>New dedicated Project Detail page becomes the central hub for everything.</strong></p>
+      <ul style="text-align:left; margin-top:8px; font-size:14px; color:#ccc;">
+        <li><strong>New Project Detail page:</strong> Tabbed view — Works, Files, Audio, Members, Settings. All work creation and management happens here.</li>
+        <li><strong>Portfolio page:</strong> Simplified — just lists projects as cards with quick stats. Click to open Project Detail.</li>
+        <li><strong>Registry page:</strong> Pure dashboard — ownership tracking, pending reviews, cross-project view of all involvement</li>
+        <li><strong>Project Settings:</strong> Full tab within Project Detail (not just an icon)</li>
+      </ul>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Pros</h4><ul><li>Cleanest separation of concerns</li><li>Project Detail page is self-contained — everything about a project in one place</li><li>Portfolio stays lightweight and scannable</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>New page to build from scratch</li><li>More navigation depth (Portfolio → Project Detail → Work Detail)</li><li>Bigger lift</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:24px; padding:16px; border-radius:8px; background:rgba(139,92,246,0.1); border:1px solid rgba(139,92,246,0.3);">
+  <h3 style="color:#a78bfa; margin-bottom:8px;">My Recommendation: Approach A</h3>
+  <p style="font-size:14px; color:#ccc;">Portfolio-First gives you the clearest mental model with the least disruption. The Portfolio is where you organize and create (your private space), the Registry is where you track shared ownership (your public/collaborative space). It also aligns with your vision of artist profiles being private — the Portfolio is personal, the Registry is shared. Approach C is the cleanest architecturally but is a bigger build. Approach B adds flexibility but risks confusion.</p>
+</div>
