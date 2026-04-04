@@ -3,10 +3,12 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   useWorkFull, useUpdateWork, useDeleteWork,
-  useConfirmStake, useDisputeStake,
-  useResendInvitation, useRevokeCollaborator,
+  useConfirmStake, useDeclineInvitation,
   type Collaborator,
 } from "@/hooks/useRegistry";
+import { useWorkFiles } from "@/hooks/useWorkFiles";
+import { useWorkAudio } from "@/hooks/useWorkAudio";
+import { InlineEdit } from "@/components/InlineEdit";
 import CollaborationStatus from "@/components/registry/CollaborationStatus";
 import OwnershipPanel from "@/components/registry/OwnershipPanel";
 import LicensingPanel from "@/components/registry/LicensingPanel";
@@ -16,7 +18,6 @@ import InviteCollaboratorModal from "@/components/registry/InviteCollaboratorMod
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -27,13 +28,14 @@ import {
 import {
   Music, ArrowLeft, Loader2, Shield, Pencil, Trash2,
   Users, Scale, FileCheck, CheckCircle, XCircle, UserPlus,
+  FileText, Headphones,
 } from "lucide-react";
+import { toast } from "sonner";
 
 const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-yellow-100 text-yellow-800",
-  pending_approval: "bg-amber-100 text-amber-800",
-  registered: "bg-green-100 text-green-800",
-  disputed: "bg-red-100 text-red-800",
+  draft: "bg-gray-500/15 text-gray-400",
+  pending_approval: "bg-amber-500/15 text-amber-400",
+  registered: "bg-emerald-500/15 text-emerald-400",
 };
 
 const WorkDetail = () => {
@@ -44,7 +46,9 @@ const WorkDetail = () => {
   const updateWork = useUpdateWork();
   const deleteWork = useDeleteWork();
   const confirmStake = useConfirmStake();
-  const disputeStake = useDisputeStake();
+  const declineInvitation = useDeclineInvitation();
+  const workFilesQuery = useWorkFiles(workId);
+  const workAudioQuery = useWorkAudio(workId);
 
   const [showEdit, setShowEdit] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -55,10 +59,6 @@ const WorkDetail = () => {
   const [editReleaseDate, setEditReleaseDate] = useState("");
   const [editNotes, setEditNotes] = useState("");
 
-  const [showDisputeDialog, setShowDisputeDialog] = useState(false);
-  const [disputeReason, setDisputeReason] = useState("");
-  const [disputeCollabId, setDisputeCollabId] = useState("");
-
   const [showInvite, setShowInvite] = useState(false);
 
   const work = workQuery.data;
@@ -68,6 +68,10 @@ const WorkDetail = () => {
   const myCollab: Collaborator | undefined = work?.collaborators?.find(
     (c) => c.collaborator_user_id === user?.id
   );
+
+  const collaborators = work?.collaborators || [];
+  const workFiles = workFilesQuery.data || [];
+  const workAudio = workAudioQuery.data || [];
 
   const openEdit = () => {
     if (!work) return;
@@ -99,18 +103,8 @@ const WorkDetail = () => {
     if (myCollab) confirmStake.mutate(myCollab.id);
   };
 
-  const openDispute = () => {
-    if (myCollab) {
-      setDisputeCollabId(myCollab.id);
-      setDisputeReason("");
-      setShowDisputeDialog(true);
-    }
-  };
-
-  const handleDispute = async () => {
-    if (!disputeCollabId || !disputeReason.trim()) return;
-    await disputeStake.mutateAsync({ collaboratorId: disputeCollabId, reason: disputeReason.trim() });
-    setShowDisputeDialog(false);
+  const handleDecline = () => {
+    if (myCollab) declineInvitation.mutate(myCollab.id);
   };
 
   if (workQuery.isLoading) {
@@ -131,6 +125,12 @@ const WorkDetail = () => {
       </div>
     );
   }
+
+  // Display label for work type — use custom_work_type when work_type is "other"
+  const workTypeLabel =
+    work.work_type === "other" && (work as any).custom_work_type
+      ? (work as any).custom_work_type
+      : work.work_type.replace("_", " ").toUpperCase();
 
   return (
     <div className="min-h-screen bg-background">
@@ -155,15 +155,16 @@ const WorkDetail = () => {
           <div className="mb-6 p-4 rounded-lg border-2 border-amber-300 bg-amber-50">
             <p className="text-sm font-medium text-amber-900 mb-3">
               You've been listed as <strong>{myCollab.role}</strong> on this work.
-              Please review the ownership details and confirm or dispute your stake.
+              Please review the ownership details and accept or decline.
             </p>
             <div className="flex gap-2">
               <Button size="sm" onClick={handleConfirm} disabled={confirmStake.isPending}>
                 {confirmStake.isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle className="w-3 h-3 mr-1" />}
-                Confirm My Stake
+                Accept
               </Button>
-              <Button size="sm" variant="destructive" onClick={openDispute}>
-                <XCircle className="w-3 h-3 mr-1" /> Dispute
+              <Button size="sm" variant="destructive" onClick={handleDecline} disabled={declineInvitation.isPending}>
+                {declineInvitation.isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <XCircle className="w-3 h-3 mr-1" />}
+                Decline
               </Button>
             </div>
           </div>
@@ -174,11 +175,18 @@ const WorkDetail = () => {
           <div>
             <div className="flex items-center gap-3 mb-2">
               <Shield className="w-6 h-6 text-primary" />
-              <h2 className="text-2xl font-bold text-foreground">{work.title}</h2>
+              <InlineEdit
+                value={work.title}
+                onSave={async (newTitle) => {
+                  await updateWork.mutateAsync({ workId: work.id, title: newTitle });
+                }}
+                disabled={!isOwner}
+                className="text-2xl font-bold"
+              />
               <Badge className={STATUS_COLORS[work.status] || ""}>{work.status.replace("_", " ")}</Badge>
             </div>
             <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-              <span>{work.work_type.replace("_", " ").toUpperCase()}</span>
+              <span>{workTypeLabel}</span>
               {work.isrc && <span>ISRC: {work.isrc}</span>}
               {work.iswc && <span>ISWC: {work.iswc}</span>}
               {work.upc && <span>UPC: {work.upc}</span>}
@@ -187,6 +195,16 @@ const WorkDetail = () => {
           </div>
           {isOwner && (
             <div className="flex items-center gap-2">
+              {/* Register button for zero-collaborator draft works */}
+              {work.status === "draft" && collaborators.length === 0 && (
+                <Button size="sm" onClick={async () => {
+                  await updateWork.mutateAsync({ workId: work.id, status: "registered" });
+                  toast.success("Work registered");
+                }} disabled={updateWork.isPending}>
+                  {updateWork.isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-1" />}
+                  Register
+                </Button>
+              )}
               <ProofOfOwnership workId={work.id} />
               <Button variant="outline" size="sm" onClick={() => setShowInvite(true)}>
                 <UserPlus className="w-4 h-4 mr-1" /> Invite
@@ -212,8 +230,8 @@ const WorkDetail = () => {
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="draft">Draft</SelectItem>
+                          <SelectItem value="pending_approval">Pending Approval</SelectItem>
                           <SelectItem value="registered">Registered</SelectItem>
-                          <SelectItem value="disputed">Disputed</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -277,24 +295,53 @@ const WorkDetail = () => {
           </TabsContent>
         </Tabs>
 
-        {/* Dispute Dialog */}
-        <Dialog open={showDisputeDialog} onOpenChange={setShowDisputeDialog}>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Dispute Your Stake</DialogTitle></DialogHeader>
-            <div className="space-y-3 pt-2">
-              <p className="text-sm text-muted-foreground">
-                Please explain why you're disputing this ownership stake.
-              </p>
-              <Textarea value={disputeReason} onChange={(e) => setDisputeReason(e.target.value)}
-                placeholder="Reason for dispute..." rows={3} />
-              <Button onClick={handleDispute} variant="destructive"
-                disabled={!disputeReason.trim() || disputeStake.isPending} className="w-full">
-                {disputeStake.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Submit Dispute
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+        {/* Linked Files Section */}
+        {workFiles.length > 0 && (
+          <div className="mt-6 rounded-lg border p-4">
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <FileText className="w-4 h-4 text-muted-foreground" /> Linked Files
+            </h3>
+            <ul className="space-y-1.5">
+              {workFiles.map((link) => (
+                <li key={link.id} className="flex items-center gap-2 text-sm">
+                  <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                  {link.project_files ? (
+                    <a href={link.project_files.file_url} target="_blank" rel="noopener noreferrer"
+                      className="text-primary hover:underline">
+                      {link.project_files.file_name}
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground">File unavailable</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Linked Audio Section */}
+        {workAudio.length > 0 && (
+          <div className="mt-4 rounded-lg border p-4">
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <Headphones className="w-4 h-4 text-muted-foreground" /> Linked Audio
+            </h3>
+            <ul className="space-y-1.5">
+              {workAudio.map((link) => (
+                <li key={link.id} className="flex items-center gap-2 text-sm">
+                  <Headphones className="w-3.5 h-3.5 text-muted-foreground" />
+                  {link.audio_files ? (
+                    <a href={link.audio_files.file_url} target="_blank" rel="noopener noreferrer"
+                      className="text-primary hover:underline">
+                      {link.audio_files.file_name}
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground">Audio file unavailable</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </main>
     </div>
   );

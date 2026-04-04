@@ -1,19 +1,26 @@
-import { type Collaborator, useSubmitForApproval, useResendInvitation, useRevokeCollaborator } from "@/hooks/useRegistry";
+import { useAuth } from "@/contexts/AuthContext";
+import { type Collaborator, useSubmitForApproval, useConfirmStake, useDeclineInvitation, useResendInvitation, useRevokeCollaborator } from "@/hooks/useRegistry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Send, Loader2, CheckCircle, AlertTriangle, Clock, RefreshCw, Trash2 } from "lucide-react";
+import { Send, Loader2, CheckCircle, Clock, X, RefreshCw, Trash2 } from "lucide-react";
 
 const COLLAB_STATUS_ICON: Record<string, typeof CheckCircle> = {
   confirmed: CheckCircle,
-  disputed: AlertTriangle,
   invited: Clock,
+  declined: X,
 };
 
 const COLLAB_STATUS_COLOR: Record<string, string> = {
   confirmed: "bg-green-100 text-green-800",
-  disputed: "bg-red-100 text-red-800",
   invited: "bg-amber-100 text-amber-800",
+  declined: "bg-gray-100 text-gray-800",
+};
+
+const COLLAB_STATUS_LABEL: Record<string, string> = {
+  confirmed: "Accepted",
+  invited: "Pending",
+  declined: "Declined",
 };
 
 interface Props {
@@ -24,7 +31,10 @@ interface Props {
 }
 
 export default function CollaborationStatus({ workId, workStatus, collaborators, isOwner }: Props) {
+  const { user } = useAuth();
   const submitForApproval = useSubmitForApproval();
+  const confirmStake = useConfirmStake();
+  const declineInvitation = useDeclineInvitation();
   const resendInvitation = useResendInvitation();
   const revokeCollaborator = useRevokeCollaborator();
 
@@ -32,7 +42,7 @@ export default function CollaborationStatus({ workId, workStatus, collaborators,
   const total = collaborators.length;
   const pct = total > 0 ? (confirmed / total) * 100 : 0;
 
-  const canSubmit = isOwner && (workStatus === "draft" || workStatus === "disputed") && total > 0;
+  const canSubmit = isOwner && workStatus === "draft" && total > 0;
 
   return (
     <Card className="mb-6">
@@ -73,6 +83,8 @@ export default function CollaborationStatus({ workId, workStatus, collaborators,
             {collaborators.map((c) => {
               const Icon = COLLAB_STATUS_ICON[c.status] || Clock;
               const isExpired = c.status === "invited" && new Date(c.expires_at) < new Date();
+              const isMyCollab = c.collaborator_user_id === user?.id;
+              const canAct = isMyCollab && !isOwner && c.status === "invited";
               return (
                 <div key={c.id} className="flex items-center justify-between p-2 rounded-lg border">
                   <div className="flex items-center gap-2">
@@ -84,8 +96,24 @@ export default function CollaborationStatus({ workId, workStatus, collaborators,
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">{c.email}</span>
-                    <Badge className={COLLAB_STATUS_COLOR[c.status] || ""}>{c.status}</Badge>
-                    {isExpired && (
+                    <Badge className={COLLAB_STATUS_COLOR[c.status] || "bg-gray-100 text-gray-800"}>
+                      {COLLAB_STATUS_LABEL[c.status] || c.status}
+                    </Badge>
+                    {canAct && (
+                      <>
+                        <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                          onClick={() => confirmStake.mutate(c.id)}
+                          disabled={confirmStake.isPending}>
+                          {confirmStake.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Accept"}
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-7 px-2 text-xs text-destructive"
+                          onClick={() => declineInvitation.mutate(c.id)}
+                          disabled={declineInvitation.isPending}>
+                          {declineInvitation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Decline"}
+                        </Button>
+                      </>
+                    )}
+                    {isExpired && isOwner && (
                       <Button size="icon" variant="outline" className="h-7 w-7"
                         onClick={() => resendInvitation.mutate(c.id)}
                         disabled={resendInvitation.isPending}
@@ -113,16 +141,6 @@ export default function CollaborationStatus({ workId, workStatus, collaborators,
                 </div>
               );
             })}
-            {collaborators.some((c) => c.status === "disputed" && c.dispute_reason) && (
-              <div className="mt-2 p-3 bg-red-50 rounded-lg border border-red-200">
-                <p className="text-sm font-medium text-red-800 mb-1">Dispute Reasons:</p>
-                {collaborators.filter((c) => c.status === "disputed" && c.dispute_reason).map((c) => (
-                  <p key={c.id} className="text-xs text-red-700">
-                    <strong>{c.name}:</strong> {c.dispute_reason}
-                  </p>
-                ))}
-              </div>
-            )}
           </div>
         )}
       </CardContent>

@@ -19,8 +19,14 @@ const ROLES = ["Artist", "Producer", "Songwriter", "Composer", "Publisher", "Lab
 
 const APPROVAL_COLORS: Record<string, string> = {
   confirmed: "bg-green-100 text-green-800",
-  disputed: "bg-red-100 text-red-800",
   invited: "bg-amber-100 text-amber-800",
+  declined: "bg-gray-100 text-gray-800",
+};
+
+const APPROVAL_LABELS: Record<string, string> = {
+  confirmed: "Accepted",
+  invited: "Pending",
+  declined: "Declined",
 };
 
 interface Props {
@@ -180,7 +186,7 @@ function StakeSection({
                       <span className="text-xs text-muted-foreground">({stake.holder_role})</span>
                       {approval && (
                         <Badge className={APPROVAL_COLORS[approval] || "bg-gray-100 text-gray-800"}>
-                          {approval}
+                          {APPROVAL_LABELS[approval] || approval}
                         </Badge>
                       )}
                     </div>
