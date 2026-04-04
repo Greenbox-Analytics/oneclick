@@ -67,7 +67,7 @@ const Dashboard = () => {
   const [recentTools, setRecentTools] = useState<RecentTool[]>(getRecentTools());
   const location = useLocation();
   const { settings } = useWorkspaceSettings();
-  const { walkthroughCompleted } = useOnboardingStatus();
+  const { walkthroughCompleted, loading: onboardingLoading } = useOnboardingStatus();
   const walkthrough = useWalkthrough();
 
   // Optimistic: if we just came from onboarding, start walkthrough immediately
@@ -76,13 +76,14 @@ const Dashboard = () => {
 
   // Auto-start walkthrough for first-time users
   useEffect(() => {
+    if (onboardingLoading && !fromOnboarding) return;
     const shouldStart = fromOnboarding || walkthroughCompleted === false;
     if (shouldStart && !walkthrough.isActive) {
       // Small delay to ensure DOM elements are rendered
       const timer = setTimeout(() => walkthrough.start(), 300);
       return () => clearTimeout(timer);
     }
-  }, [fromOnboarding, walkthroughCompleted]);
+  }, [fromOnboarding, walkthroughCompleted, onboardingLoading]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
