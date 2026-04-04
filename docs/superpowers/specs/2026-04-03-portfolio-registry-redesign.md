@@ -174,6 +174,19 @@ The existing InviteCollaboratorModal becomes more comprehensive:
 - Notes/terms (optional text field)
 - On submit: creates collaborator record + ownership stake(s) in one action. Backend needs a new composite endpoint (POST `/registry/collaborators/invite-with-stakes`) that creates both the collaborator and stake records atomically.
 
+**Invitation Email Content:**
+The invite email must contain all information the collaborator needs to make a decision, since they cannot access the work's files until they accept:
+- Work title and type
+- Project name and artist name
+- Their assigned role (e.g., Producer)
+- Their listed stake(s): "Master: 15%" / "Publishing: 25%" / both
+- Any notes/terms the owner included
+- Who invited them (inviter name + email)
+- Accept / Decline buttons (links to claim endpoint)
+- 48-hour expiry notice
+
+This way the collaborator can accept or decline based on the email alone, without needing to log in or view files first. Files become accessible only after acceptance.
+
 ### 4. Rights Registry Dashboard (Redesigned)
 
 **Path:** `/tools/registry`
@@ -384,15 +397,18 @@ CREATE POLICY "project_members_select_members" ON project_members
 
 #### File access via work collaboration
 ```sql
--- Claimed collaborators (invited or confirmed) can read files linked to their works.
--- This allows reviewing files BEFORE accepting (after claim but before confirm).
+-- ONLY confirmed collaborators can read files linked to their works.
+-- Invited (unclaimed/unconfirmed) collaborators do NOT get file access —
+-- the invite email contains the key terms (stake %, role) so they can
+-- make an informed decision without needing to access the actual files.
+-- This prevents the loophole of indefinitely sitting on an invite to
+-- view files without ever confirming.
 CREATE POLICY "project_files_select_via_work_collab" ON project_files
   FOR SELECT USING (
     id IN (
       SELECT file_id FROM work_files WHERE work_id IN (
         SELECT work_id FROM registry_collaborators
-        WHERE collaborator_user_id = auth.uid()
-        AND status IN ('invited', 'confirmed')
+        WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
       )
     )
   );
@@ -400,14 +416,13 @@ CREATE POLICY "project_files_select_via_work_collab" ON project_files
 
 #### Audio access via work collaboration
 ```sql
--- Claimed collaborators (invited or confirmed) can read audio linked to their works
+-- ONLY confirmed collaborators can read audio linked to their works (same rationale)
 CREATE POLICY "audio_files_select_via_work_collab" ON audio_files
   FOR SELECT USING (
     id IN (
       SELECT audio_file_id FROM work_audio_links WHERE work_id IN (
         SELECT work_id FROM registry_collaborators
-        WHERE collaborator_user_id = auth.uid()
-        AND status IN ('invited', 'confirmed')
+        WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
       )
     )
   );
@@ -415,7 +430,7 @@ CREATE POLICY "audio_files_select_via_work_collab" ON audio_files
 
 #### Join tables — SELECT policies
 ```sql
--- work_files: readable by project members and work collaborators
+-- work_files: readable by project members and confirmed work collaborators
 -- (Required for subqueries in project_files/audio_files policies to return results)
 CREATE POLICY "work_files_select_members" ON work_files
   FOR SELECT USING (
@@ -427,8 +442,7 @@ CREATE POLICY "work_files_select_members" ON work_files
     OR
     work_id IN (
       SELECT work_id FROM registry_collaborators
-      WHERE collaborator_user_id = auth.uid()
-      AND status IN ('invited', 'confirmed')
+      WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
     )
   );
 
@@ -443,8 +457,7 @@ CREATE POLICY "work_audio_links_select_members" ON work_audio_links
     OR
     work_id IN (
       SELECT work_id FROM registry_collaborators
-      WHERE collaborator_user_id = auth.uid()
-      AND status IN ('invited', 'confirmed')
+      WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
     )
   );
 ```
@@ -772,13 +785,13 @@ All migrations go in `supabase/migrations/`. Naming convention: `YYYYMMDD######_
 3. **`20260403000003_create_work_files.sql`**
    - Create `work_files` join table (work_id → file_id, UNIQUE constraint)
    - Enable RLS
-   - **SELECT policies:** project members can read all; work collaborators (invited OR confirmed) can read their work's files
+   - **SELECT policies:** project members can read all; **confirmed** work collaborators only (no access at `invited` status — invite email contains key terms instead)
    - Write policies: editors+ can INSERT/DELETE
 
 4. **`20260403000004_create_work_audio_links.sql`**
    - Create `work_audio_links` join table (work_id → audio_file_id, UNIQUE constraint)
    - Enable RLS
-   - **SELECT policies:** project members via project_audio_links; work collaborators (invited OR confirmed) via work_audio_links
+   - **SELECT policies:** project members via project_audio_links; **confirmed** work collaborators only
    - Write policies: editors+ can INSERT/DELETE
 
 5. **`20260403000005_add_content_hash_to_project_files.sql`**
@@ -895,8 +908,10 @@ These end-to-end scenarios show exactly how a user moves through the system. Eac
    - Redirected to Work Detail for "Neon Lights".
 2. **Mike sees a banner:** "You've been listed as Producer on this work. Please review and confirm or decline."
    - Sees his listed stake: Master 15%
-   - Sees linked contract: `Producer_Agreement_v2.pdf` (readable because he's a claimed collaborator with status `invited` — RLS grants read access at `invited` status once `collaborator_user_id` is set, so Mike can review files BEFORE deciding to accept)
+   - Does NOT see linked files yet (RLS only grants file access to `confirmed` collaborators)
+   - The invite email already contained the stake details, role, and terms — Mike has enough context to decide
 3. **Mike clicks "Accept"** — API: `POST /registry/collaborators/{id}/confirm` → status changes to `confirmed`.
+   - **Now Mike can see linked files** (contract, audio) — RLS grants access at `confirmed` status.
    - Backend checks: are all collaborators on this work confirmed? If yes → work auto-transitions to `registered`. If not → stays `pending_approval`.
 
 **Path B — via Registry Dashboard (without clicking email link):**
