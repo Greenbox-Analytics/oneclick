@@ -32,3 +32,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# superpowers brainstorm sessions
+.superpowers/

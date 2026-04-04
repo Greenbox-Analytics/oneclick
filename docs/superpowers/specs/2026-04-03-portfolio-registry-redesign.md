@@ -423,6 +423,166 @@ All migrations go in `supabase/migrations/`. Naming convention: `YYYYMMDD######_
 
 ---
 
+## Workflow Examples
+
+These end-to-end scenarios show exactly how a user moves through the system. Each step maps to a specific component and API call.
+
+### Workflow 1: Independent Artist Creates a Project with Works
+
+**Persona:** Yash is an independent artist managing his own music.
+
+1. **Yash opens Portfolio** (`/portfolio`) — sees a grid of his existing projects grouped by artist.
+2. **Clicks "+ Create Project"** — `ProjectFormDialog` opens.
+   - Selects artist: "Yash Khapre"
+   - Enters project name: "Midnight Sessions EP"
+   - Clicks "Create"
+   - API: `INSERT INTO projects` + trigger auto-creates `project_members` row with role=`owner`
+3. **Redirected to Project Detail** (`/projects/{newProjectId}`) — Works tab is empty.
+4. **Clicks "+ Add Work"** — `AddWorkDialog` opens.
+   - Title: "Late Night Drive"
+   - Type: "Single"
+   - ISRC: (leaves blank)
+   - Audio: clicks "Upload New" → uploads `late_night_drive_master.wav`
+   - API: upload to Supabase Storage → `INSERT INTO audio_files` → `INSERT INTO project_audio_links` → `INSERT INTO works_registry` → `INSERT INTO work_audio_links`
+5. **Adds two more works** the same way: "Echoes" (EP Track) and "Midnight Interlude" (Other → types "Spoken Word").
+6. **Switches to Files tab** — uploads `Producer_Agreement_v2.pdf` into Contracts folder.
+   - After upload, prompted: "Link to which works?" → selects "Late Night Drive" and "Echoes"
+   - API: `INSERT INTO project_files` (with SHA-256 hash) → `INSERT INTO work_files` (×2)
+7. **Result:** Project has 3 works, 1 contract linked to 2 works, 3 audio files each linked to their work.
+
+### Workflow 2: Manager Invites a Collaborator to a Specific Work
+
+**Persona:** Yash manages artist "Amara" and needs to add producer Mike to one track.
+
+1. **Yash opens Project Detail** for Amara's "Summer Vibes LP" → Works tab shows 5 works.
+2. **Clicks "Neon Lights"** → navigates to Work Detail (`/tools/registry/{workId}`).
+3. **Clicks "Invite Collaborator"** — enhanced `InviteCollaboratorModal` opens.
+   - Email: mike@producer.com
+   - Name: Mike Peters
+   - Role: Producer
+   - Stake Type: Master
+   - Master %: 15%
+   - Notes: "Production fee covered separately, see agreement"
+   - Clicks "Send Invite"
+   - API: `POST /registry/collaborators/invite-with-stakes` → creates `registry_collaborators` row (status=`invited`) + `ownership_stakes` row (master, 15%) atomically. Sends email via Resend with invite token.
+4. **Work status stays Draft** — Yash can continue editing.
+5. **Yash clicks "Submit for Approval"** on the CollaborationStatus panel.
+   - API: `POST /registry/works/{workId}/submit-for-approval` → status changes to `pending_approval`, invitation email resent.
+6. **Result:** Mike has a pending invite. Work is in "Pending" state. Yash sees "1 pending" on the work card in Project Detail.
+
+### Workflow 3: Collaborator Accepts an Invite via Registry
+
+**Persona:** Mike is a producer who received an invite from Yash.
+
+1. **Mike clicks the email link** → `/tools/registry/invite/{token}` → `InviteClaim` page.
+   - If not logged in: redirected to `/auth` then back.
+   - API: `POST /registry/collaborators/claim` → sets `collaborator_user_id` to Mike's ID.
+   - Redirected to Work Detail for "Neon Lights".
+2. **Mike sees a banner:** "You've been listed as Producer on this work. Please review and confirm or decline."
+   - Sees his listed stake: Master 15%
+   - Sees linked contract: `Producer_Agreement_v2.pdf` (readable because he's a confirmed collaborator via RLS)
+3. **Mike clicks "Accept"** — API: `POST /registry/collaborators/{id}/confirm` → status changes to `confirmed`.
+4. **Alternatively, Mike opens Registry Dashboard** (`/tools/registry`) without clicking the email link.
+   - **Action Required tab** shows: "You've been invited as Producer on 'Neon Lights' — invited by Yash Khapre — Master: 15%"
+   - Mike clicks **Accept** directly from this page (no navigation needed).
+   - Or clicks **Decline** → status changes to `declined`, Yash is notified.
+5. **After acceptance:** If all collaborators have accepted, work status automatically transitions to `registered`.
+6. **Mike's Registry Dashboard now shows:**
+   - Collaborations tab: "Neon Lights" with status "Registered", his 15% master stake
+   - He can click through to see work details, linked contracts, linked audio
+   - He does NOT see Amara's project, other works, or other project members
+
+### Workflow 4: Project-Level Member vs Work-Only Collaborator
+
+**Persona:** Yash adds his assistant Sarah to the full project, but producer Mike only has access to one track.
+
+1. **Yash opens Project Detail** → Members tab.
+2. **Clicks "+ Invite Member"** — enters Sarah's email, selects role "Viewer".
+   - API: `INSERT INTO project_members` (role=`viewer`)
+   - Sarah gets an email invite to join the project.
+3. **Sarah logs in** and navigates to her Portfolio.
+   - She sees "Summer Vibes LP" in her portfolio (because she's a project member).
+   - She opens it → sees ALL 5 works, ALL files, ALL audio, ALL members.
+   - She cannot edit anything (Viewer role), but she can view everything.
+4. **Meanwhile, Mike** (work-only collaborator from Workflow 3):
+   - Opens his Registry → Collaborations tab → sees only "Neon Lights".
+   - Clicks into Work Detail → sees the work's ownership, linked contracts, linked audio.
+   - He does NOT see the project, other works, Sarah, or any project-level data.
+   - If Mike tries to navigate to `/projects/{projectId}`, the page shows an access denied message (RLS blocks the project query since he's not in `project_members`).
+5. **RLS check order:**
+   - Sarah accessing a file: `project_members` check → role=viewer → ✓ read access to all project files
+   - Mike accessing a file: `project_members` check → ✗ not a member → `work_files` + `registry_collaborators` check → file is linked to his work AND he's confirmed → ✓ read access to that file only
+
+### Workflow 5: Uploading a Duplicate Contract
+
+**Persona:** Yash uploads the same contract to a different project.
+
+1. **Yash is in Project Detail** for "Debut Album" → Files tab → Contracts folder.
+2. **Clicks Upload** → selects `Producer_Agreement_v2.pdf` from his computer.
+3. **Frontend computes SHA-256 hash** of the file before uploading.
+4. **API checks:** `SELECT * FROM project_files WHERE content_hash = '{hash}' AND project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())`
+5. **Match found:** The same file exists in "Summer Vibes LP" project.
+6. **Prompt appears:** "You already have this file in 'Summer Vibes LP → Contracts'. Would you like to link the existing file instead of uploading a duplicate?"
+   - **"Link existing"** → creates a `work_files` reference to the existing file (no new upload, no storage duplication)
+   - **"Upload anyway"** → uploads as a new file with its own ID (for cases where the user wants separate copies)
+
+### Workflow 6: Zoe Analyzes a Contract from a Shared Work
+
+**Persona:** Mike wants Zoe to analyze the producer agreement for "Neon Lights".
+
+1. **Mike opens Zoe** (`/tools/zoe`).
+2. **In the document selector**, Mike sees a new source option: "From Shared Works".
+3. **Clicks "From Shared Works"** — shows works where Mike is a confirmed collaborator:
+   - "Neon Lights" (Summer Vibes LP) — 1 contract
+4. **Selects "Neon Lights"** → sees linked files: `Producer_Agreement_v2.pdf`.
+5. **Selects the contract** → Zoe loads the full document markdown.
+6. **Mike asks:** "What are my royalty split terms in this contract?"
+7. **Zoe analyzes** and responds with extracted terms, payment schedules, etc.
+8. **Data flow:** Zoe query → `work_files` JOIN `project_files` WHERE `work_id` IN (Mike's confirmed collaborations) → fetches file content from Supabase Storage.
+
+### Workflow 7: OneClick Reads from Portfolio Data
+
+**Persona:** Yash wants to run royalty calculations for "Late Night Drive".
+
+1. **Yash opens OneClick** (`/tools/oneclick`).
+2. **Selects artist:** "Yash Khapre".
+3. **Document selection step** now shows sources:
+   - "Project files" (existing) — shows all projects for this artist
+   - "From Works" (new) — shows all works grouped by project
+   - "Artist documents" (existing)
+4. **Yash selects "From Works"** → sees "Midnight Sessions EP" → "Late Night Drive".
+5. **Sees files linked to this work:** `Producer_Agreement_v2.pdf`, any split sheets.
+6. **Selects the contract** → OneClick proceeds with its existing analysis pipeline.
+7. **No changes to OneClick's core logic** — only the document source selector is updated.
+
+### Workflow 8: Creating a Project with Multiple Works (Hybrid Flow)
+
+**Persona:** Yash is setting up a new album project.
+
+1. **Yash clicks "+ Create Project"** on Portfolio.
+2. **ProjectFormDialog** opens — enters name: "Urban Nights Album", selects artist.
+3. **After clicking "Create"**, redirected to the new Project Detail page.
+4. **Works tab is empty** with a call-to-action: "No works yet. Add your first work."
+5. **Yash clicks "+ Add Work" repeatedly** to create 10 tracks:
+   - Each time the dialog opens, previous entries are saved. He can add works one-by-one at his own pace.
+   - For 3 tracks he uploads audio files. For 7 he leaves audio empty (to add later).
+   - For track 8 he selects type "Other" and types "Remix".
+6. **Result:** 10 draft works, 3 with audio linked. Yash can now upload contracts, invite collaborators, and submit works for approval at his own pace.
+
+### Workflow 9: Inline Renaming a Work
+
+**Persona:** Yash realizes "Untitled Track 3" needs a proper name.
+
+1. **In Project Detail → Works tab**, Yash hovers over "Untitled Track 3" — a small ✎ icon appears next to the title.
+2. **Clicks the title** — text becomes an editable input field, pre-filled with "Untitled Track 3".
+3. **Types "Midnight Interlude"** and presses Enter.
+   - API: `PUT /registry/works/{workId}` with `{ title: "Midnight Interlude" }`
+   - On success: input reverts to text display with the new name.
+   - On error: input reverts to the old name, toast shows error message.
+4. **Same interaction works on the Project Detail header** for renaming the project itself.
+
+---
+
 ## Out of Scope
 
 - AI-powered contract extraction to auto-fill splits (future enhancement)
