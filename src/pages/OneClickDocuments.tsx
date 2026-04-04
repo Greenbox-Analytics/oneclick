@@ -24,6 +24,8 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
+import { useWorks, type Work } from "@/hooks/useRegistry";
+import { type WorkFileLink } from "@/hooks/useWorkFiles";
 
 
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -119,6 +121,12 @@ const OneClickDocuments = () => {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [newProjectNameInput, setNewProjectNameInput] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+
+  // From Works state
+  const { data: artistWorks = [], isLoading: isLoadingWorks } = useWorks(artistId);
+  const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
+  const [workFiles, setWorkFiles] = useState<WorkFileLink[]>([]);
+  const [loadingWorkFiles, setLoadingWorkFiles] = useState(false);
 
   // Ref for chart download (only the chart content, not the entire card)
   const chartContentRef = useRef<HTMLDivElement>(null);
@@ -268,6 +276,26 @@ const OneClickDocuments = () => {
         setSelectedExistingRoyaltyStatement(null);
     }
   }, [selectedRoyaltyStatementProject]);
+
+  // Fetch files when a work is selected in "From Works" tab
+  useEffect(() => {
+    if (!selectedWorkId || !user) {
+      setWorkFiles([]);
+      return;
+    }
+    setLoadingWorkFiles(true);
+    fetch(`${API_URL}/registry/works/${selectedWorkId}/files?user_id=${user.id}`)
+      .then((res) => res.json())
+      .then((data) => {
+        setWorkFiles(data.files || []);
+        setLoadingWorkFiles(false);
+      })
+      .catch((err) => {
+        console.error("Error fetching work files:", err);
+        setWorkFiles([]);
+        setLoadingWorkFiles(false);
+      });
+  }, [selectedWorkId, user]);
 
   const handleContractFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -844,9 +872,10 @@ const OneClickDocuments = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               <Tabs value={contractTabValue} onValueChange={setContractTabValue} className="w-full">
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="upload">Upload New</TabsTrigger>
                   <TabsTrigger value="existing">Select Existing</TabsTrigger>
+                  <TabsTrigger value="works">From Works</TabsTrigger>
                 </TabsList>
                 
                 <TabsContent value="upload" className="space-y-4 mt-4">
@@ -996,6 +1025,80 @@ const OneClickDocuments = () => {
                         </div>
                       ) : (
                         <p className="text-sm text-muted-foreground text-center py-4">No contracts or split sheets found in this project.</p>
+                      )}
+                    </div>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="works" className="space-y-4 mt-4">
+                  {isLoadingWorks ? (
+                    <div className="text-center py-8">
+                      <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
+                      <p className="text-sm text-muted-foreground">Loading works...</p>
+                    </div>
+                  ) : artistWorks.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">No registered works found for this artist.</p>
+                  ) : !selectedWorkId ? (
+                    <div className="space-y-4">
+                      <p className="text-sm font-medium text-foreground">Select a Work:</p>
+                      <div className="grid gap-3 max-h-[300px] overflow-y-auto">
+                        {artistWorks.map((work: Work) => (
+                          <div
+                            key={work.id}
+                            className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer"
+                            onClick={() => setSelectedWorkId(work.id)}
+                          >
+                            <FileText className="w-5 h-5 text-primary" />
+                            <div>
+                              <p className="font-medium text-foreground">{work.title}</p>
+                              <p className="text-xs text-muted-foreground">{work.work_type}{work.release_date ? ` \u00b7 ${new Date(work.release_date).toLocaleDateString()}` : ''}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-medium text-foreground">
+                          Files in {artistWorks.find((w: Work) => w.id === selectedWorkId)?.title}:
+                        </p>
+                        <Button variant="ghost" size="sm" onClick={() => { setSelectedWorkId(null); setWorkFiles([]); }} className="text-xs h-8">
+                          Change Work
+                        </Button>
+                      </div>
+                      {loadingWorkFiles ? (
+                        <div className="text-center py-8">
+                          <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
+                          <p className="text-sm text-muted-foreground">Loading files...</p>
+                        </div>
+                      ) : workFiles.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">No files linked to this work.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                          {workFiles.map((link: WorkFileLink) => {
+                            const file = link.project_files;
+                            if (!file) return null;
+                            return (
+                              <div key={link.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <Checkbox
+                                    id={`work-file-${file.id}`}
+                                    checked={selectedExistingContracts.includes(file.id)}
+                                    onCheckedChange={() => handleToggleExistingContract(file.id)}
+                                  />
+                                  <label htmlFor={`work-file-${file.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
+                                    <FileText className="w-4 h-4 text-primary" />
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{file.file_name}</p>
+                                      <p className="text-xs text-muted-foreground">{file.folder_category}</p>
+                                    </div>
+                                  </label>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   )}

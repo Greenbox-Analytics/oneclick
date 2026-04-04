@@ -42,6 +42,8 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
+import { useMyCollaborations, type Work } from "@/hooks/useRegistry";
+import { type WorkFileLink } from "@/hooks/useWorkFiles";
 
 // Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -196,6 +198,13 @@ const Zoe = () => {
   
   // Context cleared reload dialog
   const [showReloadDialog, setShowReloadDialog] = useState(false);
+
+  // Shared Works (From Registry) state
+  const { data: sharedWorks = [], isLoading: isLoadingSharedWorks } = useMyCollaborations();
+  const [sharedWorksOpen, setSharedWorksOpen] = useState(false);
+  const [selectedSharedWork, setSelectedSharedWork] = useState<string | null>(null);
+  const [sharedWorkFiles, setSharedWorkFiles] = useState<WorkFileLink[]>([]);
+  const [loadingWorkFiles, setLoadingWorkFiles] = useState(false);
 
   // Conversation persistence — auto-saves to localStorage
   const { clearSession } = useConversationPersistence({
@@ -493,6 +502,26 @@ const Zoe = () => {
 
     fetchMissing();
   }, [selectedContracts, user]);
+
+  // Fetch files when a shared work is selected
+  useEffect(() => {
+    if (!selectedSharedWork || !user) {
+      setSharedWorkFiles([]);
+      return;
+    }
+    setLoadingWorkFiles(true);
+    fetch(`${API_URL}/registry/works/${selectedSharedWork}/files?user_id=${user.id}`)
+      .then((res) => res.json())
+      .then((data) => {
+        setSharedWorkFiles(data.files || []);
+        setLoadingWorkFiles(false);
+      })
+      .catch((err) => {
+        console.error("Error fetching work files:", err);
+        setSharedWorkFiles([]);
+        setLoadingWorkFiles(false);
+      });
+  }, [selectedSharedWork, user]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -1083,6 +1112,99 @@ const Zoe = () => {
                     <p className="text-xs text-muted-foreground">Select an artist to get started</p>
                   </div>
                 )}
+
+                {/* From Shared Works — documents from works where user is a collaborator */}
+                <div className="space-y-2">
+                  <Collapsible open={sharedWorksOpen} onOpenChange={setSharedWorksOpen}>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="secondary" size="sm" className="w-full justify-between h-9">
+                        <span className="flex items-center gap-2 text-xs font-medium">
+                          <Users className="w-3.5 h-3.5" />
+                          From Shared Works
+                        </span>
+                        <ChevronDown className={cn("ml-2 h-4 w-4 transition-transform", sharedWorksOpen && "rotate-180")} />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <div className="bg-background rounded-lg border mt-2 max-h-72 overflow-y-auto">
+                        {isLoadingSharedWorks ? (
+                          <div className="p-4 text-center">
+                            <Loader2 className="w-4 h-4 animate-spin mx-auto mb-1" />
+                            <p className="text-xs text-muted-foreground">Loading shared works...</p>
+                          </div>
+                        ) : sharedWorks.length === 0 ? (
+                          <div className="p-4 text-center">
+                            <p className="text-xs text-muted-foreground">No shared works found</p>
+                          </div>
+                        ) : !selectedSharedWork ? (
+                          <div className="p-2 space-y-1">
+                            {sharedWorks.map((work: Work) => (
+                              <div
+                                key={work.id}
+                                className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 cursor-pointer"
+                                onClick={() => setSelectedSharedWork(work.id)}
+                              >
+                                <FileText className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-medium truncate">{work.title}</p>
+                                  <p className="text-[10px] text-muted-foreground truncate">{work.work_type}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="p-2 space-y-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full h-7 text-xs justify-start text-muted-foreground hover:text-foreground mb-1"
+                              onClick={() => { setSelectedSharedWork(null); setSharedWorkFiles([]); }}
+                            >
+                              <ArrowLeft className="w-3 h-3 mr-1" />
+                              Back to works
+                            </Button>
+                            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2">
+                              Files in {sharedWorks.find((w: Work) => w.id === selectedSharedWork)?.title}
+                            </p>
+                            {loadingWorkFiles ? (
+                              <div className="py-3 text-center">
+                                <Loader2 className="w-4 h-4 animate-spin mx-auto" />
+                              </div>
+                            ) : sharedWorkFiles.length === 0 ? (
+                              <p className="text-xs text-muted-foreground text-center py-3">No files linked to this work</p>
+                            ) : (
+                              sharedWorkFiles.map((link: WorkFileLink) => {
+                                const file = link.project_files;
+                                if (!file) return null;
+                                return (
+                                  <div key={link.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50">
+                                    <Checkbox
+                                      id={`shared-file-${file.id}`}
+                                      checked={selectedContracts.includes(file.id)}
+                                      onCheckedChange={(checked) => {
+                                        if (checked) {
+                                          setSelectedContracts(prev => [...prev, file.id]);
+                                        } else {
+                                          setSelectedContracts(prev => prev.filter(id => id !== file.id));
+                                        }
+                                      }}
+                                    />
+                                    <label
+                                      htmlFor={`shared-file-${file.id}`}
+                                      className="text-xs font-medium leading-none cursor-pointer truncate flex-1"
+                                    >
+                                      {file.file_name}
+                                    </label>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </div>
               </div>
             </ScrollArea>
             <p className="text-[11px] text-center text-muted-foreground px-4 py-2 border-t border-border">
