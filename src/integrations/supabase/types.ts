@@ -88,10 +88,13 @@ export type Database = {
           full_name: string | null
           given_name: string | null
           id: string
+          industry: string | null
           last_name: string | null
+          onboarding_completed: boolean
           phone: string | null
           updated_at: string | null
           username: string | null
+          walkthrough_completed: boolean
           website: string | null
         }
         Insert: {
@@ -101,10 +104,13 @@ export type Database = {
           full_name?: string | null
           given_name?: string | null
           id: string
+          industry?: string | null
           last_name?: string | null
+          onboarding_completed?: boolean
           phone?: string | null
           updated_at?: string | null
           username?: string | null
+          walkthrough_completed?: boolean
           website?: string | null
         }
         Update: {
@@ -114,16 +120,60 @@ export type Database = {
           full_name?: string | null
           given_name?: string | null
           id?: string
+          industry?: string | null
           last_name?: string | null
+          onboarding_completed?: boolean
           phone?: string | null
           updated_at?: string | null
           username?: string | null
+          walkthrough_completed?: boolean
           website?: string | null
         }
         Relationships: [
           {
             foreignKeyName: "profiles_id_fkey"
             columns: ["id"]
+            isOneToOne: true
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_onboarding: {
+        Row: {
+          user_id: string
+          oneclick_completed: boolean
+          zoe_completed: boolean
+          splitsheet_completed: boolean
+          artists_completed: boolean
+          workspace_completed: boolean
+          portfolio_completed: boolean
+          created_at: string
+        }
+        Insert: {
+          user_id: string
+          oneclick_completed?: boolean
+          zoe_completed?: boolean
+          splitsheet_completed?: boolean
+          artists_completed?: boolean
+          workspace_completed?: boolean
+          portfolio_completed?: boolean
+          created_at?: string
+        }
+        Update: {
+          user_id?: string
+          oneclick_completed?: boolean
+          zoe_completed?: boolean
+          splitsheet_completed?: boolean
+          artists_completed?: boolean
+          workspace_completed?: boolean
+          portfolio_completed?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_onboarding_user_id_fkey"
+            columns: ["user_id"]
             isOneToOne: true
             referencedRelation: "users"
             referencedColumns: ["id"]

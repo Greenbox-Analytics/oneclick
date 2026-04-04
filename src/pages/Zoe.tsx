@@ -36,6 +36,12 @@ import { useStreamingChat } from "@/hooks/useStreamingChat";
 import type { Message, AssistantQuickAction } from "@/hooks/useStreamingChat";
 import { useConversationPersistence, restoreLatestSession } from "@/hooks/useConversationPersistence";
 import { cn } from "@/lib/utils";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 // Backend API URL
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -200,6 +206,19 @@ const Zoe = () => {
     selectedContracts,
     conversationContext,
   });
+
+  // Tool walkthrough
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.zoe, {
+    onComplete: () => markToolCompleted("zoe"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.zoe && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.zoe]);
 
   // Restore messages from saved session on mount
   useEffect(() => {
@@ -810,11 +829,12 @@ const Zoe = () => {
               </Badge>
             )}
             {messages.length > 0 && (
-              <Button variant="outline" onClick={handleNewConversation} size="sm" className="gap-2">
+              <Button data-walkthrough="zoe-newchat" variant="outline" onClick={handleNewConversation} size="sm" className="gap-2">
                 <RefreshCw className="w-4 h-4" />
                 <span className="hidden sm:inline">New Chat</span>
               </Button>
             )}
+            <ToolHelpButton onClick={walkthrough.replay} />
             <Button variant="outline" onClick={() => navigate("/tools")} size="sm" className="gap-2">
               <ArrowLeft className="w-4 h-4" />
               <span className="hidden sm:inline">Back to Tools</span>
@@ -828,6 +848,7 @@ const Zoe = () => {
         {/* Collapsible & Resizable Sidebar */}
         <aside
           ref={sidebarRef}
+          data-walkthrough="zoe-sidebar"
           className={cn(
             "border-r border-border bg-muted/30 flex-shrink-0 overflow-hidden relative",
             !isResizing && "transition-all duration-300 ease-in-out",
@@ -911,6 +932,7 @@ const Zoe = () => {
                         Documents {contracts.length > 0 && `(${contracts.length})`}
                       </div>
                       <Button
+                        data-walkthrough="zoe-upload"
                         variant="ghost"
                         size="sm"
                         onClick={() => setUploadModalOpen(true)}
@@ -1084,22 +1106,24 @@ const Zoe = () => {
             onRetry={handleRetry}
             onCopyMessage={handleCopyMessage}
           />
-          <ZoeInputBar
-            inputMessage={inputMessage}
-            onInputChange={setInputMessage}
-            error={error}
-            isStreaming={isStreaming}
-            isAtLimit={isAtLimit}
-            selectedArtist={selectedArtist}
-            selectedProject={selectedProject}
-            selectedContracts={selectedContracts}
-            contracts={contracts}
-            onDeselectContract={(id) => setSelectedContracts(prev => prev.filter(c => c !== id))}
-            onSend={handleSendMessage}
-            onStop={stopGeneration}
-            onKeyDown={handleKeyDown}
-            onUploadClick={() => setUploadModalOpen(true)}
-          />
+          <div data-walkthrough="zoe-chat">
+            <ZoeInputBar
+              inputMessage={inputMessage}
+              onInputChange={setInputMessage}
+              error={error}
+              isStreaming={isStreaming}
+              isAtLimit={isAtLimit}
+              selectedArtist={selectedArtist}
+              selectedProject={selectedProject}
+              selectedContracts={selectedContracts}
+              contracts={contracts}
+              onDeselectContract={(id) => setSelectedContracts(prev => prev.filter(c => c !== id))}
+              onSend={handleSendMessage}
+              onStop={stopGeneration}
+              onKeyDown={handleKeyDown}
+              onUploadClick={() => setUploadModalOpen(true)}
+            />
+          </div>
         </main>
       </div>
 
@@ -1195,6 +1219,21 @@ const Zoe = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ToolIntroModal
+        config={TOOL_CONFIGS.zoe}
+        isOpen={walkthrough.phase === "modal"}
+        onStartTour={walkthrough.startSpotlight}
+        onSkip={walkthrough.skip}
+      />
+      <WalkthroughProvider
+        isActive={walkthrough.phase === "spotlight"}
+        currentStep={walkthrough.currentStep}
+        currentStepIndex={walkthrough.visibleStepIndex}
+        totalSteps={walkthrough.totalSteps}
+        onNext={walkthrough.next}
+        onSkip={walkthrough.skip}
+      />
     </div>
   );
 };

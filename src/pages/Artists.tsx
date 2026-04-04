@@ -18,6 +18,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 interface Artist {
   id: string;
@@ -35,6 +41,19 @@ const Artists = () => {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [artistToDelete, setArtistToDelete] = useState<Artist | null>(null);
+
+  // Tool walkthrough
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.artists, {
+    onComplete: () => markToolCompleted("artists"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.artists && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.artists]);
 
   useEffect(() => {
     const fetchArtists = async () => {
@@ -106,9 +125,12 @@ const Artists = () => {
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          <Button variant="outline" onClick={() => navigate("/dashboard")}>
-            Back to Dashboard
-          </Button>
+          <div className="flex items-center gap-2">
+            <ToolHelpButton onClick={walkthrough.replay} />
+            <Button variant="outline" onClick={() => navigate("/dashboard")}>
+              Back to Dashboard
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -118,14 +140,14 @@ const Artists = () => {
             <h2 className="text-3xl font-bold text-foreground mb-2">Artist Profiles</h2>
             <p className="text-muted-foreground">Manage your artist roster</p>
           </div>
-          <Button onClick={() => navigate("/artists/new")}>
+          <Button data-walkthrough="artists-add" onClick={() => navigate("/artists/new")}>
             <Plus className="w-4 h-4 mr-2" />
             Add Artist
           </Button>
         </div>
 
         <div className="mb-6">
-          <div className="relative">
+          <div className="relative" data-walkthrough="artists-search">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
             <Input
               placeholder="Search artists..."
@@ -143,8 +165,8 @@ const Artists = () => {
         ) : (
           <>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {filteredArtists.map((artist) => (
-                <Card key={artist.id} className="hover:shadow-lg transition-shadow">
+              {filteredArtists.map((artist, index) => (
+                <Card key={artist.id} className="hover:shadow-lg transition-shadow" data-walkthrough={index === 0 ? "artists-card" : undefined}>
                   <CardHeader>
                     <div className="flex items-start justify-between mb-4">
                       <Avatar className="w-16 h-16">
@@ -194,6 +216,20 @@ const Artists = () => {
             )}
           </>
         )}
+        <ToolIntroModal
+          config={TOOL_CONFIGS.artists}
+          isOpen={walkthrough.phase === "modal"}
+          onStartTour={walkthrough.startSpotlight}
+          onSkip={walkthrough.skip}
+        />
+        <WalkthroughProvider
+          isActive={walkthrough.phase === "spotlight"}
+          currentStep={walkthrough.currentStep}
+          currentStepIndex={walkthrough.visibleStepIndex}
+          totalSteps={walkthrough.totalSteps}
+          onNext={walkthrough.next}
+          onSkip={walkthrough.skip}
+        />
       </main>
 
       {/* Delete Confirmation Dialog */}
