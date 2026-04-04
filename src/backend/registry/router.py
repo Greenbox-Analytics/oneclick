@@ -12,12 +12,13 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from registry import service
+from registry import work_links_service
 from registry.models import (
     WorkCreate, WorkUpdate,
     StakeCreate, StakeUpdate,
     LicenseCreate, LicenseUpdate,
     AgreementCreate,
-    CollaboratorInvite, DisputeRequest,
+    CollaboratorInvite, CollaboratorInviteWithStakes, DisputeRequest,
     TeamCardUpdate,
     NoteCreate, NoteUpdate, FolderCreate, FolderUpdate,
     ProjectAboutUpdate,
@@ -357,6 +358,110 @@ async def resend_invitation(collaborator_id: str, user_id: str = Query(...)):
         invite_token=str(collab.get("invite_token", "")),
     )
     return collab
+
+
+# ============================================================
+# Work File Links
+# ============================================================
+
+@router.get("/works/{work_id}/files")
+async def list_work_files(work_id: str, user_id: str = Query(...)):
+    files = await work_links_service.get_work_files(_get_supabase(), work_id)
+    return {"files": files}
+
+
+@router.post("/works/{work_id}/files")
+async def link_file(work_id: str, file_id: str = Query(...), user_id: str = Query(...)):
+    result = await work_links_service.link_file_to_work(_get_supabase(), work_id, file_id)
+    return {"link": result}
+
+
+@router.delete("/works/{work_id}/files/{link_id}")
+async def unlink_file(work_id: str, link_id: str, user_id: str = Query(...)):
+    return await work_links_service.unlink_file_from_work(_get_supabase(), link_id)
+
+
+# ============================================================
+# Work Audio Links
+# ============================================================
+
+@router.get("/works/{work_id}/audio")
+async def list_work_audio(work_id: str, user_id: str = Query(...)):
+    audio = await work_links_service.get_work_audio(_get_supabase(), work_id)
+    return {"audio": audio}
+
+
+@router.post("/works/{work_id}/audio")
+async def link_audio(work_id: str, audio_file_id: str = Query(...), user_id: str = Query(...)):
+    result = await work_links_service.link_audio_to_work(_get_supabase(), work_id, audio_file_id)
+    return {"link": result}
+
+
+@router.delete("/works/{work_id}/audio/{link_id}")
+async def unlink_audio(work_id: str, link_id: str, user_id: str = Query(...)):
+    return await work_links_service.unlink_audio_from_work(_get_supabase(), link_id)
+
+
+# ============================================================
+# Enhanced Collaboration
+# ============================================================
+
+@router.post("/collaborators/invite-with-stakes")
+async def invite_with_stakes_endpoint(body: CollaboratorInviteWithStakes, user_id: str = Query(...)):
+    try:
+        result = await service.invite_with_stakes(_get_supabase(), user_id, body)
+        # Send rich invite email
+        try:
+            from registry.emails import send_rich_invitation_email
+            db = _get_supabase()
+            work = db.table("works_registry").select("title, project_id").eq("id", body.work_id).single().execute()
+            project = db.table("projects").select("name").eq("id", work.data["project_id"]).single().execute() if work.data else None
+            artist_id = db.table("works_registry").select("artist_id").eq("id", body.work_id).single().execute()
+            artist = db.table("artists").select("name").eq("id", artist_id.data["artist_id"]).single().execute() if artist_id.data else None
+            inviter = db.table("profiles").select("full_name").eq("id", user_id).maybe_single().execute()
+            send_rich_invitation_email(
+                recipient_email=body.email,
+                recipient_name=body.name,
+                inviter_name=inviter.data.get("full_name", "Someone") if inviter.data else "Someone",
+                work_title=work.data["title"] if work.data else "Unknown",
+                project_name=project.data["name"] if project and project.data else "Unknown",
+                artist_name=artist.data["name"] if artist and artist.data else "Unknown",
+                role=body.role,
+                stakes=body.stakes,
+                notes=body.notes,
+                invite_token=result["invite_token"],
+            )
+        except Exception as e:
+            print(f"Warning: Failed to send invitation email: {e}")
+        return result
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@router.post("/collaborators/{collaborator_id}/decline")
+async def decline_invitation_endpoint(collaborator_id: str, user_id: str = Query(...)):
+    try:
+        return await service.decline_invitation(_get_supabase(), user_id, collaborator_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/collaborators/{collaborator_id}/accept-from-dashboard")
+async def accept_from_dashboard_endpoint(collaborator_id: str, user_id: str = Query(...)):
+    try:
+        return await service.accept_from_dashboard(_get_supabase(), user_id, collaborator_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/collaborators/my-invites")
+async def my_invites_endpoint(user_id: str = Query(...)):
+    invites = await service.get_my_invites(_get_supabase(), user_id)
+    return {"invites": invites}
 
 
 # ============================================================

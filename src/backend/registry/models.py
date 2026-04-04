@@ -167,3 +167,19 @@ class FolderUpdate(BaseModel):
 
 class ProjectAboutUpdate(BaseModel):
     about_content: list = []
+
+
+# --- Enhanced Collaboration ---
+
+class StakeInput(BaseModel):
+    stake_type: str  # master, publishing
+    percentage: float
+
+
+class CollaboratorInviteWithStakes(BaseModel):
+    work_id: str
+    email: EmailStr
+    name: str
+    role: str
+    stakes: List[StakeInput] = []
+    notes: Optional[str] = None

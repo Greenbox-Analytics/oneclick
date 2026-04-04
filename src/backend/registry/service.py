@@ -366,7 +366,6 @@ async def confirm_stake(db: Client, collaborator_id: str, user_id: str):
         db.table("registry_collaborators")
         .update({
             "status": "confirmed",
-            "dispute_reason": None,
             "responded_at": datetime.now(timezone.utc).isoformat(),
         })
         .eq("id", collaborator_id)
@@ -375,7 +374,7 @@ async def confirm_stake(db: Client, collaborator_id: str, user_id: str):
     )
     if result.data:
         collab = result.data[0]
-        await check_and_update_work_status(db, collab["work_id"])
+        await _check_auto_register(db, collab["work_id"])
         # Notify the work creator that a collaborator responded
         work_row = db.table("works_registry").select("user_id, title").eq("id", collab["work_id"]).single().execute()
         if work_row.data:
@@ -451,14 +450,12 @@ async def check_and_update_work_status(db: Client, work_id: str):
         .select("status")
         .eq("work_id", work_id)
         .neq("status", "revoked")
+        .neq("status", "declined")
         .execute()
     )
     if not collabs.data:
         return
-    statuses = [c["status"] for c in collabs.data]
-    if any(s == "disputed" for s in statuses):
-        db.table("works_registry").update({"status": "disputed"}).eq("id", work_id).execute()
-    elif all(s == "confirmed" for s in statuses):
+    if all(c["status"] == "confirmed" for c in collabs.data):
         db.table("works_registry").update({"status": "registered"}).eq("id", work_id).execute()
 
 
@@ -495,18 +492,31 @@ async def resend_invitation(db: Client, user_id: str, collaborator_id: str):
 
 
 async def revoke_collaborator(db: Client, user_id: str, collaborator_id: str):
-    """Revoke a collaborator invitation. Only the inviter can do this."""
-    result = (
+    """Revoke a collaborator. Deletes associated stakes. Reverts registered works to draft."""
+    collab = (
         db.table("registry_collaborators")
-        .update({"status": "revoked"})
+        .select("*")
         .eq("id", collaborator_id)
         .eq("invited_by", user_id)
+        .single()
         .execute()
     )
-    if result.data:
-        collab = result.data[0]
-        await check_and_update_work_status(db, collab["work_id"])
-    return result.data[0] if result.data else None
+    if not collab.data:
+        return None
+
+    # Revoke
+    db.table("registry_collaborators").update({"status": "revoked"}).eq("id", collaborator_id).execute()
+
+    # Delete associated stake
+    if collab.data.get("stake_id"):
+        db.table("ownership_stakes").delete().eq("id", collab.data["stake_id"]).execute()
+
+    # Revert registered work to draft
+    work = db.table("works_registry").select("status").eq("id", collab.data["work_id"]).single().execute()
+    if work.data and work.data["status"] == "registered":
+        db.table("works_registry").update({"status": "draft"}).eq("id", collab.data["work_id"]).execute()
+
+    return collab.data
 
 
 async def submit_for_approval(db: Client, user_id: str, work_id: str):
@@ -520,7 +530,7 @@ async def submit_for_approval(db: Client, user_id: str, work_id: str):
     )
     if not work.data:
         return None, "Work not found"
-    if work.data["status"] not in ("draft", "disputed"):
+    if work.data["status"] not in ("draft",):
         return None, f"Cannot submit: work is already {work.data['status']}"
 
     collabs = (
@@ -533,9 +543,10 @@ async def submit_for_approval(db: Client, user_id: str, work_id: str):
     if not collabs.data:
         return None, "No collaborators invited — add at least one before submitting"
 
+    # Only reset collaborators that aren't already confirmed
     db.table("registry_collaborators").update(
-        {"status": "invited", "dispute_reason": None, "responded_at": None}
-    ).eq("work_id", work_id).eq("status", "disputed").execute()
+        {"status": "invited", "responded_at": None}
+    ).eq("work_id", work_id).in_("status", ["declined"]).execute()
 
     result = (
         db.table("works_registry")
@@ -573,6 +584,160 @@ async def submit_for_approval(db: Client, user_id: str, work_id: str):
         updated_work["_renotify_collabs"] = all_collabs.data or []
 
     return updated_work, None
+
+
+async def invite_with_stakes(db: Client, user_id: str, data):
+    """Create collaborator + ownership stakes atomically."""
+    import secrets
+    from datetime import datetime, timedelta, timezone
+
+    work = db.table("works_registry").select("*").eq("id", data.work_id).single().execute()
+    if not work.data or work.data["user_id"] != user_id:
+        raise PermissionError("Not the work owner")
+
+    token = secrets.token_urlsafe(32)
+    expires = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
+    collab = db.table("registry_collaborators").insert({
+        "work_id": data.work_id,
+        "invited_by": user_id,
+        "email": data.email,
+        "name": data.name,
+        "role": data.role,
+        "status": "invited",
+        "invite_token": token,
+        "expires_at": expires,
+    }).execute()
+    collab_row = collab.data[0] if collab.data else None
+
+    created_stakes = []
+    for stake in data.stakes:
+        s = db.table("ownership_stakes").insert({
+            "work_id": data.work_id,
+            "user_id": user_id,
+            "stake_type": stake.stake_type,
+            "holder_name": data.name,
+            "holder_role": data.role,
+            "percentage": stake.percentage,
+            "holder_email": data.email,
+        }).execute()
+        if s.data:
+            created_stakes.append(s.data[0])
+
+    if created_stakes and collab_row:
+        db.table("registry_collaborators").update({
+            "stake_id": created_stakes[0]["id"]
+        }).eq("id", collab_row["id"]).execute()
+
+    # If work is registered, revert to draft (ownership changed)
+    if work.data["status"] == "registered":
+        db.table("works_registry").update({"status": "draft"}).eq("id", data.work_id).execute()
+
+    return {"collaborator": collab_row, "stakes": created_stakes, "invite_token": token}
+
+
+async def decline_invitation(db: Client, user_id: str, collaborator_id: str):
+    """Decline an invitation. Validates email match."""
+    from datetime import datetime, timezone
+    collab = db.table("registry_collaborators").select("*").eq("id", collaborator_id).single().execute()
+    if not collab.data:
+        raise ValueError("Collaborator not found")
+
+    profile = db.table("profiles").select("email").eq("id", user_id).maybe_single().execute()
+    user_email = profile.data["email"] if profile.data else None
+    if not user_email or user_email.lower() != collab.data["email"].lower():
+        raise PermissionError("Email does not match invitation")
+
+    db.table("registry_collaborators").update({
+        "status": "declined",
+        "collaborator_user_id": user_id,
+        "responded_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", collaborator_id).execute()
+
+    # Notify work owner
+    work = db.table("works_registry").select("user_id, title").eq("id", collab.data["work_id"]).single().execute()
+    if work.data:
+        await create_notification(
+            db,
+            user_id=work.data["user_id"],
+            work_id=collab.data["work_id"],
+            notification_type="status_change",
+            title="Invitation declined",
+            message=f'{collab.data["name"]} declined the invitation for "{work.data["title"]}"',
+            metadata={"collaborator_name": collab.data["name"]},
+        )
+
+    return {"declined": collaborator_id}
+
+
+async def accept_from_dashboard(db: Client, user_id: str, collaborator_id: str):
+    """Claim + confirm atomically from the registry dashboard."""
+    from datetime import datetime, timezone
+    collab = db.table("registry_collaborators").select("*").eq("id", collaborator_id).single().execute()
+    if not collab.data:
+        raise ValueError("Collaborator not found")
+
+    profile = db.table("profiles").select("email").eq("id", user_id).maybe_single().execute()
+    user_email = profile.data["email"] if profile.data else None
+    if not user_email or user_email.lower() != collab.data["email"].lower():
+        raise PermissionError("Email does not match invitation")
+
+    db.table("registry_collaborators").update({
+        "collaborator_user_id": user_id,
+        "status": "confirmed",
+        "responded_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", collaborator_id).execute()
+
+    await _check_auto_register(db, collab.data["work_id"])
+
+    # Notify work owner
+    work = db.table("works_registry").select("user_id, title").eq("id", collab.data["work_id"]).single().execute()
+    if work.data:
+        await create_notification(
+            db,
+            user_id=work.data["user_id"],
+            work_id=collab.data["work_id"],
+            notification_type="confirmation",
+            title="Invitation accepted",
+            message=f'{collab.data["name"]} accepted the invitation for "{work.data["title"]}"',
+            metadata={"collaborator_name": collab.data["name"]},
+        )
+
+    return {"accepted": collaborator_id}
+
+
+async def get_my_invites(db: Client, user_id: str):
+    """Get invites for current user by email match (for Action Required tab)."""
+    profile = db.table("profiles").select("email").eq("id", user_id).maybe_single().execute()
+    if not profile.data or not profile.data.get("email"):
+        return []
+
+    email = profile.data["email"].lower()
+    result = (
+        db.table("registry_collaborators")
+        .select("*, works_registry(id, title, project_id, status)")
+        .ilike("email", email)
+        .eq("status", "invited")
+        .order("invited_at", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+async def _check_auto_register(db: Client, work_id: str):
+    """After a confirm, check if ALL collaborators are confirmed -> auto-register."""
+    collabs = (
+        db.table("registry_collaborators")
+        .select("status")
+        .eq("work_id", work_id)
+        .neq("status", "revoked")
+        .neq("status", "declined")
+        .execute()
+    )
+    if not collabs.data:
+        return
+    all_confirmed = all(c["status"] == "confirmed" for c in collabs.data)
+    if all_confirmed:
+        db.table("works_registry").update({"status": "registered"}).eq("id", work_id).execute()
 
 
 # ============================================================
