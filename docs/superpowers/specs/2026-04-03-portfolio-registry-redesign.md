@@ -146,7 +146,11 @@ Redesign the Portfolio and Rights Registry to introduce a dedicated Project Deta
 - `draft` → `pending_approval`: Owner clicks "Submit for Approval". Requires at least 1 collaborator with status `invited`. Endpoint: `POST /registry/works/{workId}/submit-for-approval` (already exists in codebase).
 - `pending_approval` → `registered`: **Backend logic in the confirm endpoint.** After each `POST /registry/collaborators/{id}/confirm`, the backend checks: are ALL collaborators on this work now `confirmed`? If yes, auto-transition work to `registered`. If not, stay in `pending_approval`.
 - `pending_approval` → `pending_approval` (reset): If a new collaborator is added to a work that's already in `pending_approval`, the work stays in `pending_approval` (new collaborator needs to confirm too).
-- `registered` → `draft`: If the owner edits the work metadata or adds a new collaborator after registration, work reverts to `draft` (existing behavior in codebase).
+- `registered` → `draft`: Triggered ONLY by changes that affect ownership/collaboration:
+  - Adding a new collaborator → reverts to `draft` (new person needs to confirm)
+  - Revoking a collaborator → reverts to `draft` (ownership changed)
+  - Changing ownership stake percentages → reverts to `draft`
+  - **Does NOT revert for:** title rename, ISRC/ISWC/UPC edits, work type change, release date, notes. These are metadata-only changes that don't affect who owns what.
 - **Zero collaborators:** A work with no collaborators stays in `draft`. The owner can manually register it by clicking "Register" (no approval needed if there's nobody to approve). This is a direct `draft` → `registered` transition available only when collaborator count = 0.
 - **Collaborator self-decline after accepting:** Not allowed. Once `confirmed`, a collaborator's status is locked. Only the owner can revoke.
 
@@ -261,6 +265,43 @@ CREATE TABLE work_audio_links (
 );
 ```
 
+#### `pending_project_invites`
+For project member invites to users who don't have an account yet:
+```sql
+CREATE TABLE pending_project_invites (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'editor', 'viewer')),
+  invited_by UUID NOT NULL REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(project_id, email)
+);
+```
+**Mechanism:** When `POST /projects/{projectId}/members` is called with an email that doesn't match any `auth.users.email`:
+1. Insert into `pending_project_invites` (not `project_members`)
+2. Send signup invitation email via Resend
+
+**On signup trigger** (Supabase auth hook):
+```sql
+CREATE OR REPLACE FUNCTION process_pending_project_invites()
+RETURNS TRIGGER SECURITY DEFINER AS $$
+BEGIN
+  INSERT INTO project_members (project_id, user_id, role, invited_by)
+  SELECT pi.project_id, NEW.id, pi.role, pi.invited_by
+  FROM pending_project_invites pi
+  WHERE pi.email = NEW.email;
+
+  DELETE FROM pending_project_invites WHERE email = NEW.email;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER process_pending_invites_on_signup
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION process_pending_project_invites();
+```
+
 ### Table Modifications
 
 #### `project_files` — add content hash
@@ -321,15 +362,37 @@ CREATE POLICY "collaborators_select_by_email" ON registry_collaborators
   );
 ```
 
+#### Projects table — member access
+```sql
+-- Project members can read the project itself (needed for Shared with Me, Project Detail header)
+CREATE POLICY "projects_select_via_member" ON projects
+  FOR SELECT USING (
+    id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  );
+```
+
+#### Project members table — mutual visibility
+```sql
+-- All project members can see each other (needed for Members tab)
+CREATE POLICY "project_members_select_members" ON project_members
+  FOR SELECT USING (
+    project_id IN (
+      SELECT project_id FROM project_members WHERE user_id = auth.uid()
+    )
+  );
+```
+
 #### File access via work collaboration
 ```sql
--- Collaborators can read files linked to their works
+-- Claimed collaborators (invited or confirmed) can read files linked to their works.
+-- This allows reviewing files BEFORE accepting (after claim but before confirm).
 CREATE POLICY "project_files_select_via_work_collab" ON project_files
   FOR SELECT USING (
     id IN (
       SELECT file_id FROM work_files WHERE work_id IN (
         SELECT work_id FROM registry_collaborators
-        WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
+        WHERE collaborator_user_id = auth.uid()
+        AND status IN ('invited', 'confirmed')
       )
     )
   );
@@ -337,14 +400,51 @@ CREATE POLICY "project_files_select_via_work_collab" ON project_files
 
 #### Audio access via work collaboration
 ```sql
--- Collaborators can read audio files linked to their works
+-- Claimed collaborators (invited or confirmed) can read audio linked to their works
 CREATE POLICY "audio_files_select_via_work_collab" ON audio_files
   FOR SELECT USING (
     id IN (
       SELECT audio_file_id FROM work_audio_links WHERE work_id IN (
         SELECT work_id FROM registry_collaborators
-        WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
+        WHERE collaborator_user_id = auth.uid()
+        AND status IN ('invited', 'confirmed')
       )
+    )
+  );
+```
+
+#### Join tables — SELECT policies
+```sql
+-- work_files: readable by project members and work collaborators
+-- (Required for subqueries in project_files/audio_files policies to return results)
+CREATE POLICY "work_files_select_members" ON work_files
+  FOR SELECT USING (
+    work_id IN (
+      SELECT id FROM works_registry WHERE project_id IN (
+        SELECT project_id FROM project_members WHERE user_id = auth.uid()
+      )
+    )
+    OR
+    work_id IN (
+      SELECT work_id FROM registry_collaborators
+      WHERE collaborator_user_id = auth.uid()
+      AND status IN ('invited', 'confirmed')
+    )
+  );
+
+-- work_audio_links: same pattern
+CREATE POLICY "work_audio_links_select_members" ON work_audio_links
+  FOR SELECT USING (
+    work_id IN (
+      SELECT id FROM works_registry WHERE project_id IN (
+        SELECT project_id FROM project_members WHERE user_id = auth.uid()
+      )
+    )
+    OR
+    work_id IN (
+      SELECT work_id FROM registry_collaborators
+      WHERE collaborator_user_id = auth.uid()
+      AND status IN ('invited', 'confirmed')
     )
   );
 ```
@@ -394,6 +494,15 @@ CREATE POLICY "works_update_editors" ON works_registry
     project_id IN (
       SELECT project_id FROM project_members
       WHERE user_id = auth.uid() AND role IN ('owner', 'admin', 'editor')
+    )
+  );
+
+-- Owner/admin can delete works
+CREATE POLICY "works_delete_owner_admin" ON works_registry
+  FOR DELETE USING (
+    project_id IN (
+      SELECT project_id FROM project_members
+      WHERE user_id = auth.uid() AND role IN ('owner', 'admin')
     )
   );
 
@@ -448,6 +557,15 @@ CREATE POLICY "project_members_insert_admins" ON project_members
     )
   );
 
+CREATE POLICY "project_members_update_admins" ON project_members
+  FOR UPDATE USING (
+    -- Admins+ can change roles (but not the owner's role — enforced by trigger)
+    project_id IN (
+      SELECT project_id FROM project_members
+      WHERE user_id = auth.uid() AND role IN ('owner', 'admin')
+    )
+  );
+
 CREATE POLICY "project_members_delete_admins" ON project_members
   FOR DELETE USING (
     -- Admins+ can remove others (but not the owner — enforced by trigger)
@@ -477,6 +595,40 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER prevent_owner_deletion_trigger
   BEFORE DELETE ON project_members
   FOR EACH ROW EXECUTE FUNCTION prevent_owner_deletion();
+
+-- Trigger: prevent changing owner's role
+CREATE OR REPLACE FUNCTION prevent_owner_role_change()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.role = 'owner' AND NEW.role != 'owner' THEN
+    RAISE EXCEPTION 'Cannot change the project owner role';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER prevent_owner_role_change_trigger
+  BEFORE UPDATE ON project_members
+  FOR EACH ROW EXECUTE FUNCTION prevent_owner_role_change();
+```
+
+#### Auto-owner trigger (SECURITY DEFINER)
+```sql
+-- When a project is created, auto-insert the creator as owner.
+-- Must be SECURITY DEFINER because the INSERT policy on project_members
+-- requires the user to already be an admin+ member, creating a chicken-and-egg problem.
+CREATE OR REPLACE FUNCTION auto_create_project_owner()
+RETURNS TRIGGER SECURITY DEFINER AS $$
+BEGIN
+  INSERT INTO project_members (project_id, user_id, role)
+  VALUES (NEW.id, auth.uid(), 'owner');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER auto_create_project_owner_trigger
+  AFTER INSERT ON projects
+  FOR EACH ROW EXECUTE FUNCTION auto_create_project_owner();
 ```
 
 ---
@@ -517,7 +669,7 @@ CREATE TRIGGER prevent_owner_deletion_trigger
 | POST | `/registry/collaborators/invite-with-stakes` | Composite: creates collaborator record + ownership stake(s) atomically. Body: `{work_id, email, name, role, stakes: [{type, percentage}], notes?}` |
 | POST | `/registry/collaborators/{id}/decline` | Decline invitation. Sets status to `declined`. Notifies work owner. |
 | GET | `/registry/collaborators/my-invites` | Get invites for current user by email match (for Action Required tab before claim). |
-| POST | `/registry/collaborators/{id}/accept-from-dashboard` | Claim + confirm atomically (for accepting directly from Registry dashboard without visiting the email link first). Sets `collaborator_user_id` and `status = 'confirmed'` in one call. |
+| POST | `/registry/collaborators/{id}/accept-from-dashboard` | Claim + confirm atomically (for accepting directly from Registry dashboard without visiting the email link first). Sets `collaborator_user_id` and `status = 'confirmed'` in one call. **Backend MUST validate** that `auth.uid()`'s email matches the collaborator record's email before processing — prevents someone who knows a collaborator ID from accepting someone else's invite. |
 | GET | `/projects/{projectId}/members` | List project members |
 | POST | `/projects/{projectId}/members` | Add project member (admin+ only). Body: `{email, role}`. Auto-adds if account exists, sends invite email if not. |
 | PUT | `/projects/{projectId}/members/{memberId}` | Update member role (admin+ only, cannot change owner role) |
@@ -604,43 +756,56 @@ All migrations go in `supabase/migrations/`. Naming convention: `YYYYMMDD######_
 
 1. **`20260403000001_create_project_members.sql`**
    - Create `project_members` table with role CHECK constraint
-   - Owner protection trigger (`prevent_owner_deletion`)
-   - Auto-create owner entry trigger: when a project is inserted, auto-insert `project_members` row with `role='owner'` for the project creator
+   - Owner protection triggers: `prevent_owner_deletion` (DELETE) + `prevent_owner_role_change` (UPDATE). Both as regular functions (not SECURITY DEFINER).
+   - Auto-create owner entry trigger: `auto_create_project_owner` — **SECURITY DEFINER** (bypasses RLS because no member row exists yet at INSERT time)
    - Enable RLS
+   - SELECT policy: all members can see each other
+   - INSERT policy: admins+ can add members
+   - UPDATE policy: admins+ can change roles
+   - DELETE policy: admins+ can remove others, non-owners can remove self
 
-2. **`20260403000002_create_work_files.sql`**
+2. **`20260403000002_create_pending_project_invites.sql`**
+   - Create `pending_project_invites` table (for inviting non-existing users)
+   - Auth trigger: `process_pending_project_invites` — **SECURITY DEFINER** — fires on `auth.users` INSERT, converts pending invites to `project_members` rows
+   - Enable RLS (inviter can manage their own invites)
+
+3. **`20260403000003_create_work_files.sql`**
    - Create `work_files` join table (work_id → file_id, UNIQUE constraint)
    - Enable RLS
-   - Read policies: project members can read all; work collaborators can read their work's files
+   - **SELECT policies:** project members can read all; work collaborators (invited OR confirmed) can read their work's files
    - Write policies: editors+ can INSERT/DELETE
 
-3. **`20260403000003_create_work_audio_links.sql`**
+4. **`20260403000004_create_work_audio_links.sql`**
    - Create `work_audio_links` join table (work_id → audio_file_id, UNIQUE constraint)
    - Enable RLS
-   - Read policies: project members via project_audio_links; work collaborators via work_audio_links
+   - **SELECT policies:** project members via project_audio_links; work collaborators (invited OR confirmed) via work_audio_links
    - Write policies: editors+ can INSERT/DELETE
 
-4. **`20260403000004_add_content_hash_to_project_files.sql`**
+5. **`20260403000005_add_content_hash_to_project_files.sql`**
    - Add `content_hash TEXT` column to `project_files`
 
-5. **`20260403000005_update_works_registry.sql`**
+6. **`20260403000006_update_works_registry.sql`**
    - Add `custom_work_type TEXT` column
    - **Data migration:** `UPDATE works_registry SET status = 'draft' WHERE status = 'disputed'`
    - Drop and recreate `work_type` CHECK constraint (add 'other')
    - Drop and recreate `status` CHECK constraint (remove 'disputed')
 
-6. **`20260403000006_simplify_collaborator_status.sql`**
+7. **`20260403000007_simplify_collaborator_status.sql`**
    - **Data migration:** `UPDATE registry_collaborators SET status = 'declined' WHERE status = 'disputed'`
    - Drop and recreate `status` CHECK constraint: invited, confirmed, declined, revoked
    - Drop `dispute_reason` column
 
-7. **`20260403000007_update_rls_policies.sql`**
-   - Invite visibility by email (collaborators can see invites before claiming)
-   - Audio file access via work collaboration (was missing)
+8. **`20260403000008_update_rls_policies.sql`**
+   - **Projects table:** SELECT policy for project members (needed for Shared with Me + Project Detail header)
+   - Invite visibility by email on `registry_collaborators` (before claim)
+   - File access for work collaborators: `invited` OR `confirmed` status (not just confirmed — allows reviewing before accepting)
+   - Audio file access via work collaboration (was missing entirely)
+   - **SELECT on join tables:** `work_files` and `work_audio_links` need their own SELECT policies (subqueries in other policies reference them)
    - Project member cascading access to works, files, audio
-   - Role-based write permissions for works, work_files, work_audio_links
-   - Project member management (admins+, self-removal for non-owners)
-   - Owner protection trigger
+   - Role-based write permissions for works (INSERT, UPDATE, **DELETE for owner/admin**)
+   - Write permissions for `work_files` and `work_audio_links` (editors+ INSERT/DELETE)
+
+**Note on existing unique constraint:** The `registry_collaborators` table already has a partial unique index `ON (work_id, email) WHERE status != 'revoked'`. This means re-inviting a revoked collaborator to the same work works correctly — the revoked row doesn't conflict with the new invite. No migration needed for gap #8.
 
 ---
 
@@ -730,7 +895,7 @@ These end-to-end scenarios show exactly how a user moves through the system. Eac
    - Redirected to Work Detail for "Neon Lights".
 2. **Mike sees a banner:** "You've been listed as Producer on this work. Please review and confirm or decline."
    - Sees his listed stake: Master 15%
-   - Sees linked contract: `Producer_Agreement_v2.pdf` (readable because he's now a claimed collaborator — RLS matches `collaborator_user_id`)
+   - Sees linked contract: `Producer_Agreement_v2.pdf` (readable because he's a claimed collaborator with status `invited` — RLS grants read access at `invited` status once `collaborator_user_id` is set, so Mike can review files BEFORE deciding to accept)
 3. **Mike clicks "Accept"** — API: `POST /registry/collaborators/{id}/confirm` → status changes to `confirmed`.
    - Backend checks: are all collaborators on this work confirmed? If yes → work auto-transitions to `registered`. If not → stays `pending_approval`.
 
