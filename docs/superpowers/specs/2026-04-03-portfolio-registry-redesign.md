@@ -462,6 +462,24 @@ CREATE POLICY "work_audio_links_select_members" ON work_audio_links
   );
 ```
 
+#### Works access for work-only collaborators
+```sql
+-- NOTE: The existing policy "Owner or collaborator can read works" (from migration
+-- 20260329000000) already covers this case:
+--   ON works_registry FOR SELECT USING (
+--     auth.uid() = user_id
+--     OR id IN (SELECT work_id FROM registry_collaborators
+--               WHERE collaborator_user_id = auth.uid() AND status != 'revoked')
+--   )
+-- This lets claimed collaborators (invited or confirmed) read the work record itself.
+-- No new policy needed for works_registry SELECT — just confirming the existing one
+-- covers work-only collaborators like Mike after claim.
+--
+-- For pre-claim invite display (Action Required tab on Registry), the backend endpoint
+-- GET /registry/collaborators/my-invites runs with service role and returns work
+-- title/project name embedded in the response — no direct Supabase query needed.
+```
+
 #### Project member access
 ```sql
 -- Project members can read all works in their project
@@ -609,20 +627,29 @@ CREATE TRIGGER prevent_owner_deletion_trigger
   BEFORE DELETE ON project_members
   FOR EACH ROW EXECUTE FUNCTION prevent_owner_deletion();
 
--- Trigger: prevent changing owner's role
-CREATE OR REPLACE FUNCTION prevent_owner_role_change()
+-- Trigger: prevent changing owner's role AND prevent anyone from becoming owner
+CREATE OR REPLACE FUNCTION protect_owner_role()
 RETURNS TRIGGER AS $$
 BEGIN
+  -- Can't demote the owner
   IF OLD.role = 'owner' AND NEW.role != 'owner' THEN
     RAISE EXCEPTION 'Cannot change the project owner role';
+  END IF;
+  -- Can't promote to owner (prevents multiple owners)
+  IF NEW.role = 'owner' AND OLD.role != 'owner' THEN
+    RAISE EXCEPTION 'Cannot promote to owner — use ownership transfer instead';
   END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER prevent_owner_role_change_trigger
+CREATE TRIGGER protect_owner_role_trigger
   BEFORE UPDATE ON project_members
-  FOR EACH ROW EXECUTE FUNCTION prevent_owner_role_change();
+  FOR EACH ROW EXECUTE FUNCTION protect_owner_role();
+
+-- Belt-and-suspenders: partial unique index ensures at most one owner per project
+CREATE UNIQUE INDEX one_owner_per_project
+  ON project_members (project_id) WHERE role = 'owner';
 ```
 
 #### Auto-owner trigger (SECURITY DEFINER)
@@ -811,7 +838,7 @@ All migrations go in `supabase/migrations/`. Naming convention: `YYYYMMDD######_
 8. **`20260403000008_update_rls_policies.sql`**
    - **Projects table:** SELECT policy for project members (needed for Shared with Me + Project Detail header)
    - Invite visibility by email on `registry_collaborators` (before claim)
-   - File access for work collaborators: `invited` OR `confirmed` status (not just confirmed — allows reviewing before accepting)
+   - File access for work collaborators: `confirmed` status only (no access at `invited` — invite email contains key terms instead)
    - Audio file access via work collaboration (was missing entirely)
    - **SELECT on join tables:** `work_files` and `work_audio_links` need their own SELECT policies (subqueries in other policies reference them)
    - Project member cascading access to works, files, audio
