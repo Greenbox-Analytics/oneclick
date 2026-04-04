@@ -1,11 +1,14 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Music, Upload, Volume2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, Music, Upload, Volume2, Link as LinkIcon } from "lucide-react";
 import { toast } from "sonner";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 import type { AudioFile, ProjectAudioLink } from "@/types/audio";
 
 interface AudioTabProps {
@@ -26,9 +29,12 @@ function formatFileSize(bytes: number | null): string {
 }
 
 export default function AudioTab({ projectId, userRole, artistId }: AudioTabProps) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [linkingAudioId, setLinkingAudioId] = useState<string | null>(null);
+  const [linkingInProgress, setLinkingInProgress] = useState(false);
 
   // Fetch audio files linked to this project via project_audio_links
   const { data: audioLinks, isLoading: linksLoading } = useQuery<
@@ -41,6 +47,21 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
         .select("*, audio_files(*)")
         .eq("project_id", projectId);
       if (error) throw error;
+      return data || [];
+    },
+    enabled: !!projectId,
+  });
+
+  // Fetch works for this project (for linking)
+  const { data: projectWorks } = useQuery({
+    queryKey: ["project-works-for-audio-linking", projectId],
+    queryFn: async () => {
+      const { data, error } = await sb
+        .from("works_registry")
+        .select("id, title")
+        .eq("project_id", projectId)
+        .order("title");
+      if (error) return [];
       return data || [];
     },
     enabled: !!projectId,
@@ -75,6 +96,24 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       audioWorksMap.get(link.audio_file_id)!.push({ workId: w.id, title: w.title });
     }
   }
+
+  const handleLinkToWork = async (audioFileId: string, workId: string) => {
+    if (!user?.id) return;
+    setLinkingInProgress(true);
+    try {
+      await apiFetch(
+        `${API_URL}/registry/works/${workId}/audio?audio_file_id=${audioFileId}&user_id=${user.id}`,
+        { method: "POST" }
+      );
+      queryClient.invalidateQueries({ queryKey: ["work-audio-links-for-project", projectId] });
+      toast.success("Audio linked to work");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to link audio");
+    } finally {
+      setLinkingInProgress(false);
+      setLinkingAudioId(null);
+    }
+  };
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -199,6 +238,8 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
         <div className="grid gap-2">
           {audioFiles.map((audio) => {
             const linkedWorks = audioWorksMap.get(audio.id);
+            const hasNoWorkLinks = !linkedWorks || linkedWorks.length === 0;
+            const isLinkingThis = linkingAudioId === audio.id;
             return (
               <Card key={audio.id} className="p-3">
                 <div className="flex items-center gap-3">
@@ -212,28 +253,62 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       {audio.file_type && <span>{audio.file_type}</span>}
                       {audio.file_size && <span>{formatFileSize(audio.file_size)}</span>}
-                      {linkedWorks && linkedWorks.length > 0 && (
+                      {linkedWorks && linkedWorks.length > 0 ? (
                         <span className="flex items-center gap-1">
-                          Works:{" "}
+                          Relevant works:{" "}
                           {linkedWorks.map((w) => (
                             <Badge key={w.workId} variant="outline" className="text-[10px] px-1.5 py-0">
                               {w.title}
                             </Badge>
                           ))}
                         </span>
+                      ) : (
+                        <span className="italic text-muted-foreground">Not linked to any work</span>
                       )}
                     </div>
                   </div>
-                  {audio.file_url && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 px-2 text-xs shrink-0"
-                      onClick={() => window.open(audio.file_url, "_blank")}
-                    >
-                      Open
-                    </Button>
-                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {/* Link to work action for unlinked audio files */}
+                    {hasNoWorkLinks && canEdit(userRole) && projectWorks && projectWorks.length > 0 && (
+                      isLinkingThis ? (
+                        <Select
+                          onValueChange={(workId) => handleLinkToWork(audio.id, workId)}
+                          disabled={linkingInProgress}
+                        >
+                          <SelectTrigger className="h-7 w-32 text-xs">
+                            <SelectValue placeholder="Select work..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {projectWorks.map((work: any) => (
+                              <SelectItem key={work.id} value={work.id}>
+                                {work.title}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => setLinkingAudioId(audio.id)}
+                        >
+                          <LinkIcon className="w-3 h-3 mr-1" />
+                          Link to work
+                        </Button>
+                      )
+                    )}
+                    {audio.file_url && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs shrink-0"
+                        onClick={() => window.open(audio.file_url, "_blank")}
+                      >
+                        Open
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </Card>
             );

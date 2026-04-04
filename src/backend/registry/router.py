@@ -18,7 +18,7 @@ from registry.models import (
     StakeCreate, StakeUpdate,
     LicenseCreate, LicenseUpdate,
     AgreementCreate,
-    CollaboratorInvite, CollaboratorInviteWithStakes, DisputeRequest,
+    CollaboratorInvite, CollaboratorInviteWithStakes,
     TeamCardUpdate,
     NoteCreate, NoteUpdate, FolderCreate, FolderUpdate,
     ProjectAboutUpdate,
@@ -104,7 +104,7 @@ async def submit_for_approval(work_id: str, user_id: str = Query(...)):
     if error:
         raise HTTPException(status_code=400, detail=error)
 
-    # Re-send invitation emails to all collaborators (especially those reset from disputed)
+    # Re-send invitation emails to all collaborators
     renotify = (result or {}).pop("_renotify_collabs", [])
     if renotify:
         from registry.emails import send_invitation_email
@@ -312,14 +312,6 @@ async def claim_invitation(invite_token: str = Query(...), user_id: str = Query(
 @router.post("/collaborators/{collaborator_id}/confirm")
 async def confirm_stake(collaborator_id: str, user_id: str = Query(...)):
     collab = await service.confirm_stake(_get_supabase(), collaborator_id, user_id)
-    if not collab:
-        raise HTTPException(status_code=404, detail="Collaborator record not found")
-    return collab
-
-
-@router.post("/collaborators/{collaborator_id}/dispute")
-async def dispute_stake(collaborator_id: str, body: DisputeRequest, user_id: str = Query(...)):
-    collab = await service.dispute_stake(_get_supabase(), collaborator_id, user_id, body.reason)
     if not collab:
         raise HTTPException(status_code=404, detail="Collaborator record not found")
     return collab

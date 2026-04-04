@@ -1,14 +1,18 @@
 import { useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   Loader2, ChevronRight, Upload, FileText, Search, Download, ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 interface FilesTabProps {
   projectId: string;
@@ -25,6 +29,7 @@ const FOLDER_CATEGORIES = [
 const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
 
 export default function FilesTab({ projectId, userRole }: FilesTabProps) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [uploadingCategory, setUploadingCategory] = useState<string | null>(null);
@@ -36,6 +41,11 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   });
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  // Work-linking dialog state (Fix #4)
+  const [linkingFileId, setLinkingFileId] = useState<string | null>(null);
+  const [selectedWorkIds, setSelectedWorkIds] = useState<string[]>([]);
+  const [linkingInProgress, setLinkingInProgress] = useState(false);
+
   // Fetch project files
   const { data: files, isLoading } = useQuery({
     queryKey: ["project-files-tab", projectId],
@@ -46,6 +56,21 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
         .eq("project_id", projectId)
         .order("created_at", { ascending: false });
       if (error) throw error;
+      return data || [];
+    },
+    enabled: !!projectId,
+  });
+
+  // Fetch works for this project (for the linking dialog)
+  const { data: projectWorks } = useQuery({
+    queryKey: ["project-works-for-linking", projectId],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("works_registry")
+        .select("id, title")
+        .eq("project_id", projectId)
+        .order("title");
+      if (error) return [];
       return data || [];
     },
     enabled: !!projectId,
@@ -85,6 +110,34 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
 
     setUploadingCategory(category);
     try {
+      // Fix #3: Compute SHA-256 hash for dedup
+      const hashBuffer = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const contentHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+      // Check for duplicate file in this project
+      const { data: existing } = await supabase
+        .from("project_files")
+        .select("id, file_name")
+        .eq("project_id", projectId)
+        .eq("content_hash", contentHash)
+        .limit(1);
+
+      if (existing && existing.length > 0) {
+        const proceed = window.confirm(
+          `This file already exists in this project as "${existing[0].file_name}". Link the existing file to works instead?\n\nClick "OK" to skip upload, or "Cancel" to upload anyway.`
+        );
+        if (proceed) {
+          // Open linking dialog for the existing file instead
+          setUploadingCategory(null);
+          event.target.value = "";
+          setLinkingFileId(existing[0].id);
+          setSelectedWorkIds([]);
+          return;
+        }
+        // User chose "Cancel" = upload anyway
+      }
+
       const filePath = `${projectId}/${category}/${Date.now()}_${file.name}`;
       const { error: uploadError } = await supabase.storage
         .from("project-files")
@@ -93,7 +146,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
 
       const { data: urlData } = supabase.storage.from("project-files").getPublicUrl(filePath);
 
-      const { error: dbError } = await supabase
+      const { data: insertedData, error: dbError } = await supabase
         .from("project_files")
         .insert({
           project_id: projectId,
@@ -102,7 +155,10 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           folder_category: category,
           file_size: file.size,
           file_type: file.type,
-        });
+          content_hash: contentHash,
+        })
+        .select("id")
+        .single();
 
       if (dbError) {
         await supabase.storage.from("project-files").remove([filePath]);
@@ -111,11 +167,38 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
 
       queryClient.invalidateQueries({ queryKey: ["project-files-tab", projectId] });
       toast.success("File uploaded");
+
+      // Fix #4: After upload, prompt to link to works
+      if (insertedData?.id && projectWorks && projectWorks.length > 0) {
+        setLinkingFileId(insertedData.id);
+        setSelectedWorkIds([]);
+      }
     } catch (error: any) {
       toast.error(error.message || "Failed to upload file");
     } finally {
       setUploadingCategory(null);
       event.target.value = "";
+    }
+  };
+
+  const handleLinkToWorks = async () => {
+    if (!linkingFileId || selectedWorkIds.length === 0 || !user?.id) return;
+    setLinkingInProgress(true);
+    try {
+      for (const workId of selectedWorkIds) {
+        await apiFetch(
+          `${API_URL}/registry/works/${workId}/files?file_id=${linkingFileId}&user_id=${user.id}`,
+          { method: "POST" }
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["work-file-links-for-project", projectId] });
+      toast.success("File linked to works");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to link file");
+    } finally {
+      setLinkingInProgress(false);
+      setLinkingFileId(null);
+      setSelectedWorkIds([]);
     }
   };
 
@@ -241,13 +324,19 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                                   )}
                                   {linkedWorks && linkedWorks.length > 0 && (
                                     <span>
-                                      Works:{" "}
+                                      Relevant works:{" "}
                                       {linkedWorks.map((w, i) => (
                                         <span key={w.workId}>
                                           {i > 0 && ", "}
-                                          <span className="text-primary hover:underline cursor-pointer">
+                                          <a
+                                            href={`/tools/registry/${w.workId}`}
+                                            className="text-primary hover:underline cursor-pointer"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                            }}
+                                          >
                                             {w.title}
-                                          </span>
+                                          </a>
                                         </span>
                                       ))}
                                     </span>
@@ -278,6 +367,47 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           })}
         </div>
       )}
+
+      {/* Work-linking dialog (Fix #4) */}
+      <Dialog open={!!linkingFileId} onOpenChange={(open) => { if (!open) { setLinkingFileId(null); setSelectedWorkIds([]); } }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Link this file to works?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {(projectWorks || []).map((work: any) => (
+              <label key={work.id} className="flex items-center gap-2 p-2 rounded hover:bg-muted/50 cursor-pointer">
+                <Checkbox
+                  checked={selectedWorkIds.includes(work.id)}
+                  onCheckedChange={(checked) => {
+                    setSelectedWorkIds((prev) =>
+                      checked
+                        ? [...prev, work.id]
+                        : prev.filter((id) => id !== work.id)
+                    );
+                  }}
+                />
+                <span className="text-sm">{work.title}</span>
+              </label>
+            ))}
+            {(!projectWorks || projectWorks.length === 0) && (
+              <p className="text-sm text-muted-foreground">No works in this project yet.</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setLinkingFileId(null); setSelectedWorkIds([]); }}>
+              Skip
+            </Button>
+            <Button
+              onClick={handleLinkToWorks}
+              disabled={selectedWorkIds.length === 0 || linkingInProgress}
+            >
+              {linkingInProgress && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Link ({selectedWorkIds.length})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

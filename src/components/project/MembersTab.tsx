@@ -33,10 +33,10 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 const COLLAB_STATUS_COLORS: Record<string, string> = {
-  accepted: "bg-emerald-500/15 text-emerald-400",
-  pending: "bg-amber-500/15 text-amber-400",
+  confirmed: "bg-emerald-500/15 text-emerald-400",
+  invited: "bg-amber-500/15 text-amber-400",
   declined: "bg-red-500/15 text-red-400",
-  disputed: "bg-red-500/15 text-red-400",
+  revoked: "bg-gray-500/15 text-gray-400",
 };
 
 const canManageMembers = (role: string | null) => role === "owner" || role === "admin";
@@ -96,10 +96,28 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     enabled: memberUserIds.length > 0,
   });
 
-  const profileMap = new Map<string, { full_name: string | null; first_name: string | null; last_name: string | null; avatar_url: string | null }>();
+  const profileMap = new Map<string, { full_name: string | null; first_name: string | null; last_name: string | null; avatar_url: string | null; email?: string | null }>();
   for (const p of memberProfiles || []) {
     profileMap.set(p.id, p);
   }
+
+  // Fetch emails for all member user_ids
+  const { data: emailProfiles } = useQuery({
+    queryKey: ["member-email-profiles", projectId, memberUserIds],
+    queryFn: async () => {
+      if (memberUserIds.length === 0) return {};
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, email")
+        .in("id", memberUserIds);
+      const map: Record<string, string> = {};
+      for (const p of data || []) {
+        if (p.email) map[p.id] = p.email;
+      }
+      return map;
+    },
+    enabled: memberUserIds.length > 0,
+  });
 
   const handleInvite = () => {
     if (!inviteEmail.trim()) return;
@@ -148,7 +166,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
                 profile?.full_name ||
                 [profile?.first_name, profile?.last_name].filter(Boolean).join(" ") ||
                 member.user_id;
-              const email = "";
+              const email = emailProfiles?.[member.user_id] || "";
               return (
                 <Card key={member.id} className="p-3">
                   <div className="flex items-center gap-3">
@@ -264,16 +282,16 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
                     </div>
                     <Badge
                       className={`text-xs border-0 shrink-0 ${
-                        COLLAB_STATUS_COLORS[collab.status] || COLLAB_STATUS_COLORS.pending
+                        COLLAB_STATUS_COLORS[collab.status] || COLLAB_STATUS_COLORS.invited
                       }`}
                     >
-                      {collab.status === "accepted"
-                        ? "Accepted"
+                      {collab.status === "confirmed"
+                        ? "Confirmed"
                         : collab.status === "declined"
                         ? "Declined"
-                        : collab.status === "disputed"
-                        ? "Disputed"
-                        : "Pending"}
+                        : collab.status === "revoked"
+                        ? "Revoked"
+                        : "Invited"}
                     </Badge>
                   </div>
                 </Card>

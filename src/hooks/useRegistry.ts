@@ -37,7 +37,7 @@ export interface Agreement {
 export interface Collaborator {
   id: string; work_id: string; stake_id: string | null; invited_by: string;
   collaborator_user_id: string | null; email: string; name: string; role: string;
-  status: string; invite_token: string; dispute_reason: string | null;
+  status: string; invite_token: string;
   expires_at: string; invited_at: string; responded_at: string | null;
 }
 
@@ -316,27 +316,6 @@ export function useConfirmStake() {
   });
 }
 
-export function useDisputeStake() {
-  const { user } = useAuth();
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ collaboratorId, reason }: { collaboratorId: string; reason: string }) =>
-      apiFetch<Collaborator>(
-        `${API_URL}/registry/collaborators/${collaboratorId}/dispute?user_id=${user!.id}`,
-        {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason }),
-        }
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["registry-work-full"] });
-      qc.invalidateQueries({ queryKey: ["registry-pending-review"] });
-      toast.success("Dispute submitted");
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-}
-
 export function useSubmitForApproval() {
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -401,7 +380,6 @@ export interface DashboardInvite {
   role: string;
   status: string;
   invite_token: string;
-  dispute_reason: string | null;
   expires_at: string;
   invited_at: string;
   responded_at: string | null;

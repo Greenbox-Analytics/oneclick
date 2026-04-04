@@ -72,13 +72,9 @@ async def create_work(db: Client, user_id: str, data: dict):
 
 
 async def update_work(db: Client, user_id: str, work_id: str, data: dict):
-    # Block edits on registered works — requires re-approval if modified
     work = db.table("works_registry").select("status").eq("id", work_id).eq("user_id", user_id).single().execute()
     if not work.data:
         return None
-    if work.data["status"] == "registered":
-        # Reset to draft if owner edits a registered work — forces re-approval
-        data["status"] = "draft"
     result = (
         db.table("works_registry")
         .update(data)
@@ -338,8 +334,8 @@ async def claim_invitation(db: Client, invite_token: str, user_id: str):
 
 
 async def confirm_stake(db: Client, collaborator_id: str, user_id: str):
-    """Collaborator confirms their stake. Can change from disputed->confirmed
-    as long as the work is still in pending_approval status."""
+    """Collaborator confirms their stake, as long as the work is still
+    in pending_approval status."""
     from datetime import datetime, timezone
     # Verify the work is still pending (allow changing decisions)
     collab_check = (
@@ -386,60 +382,6 @@ async def confirm_stake(db: Client, collaborator_id: str, user_id: str):
                 title="Stake confirmed",
                 message=f'{collab["name"]} confirmed their stake on "{work_row.data["title"]}"',
                 metadata={"collaborator_name": collab["name"]},
-            )
-    return result.data[0] if result.data else None
-
-
-async def dispute_stake(db: Client, collaborator_id: str, user_id: str, reason: str):
-    """Collaborator disputes their stake. Can change from confirmed->disputed
-    as long as the work is still in pending_approval status."""
-    from datetime import datetime, timezone
-    # Verify the work is still pending (allow changing decisions)
-    collab_check = (
-        db.table("registry_collaborators")
-        .select("work_id, status")
-        .eq("id", collaborator_id)
-        .eq("collaborator_user_id", user_id)
-        .single()
-        .execute()
-    )
-    if not collab_check.data:
-        return None
-    work = (
-        db.table("works_registry")
-        .select("status")
-        .eq("id", collab_check.data["work_id"])
-        .single()
-        .execute()
-    )
-    if work.data and work.data["status"] == "registered":
-        return None  # Can't change after fully registered
-
-    result = (
-        db.table("registry_collaborators")
-        .update({
-            "status": "disputed",
-            "dispute_reason": reason,
-            "responded_at": datetime.now(timezone.utc).isoformat(),
-        })
-        .eq("id", collaborator_id)
-        .eq("collaborator_user_id", user_id)
-        .execute()
-    )
-    if result.data:
-        collab = result.data[0]
-        await check_and_update_work_status(db, collab["work_id"])
-        # Notify the work creator about the dispute
-        work_row = db.table("works_registry").select("user_id, title").eq("id", collab["work_id"]).single().execute()
-        if work_row.data:
-            await create_notification(
-                db,
-                user_id=work_row.data["user_id"],
-                work_id=collab["work_id"],
-                notification_type="dispute",
-                title="Stake disputed",
-                message=f'{collab["name"]} disputed their stake on "{work_row.data["title"]}": {reason}',
-                metadata={"collaborator_name": collab["name"], "reason": reason},
             )
     return result.data[0] if result.data else None
 
@@ -557,7 +499,7 @@ async def submit_for_approval(db: Client, user_id: str, work_id: str):
     )
     updated_work = result.data[0] if result.data else None
 
-    # Re-notify all collaborators (especially those reset from disputed->invited)
+    # Re-notify all collaborators that have been reset to invited
     if updated_work:
         work_title = updated_work.get("title", "Untitled")
         all_collabs = (

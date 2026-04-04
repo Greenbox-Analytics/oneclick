@@ -109,9 +109,6 @@ class CollaboratorInvite(BaseModel):
     role: str
 
 
-class DisputeRequest(BaseModel):
-    reason: str
-
 
 # --- TeamCard ---
 

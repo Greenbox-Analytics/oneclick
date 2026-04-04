@@ -35,7 +35,7 @@ interface SettingsTabProps {
   };
 }
 
-const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
+const canEdit = (role: string | null) => role === "owner" || role === "admin";
 
 export default function SettingsTab({ projectId, userRole, project }: SettingsTabProps) {
   const navigate = useNavigate();

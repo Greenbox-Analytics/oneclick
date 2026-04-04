@@ -291,7 +291,7 @@ function MyWorksTab({
                           variant="link"
                           size="sm"
                           className="h-auto p-0 text-xs text-primary"
-                          onClick={() => navigate(`/tools/projects/${projId}`)}
+                          onClick={() => navigate(`/projects/${projId}`)}
                         >
                           Open project <ExternalLink className="w-3 h-3 ml-1" />
                         </Button>
