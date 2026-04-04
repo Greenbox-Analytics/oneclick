@@ -1,0 +1,222 @@
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Loader2, Trash2, LogOut } from "lucide-react";
+import { toast } from "sonner";
+import { useRemoveProjectMember, useProjectMembers } from "@/hooks/useProjectMembers";
+
+interface SettingsTabProps {
+  projectId: string;
+  userRole: string | null;
+  project: {
+    id: string;
+    name: string;
+    description: string | null;
+    artist_id: string;
+    artists?: { name: string; user_id: string } | null;
+  };
+}
+
+const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
+
+export default function SettingsTab({ projectId, userRole, project }: SettingsTabProps) {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const { data: members } = useProjectMembers(projectId);
+  const removeMember = useRemoveProjectMember();
+
+  const [name, setName] = useState(project.name);
+  const [description, setDescription] = useState(project.description || "");
+  const [saving, setSaving] = useState(false);
+
+  // Update project mutation
+  const updateProject = useMutation({
+    mutationFn: async ({ name, description }: { name: string; description: string }) => {
+      const { error } = await supabase
+        .from("projects")
+        .update({ name: name.trim(), description: description.trim() || null })
+        .eq("id", projectId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project-detail", projectId] });
+      toast.success("Project updated");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  // Delete project mutation
+  const deleteProject = useMutation({
+    mutationFn: async () => {
+      // Delete project files from storage first
+      const { data: files } = await supabase
+        .from("project_files")
+        .select("id")
+        .eq("project_id", projectId);
+
+      if (files && files.length > 0) {
+        await supabase.from("project_files").delete().eq("project_id", projectId);
+      }
+
+      const { error } = await supabase.from("projects").delete().eq("id", projectId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Project deleted");
+      navigate("/portfolio");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      toast.error("Project name is required");
+      return;
+    }
+    setSaving(true);
+    await updateProject.mutateAsync({ name, description });
+    setSaving(false);
+  };
+
+  const handleLeave = () => {
+    const myMember = members?.find((m) => m.user_id === user?.id);
+    if (!myMember) return;
+    removeMember.mutate(
+      { projectId, memberId: myMember.id },
+      {
+        onSuccess: () => {
+          toast.success("You left the project");
+          navigate("/portfolio");
+        },
+      }
+    );
+  };
+
+  const isOwner = userRole === "owner";
+
+  return (
+    <div className="space-y-6 max-w-lg">
+      {/* General Settings */}
+      <Card className="p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-foreground">General</h3>
+
+        <div className="space-y-2">
+          <Label htmlFor="project-name">Project Name</Label>
+          <Input
+            id="project-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={!canEdit(userRole)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="project-description">Description</Label>
+          <Textarea
+            id="project-description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Add a description..."
+            rows={3}
+            disabled={!canEdit(userRole)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Artist</Label>
+          <Input value={project.artists?.name || "Unknown"} disabled className="opacity-70" />
+        </div>
+
+        {canEdit(userRole) && (
+          <Button onClick={handleSave} disabled={saving || !name.trim()}>
+            {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            Save Changes
+          </Button>
+        )}
+      </Card>
+
+      {/* Leave Project (non-owners only) */}
+      {!isOwner && userRole && (
+        <Card className="p-5 space-y-3">
+          <h3 className="text-sm font-semibold text-foreground">Leave Project</h3>
+          <p className="text-xs text-muted-foreground">
+            You will lose access to this project. This action cannot be undone.
+          </p>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="outline" size="sm">
+                <LogOut className="w-4 h-4 mr-2" /> Leave Project
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Leave project?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  You will be removed from "{project.name}" and lose access. You'll need to be re-invited to rejoin.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleLeave}>Leave</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </Card>
+      )}
+
+      {/* Danger Zone (owner only) */}
+      {isOwner && (
+        <Card className="p-5 space-y-3 border-destructive/30">
+          <h3 className="text-sm font-semibold text-destructive">Danger Zone</h3>
+          <p className="text-xs text-muted-foreground">
+            Deleting this project will permanently remove all associated files and data.
+          </p>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" size="sm">
+                <Trash2 className="w-4 h-4 mr-2" /> Delete Project
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete project?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete "{project.name}" and all its files. This action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteProject.mutate()}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  {deleteProject.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </Card>
+      )}
+    </div>
+  );
+}
