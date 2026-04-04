@@ -21,7 +21,9 @@ Redesign the Portfolio and Rights Registry to introduce a dedicated Project Deta
 
 **Changes from current:**
 - Remove inline project expansion/accordion (currently ~1300 lines of nested UI)
-- Replace with a clean card grid grouped by artist → year
+- Replace with a clean card grid in two sections:
+  - **My Projects** — grouped by artist → year (projects where user is owner)
+  - **Shared with Me** — projects where user is a member but not owner, grouped by artist → year. Shows the role badge on each card.
 - Each project card shows: name, work count, member count, last updated
 - Click card → navigates to `/projects/{projectId}`
 - Keep: search, filter by artist, sort (A-Z, newest, oldest), date range filters
@@ -76,8 +78,8 @@ Redesign the Portfolio and Rights Registry to introduce a dedicated Project Deta
 - Upload button per folder
 - File linking: after upload, prompt to link to specific works
 - SHA-256 content hash computed on upload, stored on file record
-  - On upload: check if user already has access to a file with same hash
-  - If duplicate found: prompt "You already have access to this file via [Work X]. Link it instead of uploading a duplicate?"
+  - On upload: check if a file with the same hash already exists **within the same project** (not cross-project — cross-project files are independent even if identical)
+  - If duplicate found within project: prompt "This file already exists in this project. Link the existing file to additional works instead of uploading a duplicate?"
   - If no match: upload normally
 
 #### Tab 3: Audio
@@ -93,8 +95,14 @@ Redesign the Portfolio and Rights Registry to introduce a dedicated Project Deta
 **Project Members** (can see all works):
 - Avatar circle (initials, colored by role), name, email
 - Role badge dropdown (clickable to change): Owner (purple), Admin (blue), Editor (amber), Viewer (green)
-- Remove button (×) — owner only
+- Remove button (×) — admin+ can remove others, any non-owner member can remove themselves. Owner cannot be removed.
 - "+ Invite Member" button
+
+**Project Member Invite Flow:**
+- Admin+ clicks "+ Invite Member" → enters email and selects role
+- If the email matches an existing user account: member is added directly (no accept/decline ceremony — project membership is simpler than work collaboration)
+- If no account exists for that email: an email is sent inviting them to sign up. On signup, they are auto-added to the project with the assigned role.
+- Backend: `POST /projects/{projectId}/members` → validates caller is admin+, creates `project_members` row, sends email if needed via Resend
 
 **Work-Only Collaborators** (can see only their linked work):
 - Avatar circle, name, email
@@ -117,7 +125,9 @@ Redesign the Portfolio and Rights Registry to introduce a dedicated Project Deta
 - Project Name (editable input)
 - Description (editable text area)
 - Artist (read-only, cannot be changed after creation)
-- Danger Zone: Delete project button with confirmation (owner only)
+- Danger Zone:
+  - Delete project button with confirmation (owner only)
+  - "Leave project" button for non-owner members (removes themselves from `project_members`)
 
 ### 3. Work Detail Page (Existing — Minor Updates)
 
@@ -131,6 +141,21 @@ Redesign the Portfolio and Rights Registry to introduce a dedicated Project Deta
 - Show linked files section: contracts/files linked to this work via work_files join table
 - Show linked audio file
 - Work type: support "Other" with custom text display
+
+**Work Status Transition Rules:**
+- `draft` → `pending_approval`: Owner clicks "Submit for Approval". Requires at least 1 collaborator with status `invited`. Endpoint: `POST /registry/works/{workId}/submit-for-approval` (already exists in codebase).
+- `pending_approval` → `registered`: **Backend logic in the confirm endpoint.** After each `POST /registry/collaborators/{id}/confirm`, the backend checks: are ALL collaborators on this work now `confirmed`? If yes, auto-transition work to `registered`. If not, stay in `pending_approval`.
+- `pending_approval` → `pending_approval` (reset): If a new collaborator is added to a work that's already in `pending_approval`, the work stays in `pending_approval` (new collaborator needs to confirm too).
+- `registered` → `draft`: If the owner edits the work metadata or adds a new collaborator after registration, work reverts to `draft` (existing behavior in codebase).
+- **Zero collaborators:** A work with no collaborators stays in `draft`. The owner can manually register it by clicking "Register" (no approval needed if there's nobody to approve). This is a direct `draft` → `registered` transition available only when collaborator count = 0.
+- **Collaborator self-decline after accepting:** Not allowed. Once `confirmed`, a collaborator's status is locked. Only the owner can revoke.
+
+**Revoke Workflow:**
+- Owner or admin can revoke a collaborator from the Work Detail → Collaboration panel (existing revoke button in `CollaborationStatus`).
+- `POST /registry/collaborators/{id}/revoke` → sets status to `revoked`.
+- On revoke: the associated ownership stake(s) linked to that collaborator are deleted (`DELETE FROM ownership_stakes WHERE id = collaborator.stake_id`).
+- If the work was `registered` and a collaborator is revoked, work reverts to `draft` (ownership has changed, needs re-confirmation from remaining collaborators).
+- Revoked collaborator loses access to the work and its files (RLS only grants access to `confirmed` status).
 
 **Invite Collaborator Form (enhanced):**
 The existing InviteCollaboratorModal becomes more comprehensive:
@@ -166,6 +191,8 @@ The existing InviteCollaboratorModal becomes more comprehensive:
 
 #### Action Required
 - Pending invites that need your response
+- **Invite visibility before claim:** Invites are matched by email. RLS policy on `registry_collaborators` allows `SELECT` where `email = (SELECT email FROM auth.users WHERE id = auth.uid())` AND `status = 'invited'`. This lets users see their invites before clicking the email claim link.
+- **Accepting from this page:** When a user clicks Accept on an unclaimed invite, the backend performs claim + confirm atomically: sets `collaborator_user_id = auth.uid()` and `status = 'confirmed'` in one operation.
 - Each card shows:
   - Who invited you, project name, work name
   - Your listed stake (master %, publishing %, role)
@@ -245,55 +272,267 @@ ALTER TABLE project_files ADD COLUMN content_hash TEXT;
 ```sql
 ALTER TABLE works_registry ADD COLUMN custom_work_type TEXT;
 ```
-The `work_type` enum gains 'other'. When `work_type = 'other'`, `custom_work_type` stores the user's free text.
+The `work_type` column uses a CHECK constraint (not a Postgres enum). Replace the constraint to add 'other':
+```sql
+ALTER TABLE works_registry DROP CONSTRAINT works_registry_work_type_check;
+ALTER TABLE works_registry ADD CONSTRAINT works_registry_work_type_check
+  CHECK (work_type IN ('single', 'ep_track', 'album_track', 'composition', 'other'));
+```
+When `work_type = 'other'`, `custom_work_type` stores the user's free text.
 
-#### `works_registry` — status enum update
-Remove 'disputed' from the status check constraint. New valid values: `draft`, `pending_approval`, `registered`.
+#### `works_registry` — status constraint update
+**Data migration first** — migrate existing disputed records before changing the constraint:
+```sql
+UPDATE works_registry SET status = 'draft' WHERE status = 'disputed';
+```
+Then replace the constraint:
+```sql
+ALTER TABLE works_registry DROP CONSTRAINT works_registry_status_check;
+ALTER TABLE works_registry ADD CONSTRAINT works_registry_status_check
+  CHECK (status IN ('draft', 'pending_approval', 'registered'));
+```
 
 #### `registry_collaborators` — simplify status
-Remove 'disputed' status. Valid values: `invited`, `confirmed`, `declined`, `revoked`.
-Remove `dispute_reason` column.
+**Data migration first:**
+```sql
+UPDATE registry_collaborators SET status = 'declined' WHERE status = 'disputed';
+```
+Then replace the constraint:
+```sql
+ALTER TABLE registry_collaborators DROP CONSTRAINT registry_collaborators_status_check;
+ALTER TABLE registry_collaborators ADD CONSTRAINT registry_collaborators_status_check
+  CHECK (status IN ('invited', 'confirmed', 'declined', 'revoked'));
+```
+Drop the `dispute_reason` column:
+```sql
+ALTER TABLE registry_collaborators DROP COLUMN IF EXISTS dispute_reason;
+```
 
 ### RLS Policy Updates
 
-#### File access via work collaboration
+#### Invite visibility by email (before claim)
+```sql
+-- Users can see invites addressed to their email, even before claiming
+CREATE POLICY "collaborators_select_by_email" ON registry_collaborators
+  FOR SELECT USING (
+    email = (SELECT email FROM auth.users WHERE id = auth.uid())
+    OR collaborator_user_id = auth.uid()
+    OR invited_by = auth.uid()
+  );
 ```
+
+#### File access via work collaboration
+```sql
 -- Collaborators can read files linked to their works
-SELECT on project_files WHERE id IN (
-  SELECT file_id FROM work_files WHERE work_id IN (
-    SELECT work_id FROM registry_collaborators
-    WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
-  )
-)
+CREATE POLICY "project_files_select_via_work_collab" ON project_files
+  FOR SELECT USING (
+    id IN (
+      SELECT file_id FROM work_files WHERE work_id IN (
+        SELECT work_id FROM registry_collaborators
+        WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
+      )
+    )
+  );
+```
+
+#### Audio access via work collaboration
+```sql
+-- Collaborators can read audio files linked to their works
+CREATE POLICY "audio_files_select_via_work_collab" ON audio_files
+  FOR SELECT USING (
+    id IN (
+      SELECT audio_file_id FROM work_audio_links WHERE work_id IN (
+        SELECT work_id FROM registry_collaborators
+        WHERE collaborator_user_id = auth.uid() AND status = 'confirmed'
+      )
+    )
+  );
 ```
 
 #### Project member access
-```
+```sql
 -- Project members can read all works in their project
-SELECT on works_registry WHERE project_id IN (
-  SELECT project_id FROM project_members WHERE user_id = auth.uid()
-)
+CREATE POLICY "works_select_via_project_member" ON works_registry
+  FOR SELECT USING (
+    project_id IN (
+      SELECT project_id FROM project_members WHERE user_id = auth.uid()
+    )
+  );
 
 -- Project members can read all files in their project
-SELECT on project_files WHERE project_id IN (
-  SELECT project_id FROM project_members WHERE user_id = auth.uid()
-)
+CREATE POLICY "project_files_select_via_project_member" ON project_files
+  FOR SELECT USING (
+    project_id IN (
+      SELECT project_id FROM project_members WHERE user_id = auth.uid()
+    )
+  );
+
+-- Project members can read all audio in their project (via project_audio_links)
+CREATE POLICY "audio_files_select_via_project_member" ON audio_files
+  FOR SELECT USING (
+    id IN (
+      SELECT audio_file_id FROM project_audio_links WHERE project_id IN (
+        SELECT project_id FROM project_members WHERE user_id = auth.uid()
+      )
+    )
+  );
 ```
 
 #### Role-based write access
-```
+```sql
 -- Editors+ can create/update works
-INSERT/UPDATE on works_registry WHERE project_id IN (
-  SELECT project_id FROM project_members
-  WHERE user_id = auth.uid() AND role IN ('owner', 'admin', 'editor')
-)
+CREATE POLICY "works_insert_editors" ON works_registry
+  FOR INSERT WITH CHECK (
+    project_id IN (
+      SELECT project_id FROM project_members
+      WHERE user_id = auth.uid() AND role IN ('owner', 'admin', 'editor')
+    )
+  );
 
--- Admins+ can manage members
-INSERT/UPDATE/DELETE on project_members WHERE project_id IN (
-  SELECT project_id FROM project_members
-  WHERE user_id = auth.uid() AND role IN ('owner', 'admin')
-)
+CREATE POLICY "works_update_editors" ON works_registry
+  FOR UPDATE USING (
+    project_id IN (
+      SELECT project_id FROM project_members
+      WHERE user_id = auth.uid() AND role IN ('owner', 'admin', 'editor')
+    )
+  );
+
+-- Editors+ can link/unlink files and audio to works
+CREATE POLICY "work_files_insert_editors" ON work_files
+  FOR INSERT WITH CHECK (
+    work_id IN (
+      SELECT id FROM works_registry WHERE project_id IN (
+        SELECT project_id FROM project_members
+        WHERE user_id = auth.uid() AND role IN ('owner', 'admin', 'editor')
+      )
+    )
+  );
+
+CREATE POLICY "work_files_delete_editors" ON work_files
+  FOR DELETE USING (
+    work_id IN (
+      SELECT id FROM works_registry WHERE project_id IN (
+        SELECT project_id FROM project_members
+        WHERE user_id = auth.uid() AND role IN ('owner', 'admin', 'editor')
+      )
+    )
+  );
+
+-- Same pattern for work_audio_links (editors+ can INSERT/DELETE)
+CREATE POLICY "work_audio_links_insert_editors" ON work_audio_links
+  FOR INSERT WITH CHECK (
+    work_id IN (
+      SELECT id FROM works_registry WHERE project_id IN (
+        SELECT project_id FROM project_members
+        WHERE user_id = auth.uid() AND role IN ('owner', 'admin', 'editor')
+      )
+    )
+  );
+
+CREATE POLICY "work_audio_links_delete_editors" ON work_audio_links
+  FOR DELETE USING (
+    work_id IN (
+      SELECT id FROM works_registry WHERE project_id IN (
+        SELECT project_id FROM project_members
+        WHERE user_id = auth.uid() AND role IN ('owner', 'admin', 'editor')
+      )
+    )
+  );
+
+-- Admins+ can manage project members (but cannot delete owner)
+CREATE POLICY "project_members_insert_admins" ON project_members
+  FOR INSERT WITH CHECK (
+    project_id IN (
+      SELECT project_id FROM project_members
+      WHERE user_id = auth.uid() AND role IN ('owner', 'admin')
+    )
+  );
+
+CREATE POLICY "project_members_delete_admins" ON project_members
+  FOR DELETE USING (
+    -- Admins+ can remove others (but not the owner — enforced by trigger)
+    (project_id IN (
+      SELECT project_id FROM project_members
+      WHERE user_id = auth.uid() AND role IN ('owner', 'admin')
+    ))
+    OR
+    -- Any non-owner member can remove themselves
+    (user_id = auth.uid() AND role != 'owner')
+  );
 ```
+
+#### Owner protection
+```sql
+-- Trigger: prevent owner deletion from project_members
+CREATE OR REPLACE FUNCTION prevent_owner_deletion()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.role = 'owner' THEN
+    RAISE EXCEPTION 'Cannot remove the project owner';
+  END IF;
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER prevent_owner_deletion_trigger
+  BEFORE DELETE ON project_members
+  FOR EACH ROW EXECUTE FUNCTION prevent_owner_deletion();
+```
+
+---
+
+## Backend Endpoint Inventory
+
+### Existing Endpoints (no changes needed)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/registry/works` | List user's works |
+| GET | `/registry/works/{workId}` | Get single work |
+| GET | `/registry/works/{workId}/full` | Work + stakes + licenses + agreements + collaborators |
+| GET | `/registry/works/by-project/{projectId}` | Works in a project |
+| GET | `/registry/works/my-collaborations` | Works where user is collaborator |
+| POST | `/registry/works` | Create work |
+| PUT | `/registry/works/{workId}` | Update work (resets registered → draft) |
+| DELETE | `/registry/works/{workId}` | Delete work |
+| POST | `/registry/works/{workId}/submit-for-approval` | Draft → pending_approval. Validates: at least 1 collaborator, work in `draft` status. Resets all collaborator statuses to `invited`, resends emails. |
+| GET | `/registry/works/{workId}/export` | Export proof of ownership PDF |
+| GET | `/registry/stakes` | List stakes for a work |
+| POST | `/registry/stakes` | Create stake |
+| PUT | `/registry/stakes/{stakeId}` | Update stake |
+| DELETE | `/registry/stakes/{stakeId}` | Delete stake |
+| GET | `/registry/licenses` | List licenses for a work |
+| POST | `/registry/licenses` | Create license |
+| PUT | `/registry/licenses/{licenseId}` | Update license |
+| DELETE | `/registry/licenses/{licenseId}` | Delete license |
+| GET | `/registry/agreements` | List agreements for a work |
+| POST | `/registry/agreements` | Create agreement |
+| POST | `/registry/collaborators/claim` | Claim invitation by token (sets collaborator_user_id) |
+| POST | `/registry/collaborators/{id}/confirm` | Accept invitation. **Updated:** after confirming, check if all collaborators are confirmed → auto-transition work to `registered`. |
+| POST | `/registry/collaborators/{id}/revoke` | Revoke collaborator. **Updated:** deletes associated ownership stakes, reverts `registered` work to `draft`. |
+| POST | `/registry/collaborators/{id}/resend` | Resend expired invitation |
+
+### New Endpoints
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/registry/collaborators/invite-with-stakes` | Composite: creates collaborator record + ownership stake(s) atomically. Body: `{work_id, email, name, role, stakes: [{type, percentage}], notes?}` |
+| POST | `/registry/collaborators/{id}/decline` | Decline invitation. Sets status to `declined`. Notifies work owner. |
+| GET | `/registry/collaborators/my-invites` | Get invites for current user by email match (for Action Required tab before claim). |
+| POST | `/registry/collaborators/{id}/accept-from-dashboard` | Claim + confirm atomically (for accepting directly from Registry dashboard without visiting the email link first). Sets `collaborator_user_id` and `status = 'confirmed'` in one call. |
+| GET | `/projects/{projectId}/members` | List project members |
+| POST | `/projects/{projectId}/members` | Add project member (admin+ only). Body: `{email, role}`. Auto-adds if account exists, sends invite email if not. |
+| PUT | `/projects/{projectId}/members/{memberId}` | Update member role (admin+ only, cannot change owner role) |
+| DELETE | `/projects/{projectId}/members/{memberId}` | Remove member (admin+ can remove others, any non-owner can remove self, owner cannot be removed) |
+| GET | `/works/{workId}/files` | List files linked to a work |
+| POST | `/works/{workId}/files` | Link file to work. Body: `{file_id}` |
+| DELETE | `/works/{workId}/files/{linkId}` | Unlink file from work |
+| GET | `/works/{workId}/audio` | List audio files linked to a work |
+| POST | `/works/{workId}/audio` | Link audio to work. Body: `{audio_file_id}` |
+| DELETE | `/works/{workId}/audio/{linkId}` | Unlink audio from work |
+
+### Modified Endpoints
+| Method | Path | Change |
+|---|---|---|
+| POST | `/registry/collaborators/invite` | **Deprecated** — replaced by `/invite-with-stakes`. Keep for backwards compatibility but prefer the composite endpoint. |
 
 ---
 
@@ -361,37 +600,47 @@ Registry (dashboard) ──────────────────┘
 
 ## Migration Files to Create
 
-All migrations go in `supabase/migrations/`. Naming convention: `YYYYMMDD######_description.sql`.
+All migrations go in `supabase/migrations/`. Naming convention: `YYYYMMDD######_description.sql`. **User runs these manually — do not execute directly.**
 
 1. **`20260403000001_create_project_members.sql`**
-   - Create `project_members` table
-   - RLS policies for project member access
-   - Auto-create owner entry when project is created (trigger)
+   - Create `project_members` table with role CHECK constraint
+   - Owner protection trigger (`prevent_owner_deletion`)
+   - Auto-create owner entry trigger: when a project is inserted, auto-insert `project_members` row with `role='owner'` for the project creator
+   - Enable RLS
 
 2. **`20260403000002_create_work_files.sql`**
-   - Create `work_files` join table
-   - RLS: project members can read all; work collaborators can read their work's files
+   - Create `work_files` join table (work_id → file_id, UNIQUE constraint)
+   - Enable RLS
+   - Read policies: project members can read all; work collaborators can read their work's files
+   - Write policies: editors+ can INSERT/DELETE
 
 3. **`20260403000003_create_work_audio_links.sql`**
-   - Create `work_audio_links` join table
-   - RLS: same pattern as work_files
+   - Create `work_audio_links` join table (work_id → audio_file_id, UNIQUE constraint)
+   - Enable RLS
+   - Read policies: project members via project_audio_links; work collaborators via work_audio_links
+   - Write policies: editors+ can INSERT/DELETE
 
 4. **`20260403000004_add_content_hash_to_project_files.sql`**
-   - Add `content_hash` TEXT column to `project_files`
+   - Add `content_hash TEXT` column to `project_files`
 
 5. **`20260403000005_update_works_registry.sql`**
-   - Add `custom_work_type` TEXT column
-   - Update `work_type` check constraint to include 'other'
-   - Update `status` check constraint to remove 'disputed'
+   - Add `custom_work_type TEXT` column
+   - **Data migration:** `UPDATE works_registry SET status = 'draft' WHERE status = 'disputed'`
+   - Drop and recreate `work_type` CHECK constraint (add 'other')
+   - Drop and recreate `status` CHECK constraint (remove 'disputed')
 
 6. **`20260403000006_simplify_collaborator_status.sql`**
-   - Update `registry_collaborators` status check to: invited, confirmed, declined, revoked
+   - **Data migration:** `UPDATE registry_collaborators SET status = 'declined' WHERE status = 'disputed'`
+   - Drop and recreate `status` CHECK constraint: invited, confirmed, declined, revoked
    - Drop `dispute_reason` column
 
 7. **`20260403000007_update_rls_policies.sql`**
-   - File access via work collaboration
+   - Invite visibility by email (collaborators can see invites before claiming)
+   - Audio file access via work collaboration (was missing)
    - Project member cascading access to works, files, audio
-   - Role-based write permissions
+   - Role-based write permissions for works, work_files, work_audio_links
+   - Project member management (admins+, self-removal for non-owners)
+   - Owner protection trigger
 
 ---
 
@@ -474,21 +723,29 @@ These end-to-end scenarios show exactly how a user moves through the system. Eac
 
 **Persona:** Mike is a producer who received an invite from Yash.
 
+**Path A — via email link (standard flow):**
 1. **Mike clicks the email link** → `/tools/registry/invite/{token}` → `InviteClaim` page.
    - If not logged in: redirected to `/auth` then back.
    - API: `POST /registry/collaborators/claim` → sets `collaborator_user_id` to Mike's ID.
    - Redirected to Work Detail for "Neon Lights".
 2. **Mike sees a banner:** "You've been listed as Producer on this work. Please review and confirm or decline."
    - Sees his listed stake: Master 15%
-   - Sees linked contract: `Producer_Agreement_v2.pdf` (readable because he's a confirmed collaborator via RLS)
+   - Sees linked contract: `Producer_Agreement_v2.pdf` (readable because he's now a claimed collaborator — RLS matches `collaborator_user_id`)
 3. **Mike clicks "Accept"** — API: `POST /registry/collaborators/{id}/confirm` → status changes to `confirmed`.
-4. **Alternatively, Mike opens Registry Dashboard** (`/tools/registry`) without clicking the email link.
-   - **Action Required tab** shows: "You've been invited as Producer on 'Neon Lights' — invited by Yash Khapre — Master: 15%"
-   - Mike clicks **Accept** directly from this page (no navigation needed).
-   - Or clicks **Decline** → status changes to `declined`, Yash is notified.
-5. **After acceptance:** If all collaborators have accepted, work status automatically transitions to `registered`.
-6. **Mike's Registry Dashboard now shows:**
-   - Collaborations tab: "Neon Lights" with status "Registered", his 15% master stake
+   - Backend checks: are all collaborators on this work confirmed? If yes → work auto-transitions to `registered`. If not → stays `pending_approval`.
+
+**Path B — via Registry Dashboard (without clicking email link):**
+1. **Mike opens Registry Dashboard** (`/tools/registry`).
+   - **Action Required tab** shows his pending invite. How: RLS policy matches `registry_collaborators.email` against `auth.users.email` for `invited` status records. No `collaborator_user_id` needed yet.
+   - Card shows: "You've been invited as Producer on 'Neon Lights' — invited by Yash Khapre — Master: 15%"
+2. **Mike clicks Accept** directly from this page.
+   - API: `POST /registry/collaborators/{id}/accept-from-dashboard` → performs claim + confirm atomically (sets `collaborator_user_id = auth.uid()` AND `status = 'confirmed'` in one call).
+   - Same auto-transition check as Path A.
+3. **Or Mike clicks Decline** → API: `POST /registry/collaborators/{id}/decline` → status changes to `declined`, Yash is notified.
+
+**After acceptance (either path):**
+4. **Mike's Registry Dashboard now shows:**
+   - Collaborations tab: "Neon Lights" with status "Registered" (or "Pending" if other collaborators remain), his 15% master stake
    - He can click through to see work details, linked contracts, linked audio
    - He does NOT see Amara's project, other works, or other project members
 
@@ -498,10 +755,12 @@ These end-to-end scenarios show exactly how a user moves through the system. Eac
 
 1. **Yash opens Project Detail** → Members tab.
 2. **Clicks "+ Invite Member"** — enters Sarah's email, selects role "Viewer".
-   - API: `INSERT INTO project_members` (role=`viewer`)
-   - Sarah gets an email invite to join the project.
+   - API: `POST /projects/{projectId}/members` with `{email: "sarah@mgmt.com", role: "viewer"}`
+   - Backend checks: Sarah's email matches an existing user → auto-adds to `project_members` (no accept/decline flow for project membership).
+   - If Sarah had no account: email sent inviting her to sign up. On signup, auto-added with role=viewer.
 3. **Sarah logs in** and navigates to her Portfolio.
-   - She sees "Summer Vibes LP" in her portfolio (because she's a project member).
+   - She sees "Summer Vibes LP" under the **"Shared with Me"** section (she's a member, not the owner).
+   - The card shows her role badge: Viewer (green).
    - She opens it → sees ALL 5 works, ALL files, ALL audio, ALL members.
    - She cannot edit anything (Viewer role), but she can view everything.
 4. **Meanwhile, Mike** (work-only collaborator from Workflow 3):
@@ -513,18 +772,20 @@ These end-to-end scenarios show exactly how a user moves through the system. Eac
    - Sarah accessing a file: `project_members` check → role=viewer → ✓ read access to all project files
    - Mike accessing a file: `project_members` check → ✗ not a member → `work_files` + `registry_collaborators` check → file is linked to his work AND he's confirmed → ✓ read access to that file only
 
-### Workflow 5: Uploading a Duplicate Contract
+### Workflow 5: Uploading a Duplicate Contract (Same Project)
 
-**Persona:** Yash uploads the same contract to a different project.
+**Persona:** Yash uploads the same contract twice within the same project.
 
-1. **Yash is in Project Detail** for "Debut Album" → Files tab → Contracts folder.
+1. **Yash is in Project Detail** for "Summer Vibes LP" → Files tab → Contracts folder.
 2. **Clicks Upload** → selects `Producer_Agreement_v2.pdf` from his computer.
 3. **Frontend computes SHA-256 hash** of the file before uploading.
-4. **API checks:** `SELECT * FROM project_files WHERE content_hash = '{hash}' AND project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())`
-5. **Match found:** The same file exists in "Summer Vibes LP" project.
-6. **Prompt appears:** "You already have this file in 'Summer Vibes LP → Contracts'. Would you like to link the existing file instead of uploading a duplicate?"
-   - **"Link existing"** → creates a `work_files` reference to the existing file (no new upload, no storage duplication)
-   - **"Upload anyway"** → uploads as a new file with its own ID (for cases where the user wants separate copies)
+4. **API checks within the same project only:** `SELECT * FROM project_files WHERE content_hash = '{hash}' AND project_id = '{currentProjectId}'`
+5. **Match found:** The same file already exists in this project's Contracts folder.
+6. **Prompt appears:** "This file already exists in this project. Link the existing file to additional works instead of uploading a duplicate?"
+   - **"Link existing"** → shows work picker, creates `work_files` reference(s) to the existing file (no new upload)
+   - **"Upload anyway"** → uploads as a new file with its own ID
+
+**Cross-project note:** If Yash uploads the same file in a different project, no dedup check fires — cross-project files are independent. Each project gets its own `project_files` row pointing to its own storage object, even if the content is identical. This avoids RLS conflicts where a file's `project_id` wouldn't match the accessing project.
 
 ### Workflow 6: Zoe Analyzes a Contract from a Shared Work
 
@@ -581,6 +842,29 @@ These end-to-end scenarios show exactly how a user moves through the system. Eac
    - On error: input reverts to the old name, toast shows error message.
 4. **Same interaction works on the Project Detail header** for renaming the project itself.
 
+### Workflow 10: Revoking a Collaborator
+
+**Persona:** Yash needs to remove Mike from "Neon Lights" after a business disagreement.
+
+1. **Yash opens Work Detail** for "Neon Lights" → Collaboration panel.
+2. **Clicks the revoke button (×)** next to Mike's name. Confirmation dialog: "Remove Mike Peters as collaborator? Their 15% master stake will be deleted."
+3. **Confirms** — API: `POST /registry/collaborators/{id}/revoke`
+   - Backend: sets collaborator status to `revoked`, deletes the associated `ownership_stakes` row (15% master).
+   - If work was `registered`, it reverts to `draft` (ownership changed, remaining collaborators need to re-confirm).
+4. **Mike loses access immediately** — RLS only grants access to `confirmed` collaborators. Mike's Registry Collaborations tab no longer shows "Neon Lights".
+5. **Yash sees the freed-up 15%** and can either redistribute it or invite a new collaborator.
+
+### Workflow 11: Registering a Work with Zero Collaborators
+
+**Persona:** Yash has a solo work with no collaborators — he owns 100%.
+
+1. **Yash creates "Solo Interlude"** in his project — it's in `draft` status.
+2. **He adds ownership stakes:** Master 100% (himself), Publishing 100% (himself).
+3. **No collaborators to invite** — the "Submit for Approval" button is hidden (it requires at least 1 collaborator).
+4. **Instead, a "Register" button appears** — available only when collaborator count = 0.
+5. **Yash clicks "Register"** — API: `PUT /registry/works/{workId}` with `{ status: 'registered' }`. Direct `draft` → `registered` transition, no approval flow needed.
+6. **Work is now Registered.** If Yash later adds a collaborator, the work reverts to `draft` and enters the normal approval flow.
+
 ---
 
 ## Out of Scope
@@ -591,3 +875,6 @@ These end-to-end scenarios show exactly how a user moves through the system. Eac
 - Changes to board/task management
 - Changes to team cards
 - Direct Supabase database changes (migration files only)
+- Ownership transfer (changing project owner) — not addressed, can be added later
+- Collaborator self-decline after accepting — not allowed by design; only owner can revoke
+- Cross-project file deduplication — files are independent per project to avoid RLS conflicts
