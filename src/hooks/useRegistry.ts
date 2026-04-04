@@ -388,6 +388,94 @@ export function useResendInvitation() {
   });
 }
 
+// --- Dashboard Invites ---
+
+export interface DashboardInvite {
+  id: string;
+  work_id: string;
+  stake_id: string | null;
+  invited_by: string;
+  collaborator_user_id: string | null;
+  email: string;
+  name: string;
+  role: string;
+  status: string;
+  invite_token: string;
+  dispute_reason: string | null;
+  expires_at: string;
+  invited_at: string;
+  responded_at: string | null;
+  works_registry: {
+    id: string;
+    title: string;
+    project_id: string;
+    status: string;
+  } | null;
+}
+
+export function useMyInvites() {
+  const { user } = useAuth();
+  return useQuery<DashboardInvite[]>({
+    queryKey: ["registry-my-invites", user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const res = await fetch(`${API_URL}/registry/collaborators/my-invites?user_id=${user.id}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.invites;
+    },
+    enabled: !!user?.id,
+  });
+}
+
+export function useAcceptFromDashboard() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  return useMutation({
+    mutationFn: async (collaboratorId: string) => {
+      const res = await fetch(
+        `${API_URL}/registry/collaborators/${collaboratorId}/accept-from-dashboard?user_id=${user!.id}`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to accept");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["registry-my-invites"] });
+      queryClient.invalidateQueries({ queryKey: ["registry-works"] });
+      queryClient.invalidateQueries({ queryKey: ["registry-my-collaborations"] });
+      toast.success("Invitation accepted");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+}
+
+export function useDeclineInvitation() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  return useMutation({
+    mutationFn: async (collaboratorId: string) => {
+      const res = await fetch(
+        `${API_URL}/registry/collaborators/${collaboratorId}/decline?user_id=${user!.id}`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to decline");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["registry-my-invites"] });
+      toast.success("Invitation declined");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+}
+
 // --- Export ---
 
 export function useExportProof() {

@@ -1,95 +1,206 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { useWorks, useMyCollaborations, useCreateWork, type Work } from "@/hooks/useRegistry";
-import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  useWorks,
+  useMyCollaborations,
+  useMyInvites,
+  useAcceptFromDashboard,
+  useDeclineInvitation,
+  type Work,
+  type DashboardInvite,
+} from "@/hooks/useRegistry";
+import {
+  useRegistryNotifications,
+  type RegistryNotification,
+} from "@/hooks/useRegistryNotifications";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Music, ArrowLeft, Plus, Search, Shield, Loader2, FileText, AlertCircle, Users,
+  Music,
+  Shield,
+  Bell,
+  Search,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  Check,
+  X,
+  Clock,
+  Users,
+  Loader2,
+  FileText,
 } from "lucide-react";
 
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
-
-const WORK_TYPES = [
-  { value: "single", label: "Single" },
-  { value: "ep_track", label: "EP Track" },
-  { value: "album_track", label: "Album Track" },
-  { value: "composition", label: "Composition" },
-];
+/* ------------------------------------------------------------------ */
+/* Constants                                                          */
+/* ------------------------------------------------------------------ */
 
 const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-yellow-100 text-yellow-800",
-  pending_approval: "bg-amber-100 text-amber-800",
-  registered: "bg-green-100 text-green-800",
-  disputed: "bg-red-100 text-red-800",
+  draft: "bg-gray-500/15 text-gray-400",
+  pending_approval: "bg-amber-500/15 text-amber-400",
+  registered: "bg-emerald-500/15 text-emerald-400",
 };
 
-interface Artist { id: string; name: string; }
-interface Project { id: string; name: string; artist_id: string; }
+const STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  pending_approval: "Pending",
+  registered: "Registered",
+};
 
-const Registry = () => {
+/* ------------------------------------------------------------------ */
+/* Helper: time-ago                                                   */
+/* ------------------------------------------------------------------ */
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(dateStr).toLocaleDateString();
+}
+
+/* ------------------------------------------------------------------ */
+/* Sub-components                                                     */
+/* ------------------------------------------------------------------ */
+
+function SummaryCard({
+  label,
+  count,
+  subtitle,
+  colors,
+}: {
+  label: string;
+  count: number;
+  subtitle: string;
+  colors: { bg: string; border: string; text: string };
+}) {
+  return (
+    <Card className={`${colors.bg} border ${colors.border}`}>
+      <CardContent className="p-4">
+        <p className="text-sm text-muted-foreground">{label}</p>
+        <p className={`text-3xl font-bold mt-1 ${colors.text}`}>{count}</p>
+        <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Action Required Tab                                                */
+/* ------------------------------------------------------------------ */
+
+function ActionRequiredTab({
+  invites,
+  isLoading,
+}: {
+  invites: DashboardInvite[];
+  isLoading: boolean;
+}) {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedArtistId, setSelectedArtistId] = useState<string>("all");
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const acceptMut = useAcceptFromDashboard();
+  const declineMut = useDeclineInvitation();
 
-  // Create form state
-  const [newTitle, setNewTitle] = useState("");
-  const [newArtistId, setNewArtistId] = useState("");
-  const [newProjectId, setNewProjectId] = useState("");
-  const [newWorkType, setNewWorkType] = useState("single");
-  const [newIsrc, setNewIsrc] = useState("");
-  const [newIswc, setNewIswc] = useState("");
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
 
-  // Fetch artists
-  const artistsQuery = useQuery<Artist[]>({
-    queryKey: ["registry-artists", user?.id],
-    queryFn: async () => {
-      if (!user?.id) return [];
-      const res = await fetch(`${API_URL}/artists?user_id=${user.id}`);
-      if (!res.ok) return [];
-      const data = await res.json();
-      return (Array.isArray(data) ? data : data.artists || []).map(
-        (a: Record<string, unknown>) => ({ id: a.id as string, name: a.name as string })
-      );
-    },
-    enabled: !!user?.id,
-  });
+  if (invites.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <Check className="w-12 h-12 text-emerald-400 mx-auto mb-3 opacity-60" />
+        <p className="text-muted-foreground">You're all caught up — no pending invitations.</p>
+      </div>
+    );
+  }
 
-  // Fetch projects for selected artist in create form
-  const projectsQuery = useQuery<Project[]>({
-    queryKey: ["registry-projects", newArtistId],
-    queryFn: async () => {
-      if (!newArtistId) return [];
-      const res = await fetch(`${API_URL}/projects/${newArtistId}`);
-      if (!res.ok) return [];
-      const data = await res.json();
-      return (Array.isArray(data) ? data : data.projects || []).map(
-        (p: Record<string, unknown>) => ({
-          id: p.id as string, name: p.name as string, artist_id: p.artist_id as string,
-        })
-      );
-    },
-    enabled: !!newArtistId,
-  });
+  return (
+    <div className="space-y-3">
+      {invites.map((inv) => {
+        const workTitle = inv.works_registry?.title || "Unknown work";
+        const workId = inv.works_registry?.id;
+        const busy = acceptMut.isPending || declineMut.isPending;
 
-  const artistFilter = selectedArtistId === "all" ? undefined : selectedArtistId;
-  const worksQuery = useWorks(artistFilter);
-  const collabQuery = useMyCollaborations();
-  const createWork = useCreateWork();
+        return (
+          <Card key={inv.id} className="border-amber-500/20 bg-amber-500/5">
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-full bg-amber-500/15 p-2">
+                  <Bell className="w-4 h-4 text-amber-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground">
+                    You've been invited as <span className="text-amber-400">{inv.role}</span> on{" "}
+                    <span className="font-semibold">{workTitle}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Invited by {inv.name || "someone"} &middot; {timeAgo(inv.invited_at)}
+                  </p>
 
-  const filteredWorks = useMemo(() => {
-    const works = worksQuery.data || [];
+                  <div className="flex items-center gap-3 mt-3">
+                    <Button
+                      size="sm"
+                      onClick={() => acceptMut.mutate(inv.id)}
+                      disabled={busy}
+                    >
+                      <Check className="w-3.5 h-3.5 mr-1" /> Accept
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => declineMut.mutate(inv.id)}
+                      disabled={busy}
+                    >
+                      <X className="w-3.5 h-3.5 mr-1" /> Decline
+                    </Button>
+                    {workId && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => navigate(`/tools/registry/${workId}`)}
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 mr-1" /> View Work
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* My Works Tab                                                       */
+/* ------------------------------------------------------------------ */
+
+function MyWorksTab({
+  works,
+  isLoading,
+  searchQuery,
+}: {
+  works: Work[];
+  isLoading: boolean;
+  searchQuery: string;
+}) {
+  const navigate = useNavigate();
+  const [collapsedYears, setCollapsedYears] = useState<Set<number>>(new Set());
+
+  const filtered = useMemo(() => {
     if (!searchQuery.trim()) return works;
     const q = searchQuery.toLowerCase();
     return works.filter(
@@ -98,239 +209,422 @@ const Registry = () => {
         (w.isrc && w.isrc.toLowerCase().includes(q)) ||
         (w.iswc && w.iswc.toLowerCase().includes(q))
     );
-  }, [worksQuery.data, searchQuery]);
+  }, [works, searchQuery]);
 
-  const handleCreate = async () => {
-    if (!newTitle.trim() || !newArtistId || !newProjectId) return;
-    await createWork.mutateAsync({
-      artist_id: newArtistId,
-      project_id: newProjectId,
-      title: newTitle.trim(),
-      work_type: newWorkType,
-      isrc: newIsrc.trim() || undefined,
-      iswc: newIswc.trim() || undefined,
+  // Group by year
+  const groupedByYear = useMemo(() => {
+    const map = new Map<number, Work[]>();
+    for (const w of filtered) {
+      const year = new Date(w.created_at).getFullYear();
+      if (!map.has(year)) map.set(year, []);
+      map.get(year)!.push(w);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => b - a);
+  }, [filtered]);
+
+  const toggleYear = (year: number) => {
+    setCollapsedYears((prev) => {
+      const next = new Set(prev);
+      if (next.has(year)) next.delete(year);
+      else next.add(year);
+      return next;
     });
-    setShowCreateDialog(false);
-    setNewTitle(""); setNewArtistId(""); setNewProjectId("");
-    setNewWorkType("single"); setNewIsrc(""); setNewIswc("");
   };
 
-  const getArtistName = (artistId: string) =>
-    (artistsQuery.data || []).find((a) => a.id === artistId)?.name || "Unknown";
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
 
-  const myCollabWorks = collabQuery.data || [];
-  // Split into pending (need action) vs confirmed (already responded)
-  const pendingWorks = myCollabWorks.filter((w) => w.status === "pending_approval");
-  const allCollabWorks = myCollabWorks;
+  if (filtered.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+        <p className="text-muted-foreground">
+          {searchQuery ? "No works match your search." : "No works registered yet."}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {groupedByYear.map(([year, yearWorks]) => {
+        const collapsed = collapsedYears.has(year);
+
+        // Sub-group by project
+        const byProject = new Map<string, Work[]>();
+        for (const w of yearWorks) {
+          const key = w.project_id || "no-project";
+          if (!byProject.has(key)) byProject.set(key, []);
+          byProject.get(key)!.push(w);
+        }
+
+        return (
+          <div key={year}>
+            <button
+              onClick={() => toggleYear(year)}
+              className="flex items-center gap-2 mb-2 text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {collapsed ? (
+                <ChevronRight className="w-4 h-4" />
+              ) : (
+                <ChevronDown className="w-4 h-4" />
+              )}
+              {year}
+              <span className="text-xs font-normal">({yearWorks.length} works)</span>
+            </button>
+
+            {!collapsed && (
+              <div className="space-y-3 ml-6">
+                {Array.from(byProject.entries()).map(([projId, projWorks]) => (
+                  <div key={projId}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        Project
+                      </span>
+                      {projId !== "no-project" && (
+                        <Button
+                          variant="link"
+                          size="sm"
+                          className="h-auto p-0 text-xs text-primary"
+                          onClick={() => navigate(`/tools/projects/${projId}`)}
+                        >
+                          Open project <ExternalLink className="w-3 h-3 ml-1" />
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {projWorks.map((w) => (
+                        <Card
+                          key={w.id}
+                          className="hover:border-primary/50 transition-colors cursor-pointer"
+                          onClick={() => navigate(`/tools/registry/${w.id}`)}
+                        >
+                          <CardContent className="p-3 flex items-center justify-between">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <Music className="w-4 h-4 text-muted-foreground shrink-0" />
+                              <span className="text-sm font-medium truncate">{w.title}</span>
+                              <Badge
+                                className={
+                                  STATUS_COLORS[w.status] || "bg-gray-500/15 text-gray-400"
+                                }
+                              >
+                                {STATUS_LABELS[w.status] || w.status}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-4 text-xs text-muted-foreground shrink-0">
+                              {w.isrc && <span>ISRC: {w.isrc}</span>}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Collaborations Tab                                                 */
+/* ------------------------------------------------------------------ */
+
+function CollaborationsTab({
+  works,
+  isLoading,
+}: {
+  works: Work[];
+  isLoading: boolean;
+}) {
+  const navigate = useNavigate();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (works.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <Users className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+        <p className="text-muted-foreground">No collaborations yet.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {works.map((w) => (
+        <Card
+          key={w.id}
+          className="hover:border-primary/50 transition-colors cursor-pointer"
+          onClick={() => navigate(`/tools/registry/${w.id}`)}
+        >
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{w.title}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {w.work_type.replace("_", " ").toUpperCase()}
+                </p>
+              </div>
+              <Badge className={STATUS_COLORS[w.status] || "bg-gray-500/15 text-gray-400"}>
+                {STATUS_LABELS[w.status] || w.status}
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* All Activity Tab                                                   */
+/* ------------------------------------------------------------------ */
+
+function AllActivityTab({
+  notifications,
+  isLoading,
+}: {
+  notifications: RegistryNotification[];
+  isLoading: boolean;
+}) {
+  const navigate = useNavigate();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (notifications.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <Clock className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+        <p className="text-muted-foreground">No activity yet.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {notifications.map((n) => (
+        <Card key={n.id} className="hover:border-primary/30 transition-colors">
+          <CardContent className="p-3 flex items-start gap-3">
+            <div className="mt-0.5 rounded-full bg-muted p-1.5">
+              <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{n.title}</span>
+                <span className="text-xs text-muted-foreground">{timeAgo(n.created_at)}</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">{n.message}</p>
+            </div>
+            {n.work_id && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="shrink-0"
+                onClick={() => navigate(`/tools/registry/${n.work_id}`)}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Main Page Component                                                */
+/* ------------------------------------------------------------------ */
+
+const Registry = () => {
+  const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Data hooks
+  const worksQuery = useWorks();
+  const collabQuery = useMyCollaborations();
+  const invitesQuery = useMyInvites();
+  const notificationsQuery = useRegistryNotifications();
+
+  const works = worksQuery.data || [];
+  const collabs = collabQuery.data || [];
+  const invites = invitesQuery.data || [];
+  const notifications = notificationsQuery.data || [];
+
+  // Summary counts
+  const myWorksCount = works.length;
+  const registeredCount = works.filter((w) => w.status === "registered").length;
+  const pendingCount = works.filter((w) => w.status === "pending_approval").length;
+  const collabCount = collabs.length;
+
+  const uniqueProjects = new Set(works.map((w) => w.project_id).filter(Boolean));
+
+  // Default tab: action-required if invites exist, otherwise my-works
+  const defaultTab = invites.length > 0 ? "action-required" : "my-works";
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/dashboard")}>
+          <div
+            className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+            onClick={() => navigate("/dashboard")}
+          >
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
               <Music className="w-6 h-6 text-primary-foreground" />
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <Button variant="outline" onClick={() => navigate("/tools")}>
-            <ArrowLeft className="w-4 h-4 mr-2" /> Back to Tools
+            Back to Tools
           </Button>
         </div>
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-3xl font-bold text-foreground flex items-center gap-3">
-              <Shield className="w-8 h-8 text-primary" /> Rights Registry
-            </h2>
-            <p className="text-muted-foreground mt-1">
-              Track ownership, splits, licensing, and generate proof-of-ownership documents
-            </p>
-          </div>
-          <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-            <DialogTrigger asChild>
-              <Button><Plus className="w-4 h-4 mr-2" /> Register Work</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Register a New Work</DialogTitle></DialogHeader>
-              <div className="space-y-4 pt-2">
-                <div>
-                  <label className="text-sm font-medium">Title *</label>
-                  <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)}
-                    placeholder="Song or composition title" />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Artist *</label>
-                  <Select value={newArtistId} onValueChange={(v) => { setNewArtistId(v); setNewProjectId(""); }}>
-                    <SelectTrigger><SelectValue placeholder="Select artist" /></SelectTrigger>
-                    <SelectContent>
-                      {(artistsQuery.data || []).map((a) => (
-                        <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Project *</label>
-                  <Select value={newProjectId} onValueChange={setNewProjectId} disabled={!newArtistId}>
-                    <SelectTrigger><SelectValue placeholder={newArtistId ? "Select project" : "Select artist first"} /></SelectTrigger>
-                    <SelectContent>
-                      {(projectsQuery.data || []).map((p) => (
-                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Work Type</label>
-                  <Select value={newWorkType} onValueChange={setNewWorkType}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {WORK_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-sm font-medium">ISRC</label>
-                    <Input value={newIsrc} onChange={(e) => setNewIsrc(e.target.value)}
-                      placeholder="e.g. USRC17607839" />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium">ISWC</label>
-                    <Input value={newIswc} onChange={(e) => setNewIswc(e.target.value)}
-                      placeholder="e.g. T-345246800-1" />
-                  </div>
-                </div>
-                <Button onClick={handleCreate}
-                  disabled={!newTitle.trim() || !newArtistId || !newProjectId || createWork.isPending}
-                  className="w-full">
-                  {createWork.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
-                  Register Work
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
+        {/* Page Title */}
+        <div className="mb-6">
+          <h2 className="text-3xl font-bold text-foreground flex items-center gap-3">
+            <Shield className="w-8 h-8 text-primary" /> Rights Registry
+          </h2>
+          <p className="text-muted-foreground mt-1">
+            Track your ownership, stakes, and collaborations across all projects
+          </p>
         </div>
 
-        {/* Pending Your Review — works needing action */}
-        {pendingWorks.length > 0 && (
-          <div className="mb-8">
-            <h3 className="text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 text-amber-500" /> Pending Your Review
-            </h3>
-            <div className="flex gap-3 overflow-x-auto pb-2">
-              {pendingWorks.map((work) => (
-                <Card key={work.id}
-                  className="min-w-[250px] hover:border-primary/50 transition-colors cursor-pointer border-amber-200 bg-amber-50/30"
-                  onClick={() => navigate(`/tools/registry/${work.id}`)}>
-                  <CardContent className="p-4">
-                    <div className="font-medium text-sm">{work.title}</div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {work.work_type.replace("_", " ").toUpperCase()}
-                    </div>
-                    <Badge className="mt-2 bg-amber-100 text-amber-800">Needs Your Confirmation</Badge>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* My Works as Collaborator — all works user is involved in across all artists/projects */}
-        {allCollabWorks.length > 0 && (
-          <div className="mb-8">
-            <h3 className="text-lg font-semibold text-foreground mb-3 flex items-center gap-2">
-              <Users className="w-5 h-5 text-primary" /> Shared Works
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {allCollabWorks.map((work) => (
-                <Card key={work.id}
-                  className="hover:border-primary/50 transition-colors cursor-pointer"
-                  onClick={() => navigate(`/tools/registry/${work.id}`)}>
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="font-medium text-sm">{work.title}</div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {getArtistName(work.artist_id)} · {work.work_type.replace("_", " ").toUpperCase()}
-                        </div>
-                      </div>
-                      <Badge className={STATUS_COLORS[work.status] || "bg-gray-100 text-gray-800"}>
-                        {work.status.replace("_", " ")}
-                      </Badge>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Filters */}
-        <div className="flex gap-3 mb-6">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by title, ISRC, or ISWC..." className="pl-9" />
-          </div>
-          <Select value={selectedArtistId} onValueChange={setSelectedArtistId}>
-            <SelectTrigger className="w-48"><SelectValue placeholder="All Artists" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Artists</SelectItem>
-              {(artistsQuery.data || []).map((a) => (
-                <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Search */}
+        <div className="relative max-w-md mb-6">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search works by title, ISRC, or ISWC..."
+            className="pl-9"
+          />
         </div>
 
-        {/* Works Grid */}
-        {worksQuery.isLoading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="w-8 h-8 animate-spin text-primary" />
-          </div>
-        ) : filteredWorks.length === 0 ? (
-          <div className="text-center py-20">
-            <FileText className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
-            <h3 className="text-lg font-semibold text-foreground mb-2">No works registered</h3>
-            <p className="text-muted-foreground mb-4">
-              Register your first work to start tracking ownership and rights
-            </p>
-            <Button onClick={() => setShowCreateDialog(true)}>
-              <Plus className="w-4 h-4 mr-2" /> Register Work
-            </Button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredWorks.map((work) => (
-              <Card key={work.id}
-                className="hover:border-primary/50 transition-colors cursor-pointer group"
-                onClick={() => navigate(`/tools/registry/${work.id}`)}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between">
-                    <CardTitle className="text-base leading-tight">{work.title}</CardTitle>
-                    <Badge className={STATUS_COLORS[work.status] || "bg-gray-100 text-gray-800"}>
-                      {work.status.replace("_", " ")}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground">{getArtistName(work.artist_id)}</p>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                    <span>{work.work_type.replace("_", " ").toUpperCase()}</span>
-                    {work.isrc && <span>ISRC: {work.isrc}</span>}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
+        {/* Summary Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
+          <SummaryCard
+            label="My Works"
+            count={myWorksCount}
+            subtitle={`Across ${uniqueProjects.size} project${uniqueProjects.size !== 1 ? "s" : ""}`}
+            colors={{
+              bg: "bg-purple-500/10",
+              border: "border-purple-500/20",
+              text: "text-purple-400",
+            }}
+          />
+          <SummaryCard
+            label="Registered"
+            count={registeredCount}
+            subtitle="Fully confirmed"
+            colors={{
+              bg: "bg-emerald-500/10",
+              border: "border-emerald-500/20",
+              text: "text-emerald-400",
+            }}
+          />
+          <SummaryCard
+            label="Pending"
+            count={pendingCount}
+            subtitle="Awaiting approval"
+            colors={{
+              bg: "bg-amber-500/10",
+              border: "border-amber-500/20",
+              text: "text-amber-400",
+            }}
+          />
+          <SummaryCard
+            label="Collaborations"
+            count={collabCount}
+            subtitle="Works you contribute to"
+            colors={{
+              bg: "bg-blue-500/10",
+              border: "border-blue-500/20",
+              text: "text-blue-400",
+            }}
+          />
+        </div>
+
+        {/* Tabs */}
+        <Tabs defaultValue={defaultTab}>
+          <TabsList className="mb-4">
+            <TabsTrigger value="action-required" className="gap-1.5">
+              <Bell className="w-3.5 h-3.5" />
+              Action Required
+              {invites.length > 0 && (
+                <span className="ml-1 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-amber-500 text-white">
+                  {invites.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="my-works" className="gap-1.5">
+              <Music className="w-3.5 h-3.5" />
+              My Works
+            </TabsTrigger>
+            <TabsTrigger value="collaborations" className="gap-1.5">
+              <Users className="w-3.5 h-3.5" />
+              Collaborations
+            </TabsTrigger>
+            <TabsTrigger value="activity" className="gap-1.5">
+              <Clock className="w-3.5 h-3.5" />
+              All Activity
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="action-required">
+            <ActionRequiredTab
+              invites={invites}
+              isLoading={invitesQuery.isLoading}
+            />
+          </TabsContent>
+
+          <TabsContent value="my-works">
+            <MyWorksTab
+              works={works}
+              isLoading={worksQuery.isLoading}
+              searchQuery={searchQuery}
+            />
+          </TabsContent>
+
+          <TabsContent value="collaborations">
+            <CollaborationsTab
+              works={collabs}
+              isLoading={collabQuery.isLoading}
+            />
+          </TabsContent>
+
+          <TabsContent value="activity">
+            <AllActivityTab
+              notifications={notifications}
+              isLoading={notificationsQuery.isLoading}
+            />
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );
