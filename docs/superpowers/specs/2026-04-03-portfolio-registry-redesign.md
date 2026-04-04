@@ -144,13 +144,18 @@ Redesign the Portfolio and Rights Registry to introduce a dedicated Project Deta
 
 **Work Status Transition Rules:**
 - `draft` → `pending_approval`: Owner clicks "Submit for Approval". Requires at least 1 collaborator with status `invited`. Endpoint: `POST /registry/works/{workId}/submit-for-approval` (already exists in codebase).
-- `pending_approval` → `registered`: **Backend logic in the confirm endpoint.** After each `POST /registry/collaborators/{id}/confirm`, the backend checks: are ALL collaborators on this work now `confirmed`? If yes, auto-transition work to `registered`. If not, stay in `pending_approval`.
-- `pending_approval` → `pending_approval` (reset): If a new collaborator is added to a work that's already in `pending_approval`, the work stays in `pending_approval` (new collaborator needs to confirm too).
+- `pending_approval` → `registered`: **Backend logic in the confirm endpoint** (`src/backend/registry/service.py` → `confirm_stake()`). After each `POST /registry/collaborators/{id}/confirm`, the backend checks: are ALL collaborators on this work now `confirmed`? If yes, auto-transition work to `registered`. If not, stay in `pending_approval`.
+- `pending_approval` + new collaborator added: Work stays in `pending_approval`. The new collaborator receives an invite email automatically (no need for owner to re-submit). Only the new collaborator needs to confirm — **existing confirmed collaborators keep their status.** The auto-transition check still requires ALL collaborators to be confirmed before moving to `registered`.
 - `registered` → `draft`: Triggered ONLY by changes that affect ownership/collaboration:
   - Adding a new collaborator → reverts to `draft` (new person needs to confirm)
   - Revoking a collaborator → reverts to `draft` (ownership changed)
   - Changing ownership stake percentages → reverts to `draft`
   - **Does NOT revert for:** title rename, ISRC/ISWC/UPC edits, work type change, release date, notes. These are metadata-only changes that don't affect who owns what.
+  - **Implementation location:** This logic lives in the **backend service layer**, not DB triggers. Specifically:
+    - `POST /registry/collaborators/invite-with-stakes` → if work is `registered`, set to `draft`
+    - `POST /registry/collaborators/{id}/revoke` → if work is `registered`, set to `draft`
+    - `PUT /registry/stakes/{stakeId}` → if work is `registered`, set to `draft`
+    - `PUT /registry/works/{workId}` → does NOT check or revert status (metadata-only edits)
 - **Zero collaborators:** A work with no collaborators stays in `draft`. The owner can manually register it by clicking "Register" (no approval needed if there's nobody to approve). This is a direct `draft` → `registered` transition available only when collaborator count = 0.
 - **Collaborator self-decline after accepting:** Not allowed. Once `confirmed`, a collaborator's status is locked. Only the owner can revoke.
 
@@ -366,10 +371,12 @@ ALTER TABLE registry_collaborators DROP COLUMN IF EXISTS dispute_reason;
 
 #### Invite visibility by email (before claim)
 ```sql
--- Users can see invites addressed to their email, even before claiming
+-- Users can see invites addressed to their email, even before claiming.
+-- Uses LOWER() on both sides for case-insensitive matching
+-- (e.g., Mike@Producer.com matches mike@producer.com).
 CREATE POLICY "collaborators_select_by_email" ON registry_collaborators
   FOR SELECT USING (
-    email = (SELECT email FROM auth.users WHERE id = auth.uid())
+    LOWER(email) = LOWER((SELECT email FROM auth.users WHERE id = auth.uid()))
     OR collaborator_user_id = auth.uid()
     OR invited_by = auth.uid()
   );
@@ -686,7 +693,7 @@ CREATE TRIGGER auto_create_project_owner_trigger
 | POST | `/registry/works` | Create work |
 | PUT | `/registry/works/{workId}` | Update work (resets registered → draft) |
 | DELETE | `/registry/works/{workId}` | Delete work |
-| POST | `/registry/works/{workId}/submit-for-approval` | Draft → pending_approval. Validates: at least 1 collaborator, work in `draft` status. Resets all collaborator statuses to `invited`, resends emails. |
+| POST | `/registry/works/{workId}/submit-for-approval` | Draft → pending_approval. Validates: at least 1 collaborator, work in `draft` status. **Only resets collaborators whose stakes changed** (new collaborators, or existing ones with modified percentages). Already-confirmed collaborators with unchanged stakes keep their `confirmed` status. Resends emails only to those reset to `invited`. |
 | GET | `/registry/works/{workId}/export` | Export proof of ownership PDF |
 | GET | `/registry/stakes` | List stakes for a work |
 | POST | `/registry/stakes` | Create stake |
@@ -707,7 +714,7 @@ CREATE TRIGGER auto_create_project_owner_trigger
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/registry/collaborators/invite-with-stakes` | Composite: creates collaborator record + ownership stake(s) atomically. Body: `{work_id, email, name, role, stakes: [{type, percentage}], notes?}` |
-| POST | `/registry/collaborators/{id}/decline` | Decline invitation. Sets status to `declined`. Notifies work owner. |
+| POST | `/registry/collaborators/{id}/decline` | Decline invitation. Sets status to `declined`. Notifies work owner. **Backend MUST validate** that `auth.uid()`'s email matches the collaborator record's email (same as accept-from-dashboard). |
 | GET | `/registry/collaborators/my-invites` | Get invites for current user by email match (for Action Required tab before claim). |
 | POST | `/registry/collaborators/{id}/accept-from-dashboard` | Claim + confirm atomically (for accepting directly from Registry dashboard without visiting the email link first). Sets `collaborator_user_id` and `status = 'confirmed'` in one call. **Backend MUST validate** that `auth.uid()`'s email matches the collaborator record's email before processing — prevents someone who knows a collaborator ID from accepting someone else's invite. |
 | GET | `/projects/{projectId}/members` | List project members |
@@ -1071,6 +1078,28 @@ These end-to-end scenarios show exactly how a user moves through the system. Eac
 4. **Instead, a "Register" button appears** — available only when collaborator count = 0.
 5. **Yash clicks "Register"** — API: `PUT /registry/works/{workId}` with `{ status: 'registered' }`. Direct `draft` → `registered` transition, no approval flow needed.
 6. **Work is now Registered.** If Yash later adds a collaborator, the work reverts to `draft` and enters the normal approval flow.
+
+---
+
+## Implementation Notes
+
+Handle these during execution — not spec-level issues but details to get right:
+
+1. **pending_project_invites management:** Add a DELETE endpoint (`DELETE /projects/{projectId}/pending-invites/{id}`) so admins can retract invites to wrong emails. Add an expiry column (default 7 days) and a cleanup job or check-on-access pattern.
+
+2. **pending_project_invites RLS:** Admins+ on the project should be able to SELECT and DELETE pending invites. The inviter should also be able to manage their own.
+
+3. **AddWorkDialog atomicity:** The 5-step sequence (upload → audio_files → project_audio_links → works_registry → work_audio_links) should handle partial failures gracefully. If work creation fails after audio upload, the orphaned audio file is harmless (it's still linked to the project via project_audio_links). Consider a composite backend endpoint if this becomes a UX issue, but for now, sequential frontend calls with error handling are acceptable.
+
+4. **Admin demoting other admins:** This is intentional — admins can change each other's roles. Owner is the only protected role. Worth documenting in a user-facing tooltip on the role dropdown.
+
+5. **updated_at trigger on project_members:** Add a `BEFORE UPDATE` trigger to auto-set `updated_at = now()`. Same pattern as other tables in the codebase.
+
+6. **auto_create_project_owner and service role:** The trigger uses `auth.uid()` which is NULL for service-role operations. If projects are ever created via backend scripts or admin tools, the owner row won't be created. For now this is fine — projects are only created via the frontend (authenticated users). If service-role project creation is needed later, use `INSERT INTO project_members` explicitly in the backend code.
+
+7. **Existing upload policies:** Verify that existing RLS policies on `project_files` and `audio_files` already allow editors+ to INSERT. If not, add INSERT policies during the RLS migration.
+
+8. **Case-insensitive email matching:** The `LOWER()` fix in the RLS policy should also be applied in all backend email comparison logic (claim, accept-from-dashboard, decline). Use `LOWER()` consistently.
 
 ---
 
