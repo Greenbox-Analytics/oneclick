@@ -40,6 +40,8 @@ import {
   Users,
   FileText,
   Calendar,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 
 const ROLE_COLORS: Record<string, string> = {
@@ -190,16 +192,62 @@ const Portfolio = () => {
     setSelectedArtistIds((prev) => prev.filter((id) => id !== artistId));
   };
 
-  // Group my projects by artist name for display
-  const projectsByArtist = useMemo(() => {
-    const groups = new Map<string, ProjectCard[]>();
+  // Group my projects by year → artist for display
+  const projectsByYearAndArtist = useMemo(() => {
+    // First group by year
+    const yearMap = new Map<number, Map<string, ProjectCard[]>>();
     for (const p of myProjects) {
+      const year = new Date(p.created_at).getFullYear();
+      if (!yearMap.has(year)) yearMap.set(year, new Map());
+      const artistMap = yearMap.get(year)!;
       const key = p.artist_name;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(p);
+      if (!artistMap.has(key)) artistMap.set(key, []);
+      artistMap.get(key)!.push(p);
     }
-    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+    // Sort years descending, artists alphabetically within each year
+    return Array.from(yearMap.entries())
+      .sort(([a], [b]) => b - a)
+      .map(([year, artistMap]) => ({
+        year,
+        artists: Array.from(artistMap.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, projects]) => ({ name, projects })),
+        totalProjects: Array.from(artistMap.values()).reduce((sum, arr) => sum + arr.length, 0),
+      }));
   }, [myProjects]);
+
+  // Group shared projects by year → artist
+  const sharedByYearAndArtist = useMemo(() => {
+    const yearMap = new Map<number, Map<string, SharedProjectCard[]>>();
+    for (const p of sharedProjects) {
+      const year = new Date(p.created_at).getFullYear();
+      if (!yearMap.has(year)) yearMap.set(year, new Map());
+      const artistMap = yearMap.get(year)!;
+      const key = p.artist_name;
+      if (!artistMap.has(key)) artistMap.set(key, []);
+      artistMap.get(key)!.push(p);
+    }
+    return Array.from(yearMap.entries())
+      .sort(([a], [b]) => b - a)
+      .map(([year, artistMap]) => ({
+        year,
+        artists: Array.from(artistMap.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, projects]) => ({ name, projects })),
+        totalProjects: Array.from(artistMap.values()).reduce((sum, arr) => sum + arr.length, 0),
+      }));
+  }, [sharedProjects]);
+
+  // Track collapsed years
+  const [collapsedYears, setCollapsedYears] = useState<Set<number>>(new Set());
+  const toggleYear = (year: number) => {
+    setCollapsedYears((prev) => {
+      const next = new Set(prev);
+      if (next.has(year)) next.delete(year);
+      else next.add(year);
+      return next;
+    });
+  };
 
   const sortLabel = sortOrder === "alpha" ? "A-Z" : sortOrder === "newest" ? "Newest" : "Oldest";
 
@@ -400,25 +448,46 @@ const Portfolio = () => {
               <Badge variant="secondary">{myProjects.length}</Badge>
             </div>
 
-            {projectsByArtist.map(([artistName, projects]) => (
-              <div key={artistName} className="mb-6">
-                <div className="flex items-center gap-2 mb-3">
-                  <Avatar className="h-6 w-6">
-                    <AvatarImage src={projects[0]?.artist_avatar || ""} />
-                    <AvatarFallback className="text-[10px] bg-primary/10">
-                      {artistName.slice(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className="text-sm font-medium text-muted-foreground">{artistName}</span>
+            {projectsByYearAndArtist.map(({ year, artists, totalProjects }) => (
+              <div key={year} className="mb-6">
+                {/* Year header — collapsible */}
+                <button
+                  onClick={() => toggleYear(year)}
+                  className="flex items-center gap-2 mb-3 group cursor-pointer hover:opacity-80 transition-opacity"
+                >
+                  {collapsedYears.has(year) ? (
+                    <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                  )}
+                  <span className="text-lg font-semibold text-foreground">{year}</span>
                   <Badge variant="outline" className="text-xs">
-                    {projects.length} project{projects.length !== 1 ? "s" : ""}
+                    {totalProjects} project{totalProjects !== 1 ? "s" : ""}
                   </Badge>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {projects.map((project) => (
-                    <ProjectCardComponent key={project.id} project={project} onClick={() => navigate(`/projects/${project.id}`)} />
-                  ))}
-                </div>
+                </button>
+
+                {/* Artists and projects within this year */}
+                {!collapsedYears.has(year) && artists.map(({ name: artistName, projects }) => (
+                  <div key={artistName} className="mb-5 ml-6">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Avatar className="h-6 w-6">
+                        <AvatarImage src={projects[0]?.artist_avatar || ""} />
+                        <AvatarFallback className="text-[10px] bg-primary/10">
+                          {artistName.slice(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-sm font-medium text-muted-foreground">{artistName}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {projects.length} project{projects.length !== 1 ? "s" : ""}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {projects.map((project) => (
+                        <ProjectCardComponent key={project.id} project={project} onClick={() => navigate(`/projects/${project.id}`)} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
           </section>
@@ -431,15 +500,50 @@ const Portfolio = () => {
               <h3 className="text-xl font-semibold text-foreground">Shared with Me</h3>
               <Badge variant="secondary">{sharedProjects.length}</Badge>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {sharedProjects.map((project) => (
-                <SharedProjectCardComponent
-                  key={project.id}
-                  project={project}
-                  onClick={() => navigate(`/projects/${project.id}`)}
-                />
-              ))}
-            </div>
+
+            {sharedByYearAndArtist.map(({ year, artists, totalProjects }) => (
+              <div key={year} className="mb-6">
+                <button
+                  onClick={() => toggleYear(year + 10000)}
+                  className="flex items-center gap-2 mb-3 group cursor-pointer hover:opacity-80 transition-opacity"
+                >
+                  {collapsedYears.has(year + 10000) ? (
+                    <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                  )}
+                  <span className="text-lg font-semibold text-foreground">{year}</span>
+                  <Badge variant="outline" className="text-xs">
+                    {totalProjects} project{totalProjects !== 1 ? "s" : ""}
+                  </Badge>
+                </button>
+
+                {!collapsedYears.has(year + 10000) && artists.map(({ name: artistName, projects }) => (
+                  <div key={artistName} className="mb-5 ml-6">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Avatar className="h-6 w-6">
+                        <AvatarFallback className="text-[10px] bg-primary/10">
+                          {artistName.slice(0, 2).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-sm font-medium text-muted-foreground">{artistName}</span>
+                      <Badge variant="outline" className="text-xs">
+                        {projects.length} project{projects.length !== 1 ? "s" : ""}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {projects.map((project) => (
+                        <SharedProjectCardComponent
+                          key={project.id}
+                          project={project}
+                          onClick={() => navigate(`/projects/${project.id}`)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
           </section>
         )}
 
