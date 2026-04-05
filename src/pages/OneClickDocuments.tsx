@@ -8,10 +8,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus, RefreshCw } from "lucide-react";
+import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus, RefreshCw, BookOpen } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -24,6 +24,8 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
+import { useWorks, type Work } from "@/hooks/useRegistry";
+import { type WorkFileLink } from "@/hooks/useWorkFiles";
 
 
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
@@ -119,6 +121,12 @@ const OneClickDocuments = () => {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [newProjectNameInput, setNewProjectNameInput] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+
+  // From Works state
+  const { data: artistWorks = [], isLoading: isLoadingWorks } = useWorks(artistId);
+  const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
+  const [workFiles, setWorkFiles] = useState<WorkFileLink[]>([]);
+  const [loadingWorkFiles, setLoadingWorkFiles] = useState(false);
 
   // Ref for chart download (only the chart content, not the entire card)
   const chartContentRef = useRef<HTMLDivElement>(null);
@@ -268,6 +276,26 @@ const OneClickDocuments = () => {
         setSelectedExistingRoyaltyStatement(null);
     }
   }, [selectedRoyaltyStatementProject]);
+
+  // Fetch files when a work is selected in "From Works" tab
+  useEffect(() => {
+    if (!selectedWorkId || !user) {
+      setWorkFiles([]);
+      return;
+    }
+    setLoadingWorkFiles(true);
+    fetch(`${API_URL}/registry/works/${selectedWorkId}/files?user_id=${user.id}`)
+      .then((res) => res.json())
+      .then((data) => {
+        setWorkFiles(data.files || []);
+        setLoadingWorkFiles(false);
+      })
+      .catch((err) => {
+        console.error("Error fetching work files:", err);
+        setWorkFiles([]);
+        setLoadingWorkFiles(false);
+      });
+  }, [selectedWorkId, user]);
 
   const handleContractFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -688,7 +716,7 @@ const OneClickDocuments = () => {
     document.body.removeChild(link);
   };
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     if (!calculationResult) return;
     const excelData = [
       ["Song Title", "Payee", "Role", "Royalty Type", "Total Revenue", "Share %", "Amount to Pay"],
@@ -696,10 +724,17 @@ const OneClickDocuments = () => {
         p.song_title, p.party_name, p.role, p.royalty_type, p.total_royalty, p.percentage, p.amount_to_pay
       ])
     ];
-    const ws = XLSX.utils.aoa_to_sheet(excelData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Royalty Breakdown");
-    XLSX.writeFile(wb, `royalty_breakdown.xlsx`);
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Royalty Breakdown");
+    excelData.forEach(row => ws.addRow(row));
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "royalty_breakdown.xlsx";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleDownloadChart = async () => {
@@ -782,16 +817,27 @@ const OneClickDocuments = () => {
       <div className="min-h-screen bg-background">
         <header className="border-b border-border bg-card">
           <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate("/dashboard")}>
+            <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/dashboard")}>
               <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
                 <Music className="w-6 h-6 text-primary-foreground" />
               </div>
               <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
-            <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Artist Selection
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigate("/docs")}
+                title="Documentation"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <BookOpen className="w-4 h-4" />
+              </Button>
+              <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Artist Selection
+              </Button>
+            </div>
           </div>
         </header>
         <main className="container mx-auto px-4 py-8 max-w-4xl">
@@ -808,13 +854,22 @@ const OneClickDocuments = () => {
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate("/dashboard")}>
+          <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/dashboard")}>
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
               <Music className="w-6 h-6 text-primary-foreground" />
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
             <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
               <ArrowLeft className="w-4 h-4 mr-2" />
@@ -844,9 +899,10 @@ const OneClickDocuments = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               <Tabs value={contractTabValue} onValueChange={setContractTabValue} className="w-full">
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="upload">Upload New</TabsTrigger>
                   <TabsTrigger value="existing">Select Existing</TabsTrigger>
+                  <TabsTrigger value="works">From Works</TabsTrigger>
                 </TabsList>
                 
                 <TabsContent value="upload" className="space-y-4 mt-4">
@@ -996,6 +1052,80 @@ const OneClickDocuments = () => {
                         </div>
                       ) : (
                         <p className="text-sm text-muted-foreground text-center py-4">No contracts or split sheets found in this project.</p>
+                      )}
+                    </div>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="works" className="space-y-4 mt-4">
+                  {isLoadingWorks ? (
+                    <div className="text-center py-8">
+                      <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
+                      <p className="text-sm text-muted-foreground">Loading works...</p>
+                    </div>
+                  ) : artistWorks.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">No registered works found for this artist.</p>
+                  ) : !selectedWorkId ? (
+                    <div className="space-y-4">
+                      <p className="text-sm font-medium text-foreground">Select a Work:</p>
+                      <div className="grid gap-3 max-h-[300px] overflow-y-auto">
+                        {artistWorks.map((work: Work) => (
+                          <div
+                            key={work.id}
+                            className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer"
+                            onClick={() => setSelectedWorkId(work.id)}
+                          >
+                            <FileText className="w-5 h-5 text-primary" />
+                            <div>
+                              <p className="font-medium text-foreground">{work.title}</p>
+                              <p className="text-xs text-muted-foreground">{work.work_type}{work.release_date ? ` \u00b7 ${new Date(work.release_date).toLocaleDateString()}` : ''}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-medium text-foreground">
+                          Files in {artistWorks.find((w: Work) => w.id === selectedWorkId)?.title}:
+                        </p>
+                        <Button variant="ghost" size="sm" onClick={() => { setSelectedWorkId(null); setWorkFiles([]); }} className="text-xs h-8">
+                          Change Work
+                        </Button>
+                      </div>
+                      {loadingWorkFiles ? (
+                        <div className="text-center py-8">
+                          <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
+                          <p className="text-sm text-muted-foreground">Loading files...</p>
+                        </div>
+                      ) : workFiles.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">No files linked to this work.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                          {workFiles.map((link: WorkFileLink) => {
+                            const file = link.project_files;
+                            if (!file) return null;
+                            return (
+                              <div key={link.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <Checkbox
+                                    id={`work-file-${file.id}`}
+                                    checked={selectedExistingContracts.includes(file.id)}
+                                    onCheckedChange={() => handleToggleExistingContract(file.id)}
+                                  />
+                                  <label htmlFor={`work-file-${file.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
+                                    <FileText className="w-4 h-4 text-primary" />
+                                    <div>
+                                      <p className="text-sm font-medium text-foreground">{file.file_name}</p>
+                                      <p className="text-xs text-muted-foreground">{file.folder_category}</p>
+                                    </div>
+                                  </label>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   )}

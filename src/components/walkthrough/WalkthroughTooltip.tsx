@@ -18,6 +18,7 @@ const WalkthroughTooltip = ({
   onSkip,
 }: WalkthroughTooltipProps) => {
   const [position, setPosition] = useState({ top: 0, left: 0 });
+  const [visible, setVisible] = useState(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -64,9 +65,14 @@ const WalkthroughTooltip = ({
       setPosition({ top, left });
     };
 
-    // Small delay to let scroll complete and measure tooltip height
-    const timer = setTimeout(positionTooltip, 100);
-    return () => clearTimeout(timer);
+    // Stagger: let the spotlight animate to position first, then show tooltip
+    const positionTimer = setTimeout(positionTooltip, 200);
+    const visibleTimer = setTimeout(() => setVisible(true), 300);
+
+    return () => {
+      clearTimeout(positionTimer);
+      clearTimeout(visibleTimer);
+    };
   }, [step]);
 
   const isLast = stepIndex === totalSteps - 1;
@@ -74,8 +80,14 @@ const WalkthroughTooltip = ({
   return (
     <div
       ref={tooltipRef}
-      className="fixed z-[60] w-80 bg-card border border-border rounded-xl shadow-2xl p-5 animate-in fade-in slide-in-from-bottom-2 duration-300"
-      style={{ top: position.top, left: position.left }}
+      className="fixed z-[60] w-80 bg-card border border-border rounded-xl shadow-2xl p-5"
+      style={{
+        top: position.top,
+        left: position.left,
+        opacity: visible ? 1 : 0,
+        transform: visible ? "translateY(0)" : "translateY(8px)",
+        transition: "opacity 0.25s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+      }}
     >
       <div className="space-y-2 mb-4">
         <div className="flex items-center justify-between">

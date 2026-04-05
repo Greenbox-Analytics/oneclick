@@ -3,13 +3,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Music, Loader2, Sun, Moon, HelpCircle } from "lucide-react";
+import { Music, Loader2, Sun, Moon, HelpCircle, ArrowLeft, BookOpen } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import TeamCardSettings from "@/components/profile/TeamCardSettings";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -85,6 +92,19 @@ const Profile = () => {
     fetchProfile();
   }, [user]);
 
+  // Tour
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.profile, {
+    onComplete: () => markToolCompleted("profile"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.profile && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.profile]);
+
   const handleSave = async () => {
     if (!user) return;
     setIsLoading(true);
@@ -127,18 +147,41 @@ const Profile = () => {
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div
-            className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/dashboard")}
-          >
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-6 h-6 text-primary-foreground" />
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => navigate(-1)}
+            >
+              <ArrowLeft className="w-4 h-4 mr-1" /> Back
+            </Button>
+            <div className="w-px h-6 bg-border" />
+            <div
+              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+              onClick={() => navigate("/dashboard")}
+            >
+              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
+                <Music className="w-6 h-6 text-primary-foreground" />
+              </div>
+              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          <Button variant="outline" onClick={() => navigate("/dashboard")}>
-            Back to Dashboard
-          </Button>
+          <div className="flex items-center gap-2">
+            <ToolHelpButton onClick={() => walkthrough.replay()} />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/dashboard")}>
+              Back to Dashboard
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -148,7 +191,7 @@ const Profile = () => {
           <p className="text-muted-foreground">Manage your account information</p>
         </div>
 
-        <Card>
+        <Card data-walkthrough="profile-info">
           <CardHeader>
             <CardTitle>Account Information</CardTitle>
             <CardDescription>Update your personal details</CardDescription>
@@ -248,7 +291,11 @@ const Profile = () => {
           </CardContent>
         </Card>
 
-        <Card className="mt-6">
+        <div data-walkthrough="profile-teamcard" className="mt-6">
+          <TeamCardSettings />
+        </div>
+
+        <Card data-walkthrough="profile-theme" className="mt-6">
           <CardHeader>
             <CardTitle>Appearance</CardTitle>
             <CardDescription>Customize the look and feel</CardDescription>
@@ -269,6 +316,21 @@ const Profile = () => {
           </CardContent>
         </Card>
       </main>
+
+      <ToolIntroModal
+        config={TOOL_CONFIGS.profile}
+        isOpen={walkthrough.phase === "modal"}
+        onStartTour={walkthrough.startSpotlight}
+        onSkip={walkthrough.skip}
+      />
+      <WalkthroughProvider
+        isActive={walkthrough.phase === "spotlight"}
+        currentStep={walkthrough.currentStep}
+        currentStepIndex={walkthrough.visibleStepIndex}
+        totalSteps={walkthrough.totalSteps}
+        onNext={walkthrough.next}
+        onSkip={walkthrough.skip}
+      />
     </div>
   );
 };

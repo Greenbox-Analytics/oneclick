@@ -9,9 +9,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2 } from "lucide-react";
+import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, BookOpen, Plus, StickyNote } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useQuery } from "@tanstack/react-query";
+import NotesView from "@/components/notes/NotesView";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -68,6 +70,28 @@ const ArtistProfile = () => {
   });
   
   const [originalData, setOriginalData] = useState(formData);
+
+  const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+
+  // Fetch TeamCard overlay for verified artists
+  const teamcardQuery = useQuery({
+    queryKey: ["artist-teamcard", id],
+    queryFn: async () => {
+      if (!user?.id || !id) return null;
+      const res = await fetch(`${API_URL}/registry/artists/${id}/with-teamcard?user_id=${user.id}`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!user?.id && !!id,
+  });
+
+  const teamcard = teamcardQuery.data?.teamcard;
+  const isVerified = teamcardQuery.data?.verified === true;
+
+  // Display fields: prefer TeamCard data when verified
+  const displayName = (isVerified && teamcard?.display_name) || formData.name;
+  const displayBio = (isVerified && teamcard?.bio) || formData.bio;
+  const displayAvatar = (isVerified && teamcard?.avatar_url) || formData.avatar;
 
   // Fetch artist data from Supabase
   useEffect(() => {
@@ -349,16 +373,36 @@ const ArtistProfile = () => {
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-secondary/10">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div 
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/dashboard")}
-          >
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center p-1.5">
-              <Music className="w-full h-full text-primary-foreground" />
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => navigate(-1)}
+            >
+              <ArrowLeft className="w-4 h-4 mr-1" /> Back
+            </Button>
+            <div className="w-px h-6 bg-border" />
+            <div
+              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+              onClick={() => navigate("/dashboard")}
+            >
+              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center p-1.5">
+                <Music className="w-full h-full text-primary-foreground" />
+              </div>
+              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <div className="flex gap-2 items-center">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")} title="Back to Dashboard">
               <ArrowLeft className="w-4 h-4" />
             </Button>
@@ -392,14 +436,14 @@ const ArtistProfile = () => {
 
       <main className="container mx-auto px-4 py-8 max-w-5xl">
         {/* Profile Header */}
-        <Card className="mb-6 border-2 shadow-lg">
+        <Card className="mb-6 border border-border shadow-sm">
           <CardContent className="pt-6">
             <div className="flex items-start gap-6">
               <div className="relative group">
-                <Avatar className="w-28 h-28 ring-4 ring-primary/10">
-                  <AvatarImage src={formData.avatar} alt={formData.name} />
+                <Avatar className="w-28 h-28 ring-2 ring-primary/20">
+                  <AvatarImage src={displayAvatar} alt={displayName} />
                   <AvatarFallback className="bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-3xl">
-                    {formData.name.charAt(0)}
+                    {displayName.charAt(0)}
                   </AvatarFallback>
                 </Avatar>
                 {isEditMode && (
@@ -409,13 +453,20 @@ const ArtistProfile = () => {
                 )}
               </div>
               <div className="flex-1">
-                <h2 className="text-4xl font-bold text-foreground mb-3 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">{formData.name}</h2>
+                <div className="flex items-center gap-3 mb-3">
+                  <h2 className="text-2xl font-bold text-foreground">{displayName}</h2>
+                  {isVerified && (
+                    <Badge className="bg-green-100 text-green-800 flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> Verified
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2 mb-3">
                   {formData.genres.map(genre => (
                     <Badge key={genre} variant="secondary" className="px-3 py-1 text-sm">{genre}</Badge>
                   ))}
                 </div>
-                <p className="text-muted-foreground text-sm line-clamp-2">{formData.bio}</p>
+                <p className="text-muted-foreground text-sm line-clamp-2">{displayBio}</p>
               </div>
             </div>
           </CardContent>
@@ -423,7 +474,8 @@ const ArtistProfile = () => {
 
         <div className="grid gap-6">
           {/* Basic Information */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-primary/40" />
             <CardHeader className="bg-gradient-to-r from-primary/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 text-primary" />
@@ -441,8 +493,10 @@ const ArtistProfile = () => {
                     onChange={(e) => updateField('name', e.target.value)}
                     className="bg-background border-2 focus:border-primary transition-colors"
                   />
+                ) : formData.name ? (
+                  <p className="text-sm font-medium text-foreground">{formData.name}</p>
                 ) : (
-                  <p className="text-foreground text-lg font-medium">{formData.name}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -456,8 +510,10 @@ const ArtistProfile = () => {
                     onChange={(e) => updateField('email', e.target.value)}
                     className="bg-background border-2 focus:border-primary transition-colors"
                   />
+                ) : formData.email ? (
+                  <p className="text-sm text-foreground">{formData.email}</p>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.email}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -471,8 +527,10 @@ const ArtistProfile = () => {
                     rows={4}
                     className="bg-background border-2 focus:border-primary transition-colors resize-none"
                   />
-                ) : (
+                ) : formData.bio ? (
                   <p className="text-foreground leading-relaxed">{formData.bio}</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -505,9 +563,13 @@ const ArtistProfile = () => {
                   </div>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {formData.genres.map(genre => (
-                      <Badge key={genre} variant="secondary" className="px-3 py-1">{genre}</Badge>
-                    ))}
+                    {formData.genres.length > 0 ? (
+                      formData.genres.map(genre => (
+                        <Badge key={genre} variant="secondary" className="px-3 py-1">{genre}</Badge>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground/50 italic">No genres added</p>
+                    )}
                   </div>
                 )}
               </FieldContainer>
@@ -515,7 +577,8 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Social Media */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-pink-500/40" />
             <CardHeader className="bg-gradient-to-r from-pink-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Instagram className="w-5 h-5 text-pink-500" />
@@ -536,8 +599,12 @@ const ArtistProfile = () => {
                     placeholder="https://instagram.com/username"
                     className="bg-background border-2 focus:border-pink-500 transition-colors"
                   />
+                ) : formData.social.instagram ? (
+                  <a href={formData.social.instagram} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.social.instagram}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.social.instagram}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -554,8 +621,12 @@ const ArtistProfile = () => {
                     placeholder="https://tiktok.com/@username"
                     className="bg-background border-2 focus:border-blue-500 transition-colors"
                   />
+                ) : formData.social.tiktok ? (
+                  <a href={formData.social.tiktok} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.social.tiktok}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.social.tiktok}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -572,8 +643,12 @@ const ArtistProfile = () => {
                     placeholder="https://youtube.com/@channel"
                     className="bg-background border-2 focus:border-red-500 transition-colors"
                   />
+                ) : formData.social.youtube ? (
+                  <a href={formData.social.youtube} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.social.youtube}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.social.youtube}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -631,12 +706,18 @@ const ArtistProfile = () => {
                               <LinkIcon className="w-4 h-4 text-pink-500" />
                               <Label className="text-sm font-semibold text-muted-foreground">{link.label}</Label>
                             </div>
-                            <p className="text-foreground text-lg break-all">{link.url}</p>
+                            {link.url ? (
+                              <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                                {link.url}
+                              </a>
+                            ) : (
+                              <p className="text-sm text-muted-foreground/50 italic">Not set</p>
+                            )}
                           </div>
                         )}
                       </FieldContainer>
                     ))}
-                    
+
                     {formData.customSocialLinks.length === 0 && isEditMode && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom social links added. Click "Add Link" to create one.
@@ -649,7 +730,8 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Streaming Platforms */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-green-500/40" />
             <CardHeader className="bg-gradient-to-r from-green-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Mic2 className="w-5 h-5 text-green-500" />
@@ -670,8 +752,12 @@ const ArtistProfile = () => {
                     placeholder="https://open.spotify.com/artist/..."
                     className="bg-background border-2 focus:border-green-500 transition-colors"
                   />
+                ) : formData.dsp.spotify ? (
+                  <a href={formData.dsp.spotify} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all font-mono">
+                    {formData.dsp.spotify}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg font-mono text-sm">{formData.dsp.spotify}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -688,8 +774,12 @@ const ArtistProfile = () => {
                     placeholder="https://music.apple.com/..."
                     className="bg-background border-2 focus:border-red-500 transition-colors"
                   />
+                ) : formData.dsp.appleMusic ? (
+                  <a href={formData.dsp.appleMusic} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.dsp.appleMusic}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg break-all">{formData.dsp.appleMusic}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -706,8 +796,12 @@ const ArtistProfile = () => {
                     placeholder="https://soundcloud.com/artist"
                     className="bg-background border-2 focus:border-orange-500 transition-colors"
                   />
+                ) : formData.dsp.soundcloud ? (
+                  <a href={formData.dsp.soundcloud} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.dsp.soundcloud}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.dsp.soundcloud}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -765,12 +859,18 @@ const ArtistProfile = () => {
                               <LinkIcon className="w-4 h-4 text-green-500" />
                               <Label className="text-sm font-semibold text-muted-foreground">{link.label}</Label>
                             </div>
-                            <p className="text-foreground text-lg break-all">{link.url}</p>
+                            {link.url ? (
+                              <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                                {link.url}
+                              </a>
+                            ) : (
+                              <p className="text-sm text-muted-foreground/50 italic">Not set</p>
+                            )}
                           </div>
                         )}
                       </FieldContainer>
                     ))}
-                    
+
                     {formData.customDspLinks.length === 0 && isEditMode && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom DSP links added. Click "Add Link" to create one.
@@ -783,7 +883,8 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Additional Links */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-purple-500/40" />
             <CardHeader className="bg-gradient-to-r from-purple-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <LinkIcon className="w-5 h-5 text-purple-500" />
@@ -805,8 +906,12 @@ const ArtistProfile = () => {
                     placeholder="https://epk.example.com"
                     className="bg-background border-2 focus:border-purple-500 transition-colors"
                   />
+                ) : formData.additional.epk ? (
+                  <a href={formData.additional.epk} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.additional.epk}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg break-all">{formData.additional.epk}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -823,8 +928,12 @@ const ArtistProfile = () => {
                     placeholder="https://press.example.com"
                     className="bg-background border-2 focus:border-blue-500 transition-colors"
                   />
+                ) : formData.additional.pressKit ? (
+                  <a href={formData.additional.pressKit} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.additional.pressKit}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg break-all">{formData.additional.pressKit}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -841,8 +950,12 @@ const ArtistProfile = () => {
                     placeholder="https://linktr.ee/artist"
                     className="bg-background border-2 focus:border-green-500 transition-colors"
                   />
+                ) : formData.additional.linktree ? (
+                  <a href={formData.additional.linktree} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.additional.linktree}
+                  </a>
                 ) : (
-                  <p className="text-foreground text-lg break-all">{formData.additional.linktree}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -900,12 +1013,18 @@ const ArtistProfile = () => {
                               <LinkIcon className="w-4 h-4 text-purple-500" />
                               <Label className="text-sm font-semibold text-muted-foreground">{link.label}</Label>
                             </div>
-                            <p className="text-foreground text-lg break-all">{link.url}</p>
+                            {link.url ? (
+                              <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                                {link.url}
+                              </a>
+                            ) : (
+                              <p className="text-sm text-muted-foreground/50 italic">Not set</p>
+                            )}
                           </div>
                         )}
                       </FieldContainer>
                     ))}
-                    
+
                     {formData.customLinks.length === 0 && isEditMode && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom links added. Click "Add Link" to create one.
@@ -914,6 +1033,21 @@ const ArtistProfile = () => {
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          {/* My Notes -- private to you */}
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-amber-500/40" />
+            <CardHeader className="bg-gradient-to-r from-amber-500/5 to-transparent">
+              <div className="flex items-center gap-2">
+                <StickyNote className="w-5 h-5 text-amber-500" />
+                <CardTitle>My Notes</CardTitle>
+              </div>
+              <CardDescription>Private notes about this artist</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <NotesView scope={{ artistId: id }} />
             </CardContent>
           </Card>
 

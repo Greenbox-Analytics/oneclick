@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Music, Plus, Search, FileText, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Music, Plus, Search, FileText, Trash2, CheckCircle, ArrowLeft, BookOpen, Users } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   AlertDialog,
@@ -31,16 +33,50 @@ interface Artist {
   genres: string[];
   has_contract: boolean;
   avatar_url: string | null;
+  verified?: boolean;
+  teamcard?: {
+    display_name?: string;
+    avatar_url?: string;
+    bio?: string;
+  };
 }
+
+const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
 const Artists = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
-  const [artists, setArtists] = useState<Artist[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [artistToDelete, setArtistToDelete] = useState<Artist | null>(null);
+
+  // Fetch artists with TeamCard overlay for verified artists
+  const { data: artists = [], isLoading, refetch } = useQuery<Artist[]>({
+    queryKey: ["artists-with-teamcards", user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      // Try batch overlay endpoint first, fall back to direct Supabase query
+      try {
+        const res = await fetch(`${API_URL}/registry/artists/with-teamcards?user_id=${user.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          return data.artists || [];
+        }
+      } catch {
+        // Fall back to direct Supabase query
+      }
+      const { data, error } = await supabase
+        .from('artists')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) {
+        console.error('Error fetching artists:', error);
+        return [];
+      }
+      return data || [];
+    },
+    enabled: !!user?.id,
+  });
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
@@ -54,35 +90,6 @@ const Artists = () => {
       return () => clearTimeout(timer);
     }
   }, [onboardingLoading, statuses.artists]);
-
-  useEffect(() => {
-    const fetchArtists = async () => {
-      if (!user) {
-        setIsLoading(false);
-        return;
-      }
-
-      // RLS policies will automatically filter by user_id
-      const { data, error } = await supabase
-        .from('artists')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Error fetching artists:', error);
-        toast({
-          title: "Error",
-          description: "Failed to load artists",
-          variant: "destructive",
-        });
-      } else if (data) {
-        setArtists(data);
-      }
-      setIsLoading(false);
-    };
-
-    fetchArtists();
-  }, [user, toast]);
 
   const handleDeleteArtist = async () => {
     if (!artistToDelete) return;
@@ -99,7 +106,7 @@ const Artists = () => {
         variant: "destructive",
       });
     } else {
-      setArtists(artists.filter(a => a.id !== artistToDelete.id));
+      refetch();
       toast({
         title: "Success",
         description: `${artistToDelete.name} has been deleted.`,
@@ -116,16 +123,36 @@ const Artists = () => {
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div 
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/dashboard")}
-          >
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center p-1.5">
-              <Music className="w-full h-full text-primary-foreground" />
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => navigate(-1)}
+            >
+              <ArrowLeft className="w-4 h-4 mr-1" /> Back
+            </Button>
+            <div className="w-px h-6 bg-border" />
+            <div
+              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+              onClick={() => navigate("/dashboard")}
+            >
+              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center p-1.5">
+                <Music className="w-full h-full text-primary-foreground" />
+              </div>
+              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
             <Button variant="outline" onClick={() => navigate("/dashboard")}>
               Back to Dashboard
@@ -137,8 +164,9 @@ const Artists = () => {
       <main className="container mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-3xl font-bold text-foreground mb-2">Artist Profiles</h2>
-            <p className="text-muted-foreground">Manage your artist roster</p>
+            <h2 className="text-3xl font-bold text-foreground mb-1">Artist Profiles</h2>
+            <p className="text-muted-foreground mb-3">Manage your artist roster</p>
+            <div className="h-0.5 w-20 bg-gradient-to-r from-primary to-primary/0 rounded-full" />
           </div>
           <Button data-walkthrough="artists-add" onClick={() => navigate("/artists/new")}>
             <Plus className="w-4 h-4 mr-2" />
@@ -159,59 +187,89 @@ const Artists = () => {
         </div>
 
         {isLoading ? (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground">Loading artists...</p>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Card key={i} className="border border-border">
+                <div className="h-0.5 bg-muted" />
+                <CardContent className="p-5">
+                  <div className="flex items-start gap-4">
+                    <div className="w-14 h-14 rounded-full bg-muted animate-pulse shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-5 bg-muted rounded animate-pulse w-2/3" />
+                      <div className="h-4 bg-muted rounded animate-pulse w-1/2" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         ) : (
           <>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {filteredArtists.map((artist, index) => (
-                <Card key={artist.id} className="hover:shadow-lg transition-shadow" data-walkthrough={index === 0 ? "artists-card" : undefined}>
-                  <CardHeader>
-                    <div className="flex items-start justify-between mb-4">
-                      <Avatar className="w-16 h-16">
-                        <AvatarImage src={artist.avatar_url || undefined} alt={artist.name} />
-                        <AvatarFallback className="bg-primary text-primary-foreground text-xl">
-                          {artist.name.charAt(0)}
+              {filteredArtists.map((artist, index) => {
+                const cardDisplayName = artist.teamcard?.display_name || artist.name;
+                const cardDisplayAvatar = artist.teamcard?.avatar_url || artist.avatar_url;
+                const cardIsVerified = artist.verified === true;
+
+                return (
+                <Card
+                  key={artist.id}
+                  className="group cursor-pointer border border-border hover:border-primary/30 hover:shadow-md transition-all overflow-hidden"
+                  onClick={() => navigate(`/artists/${artist.id}`)}
+                  data-walkthrough={index === 0 ? "artists-card" : undefined}
+                >
+                  <div className="h-0.5 bg-primary/40 group-hover:bg-primary transition-colors" />
+                  <CardContent className="p-5">
+                    <div className="flex items-start gap-4">
+                      <Avatar className="w-14 h-14 ring-2 ring-primary/10">
+                        <AvatarImage src={cardDisplayAvatar || undefined} alt={cardDisplayName} />
+                        <AvatarFallback className="bg-primary/10 text-primary text-lg font-semibold">
+                          {cardDisplayName.charAt(0)}
                         </AvatarFallback>
                       </Avatar>
-                      {artist.has_contract && (
-                        <div className="flex items-center gap-1 text-xs text-success bg-success/10 px-2 py-1 rounded-full">
-                          <FileText className="w-3 h-3" />
-                          Contract
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="font-semibold text-foreground truncate">{cardDisplayName}</h3>
+                          {cardIsVerified && (
+                            <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                          )}
                         </div>
-                      )}
+                        <p className="text-sm text-muted-foreground mb-2 truncate">
+                          {artist.genres.length > 0 ? artist.genres.join(' \u00b7 ') : 'No genres set'}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          {artist.has_contract && (
+                            <Badge variant="outline" className="text-xs gap-1 text-primary border-primary/30">
+                              <FileText className="w-3 h-3" /> Contract
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setArtistToDelete(artist);
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
                     </div>
-                    <CardTitle>{artist.name}</CardTitle>
-                    <CardDescription>{artist.genres.join(', ')}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => navigate(`/artists/${artist.id}`)}
-                    >
-                      View Profile
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="w-full text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setArtistToDelete(artist);
-                      }}
-                    >
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Delete Artist
-                    </Button>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
 
             {filteredArtists.length === 0 && !isLoading && (
-              <div className="text-center py-12">
-                <p className="text-muted-foreground">No artists found</p>
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Users className="w-12 h-12 text-muted-foreground/30 mb-3" />
+                <p className="text-muted-foreground font-medium">No artists found</p>
+                <p className="text-sm text-muted-foreground/60 mt-1">
+                  {searchQuery ? 'Try a different search term' : 'Add your first artist to get started'}
+                </p>
               </div>
             )}
           </>

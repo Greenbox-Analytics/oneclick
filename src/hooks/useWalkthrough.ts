@@ -14,28 +14,28 @@ export const WALKTHROUGH_STEPS: WalkthroughStep[] = [
     targetSelector: '[data-walkthrough="tools"]',
     title: "Tools",
     description:
-      "Access OneClick for rapid document processing, Zoe AI for contract analysis, and Split Sheets for royalty management.",
+      "OneClick for royalty calculations, Zoe AI for contract analysis, Split Sheets for ownership docs, and the Rights Registry to track and protect your catalog.",
     placement: "bottom",
   },
   {
     targetSelector: '[data-walkthrough="artists"]',
     title: "Artist Profiles",
     description:
-      "Create and manage your artist roster — store DSP links, social media, contracts, and project files all in one place.",
+      "Create and manage your artist roster. Each profile stores DSP links, contracts, and project files. Artist data feeds into collaboration invitations and TeamCards.",
     placement: "bottom",
   },
   {
     targetSelector: '[data-walkthrough="workspace"]',
     title: "Workspace",
     description:
-      "Organize projects with Kanban boards, connect Google Drive, Slack, Notion, and Monday.com integrations.",
+      "Organize tasks on Kanban boards with monthly iterations. Connect Google Drive, Slack, Notion, and Monday.com to keep everything in sync.",
     placement: "bottom",
   },
   {
     targetSelector: '[data-walkthrough="portfolio"]',
     title: "Portfolio",
     description:
-      "See everything at a glance — your artists, projects, and documents organized by year and category.",
+      "All your projects grouped by year and artist. See work counts, team members, and access projects shared with you by collaborators — with your role clearly visible.",
     placement: "bottom",
   },
 ];

@@ -2,8 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import type { Tables } from "@/integrations/supabase/types";
-import type { BoardTask } from "@/types/integrations";
 
 const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
@@ -13,45 +11,32 @@ export interface ArtistInfo {
   avatar?: string;
 }
 
-export interface ProjectWithFiles {
+export interface ProjectCard {
   id: string;
   name: string;
   description: string | null;
   created_at: string;
   artist_id: string;
-  files: Record<string, Tables<"project_files">[]>; // keyed by folder_category
-  tasks: BoardTask[];
+  artist_name: string;
+  artist_avatar?: string;
+  member_count: number;
+  work_count: number;
 }
 
-export interface ArtistGroup {
-  artist: ArtistInfo;
-  projects: ProjectWithFiles[];
-}
-
-export interface LetterGroup {
-  letter: string;
-  artists: ArtistGroup[];
-}
-
-export interface YearGroup {
-  year: number;
-  artists: ArtistGroup[];
-  letterGroups: LetterGroup[];
-  totalProjects: number;
+export interface SharedProjectCard extends ProjectCard {
+  role: "admin" | "editor" | "viewer";
 }
 
 export interface PortfolioFilters {
   selectedArtistIds: string[];
-  searchQuery: string;       // matches project name + file name
-  dateFrom?: string;         // ISO date string
-  dateTo?: string;           // ISO date string
+  searchQuery: string;
   sortOrder: "alpha" | "newest" | "oldest";
 }
 
 export function usePortfolioData(filters: PortfolioFilters) {
   const { user } = useAuth();
 
-  // Query 1: Fetch artists from backend API (same pattern as useArtistsList.ts)
+  // Query 1: Fetch artists from backend API
   const artistsQuery = useQuery<ArtistInfo[]>({
     queryKey: ["portfolio-artists", user?.id],
     queryFn: async () => {
@@ -70,10 +55,16 @@ export function usePortfolioData(filters: PortfolioFilters) {
     enabled: !!user?.id,
   });
 
+  const artistMap = useMemo(() => {
+    const map = new Map<string, ArtistInfo>();
+    for (const a of artistsQuery.data || []) map.set(a.id, a);
+    return map;
+  }, [artistsQuery.data]);
+
   const artistIds = useMemo(() => (artistsQuery.data || []).map(a => a.id), [artistsQuery.data]);
 
-  // Query 2: Fetch ALL projects for user's artists from Supabase
-  const projectsQuery = useQuery<Tables<"projects">[]>({
+  // Query 2: Fetch projects for user's artists
+  const projectsQuery = useQuery({
     queryKey: ["portfolio-projects", artistIds],
     queryFn: async () => {
       if (artistIds.length === 0) return [];
@@ -90,160 +81,196 @@ export function usePortfolioData(filters: PortfolioFilters) {
 
   const projectIds = useMemo(() => (projectsQuery.data || []).map(p => p.id), [projectsQuery.data]);
 
-  // Query 3: Fetch ALL project files from Supabase
-  const filesQuery = useQuery<Tables<"project_files">[]>({
-    queryKey: ["portfolio-files", projectIds],
+  // Query 3: Fetch member counts per project
+  const memberCountsQuery = useQuery<Map<string, number>>({
+    queryKey: ["portfolio-member-counts", projectIds],
     queryFn: async () => {
-      if (projectIds.length === 0) return [];
-      // Supabase .in() has a limit, batch if needed
+      if (projectIds.length === 0) return new Map();
+      const map = new Map<string, number>();
       const batchSize = 100;
-      const allFiles: Tables<"project_files">[] = [];
       for (let i = 0; i < projectIds.length; i += batchSize) {
         const batch = projectIds.slice(i, i + batchSize);
         const { data, error } = await supabase
-          .from("project_files")
-          .select("*")
+          .from("project_members")
+          .select("project_id")
           .in("project_id", batch);
-        if (error) { console.error("Error fetching files:", error); continue; }
-        allFiles.push(...(data || []));
+        if (error) { console.error("Error fetching member counts:", error); continue; }
+        for (const row of data || []) {
+          map.set(row.project_id, (map.get(row.project_id) || 0) + 1);
+        }
       }
-      return allFiles;
+      return map;
     },
     enabled: projectIds.length > 0,
   });
 
-  // Query 4: Fetch ALL board tasks from backend API
-  const tasksQuery = useQuery<BoardTask[]>({
-    queryKey: ["portfolio-tasks", user?.id],
+  // Query 4: Fetch work counts per project
+  const workCountsQuery = useQuery<Map<string, number>>({
+    queryKey: ["portfolio-work-counts", projectIds],
+    queryFn: async () => {
+      if (projectIds.length === 0) return new Map();
+      const map = new Map<string, number>();
+      const batchSize = 100;
+      for (let i = 0; i < projectIds.length; i += batchSize) {
+        const batch = projectIds.slice(i, i + batchSize);
+        const { data, error } = await supabase
+          .from("works_registry")
+          .select("project_id")
+          .in("project_id", batch);
+        if (error) { console.error("Error fetching work counts:", error); continue; }
+        for (const row of data || []) {
+          map.set(row.project_id, (map.get(row.project_id) || 0) + 1);
+        }
+      }
+      return map;
+    },
+    enabled: projectIds.length > 0,
+  });
+
+  // Query 5: Fetch shared projects (where user is a member but NOT the owner)
+  const sharedProjectsQuery = useQuery<SharedProjectCard[]>({
+    queryKey: ["portfolio-shared-projects", user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const res = await fetch(`${API_URL}/boards/tasks?user_id=${user.id}`);
-      if (!res.ok) return [];
-      const data = await res.json();
-      return data.tasks || [];
+      // Get all project memberships for current user where role is not owner
+      const { data: memberships, error: memberError } = await supabase
+        .from("project_members")
+        .select("project_id, role")
+        .eq("user_id", user.id)
+        .neq("role", "owner");
+      if (memberError) { console.error("Error fetching shared memberships:", memberError); return []; }
+      if (!memberships || memberships.length === 0) return [];
+
+      const sharedProjectIds = memberships.map(m => m.project_id);
+      const roleMap = new Map(memberships.map(m => [m.project_id, m.role]));
+
+      // Fetch the projects
+      const { data: projects, error: projectError } = await supabase
+        .from("projects")
+        .select("*")
+        .in("id", sharedProjectIds);
+      if (projectError) { console.error("Error fetching shared projects:", projectError); return []; }
+      if (!projects || projects.length === 0) return [];
+
+      // Fetch artists for these projects
+      const sharedArtistIds = [...new Set(projects.map(p => p.artist_id))];
+      const { data: artists, error: artistError } = await supabase
+        .from("artists")
+        .select("id, name, avatar_url")
+        .in("id", sharedArtistIds);
+      if (artistError) console.error("Error fetching shared artists:", artistError);
+      const sharedArtistMap = new Map((artists || []).map(a => [a.id, a]));
+
+      // Fetch member counts for shared projects
+      const { data: memberRows } = await supabase
+        .from("project_members")
+        .select("project_id")
+        .in("project_id", sharedProjectIds);
+      const sharedMemberCounts = new Map<string, number>();
+      for (const row of memberRows || []) {
+        sharedMemberCounts.set(row.project_id, (sharedMemberCounts.get(row.project_id) || 0) + 1);
+      }
+
+      // Fetch work counts for shared projects
+      const { data: workRows } = await supabase
+        .from("works_registry")
+        .select("project_id")
+        .in("project_id", sharedProjectIds);
+      const sharedWorkCounts = new Map<string, number>();
+      for (const row of workRows || []) {
+        sharedWorkCounts.set(row.project_id, (sharedWorkCounts.get(row.project_id) || 0) + 1);
+      }
+
+      return projects.map(p => {
+        const artist = sharedArtistMap.get(p.artist_id);
+        return {
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          created_at: p.created_at,
+          artist_id: p.artist_id,
+          artist_name: artist?.name || "Unknown",
+          artist_avatar: artist?.avatar_url || undefined,
+          member_count: sharedMemberCounts.get(p.id) || 0,
+          work_count: sharedWorkCounts.get(p.id) || 0,
+          role: roleMap.get(p.id) as "admin" | "editor" | "viewer",
+        };
+      });
     },
     enabled: !!user?.id,
   });
 
-  // Build lookup maps
-  const filesByProject = useMemo(() => {
-    const map = new Map<string, Record<string, Tables<"project_files">[]>>();
-    for (const file of filesQuery.data || []) {
-      if (!map.has(file.project_id)) {
-        map.set(file.project_id, { contract: [], split_sheet: [], royalty_statement: [], other: [] });
-      }
-      const bucket = map.get(file.project_id)!;
-      const cat = file.folder_category || "other";
-      if (!bucket[cat]) bucket[cat] = [];
-      bucket[cat].push(file);
-    }
-    return map;
-  }, [filesQuery.data]);
-
-  const tasksByProject = useMemo(() => {
-    const map = new Map<string, BoardTask[]>();
-    for (const task of tasksQuery.data || []) {
-      for (const pid of task.project_ids || []) {
-        if (!map.has(pid)) map.set(pid, []);
-        map.get(pid)!.push(task);
-      }
-    }
-    return map;
-  }, [tasksQuery.data]);
-
-  const artistMap = useMemo(() => {
-    const map = new Map<string, ArtistInfo>();
-    for (const a of artistsQuery.data || []) map.set(a.id, a);
-    return map;
-  }, [artistsQuery.data]);
-
-  // Compute filtered + grouped hierarchy
-  const years = useMemo((): YearGroup[] => {
+  // Build filtered + sorted project cards grouped by artist
+  const myProjects = useMemo((): ProjectCard[] => {
     const projects = projectsQuery.data || [];
     const search = filters.searchQuery.toLowerCase();
+    const memberCounts = memberCountsQuery.data || new Map();
+    const workCounts = workCountsQuery.data || new Map();
 
-    // Step 1: Filter projects
     const filtered = projects.filter(p => {
-      // Artist filter
       if (filters.selectedArtistIds.length > 0 && !filters.selectedArtistIds.includes(p.artist_id)) {
         return false;
       }
-      // Date filter
-      if (filters.dateFrom && p.created_at < filters.dateFrom) return false;
-      if (filters.dateTo && p.created_at > filters.dateTo) return false;
-      // Text search: match project name OR any file name in this project
-      if (search) {
-        const nameMatch = p.name.toLowerCase().includes(search);
-        const filesMap = filesByProject.get(p.id);
-        const fileMatch = filesMap && Object.values(filesMap).flat().some(
-          f => f.file_name.toLowerCase().includes(search)
-        );
-        if (!nameMatch && !fileMatch) return false;
+      if (search && !p.name.toLowerCase().includes(search)) {
+        return false;
       }
       return true;
     });
 
-    // Step 2: Group by year
-    const yearMap = new Map<number, Map<string, Tables<"projects">[]>>();
-    for (const p of filtered) {
-      const year = new Date(p.created_at).getFullYear();
-      if (!yearMap.has(year)) yearMap.set(year, new Map());
-      const artistGroup = yearMap.get(year)!;
-      if (!artistGroup.has(p.artist_id)) artistGroup.set(p.artist_id, []);
-      artistGroup.get(p.artist_id)!.push(p);
-    }
+    const cards: ProjectCard[] = filtered.map(p => {
+      const artist = artistMap.get(p.artist_id);
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        created_at: p.created_at,
+        artist_id: p.artist_id,
+        artist_name: artist?.name || "Unknown",
+        artist_avatar: artist?.avatar,
+        member_count: memberCounts.get(p.id) || 0,
+        work_count: workCounts.get(p.id) || 0,
+      };
+    });
 
-    // Step 3: Build output sorted by year desc, artists alphabetical
-    return Array.from(yearMap.entries())
-      .sort(([a], [b]) => b - a) // years descending
-      .map(([year, artistGroups]) => {
-        const artists = Array.from(artistGroups.entries())
-          .map(([artistId, projects]) => ({
-            artist: artistMap.get(artistId) || { id: artistId, name: "Unknown" },
-            projects: projects
-              .sort((a, b) => {
-                if (filters.sortOrder === "alpha") return a.name.localeCompare(b.name);
-                if (filters.sortOrder === "oldest") return a.created_at.localeCompare(b.created_at);
-                return b.created_at.localeCompare(a.created_at); // newest
-              })
-              .map(p => ({
-                id: p.id,
-                name: p.name,
-                description: p.description,
-                created_at: p.created_at,
-                artist_id: p.artist_id,
-                files: filesByProject.get(p.id) || { contract: [], split_sheet: [], royalty_statement: [], other: [] },
-                tasks: tasksByProject.get(p.id) || [],
-              })),
-          }))
-          .sort((a, b) => a.artist.name.localeCompare(b.artist.name)); // alphabetical
+    // Sort
+    cards.sort((a, b) => {
+      if (filters.sortOrder === "alpha") return a.name.localeCompare(b.name);
+      if (filters.sortOrder === "oldest") return a.created_at.localeCompare(b.created_at);
+      return b.created_at.localeCompare(a.created_at); // newest
+    });
 
-        // Build letter groups for alphabetical legend
-        const letterMap = new Map<string, ArtistGroup[]>();
-        for (const ag of artists) {
-          const letter = ag.artist.name.charAt(0).toUpperCase();
-          if (!letterMap.has(letter)) letterMap.set(letter, []);
-          letterMap.get(letter)!.push(ag);
-        }
-        const letterGroups = Array.from(letterMap.entries())
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([letter, artists]) => ({ letter, artists }));
+    return cards;
+  }, [projectsQuery.data, filters, artistMap, memberCountsQuery.data, workCountsQuery.data]);
 
-        return {
-          year,
-          artists,
-          letterGroups,
-          totalProjects: artists.reduce((sum, a) => sum + a.projects.length, 0),
-        };
-      });
-  }, [projectsQuery.data, filters, filesByProject, tasksByProject, artistMap]);
+  // Filter shared projects by search and artist
+  const sharedProjects = useMemo((): SharedProjectCard[] => {
+    const projects = sharedProjectsQuery.data || [];
+    const search = filters.searchQuery.toLowerCase();
+
+    const filtered = projects.filter(p => {
+      if (filters.selectedArtistIds.length > 0 && !filters.selectedArtistIds.includes(p.artist_id)) {
+        return false;
+      }
+      if (search && !p.name.toLowerCase().includes(search)) {
+        return false;
+      }
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      if (filters.sortOrder === "alpha") return a.name.localeCompare(b.name);
+      if (filters.sortOrder === "oldest") return a.created_at.localeCompare(b.created_at);
+      return b.created_at.localeCompare(a.created_at);
+    });
+
+    return filtered;
+  }, [sharedProjectsQuery.data, filters]);
 
   return {
-    years,
+    myProjects,
+    sharedProjects,
     allArtists: artistsQuery.data || [],
-    allFiles: filesQuery.data || [],
-    isLoading: artistsQuery.isLoading || projectsQuery.isLoading || filesQuery.isLoading || tasksQuery.isLoading,
-    refetchFiles: filesQuery.refetch,
+    isLoading: artistsQuery.isLoading || projectsQuery.isLoading,
     refetchProjects: projectsQuery.refetch,
   };
 }

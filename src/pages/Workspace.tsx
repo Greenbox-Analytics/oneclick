@@ -1,6 +1,6 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
-import { Music, ArrowLeft, LayoutGrid, HardDrive, Bell, CalendarDays, Settings } from "lucide-react";
+import { Music, ArrowLeft, LayoutGrid, HardDrive, Bell, CalendarDays, Settings, BookOpen } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
@@ -10,6 +10,8 @@ import { WorkspaceSettings } from "@/components/workspace/WorkspaceSettings";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
 import { CalendarView } from "@/components/workspace/boards/CalendarView";
 import { toast } from "sonner";
+import { RegistryNotifications } from "@/components/workspace/RegistryNotifications";
+import { useUnreadCount } from "@/hooks/useRegistryNotifications";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -23,6 +25,7 @@ const Workspace = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [now, setNow] = useState(new Date());
   const { settings } = useWorkspaceSettings();
+  const unreadNotifications = useUnreadCount();
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -98,11 +101,13 @@ const Workspace = () => {
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
-              size="icon"
-              onClick={() => navigate("/dashboard")}
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => navigate(-1)}
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>
+            <div className="w-px h-6 bg-border" />
             <div
               className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
               onClick={() => navigate("/dashboard")}
@@ -113,7 +118,18 @@ const Workspace = () => {
               <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
           </div>
-          <ToolHelpButton onClick={walkthrough.replay} />
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
+            <ToolHelpButton onClick={walkthrough.replay} />
+          </div>
         </div>
       </header>
 
@@ -145,6 +161,11 @@ const Workspace = () => {
             <TabsTrigger value="notifications" className="gap-2">
               <Bell className="w-4 h-4" />
               Notifications
+              {unreadNotifications > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-destructive text-destructive-foreground rounded-full">
+                  {unreadNotifications}
+                </span>
+              )}
             </TabsTrigger>
             <TabsTrigger value="settings" className="gap-2">
               <Settings className="w-4 h-4" />
@@ -165,11 +186,7 @@ const Workspace = () => {
           </TabsContent>
 
           <TabsContent value="notifications">
-            <div className="text-center py-12 text-muted-foreground">
-              <Bell className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <h3 className="text-lg font-semibold mb-2">Notification Settings</h3>
-              <p>Connect Slack, Notion, or Monday.com to configure notifications</p>
-            </div>
+            <RegistryNotifications />
           </TabsContent>
 
           <TabsContent value="settings" data-walkthrough="workspace-settings">

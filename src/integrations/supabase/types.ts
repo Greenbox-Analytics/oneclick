@@ -35,6 +35,12 @@ export type Database = {
           social_tiktok: string | null
           social_youtube: string | null
           updated_at: string
+          user_id: string
+          custom_social_links: Json | null
+          custom_dsp_links: Json | null
+          linked_user_id: string | null
+          verified: boolean
+          verified_at: string | null
         }
         Insert: {
           additional_epk?: string | null
@@ -56,6 +62,12 @@ export type Database = {
           social_tiktok?: string | null
           social_youtube?: string | null
           updated_at?: string
+          user_id?: string
+          custom_social_links?: Json | null
+          custom_dsp_links?: Json | null
+          linked_user_id?: string | null
+          verified?: boolean
+          verified_at?: string | null
         }
         Update: {
           additional_epk?: string | null
@@ -77,6 +89,12 @@ export type Database = {
           social_tiktok?: string | null
           social_youtube?: string | null
           updated_at?: string
+          user_id?: string
+          custom_social_links?: Json | null
+          custom_dsp_links?: Json | null
+          linked_user_id?: string | null
+          verified?: boolean
+          verified_at?: string | null
         }
         Relationships: []
       }
@@ -148,6 +166,10 @@ export type Database = {
           artists_completed: boolean
           workspace_completed: boolean
           portfolio_completed: boolean
+          registry_completed: boolean
+          project_detail_completed: boolean
+          profile_completed: boolean
+          work_detail_completed: boolean
           created_at: string
         }
         Insert: {
@@ -158,6 +180,10 @@ export type Database = {
           artists_completed?: boolean
           workspace_completed?: boolean
           portfolio_completed?: boolean
+          registry_completed?: boolean
+          project_detail_completed?: boolean
+          profile_completed?: boolean
+          work_detail_completed?: boolean
           created_at?: string
         }
         Update: {
@@ -168,6 +194,10 @@ export type Database = {
           artists_completed?: boolean
           workspace_completed?: boolean
           portfolio_completed?: boolean
+          registry_completed?: boolean
+          project_detail_completed?: boolean
+          profile_completed?: boolean
+          work_detail_completed?: boolean
           created_at?: string
         }
         Relationships: [
@@ -182,6 +212,7 @@ export type Database = {
       }
       project_files: {
         Row: {
+          content_hash: string | null
           created_at: string
           file_name: string
           file_size: number | null
@@ -193,6 +224,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          content_hash?: string | null
           created_at?: string
           file_name: string
           file_size?: number | null
@@ -204,6 +236,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          content_hash?: string | null
           created_at?: string
           file_name?: string
           file_size?: number | null
@@ -232,6 +265,7 @@ export type Database = {
           id: string
           name: string
           updated_at: string
+          about_content: Json
         }
         Insert: {
           artist_id: string
@@ -240,6 +274,7 @@ export type Database = {
           id?: string
           name: string
           updated_at?: string
+          about_content?: Json
         }
         Update: {
           artist_id?: string
@@ -248,6 +283,7 @@ export type Database = {
           id?: string
           name?: string
           updated_at?: string
+          about_content?: Json
         }
         Relationships: [
           {
@@ -258,6 +294,297 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      works_registry: {
+        Row: {
+          id: string; user_id: string; artist_id: string; project_id: string
+          title: string; work_type: string; custom_work_type: string | null
+          isrc: string | null; iswc: string | null
+          upc: string | null; release_date: string | null; status: string
+          notes: string | null; created_at: string; updated_at: string
+        }
+        Insert: {
+          id?: string; user_id?: string; artist_id: string; project_id: string
+          title: string; work_type?: string; custom_work_type?: string | null
+          isrc?: string | null; iswc?: string | null
+          upc?: string | null; release_date?: string | null; status?: string
+          notes?: string | null; created_at?: string; updated_at?: string
+        }
+        Update: {
+          id?: string; user_id?: string; artist_id?: string; project_id?: string
+          title?: string; work_type?: string; custom_work_type?: string | null
+          isrc?: string | null; iswc?: string | null
+          upc?: string | null; release_date?: string | null; status?: string
+          notes?: string | null; created_at?: string; updated_at?: string
+        }
+        Relationships: []
+      }
+      ownership_stakes: {
+        Row: {
+          id: string; work_id: string; user_id: string; stake_type: string
+          holder_name: string; holder_role: string; percentage: number
+          holder_email: string | null; holder_ipi: string | null
+          publisher_or_label: string | null; notes: string | null
+          created_at: string; updated_at: string
+        }
+        Insert: {
+          id?: string; work_id: string; user_id?: string; stake_type: string
+          holder_name: string; holder_role: string; percentage: number
+          holder_email?: string | null; holder_ipi?: string | null
+          publisher_or_label?: string | null; notes?: string | null
+          created_at?: string; updated_at?: string
+        }
+        Update: {
+          id?: string; work_id?: string; user_id?: string; stake_type?: string
+          holder_name?: string; holder_role?: string; percentage?: number
+          holder_email?: string | null; holder_ipi?: string | null
+          publisher_or_label?: string | null; notes?: string | null
+          created_at?: string; updated_at?: string
+        }
+        Relationships: []
+      }
+      licensing_rights: {
+        Row: {
+          id: string; work_id: string; user_id: string; license_type: string
+          licensee_name: string; licensee_email: string | null; territory: string
+          start_date: string; end_date: string | null; terms: string | null
+          status: string; created_at: string; updated_at: string
+        }
+        Insert: {
+          id?: string; work_id: string; user_id?: string; license_type: string
+          licensee_name: string; licensee_email?: string | null; territory?: string
+          start_date: string; end_date?: string | null; terms?: string | null
+          status?: string; created_at?: string; updated_at?: string
+        }
+        Update: {
+          id?: string; work_id?: string; user_id?: string; license_type?: string
+          licensee_name?: string; licensee_email?: string | null; territory?: string
+          start_date?: string; end_date?: string | null; terms?: string | null
+          status?: string; created_at?: string; updated_at?: string
+        }
+        Relationships: []
+      }
+      registry_agreements: {
+        Row: {
+          id: string; work_id: string; user_id: string; agreement_type: string
+          title: string; description: string | null; effective_date: string
+          parties: Json; file_id: string | null; document_hash: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string; work_id: string; user_id?: string; agreement_type: string
+          title: string; description?: string | null; effective_date: string
+          parties?: Json; file_id?: string | null; document_hash?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string; work_id?: string; user_id?: string; agreement_type?: string
+          title?: string; description?: string | null; effective_date?: string
+          parties?: Json; file_id?: string | null; document_hash?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
+      registry_collaborators: {
+        Row: {
+          id: string; work_id: string; stake_id: string | null; invited_by: string
+          collaborator_user_id: string | null; email: string; name: string; role: string
+          status: string; invite_token: string
+          expires_at: string; invited_at: string; responded_at: string | null
+        }
+        Insert: {
+          id?: string; work_id: string; stake_id?: string | null; invited_by?: string
+          collaborator_user_id?: string | null; email: string; name: string; role: string
+          status?: string; invite_token?: string
+          expires_at?: string; invited_at?: string; responded_at?: string | null
+        }
+        Update: {
+          id?: string; work_id?: string; stake_id?: string | null; invited_by?: string
+          collaborator_user_id?: string | null; email?: string; name?: string; role?: string
+          status?: string; invite_token?: string
+          expires_at?: string; invited_at?: string; responded_at?: string | null
+        }
+        Relationships: []
+      }
+      team_cards: {
+        Row: {
+          id: string; user_id: string; display_name: string; first_name: string
+          last_name: string; email: string; avatar_url: string | null; bio: string | null
+          phone: string | null; website: string | null; company: string | null
+          industry: string | null; social_links: Json; dsp_links: Json; custom_links: Json
+          visible_fields: Json; created_at: string; updated_at: string
+        }
+        Insert: {
+          id?: string; user_id: string; display_name: string; first_name: string
+          last_name: string; email: string; avatar_url?: string | null; bio?: string | null
+          phone?: string | null; website?: string | null; company?: string | null
+          industry?: string | null; social_links?: Json; dsp_links?: Json; custom_links?: Json
+          visible_fields?: Json; created_at?: string; updated_at?: string
+        }
+        Update: {
+          id?: string; user_id?: string; display_name?: string; first_name?: string
+          last_name?: string; email?: string; avatar_url?: string | null; bio?: string | null
+          phone?: string | null; website?: string | null; company?: string | null
+          industry?: string | null; social_links?: Json; dsp_links?: Json; custom_links?: Json
+          visible_fields?: Json; created_at?: string; updated_at?: string
+        }
+        Relationships: []
+      }
+      notes: {
+        Row: {
+          id: string; user_id: string; folder_id: string | null
+          artist_id: string | null; project_id: string | null
+          title: string; content: Json; pinned: boolean
+          created_at: string; updated_at: string
+        }
+        Insert: {
+          id?: string; user_id?: string; folder_id?: string | null
+          artist_id?: string | null; project_id?: string | null
+          title?: string; content?: Json; pinned?: boolean
+          created_at?: string; updated_at?: string
+        }
+        Update: {
+          id?: string; user_id?: string; folder_id?: string | null
+          artist_id?: string | null; project_id?: string | null
+          title?: string; content?: Json; pinned?: boolean
+          created_at?: string; updated_at?: string
+        }
+        Relationships: []
+      }
+      note_folders: {
+        Row: {
+          id: string; user_id: string; artist_id: string | null; project_id: string | null
+          name: string; parent_folder_id: string | null; sort_order: number
+          created_at: string; updated_at: string
+        }
+        Insert: {
+          id?: string; user_id?: string; artist_id?: string | null; project_id?: string | null
+          name: string; parent_folder_id?: string | null; sort_order?: number
+          created_at?: string; updated_at?: string
+        }
+        Update: {
+          id?: string; user_id?: string; artist_id?: string | null; project_id?: string | null
+          name?: string; parent_folder_id?: string | null; sort_order?: number
+          created_at?: string; updated_at?: string
+        }
+        Relationships: []
+      }
+      project_members: {
+        Row: {
+          id: string
+          project_id: string
+          user_id: string
+          role: string
+          invited_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          user_id: string
+          role: string
+          invited_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          user_id?: string
+          role?: string
+          invited_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      pending_project_invites: {
+        Row: {
+          id: string
+          project_id: string
+          email: string
+          role: string
+          invited_by: string
+          created_at: string
+          expires_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          email: string
+          role: string
+          invited_by: string
+          created_at?: string
+          expires_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          email?: string
+          role?: string
+          invited_by?: string
+          created_at?: string
+          expires_at?: string
+        }
+        Relationships: []
+      }
+      work_files: {
+        Row: {
+          id: string
+          work_id: string
+          file_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          work_id: string
+          file_id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          work_id?: string
+          file_id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      work_audio_links: {
+        Row: {
+          id: string
+          work_id: string
+          audio_file_id: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          work_id: string
+          audio_file_id: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          work_id?: string
+          audio_file_id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      registry_notifications: {
+        Row: {
+          id: string; user_id: string; work_id: string | null; type: string
+          title: string; message: string; read: boolean; metadata: Json; created_at: string
+        }
+        Insert: {
+          id?: string; user_id?: string; work_id?: string | null; type: string
+          title: string; message: string; read?: boolean; metadata?: Json; created_at?: string
+        }
+        Update: {
+          id?: string; user_id?: string; work_id?: string | null; type?: string
+          title?: string; message?: string; read?: boolean; metadata?: Json; created_at?: string
+        }
+        Relationships: []
       }
     }
     Views: {
