@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, Plus, Search, FileText, Trash2, CheckCircle, ArrowLeft } from "lucide-react";
+import { Music, Plus, Search, FileText, Trash2, CheckCircle, ArrowLeft, BookOpen } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -144,6 +144,15 @@ const Artists = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
             <Button variant="outline" onClick={() => navigate("/dashboard")}>
               Back to Dashboard

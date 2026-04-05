@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Music, ArrowLeft, Loader2, Plus,
-  FileText, Volume2, Users, Settings, StickyNote,
+  FileText, Volume2, Users, Settings, StickyNote, BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -105,6 +105,15 @@ const ProjectDetail = () => {
               >
                 <ArrowLeft className="w-4 h-4 mr-1" /> Portfolio
               </Button>
+              <div
+                className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                onClick={() => navigate("/dashboard")}
+              >
+                <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
+                  <Music className="w-5 h-5 text-primary-foreground" />
+                </div>
+              </div>
+              <div className="w-px h-6 bg-border" />
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   {canEdit(userRole) ? (
@@ -132,11 +141,22 @@ const ProjectDetail = () => {
               </div>
             </div>
 
-            {canEdit(userRole) && (
-              <Button size="sm" onClick={() => setAddWorkOpen(true)} className="shrink-0">
-                <Plus className="w-4 h-4 mr-2" /> Add Work
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigate("/docs")}
+                title="Documentation"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <BookOpen className="w-4 h-4" />
               </Button>
-            )}
+              {canEdit(userRole) && (
+                <Button size="sm" onClick={() => setAddWorkOpen(true)}>
+                  <Plus className="w-4 h-4 mr-2" /> Add Work
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </header>

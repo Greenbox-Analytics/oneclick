@@ -34,6 +34,7 @@ import {
   Loader2,
   FileText,
   ArrowLeft,
+  BookOpen,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -510,9 +511,20 @@ const Registry = () => {
               <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
           </div>
-          <Button variant="outline" onClick={() => navigate("/tools")}>
-            Back to Tools
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/tools")}>
+              Back to Tools
+            </Button>
+          </div>
         </div>
       </header>
 

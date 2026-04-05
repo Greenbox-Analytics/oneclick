@@ -28,7 +28,7 @@ import {
 import {
   Music, ArrowLeft, Loader2, Shield, Pencil, Trash2,
   Users, Scale, FileCheck, CheckCircle, XCircle, UserPlus,
-  FileText, Headphones,
+  FileText, Headphones, BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -143,9 +143,20 @@ const WorkDetail = () => {
             </div>
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
-          <Button variant="outline" onClick={() => navigate("/tools/registry")}>
-            <ArrowLeft className="w-4 h-4 mr-2" /> Back to Registry
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/tools/registry")}>
+              <ArrowLeft className="w-4 h-4 mr-2" /> Back to Registry
+            </Button>
+          </div>
         </div>
       </header>
 

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Music, ArrowLeft, Upload } from "lucide-react";
+import { Music, ArrowLeft, Upload, BookOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -102,10 +102,21 @@ const NewArtist = () => {
               <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
           </div>
-          <Button variant="outline" onClick={() => navigate("/artists")}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Artists
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/artists")}>
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back to Artists
+            </Button>
+          </div>
         </div>
       </header>
 

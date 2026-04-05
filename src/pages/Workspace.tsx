@@ -1,6 +1,6 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
-import { Music, ArrowLeft, LayoutGrid, HardDrive, Bell, CalendarDays, Settings } from "lucide-react";
+import { Music, ArrowLeft, LayoutGrid, HardDrive, Bell, CalendarDays, Settings, BookOpen } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
@@ -118,7 +118,18 @@ const Workspace = () => {
               <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
           </div>
-          <ToolHelpButton onClick={walkthrough.replay} />
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
+            <ToolHelpButton onClick={walkthrough.replay} />
+          </div>
         </div>
       </header>
 

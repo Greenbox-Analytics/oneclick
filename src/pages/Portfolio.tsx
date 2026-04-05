@@ -42,6 +42,7 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
+  BookOpen,
 } from "lucide-react";
 
 const ROLE_COLORS: Record<string, string> = {
@@ -305,6 +306,15 @@ const Portfolio = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
