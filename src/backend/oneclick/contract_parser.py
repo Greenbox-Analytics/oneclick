@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import time
 import json
-
 import logging
 
 # Configure logging
