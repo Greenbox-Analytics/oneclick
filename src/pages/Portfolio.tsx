@@ -52,14 +52,14 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 const ARTIST_ACCENT_COLORS = [
-  { border: "border-l-rose-400", bg: "bg-rose-500/10", text: "text-rose-400", avatar: "bg-rose-500/15 text-rose-600 dark:text-rose-400", topBg: "bg-rose-400" },
-  { border: "border-l-amber-400", bg: "bg-amber-500/10", text: "text-amber-400", avatar: "bg-amber-500/15 text-amber-600 dark:text-amber-400", topBg: "bg-amber-400" },
-  { border: "border-l-violet-400", bg: "bg-violet-500/10", text: "text-violet-400", avatar: "bg-violet-500/15 text-violet-600 dark:text-violet-400", topBg: "bg-violet-400" },
-  { border: "border-l-cyan-400", bg: "bg-cyan-500/10", text: "text-cyan-400", avatar: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400", topBg: "bg-cyan-400" },
-  { border: "border-l-emerald-400", bg: "bg-emerald-500/10", text: "text-emerald-400", avatar: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400", topBg: "bg-emerald-400" },
-  { border: "border-l-pink-400", bg: "bg-pink-500/10", text: "text-pink-400", avatar: "bg-pink-500/15 text-pink-600 dark:text-pink-400", topBg: "bg-pink-400" },
-  { border: "border-l-sky-400", bg: "bg-sky-500/10", text: "text-sky-400", avatar: "bg-sky-500/15 text-sky-600 dark:text-sky-400", topBg: "bg-sky-400" },
-  { border: "border-l-orange-400", bg: "bg-orange-500/10", text: "text-orange-400", avatar: "bg-orange-500/15 text-orange-600 dark:text-orange-400", topBg: "bg-orange-400" },
+  { border: "border-l-blue-700", bg: "bg-blue-900/10", text: "text-blue-400", avatar: "bg-blue-900/20 text-blue-300 dark:text-blue-400", topBg: "bg-blue-600" },
+  { border: "border-l-red-700", bg: "bg-red-900/10", text: "text-red-400", avatar: "bg-red-900/20 text-red-300 dark:text-red-400", topBg: "bg-red-600" },
+  { border: "border-l-orange-600", bg: "bg-orange-900/10", text: "text-orange-400", avatar: "bg-orange-900/20 text-orange-300 dark:text-orange-400", topBg: "bg-orange-500" },
+  { border: "border-l-purple-800", bg: "bg-purple-900/10", text: "text-purple-400", avatar: "bg-purple-900/20 text-purple-300 dark:text-purple-400", topBg: "bg-purple-700" },
+  { border: "border-l-teal-600", bg: "bg-teal-900/10", text: "text-teal-400", avatar: "bg-teal-900/20 text-teal-300 dark:text-teal-400", topBg: "bg-teal-500" },
+  { border: "border-l-slate-500", bg: "bg-slate-800/10", text: "text-slate-400", avatar: "bg-slate-800/20 text-slate-300 dark:text-slate-400", topBg: "bg-slate-500" },
+  { border: "border-l-indigo-700", bg: "bg-indigo-900/10", text: "text-indigo-400", avatar: "bg-indigo-900/20 text-indigo-300 dark:text-indigo-400", topBg: "bg-indigo-600" },
+  { border: "border-l-amber-600", bg: "bg-amber-900/10", text: "text-amber-400", avatar: "bg-amber-900/20 text-amber-300 dark:text-amber-400", topBg: "bg-amber-500" },
 ];
 
 function getArtistColor(name: string) {
