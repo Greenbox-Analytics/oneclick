@@ -67,10 +67,15 @@ const ACCENT_STYLES: Record<string, { iconBg: string; iconText: string; bar: str
 // Reusable UI primitives — defined OUTSIDE components (rerender-no-inline-components)
 // ---------------------------------------------------------------------------
 
-function Step({ num, title, children }: { num: number; title: string; children: React.ReactNode }) {
+function Step({ num, title, children, isLast = false }: { num: number; title: string; children: React.ReactNode; isLast?: boolean }) {
   return (
-    <div className="relative pl-12 pb-8 border-l-2 border-primary/20 last:border-l-0 last:pb-0">
-      <div className="absolute left-0 top-0 -translate-x-1/2 w-9 h-9 rounded-full bg-primary/10 border-2 border-primary/30 flex items-center justify-center text-sm font-bold text-primary">
+    <div className="relative pl-12 pb-8 last:pb-0">
+      {/* Connector line — starts below the circle, ends at next circle */}
+      {!isLast && (
+        <div className="absolute left-[17px] top-[36px] bottom-0 w-0.5 bg-primary/20" />
+      )}
+      {/* Number circle */}
+      <div className="absolute left-0 top-0 w-9 h-9 rounded-full bg-primary/10 border-2 border-primary/30 flex items-center justify-center text-sm font-bold text-primary z-10">
         {num}
       </div>
       <div className="pt-1">
@@ -177,7 +182,7 @@ const GettingStartedContent = () => (
     <Step num={3} title="Create a Project and Add Works">
       Create a <strong>Project</strong> in your Portfolio, then add <strong>Works</strong> to it. Upload contracts and audio files, and link them to specific works. Msanii stores your files securely and makes contracts searchable by Zoe AI.
     </Step>
-    <Step num={4} title="Explore the Tools">
+    <Step num={4} title="Explore the Tools" isLast>
       Head to the <strong>Tools</strong> page to access OneClick (royalty calculations), Zoe (AI contract analysis), and the Split Sheet Generator. Each tool reads from your uploaded data — upload once, benefit everywhere.
     </Step>
     <Callout type="tip" title="Quick Start">
@@ -336,7 +341,7 @@ const OneClickContent = () => (
         <Step num={2} title="Upload or Select Contracts">Upload contract PDFs or select from existing project files and work-linked files. OneClick's AI parses them to extract parties, works, and royalty split percentages for each revenue type.</Step>
         <Step num={3} title="Upload Royalty Statements">Upload the royalty statement files that contain the actual revenue figures.</Step>
         <Step num={4} title="Calculate">OneClick applies the contract terms to the royalty statements and generates a detailed payment breakdown showing what each party is owed.</Step>
-        <Step num={5} title="Export">Download the results as an Excel spreadsheet with itemized breakdowns and visual charts.</Step>
+        <Step num={5} title="Export" isLast>Download the results as an Excel spreadsheet with itemized breakdowns and visual charts.</Step>
       </div>
     </div>
     <Callout type="tip" title="Best Results">
@@ -392,7 +397,7 @@ const SplitSheetContent = () => (
       <div className="space-y-0">
         <Step num={1} title="Enter Song Details">Enter the song title, date, and any notes. This information appears at the top of the generated split sheet.</Step>
         <Step num={2} title="Define Splits">Add each contributor with their role (songwriter, producer, performer). Set publishing and master ownership percentages. Optionally add IPI numbers, publisher names, and label info.</Step>
-        <Step num={3} title="Review & Download">Verify that publishing and master splits each total 100%. Download as a professionally formatted PDF ready for signing.</Step>
+        <Step num={3} title="Review & Download" isLast>Verify that publishing and master splits each total 100%. Download as a professionally formatted PDF ready for signing.</Step>
       </div>
     </div>
     <Callout type="tip" title="Pro Tip">
