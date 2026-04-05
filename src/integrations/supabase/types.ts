@@ -166,6 +166,10 @@ export type Database = {
           artists_completed: boolean
           workspace_completed: boolean
           portfolio_completed: boolean
+          registry_completed: boolean
+          project_detail_completed: boolean
+          profile_completed: boolean
+          work_detail_completed: boolean
           created_at: string
         }
         Insert: {
@@ -176,6 +180,10 @@ export type Database = {
           artists_completed?: boolean
           workspace_completed?: boolean
           portfolio_completed?: boolean
+          registry_completed?: boolean
+          project_detail_completed?: boolean
+          profile_completed?: boolean
+          work_detail_completed?: boolean
           created_at?: string
         }
         Update: {
@@ -186,6 +194,10 @@ export type Database = {
           artists_completed?: boolean
           workspace_completed?: boolean
           portfolio_completed?: boolean
+          registry_completed?: boolean
+          project_detail_completed?: boolean
+          profile_completed?: boolean
+          work_detail_completed?: boolean
           created_at?: string
         }
         Relationships: [

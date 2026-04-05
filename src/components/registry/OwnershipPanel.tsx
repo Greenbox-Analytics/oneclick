@@ -46,6 +46,7 @@ function StakeSection({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
+  const [customRole, setCustomRole] = useState("");
   const [pct, setPct] = useState("");
   const [email, setEmail] = useState("");
   const [ipi, setIpi] = useState("");
@@ -59,23 +60,24 @@ function StakeSection({
   const barWidth = Math.min(totalPct, 100);
 
   const resetForm = () => {
-    setName(""); setRole(""); setPct(""); setEmail(""); setIpi(""); setPubLabel("");
+    setName(""); setRole(""); setCustomRole(""); setPct(""); setEmail(""); setIpi(""); setPubLabel("");
     setShowAdd(false); setEditingId(null);
   };
 
   const handleSubmit = async () => {
     const percentage = parseFloat(pct);
-    if (!name || !role || isNaN(percentage) || percentage <= 0) return;
+    const finalRole = role === "Other" ? (customRole.trim() || "Other") : role;
+    if (!name || !finalRole || isNaN(percentage) || percentage <= 0) return;
     if (editingId) {
       await updateStake.mutateAsync({
-        stakeId: editingId, holder_name: name, holder_role: role, percentage,
+        stakeId: editingId, holder_name: name, holder_role: finalRole, percentage,
         holder_email: email || undefined, holder_ipi: ipi || undefined,
         publisher_or_label: pubLabel || undefined,
       });
     } else {
       await createStake.mutateAsync({
         work_id: workId, stake_type: stakeType, holder_name: name,
-        holder_role: role, percentage,
+        holder_role: finalRole, percentage,
         holder_email: email || undefined, holder_ipi: ipi || undefined,
         publisher_or_label: pubLabel || undefined,
       });
@@ -84,7 +86,10 @@ function StakeSection({
   };
 
   const startEdit = (stake: OwnershipStake) => {
-    setEditingId(stake.id); setName(stake.holder_name); setRole(stake.holder_role);
+    const isPresetRole = ROLES.includes(stake.holder_role);
+    setEditingId(stake.id); setName(stake.holder_name);
+    setRole(isPresetRole ? stake.holder_role : "Other");
+    setCustomRole(isPresetRole ? "" : stake.holder_role);
     setPct(String(stake.percentage)); setEmail(stake.holder_email || "");
     setIpi(stake.holder_ipi || ""); setPubLabel(stake.publisher_or_label || "");
     setShowAdd(true);
@@ -129,6 +134,13 @@ function StakeSection({
                       </SelectContent>
                     </Select>
                   </div>
+                  {role === "Other" && (
+                    <div>
+                      <label className="text-sm font-medium">Custom Role *</label>
+                      <Input value={customRole} onChange={(e) => setCustomRole(e.target.value)}
+                        placeholder="e.g. Mixer, Engineer, Arranger..." />
+                    </div>
+                  )}
                   <div>
                     <label className="text-sm font-medium">Percentage *</label>
                     <Input type="number" min="0.01" max="100" step="0.01" value={pct}

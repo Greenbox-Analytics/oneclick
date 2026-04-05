@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -36,6 +36,12 @@ import {
   ArrowLeft,
   BookOpen,
 } from "lucide-react";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                          */
@@ -475,6 +481,23 @@ const Registry = () => {
   const invites = invitesQuery.data || [];
   const notifications = notificationsQuery.data || [];
 
+  // Tour
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.registry, {
+    onComplete: () => markToolCompleted("registry"),
+    onBeforeStep: (stepIndex) => {
+      // Step 3 targets registry-action inside the action-required tab
+      if (stepIndex === 3) setActiveTab("action-required");
+    },
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.registry && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.registry]);
+
   // Summary counts
   const myWorksCount = works.length;
   const registeredCount = works.filter((w) => w.status === "registered").length;
@@ -483,8 +506,17 @@ const Registry = () => {
 
   const uniqueProjects = new Set(works.map((w) => w.project_id).filter(Boolean));
 
-  // Default tab: action-required if invites exist, otherwise my-works
-  const defaultTab = invites.length > 0 ? "action-required" : "my-works";
+  // Controlled tab state
+  const [activeTab, setActiveTab] = useState("my-works");
+  const [tabInitialized, setTabInitialized] = useState(false);
+
+  // Set default tab once invites data loads
+  useEffect(() => {
+    if (!invitesQuery.isLoading && !tabInitialized) {
+      setActiveTab(invites.length > 0 ? "action-required" : "my-works");
+      setTabInitialized(true);
+    }
+  }, [invitesQuery.isLoading, invites.length, tabInitialized]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -512,6 +544,7 @@ const Registry = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <ToolHelpButton onClick={() => walkthrough.replay()} />
             <Button
               variant="ghost"
               size="icon"
@@ -540,7 +573,7 @@ const Registry = () => {
         </div>
 
         {/* Search */}
-        <div className="relative max-w-md mb-6">
+        <div data-walkthrough="registry-search" className="relative max-w-md mb-6">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             value={searchQuery}
@@ -551,7 +584,7 @@ const Registry = () => {
         </div>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
+        <div data-walkthrough="registry-summary" className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
           <SummaryCard
             label="My Works"
             count={myWorksCount}
@@ -595,8 +628,8 @@ const Registry = () => {
         </div>
 
         {/* Tabs */}
-        <Tabs defaultValue={defaultTab}>
-          <TabsList className="mb-4">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList data-walkthrough="registry-tabs" className="mb-4">
             <TabsTrigger value="action-required" className="gap-1.5">
               <Bell className="w-3.5 h-3.5" />
               Action Required
@@ -621,10 +654,12 @@ const Registry = () => {
           </TabsList>
 
           <TabsContent value="action-required">
-            <ActionRequiredTab
-              invites={invites}
-              isLoading={invitesQuery.isLoading}
-            />
+            <div data-walkthrough="registry-action">
+              <ActionRequiredTab
+                invites={invites}
+                isLoading={invitesQuery.isLoading}
+              />
+            </div>
           </TabsContent>
 
           <TabsContent value="my-works">
@@ -650,6 +685,21 @@ const Registry = () => {
           </TabsContent>
         </Tabs>
       </main>
+
+      <ToolIntroModal
+        config={TOOL_CONFIGS.registry}
+        isOpen={walkthrough.phase === "modal"}
+        onStartTour={walkthrough.startSpotlight}
+        onSkip={walkthrough.skip}
+      />
+      <WalkthroughProvider
+        isActive={walkthrough.phase === "spotlight"}
+        currentStep={walkthrough.currentStep}
+        currentStepIndex={walkthrough.visibleStepIndex}
+        totalSteps={walkthrough.totalSteps}
+        onNext={walkthrough.next}
+        onSkip={walkthrough.skip}
+      />
     </div>
   );
 };

@@ -18,12 +18,18 @@ interface AddWorkDialogProps {
   artistId: string;
 }
 
-const WORK_TYPES = ["Single", "EP Track", "Album Track", "Composition", "Other"];
+const WORK_TYPES = [
+  { value: "single", label: "Single" },
+  { value: "ep_track", label: "EP Track" },
+  { value: "album_track", label: "Album Track" },
+  { value: "composition", label: "Composition" },
+  { value: "other", label: "Other" },
+];
 
 export default function AddWorkDialog({ open, onOpenChange, projectId, artistId }: AddWorkDialogProps) {
   const { user } = useAuth();
   const [title, setTitle] = useState("");
-  const [workType, setWorkType] = useState("Single");
+  const [workType, setWorkType] = useState("single");
   const [customWorkType, setCustomWorkType] = useState("");
   const [isrc, setIsrc] = useState("");
   const [selectedAudioId, setSelectedAudioId] = useState<string>("");
@@ -47,14 +53,15 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
     e.preventDefault();
     if (!title.trim()) return;
 
-    const finalType = workType === "Other" ? customWorkType.trim() || "Other" : workType;
-
     createWork.mutate(
       {
         artist_id: artistId,
         project_id: projectId,
         title: title.trim(),
-        work_type: finalType,
+        work_type: workType,
+        ...(workType === "other" && customWorkType.trim()
+          ? { custom_work_type: customWorkType.trim() }
+          : {}),
         ...(isrc.trim() ? { isrc: isrc.trim() } : {}),
       },
       {
@@ -71,7 +78,7 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
             }
           }
           setTitle("");
-          setWorkType("Single");
+          setWorkType("single");
           setCustomWorkType("");
           setIsrc("");
           setSelectedAudioId("");
@@ -111,15 +118,15 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
               </SelectTrigger>
               <SelectContent>
                 {WORK_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
+                  <SelectItem key={t.value} value={t.value}>
+                    {t.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
-          {workType === "Other" && (
+          {workType === "other" && (
             <div className="space-y-2">
               <Label htmlFor="custom-type">Custom Type</Label>
               <Input

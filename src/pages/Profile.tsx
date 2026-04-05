@@ -11,6 +11,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import TeamCardSettings from "@/components/profile/TeamCardSettings";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -86,6 +92,19 @@ const Profile = () => {
     fetchProfile();
   }, [user]);
 
+  // Tour
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.profile, {
+    onComplete: () => markToolCompleted("profile"),
+  });
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.profile && walkthrough.phase === "idle") {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.profile]);
+
   const handleSave = async () => {
     if (!user) return;
     setIsLoading(true);
@@ -149,6 +168,7 @@ const Profile = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <ToolHelpButton onClick={() => walkthrough.replay()} />
             <Button
               variant="ghost"
               size="icon"
@@ -171,7 +191,7 @@ const Profile = () => {
           <p className="text-muted-foreground">Manage your account information</p>
         </div>
 
-        <Card>
+        <Card data-walkthrough="profile-info">
           <CardHeader>
             <CardTitle>Account Information</CardTitle>
             <CardDescription>Update your personal details</CardDescription>
@@ -271,11 +291,11 @@ const Profile = () => {
           </CardContent>
         </Card>
 
-        <div className="mt-6">
+        <div data-walkthrough="profile-teamcard" className="mt-6">
           <TeamCardSettings />
         </div>
 
-        <Card className="mt-6">
+        <Card data-walkthrough="profile-theme" className="mt-6">
           <CardHeader>
             <CardTitle>Appearance</CardTitle>
             <CardDescription>Customize the look and feel</CardDescription>
@@ -296,6 +316,21 @@ const Profile = () => {
           </CardContent>
         </Card>
       </main>
+
+      <ToolIntroModal
+        config={TOOL_CONFIGS.profile}
+        isOpen={walkthrough.phase === "modal"}
+        onStartTour={walkthrough.startSpotlight}
+        onSkip={walkthrough.skip}
+      />
+      <WalkthroughProvider
+        isActive={walkthrough.phase === "spotlight"}
+        currentStep={walkthrough.currentStep}
+        currentStepIndex={walkthrough.visibleStepIndex}
+        totalSteps={walkthrough.totalSteps}
+        onNext={walkthrough.next}
+        onSkip={walkthrough.skip}
+      />
     </div>
   );
 };

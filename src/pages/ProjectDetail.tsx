@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,6 +21,12 @@ import MembersTab from "@/components/project/MembersTab";
 import SettingsTab from "@/components/project/SettingsTab";
 import AddWorkDialog from "@/components/project/AddWorkDialog";
 import NotesView from "@/components/notes/NotesView";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 const ROLE_COLORS: Record<string, string> = {
   owner: "bg-purple-500/20 text-purple-400 border-purple-500/30",
@@ -39,6 +45,17 @@ const ProjectDetail = () => {
   const userRole = useMyRole(projectId);
 
   const [addWorkOpen, setAddWorkOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("works");
+
+  // Tour
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.project_detail, {
+    onComplete: () => markToolCompleted("project_detail"),
+    onBeforeStep: (stepIndex) => {
+      // Step 3 targets project-members tab trigger — switch to members so user sees the content
+      if (stepIndex === 3) setActiveTab("members");
+    },
+  });
 
   // Fetch project with artist info
   const projectQuery = useQuery({
@@ -56,6 +73,13 @@ const ProjectDetail = () => {
   });
 
   const project = projectQuery.data;
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.project_detail && walkthrough.phase === "idle" && project) {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.project_detail, project]);
 
   const handleRenameProject = async (newName: string) => {
     if (!projectId) return;
@@ -129,6 +153,7 @@ const ProjectDetail = () => {
                   {userRole && (
                     <Badge
                       variant="outline"
+                      data-walkthrough="project-role"
                       className={`text-xs ${ROLE_COLORS[userRole] || ""}`}
                     >
                       {userRole}
@@ -142,6 +167,7 @@ const ProjectDetail = () => {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <ToolHelpButton onClick={() => walkthrough.replay()} />
               <Button
                 variant="ghost"
                 size="icon"
@@ -152,7 +178,7 @@ const ProjectDetail = () => {
                 <BookOpen className="w-4 h-4" />
               </Button>
               {canEdit(userRole) && (
-                <Button size="sm" onClick={() => setAddWorkOpen(true)}>
+                <Button data-walkthrough="project-add-work" size="sm" onClick={() => setAddWorkOpen(true)}>
                   <Plus className="w-4 h-4 mr-2" /> Add Work
                 </Button>
               )}
@@ -163,8 +189,8 @@ const ProjectDetail = () => {
 
       {/* Main content with tabs */}
       <main className="container mx-auto px-4 py-6 max-w-5xl">
-        <Tabs defaultValue="works">
-          <TabsList className="mb-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList data-walkthrough="project-tabs" className="mb-6">
             <TabsTrigger value="works" className="gap-1.5">
               <Music className="w-4 h-4" /> Works
             </TabsTrigger>
@@ -174,7 +200,7 @@ const ProjectDetail = () => {
             <TabsTrigger value="audio" className="gap-1.5">
               <Volume2 className="w-4 h-4" /> Audio
             </TabsTrigger>
-            <TabsTrigger value="members" className="gap-1.5">
+            <TabsTrigger data-walkthrough="project-members" value="members" className="gap-1.5">
               <Users className="w-4 h-4" /> Members
             </TabsTrigger>
             <TabsTrigger value="notes" className="gap-1.5">
@@ -238,6 +264,21 @@ const ProjectDetail = () => {
           artistId={project.artist_id}
         />
       )}
+
+      <ToolIntroModal
+        config={TOOL_CONFIGS.project_detail}
+        isOpen={walkthrough.phase === "modal"}
+        onStartTour={walkthrough.startSpotlight}
+        onSkip={walkthrough.skip}
+      />
+      <WalkthroughProvider
+        isActive={walkthrough.phase === "spotlight"}
+        currentStep={walkthrough.currentStep}
+        currentStepIndex={walkthrough.visibleStepIndex}
+        totalSteps={walkthrough.totalSteps}
+        onNext={walkthrough.next}
+        onSkip={walkthrough.skip}
+      />
     </div>
   );
 };

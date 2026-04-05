@@ -6,6 +6,7 @@ import {
   Music, ArrowLeft, ArrowRight, BookOpen, Calculator, Bot, FileText,
   Users, LayoutGrid, Folder, FolderOpen, Shield, Lightbulb, Rocket,
   Info, CheckCircle2, Zap, Volume2, StickyNote, Settings, Lock,
+  ChevronDown, ChevronRight, Scale, FileCheck, UserPlus, Pencil,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -19,12 +20,15 @@ interface Section {
   label: string;
   icon: React.ElementType;
   color: string; // accent color class per section
+  parent?: string; // parent section id for sidebar grouping
 }
 
+// Flat list of ALL navigable sections — order determines prev/next (rendering-hoist-jsx)
 const SECTIONS: Section[] = [
   { id: "getting-started", label: "Getting Started", icon: Rocket, color: "emerald" },
   { id: "portfolio", label: "Portfolio", icon: Folder, color: "blue" },
-  { id: "project-detail", label: "Project Detail", icon: FolderOpen, color: "purple" },
+  { id: "project-detail", label: "Project Detail", icon: FolderOpen, color: "purple", parent: "portfolio" },
+  { id: "work-detail", label: "Work Detail", icon: FileText, color: "rose", parent: "portfolio" },
   { id: "rights-registry", label: "Rights Registry", icon: Shield, color: "amber" },
   { id: "oneclick", label: "OneClick", icon: Calculator, color: "teal" },
   { id: "zoe", label: "Zoe AI", icon: Bot, color: "indigo" },
@@ -34,6 +38,22 @@ const SECTIONS: Section[] = [
   { id: "best-practices", label: "Best Practices", icon: Lightbulb, color: "amber" },
 ];
 
+// Set of child section ids for O(1) lookup (js-set-map-lookups)
+const CHILD_SECTIONS = new Set(SECTIONS.filter((s) => s.parent).map((s) => s.id));
+
+// Map parent id -> child sections (js-index-maps)
+const CHILDREN_BY_PARENT = new Map<string, Section[]>();
+for (const s of SECTIONS) {
+  if (s.parent) {
+    const list = CHILDREN_BY_PARENT.get(s.parent) || [];
+    list.push(s);
+    CHILDREN_BY_PARENT.set(s.parent, list);
+  }
+}
+
+// Top-level sections for sidebar rendering (excludes children)
+const TOP_LEVEL_SECTIONS = SECTIONS.filter((s) => !s.parent);
+
 // Section index map for O(1) lookup (js-index-maps)
 const SECTION_INDEX = new Map(SECTIONS.map((s, i) => [s.id, i]));
 
@@ -41,6 +61,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   "getting-started": "Get up and running with Msanii in just a few steps.",
   portfolio: "Browse your projects as a card grid grouped by year and artist.",
   "project-detail": "The central hub for a project — works, files, audio, members, notes, and settings.",
+  "work-detail": "Manage a single work — ownership splits, collaborators, licensing, agreements, and industry codes.",
   "rights-registry": "Track ownership, manage collaborator invitations, and confirm rights across all your works.",
   oneclick: "Calculate royalty splits and payments from your contracts in one click using AI.",
   zoe: "Your AI-powered contract assistant. Ask questions and get answers with source citations.",
@@ -61,6 +82,7 @@ const ACCENT_STYLES: Record<string, { iconBg: string; iconText: string; bar: str
   red: { iconBg: "bg-red-500/10", iconText: "text-red-500", bar: "from-red-500 via-red-500/60" },
   orange: { iconBg: "bg-orange-500/10", iconText: "text-orange-500", bar: "from-orange-500 via-orange-500/60" },
   sky: { iconBg: "bg-sky-500/10", iconText: "text-sky-500", bar: "from-sky-500 via-sky-500/60" },
+  rose: { iconBg: "bg-rose-500/10", iconText: "text-rose-500", bar: "from-rose-500 via-rose-500/60" },
 };
 
 // ---------------------------------------------------------------------------
@@ -164,7 +186,7 @@ function StatusBadges() {
 }
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
-  return <h3 className="text-base font-semibold text-foreground mb-3 flex items-center gap-2">{children}</h3>;
+  return <h3 className="text-base font-semibold text-foreground mb-4 flex items-center gap-2">{children}</h3>;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +214,7 @@ const GettingStartedContent = () => (
 );
 
 const PortfolioContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <div>
       <SectionHeading>Overview</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed">
@@ -222,7 +244,7 @@ const PortfolioContent = () => (
 );
 
 const ProjectDetailContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <div>
       <SectionHeading>Overview</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">
@@ -280,8 +302,155 @@ const ProjectDetailContent = () => (
   </div>
 );
 
+const WorkDetailContent = () => (
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
+    <div>
+      <SectionHeading>Overview</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+        The Work Detail page is where you manage a single work — a track, composition, or recording. You get here by clicking a work in the <strong>Project Detail → Works tab</strong> or from the <strong>Rights Registry</strong>. Everything about this work lives on one page: identity codes, ownership splits, licensing, agreements, and collaboration status.
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <FeatureCard icon={Shield} title="Work Header" description="Title (inline-editable by owner), status badge, work type, and industry codes (ISRC, ISWC, UPC)." color="blue" />
+        <FeatureCard icon={Pencil} title="Owner Actions" description="Register the work, upload proof-of-ownership, invite collaborators, edit metadata, or delete." color="purple" />
+      </div>
+    </div>
+    <div>
+      <SectionHeading>Industry Codes</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-3">
+        These standard identifiers are used by distributors, collection societies, and digital platforms to track and pay royalties. Add them via the <strong>Edit</strong> button on the work header.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <FeatureCard icon={Info} title="ISRC" description="International Standard Recording Code — uniquely identifies a specific sound recording. Each master gets its own ISRC. Format: CC-XXX-YY-NNNNN (e.g. USRC17607839)." color="blue" />
+        <FeatureCard icon={Info} title="ISWC" description="International Standard Musical Work Code — identifies the underlying composition (melody + lyrics), regardless of who records it. Format: T-NNN.NNN.NNN-C." color="purple" />
+        <FeatureCard icon={Info} title="UPC" description="Universal Product Code — identifies the release as a whole (album, EP, single). Used by retailers and streaming platforms. 12-digit barcode number." color="teal" />
+      </div>
+    </div>
+    <div>
+      <SectionHeading>Ownership Panel</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+        Ownership is tracked in two separate sections: <strong>Master</strong> (recording rights) and <strong>Publishing</strong> (songwriting/composition rights). Each section has its own percentage allocation bar that fills as you add stakes.
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <FeatureCard icon={Volume2} title="Master Ownership" description="Who owns the recording itself. Typically the artist, label, or producer. Each stake has a percentage, role, and optional IPI number." color="blue" />
+        <FeatureCard icon={StickyNote} title="Publishing Ownership" description="Who owns the composition — melody and lyrics. Typically the songwriter, composer, or music publisher." color="purple" />
+      </div>
+      <div className="rounded-xl border border-border p-4 bg-muted/20">
+        <p className="text-xs font-semibold text-foreground mb-2">Example: "Golden Hour" — Master Ownership</p>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Sarah Chen</span>
+              <span className="text-xs text-muted-foreground">(Artist)</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">Accepted</span>
+            </div>
+            <span className="font-semibold">50.00%</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Marcus Rivera</span>
+              <span className="text-xs text-muted-foreground">(Producer)</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800">Pending</span>
+            </div>
+            <span className="font-semibold">30.00%</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Horizon Records</span>
+              <span className="text-xs text-muted-foreground">(Label)</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">Accepted</span>
+            </div>
+            <span className="font-semibold">20.00%</span>
+          </div>
+          <div className="mt-2">
+            <div className="flex justify-between text-xs text-muted-foreground mb-1">
+              <span>100.00% allocated</span>
+              <span>0.00% unallocated</span>
+            </div>
+            <div className="h-2 bg-muted rounded-full overflow-hidden">
+              <div className="h-full rounded-full bg-primary w-full" />
+            </div>
+          </div>
+        </div>
+      </div>
+      <Callout type="tip" title="Custom Roles">
+        When adding a stake, select <strong>"Other"</strong> from the role dropdown to type a custom role (e.g. Mixer, Engineer, Arranger, A&R). The custom name is saved and displayed alongside the stake.
+      </Callout>
+    </div>
+    <div>
+      <SectionHeading>Three Tabs</SectionHeading>
+      <div className="flex flex-wrap gap-2 mb-4">
+        <Badge variant="outline" className="gap-1.5 px-3 py-1.5 text-xs font-medium"><Users className="w-3 h-3" /> Ownership</Badge>
+        <Badge variant="outline" className="gap-1.5 px-3 py-1.5 text-xs font-medium"><Scale className="w-3 h-3" /> Licensing</Badge>
+        <Badge variant="outline" className="gap-1.5 px-3 py-1.5 text-xs font-medium"><FileCheck className="w-3 h-3" /> Agreements</Badge>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <FeatureCard icon={Users} title="Ownership" description="Master and publishing splits with percentages, roles, approval status, and IPI numbers. Visual allocation bar turns red if total exceeds 100%." color="blue" />
+        <FeatureCard icon={Scale} title="Licensing" description="License rights granted to third parties — sync, mechanical, performance, print, digital. Track licensee, territory, date range, and terms." color="amber" />
+        <FeatureCard icon={FileCheck} title="Agreements" description="Formal records: ownership transfers, split agreements, license grants, amendments, and terminations. Each can have multiple named parties with roles." color="emerald" />
+      </div>
+    </div>
+    <div>
+      <SectionHeading><UserPlus className="w-4 h-4" /> Inviting Collaborators</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+        Only the work owner can invite collaborators. Each invite captures the collaborator's identity, role, and optional ownership stakes — so they know exactly what they're accepting.
+      </p>
+      <div className="space-y-0">
+        <Step num={1} title="Click 'Invite' on the Work Header">
+          Opens the invite modal. Optionally select from your artist roster to prefill email and name.
+        </Step>
+        <Step num={2} title="Fill In Details">
+          Enter email, name, and role (Artist, Producer, Songwriter, Composer, Publisher, Label, or a custom "Other" role). Choose stake type: None, Master only, Publishing only, or Both — with percentages for each.
+        </Step>
+        <Step num={3} title="Collaborator Receives an Email">
+          The invite includes all details: work title, your name, their assigned role, and stake percentages. They can review before accepting.
+        </Step>
+        <Step num={4} title="Accept or Decline" isLast>
+          The collaborator sees the invite in their <strong>Rights Registry → Action Required</strong> tab. They accept to confirm their stake or decline to remove themselves. Files linked to the work become accessible only after acceptance.
+        </Step>
+      </div>
+    </div>
+    <div>
+      <SectionHeading>Work Statuses & Registration</SectionHeading>
+      <StatusBadges />
+      <p className="text-sm text-muted-foreground mt-3 leading-relaxed mb-4">
+        Works move through three statuses as collaborators confirm their stakes:
+      </p>
+      <div className="rounded-xl border border-border p-4 bg-muted/20 mb-4">
+        <div className="flex items-center gap-3 text-sm">
+          <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-500/10 text-gray-400 border border-gray-500/20">Draft</span>
+          <ArrowRight className="w-3 h-3 text-muted-foreground" />
+          <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Pending</span>
+          <ArrowRight className="w-3 h-3 text-muted-foreground" />
+          <span className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Registered</span>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">
+          <strong>Draft:</strong> Still being set up — add ownership, invite collaborators.<br />
+          <strong>Pending:</strong> Submitted for approval — waiting on collaborators to accept.<br />
+          <strong>Registered:</strong> All collaborators accepted — the work is fully confirmed.
+        </p>
+      </div>
+      <Callout type="important" title="What Reverts Status?">
+        Adding/revoking collaborators or changing ownership stakes reverts a registered work back to draft. Metadata edits (renaming, updating ISRC) are safe and don't change the status.
+      </Callout>
+    </div>
+    <div>
+      <SectionHeading>Access & Permissions</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-3">
+        There are two layers of access for works. Understanding the difference is key:
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <FeatureCard icon={Users} title="Project Members" description="Added at the project level (Owner/Admin/Editor/Viewer). They can see ALL works in that project and manage files, audio, and notes." color="purple" />
+        <FeatureCard icon={UserPlus} title="Work Collaborators" description="Invited to a specific work via the Rights Registry. They only see the work they were invited to — not the full project or other works." color="blue" />
+      </div>
+      <Callout type="info" title="When to Use Which">
+        Use <strong>project members</strong> for your internal team (managers, assistants) who need access to everything in a project. Use <strong>work collaborators</strong> for external parties (producers, featured artists) who should only see their specific work and its ownership details.
+      </Callout>
+    </div>
+  </div>
+);
+
 const RightsRegistryContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <div>
       <SectionHeading>Overview</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">
@@ -318,6 +487,17 @@ const RightsRegistryContent = () => (
       </p>
     </div>
     <div>
+      <SectionHeading>Industry Codes</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-3">
+        These standard identifiers are used by distributors, collection societies, and digital platforms to track and pay royalties for your works.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <FeatureCard icon={Info} title="ISRC" description="International Standard Recording Code — uniquely identifies a specific sound recording. Each master/recording gets its own ISRC. Format: CC-XXX-YY-NNNNN (e.g. USRC17607839)." color="blue" />
+        <FeatureCard icon={Info} title="ISWC" description="International Standard Musical Work Code — identifies the underlying composition (melody + lyrics), regardless of who records it. Format: T-NNN.NNN.NNN-C." color="purple" />
+        <FeatureCard icon={Info} title="UPC" description="Universal Product Code — identifies the release or product (album, EP, single) as a whole. Used by retailers and streaming platforms to catalog releases. 12-digit barcode number." color="teal" />
+      </div>
+    </div>
+    <div>
       <SectionHeading><Lock className="w-4 h-4" /> Enhanced Invite Form</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-3">
         When inviting a collaborator, the form captures everything needed:
@@ -333,7 +513,7 @@ const RightsRegistryContent = () => (
 );
 
 const OneClickContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <div>
       <SectionHeading>How It Works</SectionHeading>
       <div className="space-y-0">
@@ -354,7 +534,7 @@ const OneClickContent = () => (
 );
 
 const ZoeContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <div>
       <SectionHeading>How to Use Zoe</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">
@@ -391,7 +571,7 @@ const ZoeContent = () => (
 );
 
 const SplitSheetContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <div>
       <SectionHeading>Step-by-Step Guide</SectionHeading>
       <div className="space-y-0">
@@ -407,7 +587,7 @@ const SplitSheetContent = () => (
 );
 
 const ArtistManagementContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <div>
       <SectionHeading>Artist Profiles</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">Each artist profile is your private space for managing that artist's information, documents, and notes.</p>
@@ -431,7 +611,7 @@ const ArtistManagementContent = () => (
 );
 
 const WorkspaceContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <div>
       <SectionHeading>Features</SectionHeading>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -448,7 +628,7 @@ const WorkspaceContent = () => (
 );
 
 const BestPracticesContent = () => (
-  <div className="space-y-6">
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <Callout type="tip" title="Organize with Projects">
       Create a project for each deal, album, or major agreement. Name them descriptively (e.g., "2024 Publishing Deal — Universal" rather than "Deal 1"). Upload both contracts and royalty statements to the same project for seamless OneClick calculations.
     </Callout>
@@ -474,6 +654,7 @@ const SECTION_CONTENT: Record<string, React.FC> = {
   "getting-started": GettingStartedContent,
   portfolio: PortfolioContent,
   "project-detail": ProjectDetailContent,
+  "work-detail": WorkDetailContent,
   "rights-registry": RightsRegistryContent,
   oneclick: OneClickContent,
   zoe: ZoeContent,
@@ -491,6 +672,29 @@ const Documentation = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [activeSection, setActiveSection] = useState("getting-started");
+  // Track which sidebar groups are expanded (js-set-map-lookups)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(["portfolio"]));
+
+  const toggleGroup = useCallback((groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  // Auto-expand parent when a child is selected
+  const handleSelectSection = useCallback((id: string) => {
+    setActiveSection(id);
+    const section = SECTIONS.find((s) => s.id === id);
+    if (section?.parent) {
+      setExpandedGroups((prev) => {
+        if (prev.has(section.parent!)) return prev;
+        return new Set(prev).add(section.parent!);
+      });
+    }
+  }, []);
 
   // Derived values — useMemo for stable reference (rerender-derived-state)
   const currentIndex = useMemo(() => SECTION_INDEX.get(activeSection) ?? 0, [activeSection]);
@@ -501,8 +705,8 @@ const Documentation = () => {
   const ActiveContent = SECTION_CONTENT[activeData.id];
 
   // Stable callbacks (rerender-functional-setstate)
-  const goToPrev = useCallback(() => { if (prevSection) setActiveSection(prevSection.id); }, [prevSection]);
-  const goToNext = useCallback(() => { if (nextSection) setActiveSection(nextSection.id); }, [nextSection]);
+  const goToPrev = useCallback(() => { if (prevSection) handleSelectSection(prevSection.id); }, [prevSection, handleSelectSection]);
+  const goToNext = useCallback(() => { if (nextSection) handleSelectSection(nextSection.id); }, [nextSection, handleSelectSection]);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -558,28 +762,71 @@ const Documentation = () => {
             <span className="text-sm font-bold text-foreground tracking-tight">Documentation</span>
           </div>
           <div className="space-y-0.5">
-            {SECTIONS.map((section) => {
+            {TOP_LEVEL_SECTIONS.map((section) => {
               const Icon = section.icon;
+              const children = CHILDREN_BY_PARENT.get(section.id);
+              const hasChildren = children && children.length > 0;
+              const isExpanded = expandedGroups.has(section.id);
               const isActive = activeSection === section.id;
+              // Highlight parent if a child is active
+              const isChildActive = hasChildren ? children.some((c) => activeSection === c.id) : false;
+
               return (
-                <button
-                  key={section.id}
-                  onClick={() => setActiveSection(section.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-left ${
-                    isActive
-                      ? "bg-primary/10 text-primary font-medium border-l-2 border-primary pl-[10px]"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                  }`}
-                >
-                  <Icon className="w-4 h-4 shrink-0" />
-                  {section.label}
-                </button>
+                <div key={section.id}>
+                  <button
+                    onClick={() => {
+                      if (hasChildren) {
+                        toggleGroup(section.id);
+                        handleSelectSection(section.id);
+                      } else {
+                        handleSelectSection(section.id);
+                      }
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-left ${
+                      isActive
+                        ? "bg-primary/10 text-primary font-medium border-l-2 border-primary pl-[10px]"
+                        : isChildActive
+                          ? "text-foreground font-medium"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="flex-1">{section.label}</span>
+                    {hasChildren ? (
+                      isExpanded
+                        ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                        : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+                    ) : null}
+                  </button>
+                  {hasChildren && isExpanded ? (
+                    <div className="ml-4 pl-3 border-l border-border/50 space-y-0.5 mt-0.5 mb-1">
+                      {children.map((child) => {
+                        const ChildIcon = child.icon;
+                        const isChildSelf = activeSection === child.id;
+                        return (
+                          <button
+                            key={child.id}
+                            onClick={() => handleSelectSection(child.id)}
+                            className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-colors text-left ${
+                              isChildSelf
+                                ? "bg-primary/10 text-primary font-medium"
+                                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                            }`}
+                          >
+                            <ChildIcon className="w-3.5 h-3.5 shrink-0" />
+                            {child.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
               );
             })}
           </div>
         </nav>
 
-        {/* Mobile nav */}
+        {/* Mobile nav — show all navigable sections (flat) */}
         <div className="lg:hidden fixed top-[57px] left-0 right-0 z-40 bg-background border-b border-border overflow-x-auto">
           <div className="flex gap-1.5 p-3">
             {SECTIONS.map((section) => {
@@ -588,10 +835,10 @@ const Documentation = () => {
               return (
                 <button
                   key={section.id}
-                  onClick={() => setActiveSection(section.id)}
+                  onClick={() => handleSelectSection(section.id)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors ${
                     isActive ? "bg-primary/10 text-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                  }`}
+                  }${section.parent ? " ml-0" : ""}`}
                 >
                   <Icon className="w-3.5 h-3.5" />
                   {section.label}

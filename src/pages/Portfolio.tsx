@@ -554,7 +554,7 @@ const Portfolio = () => {
 
         {/* === SHARED WITH ME SECTION === */}
         {!isLoading && sharedProjects.length > 0 && (
-          <section className="mb-10">
+          <section data-walkthrough="portfolio-shared" className="mb-10">
             <div className="flex items-center gap-3 mb-4">
               <h3 className="text-xl font-semibold text-foreground">Shared with Me</h3>
               <Badge variant="secondary">{sharedProjects.length}</Badge>

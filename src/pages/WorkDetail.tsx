@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -31,6 +31,12 @@ import {
   FileText, Headphones, BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
+import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
+import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
+import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-500/15 text-gray-400",
@@ -61,8 +67,21 @@ const WorkDetail = () => {
 
   const [showInvite, setShowInvite] = useState(false);
 
+  // Tour
+  const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
+  const walkthrough = useToolWalkthrough(TOOL_CONFIGS.work_detail, {
+    onComplete: () => markToolCompleted("work_detail"),
+  });
+
   const work = workQuery.data;
   const isOwner = work?.user_id === user?.id;
+
+  useEffect(() => {
+    if (!onboardingLoading && !statuses.work_detail && walkthrough.phase === "idle" && work) {
+      const timer = setTimeout(() => walkthrough.startModal(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [onboardingLoading, statuses.work_detail, work]);
 
   // Find this user's collaborator record (if they're a collaborator)
   const myCollab: Collaborator | undefined = work?.collaborators?.find(
@@ -144,6 +163,7 @@ const WorkDetail = () => {
             <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <div className="flex items-center gap-2">
+            <ToolHelpButton onClick={() => walkthrough.replay()} />
             <Button
               variant="ghost"
               size="icon"
@@ -194,9 +214,9 @@ const WorkDetail = () => {
                 disabled={!isOwner}
                 className="text-2xl font-bold"
               />
-              <Badge className={STATUS_COLORS[work.status] || ""}>{work.status.replace("_", " ")}</Badge>
+              <Badge data-walkthrough="work-status" className={STATUS_COLORS[work.status] || ""}>{work.status.replace("_", " ")}</Badge>
             </div>
-            <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+            <div data-walkthrough="work-header" className="flex flex-wrap gap-4 text-sm text-muted-foreground">
               <span>{workTypeLabel}</span>
               {work.isrc && <span>ISRC: {work.isrc}</span>}
               {work.iswc && <span>ISWC: {work.iswc}</span>}
@@ -205,7 +225,7 @@ const WorkDetail = () => {
             </div>
           </div>
           {isOwner && (
-            <div className="flex items-center gap-2">
+            <div data-walkthrough="work-actions" className="flex items-center gap-2">
               {/* Register button for zero-collaborator draft works */}
               {work.status === "draft" && collaborators.length === 0 && (
                 <Button size="sm" onClick={async () => {
@@ -260,7 +280,7 @@ const WorkDetail = () => {
                         onChange={(e) => setEditReleaseDate(e.target.value)} />
                     </div>
                     <div>
-                      <label className="text-sm font-medium">Notes</label>
+                      <label className="text-sm font-medium">Description</label>
                       <Input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} />
                     </div>
                     <Button onClick={handleUpdate} disabled={updateWork.isPending} className="w-full">
@@ -283,7 +303,7 @@ const WorkDetail = () => {
 
         {/* Tabs */}
         <Tabs defaultValue="ownership">
-          <TabsList className="mb-6">
+          <TabsList data-walkthrough="work-tabs" className="mb-6">
             <TabsTrigger value="ownership" className="gap-1.5">
               <Users className="w-4 h-4" /> Ownership
             </TabsTrigger>
@@ -354,6 +374,21 @@ const WorkDetail = () => {
           </div>
         )}
       </main>
+
+      <ToolIntroModal
+        config={TOOL_CONFIGS.work_detail}
+        isOpen={walkthrough.phase === "modal"}
+        onStartTour={walkthrough.startSpotlight}
+        onSkip={walkthrough.skip}
+      />
+      <WalkthroughProvider
+        isActive={walkthrough.phase === "spotlight"}
+        currentStep={walkthrough.currentStep}
+        currentStepIndex={walkthrough.visibleStepIndex}
+        totalSteps={walkthrough.totalSteps}
+        onNext={walkthrough.next}
+        onSkip={walkthrough.skip}
+      />
     </div>
   );
 };

@@ -13,8 +13,7 @@ dist-ssr
 *.local
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea
 .DS_Store
 *.suo
@@ -35,3 +34,10 @@ __pycache__/
 
 # superpowers brainstorm sessions
 .superpowers/
+docs/superpowers/
+
+# supabase temp files
+.temp
+
+# bun lockfile (not used — project uses npm)
+bun.lockb

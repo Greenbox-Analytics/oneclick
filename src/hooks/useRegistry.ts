@@ -113,14 +113,50 @@ export function useCreateWork() {
   return useMutation({
     mutationFn: async (body: {
       artist_id: string; project_id: string; title: string; work_type?: string;
-      isrc?: string; iswc?: string; upc?: string; release_date?: string; notes?: string;
+      custom_work_type?: string; isrc?: string; iswc?: string; upc?: string;
+      release_date?: string; notes?: string;
     }) =>
       apiFetch(`${API_URL}/registry/works?user_id=${user!.id}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-works"] }); toast.success("Work registered"); },
-    onError: (e: Error) => toast.error(e.message),
+    onMutate: async (body) => {
+      // Optimistic update — show the work immediately in the project list
+      const projectKey = ["registry-works-by-project", user!.id, body.project_id];
+      await qc.cancelQueries({ queryKey: projectKey });
+      const previous = qc.getQueryData<Work[]>(projectKey);
+      const optimistic: Work = {
+        id: `temp-${Date.now()}`,
+        user_id: user!.id,
+        artist_id: body.artist_id,
+        project_id: body.project_id,
+        title: body.title,
+        work_type: body.work_type || "single",
+        isrc: body.isrc || null,
+        iswc: body.iswc || null,
+        upc: body.upc || null,
+        release_date: body.release_date || null,
+        status: "draft",
+        notes: body.notes || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      qc.setQueryData<Work[]>(projectKey, (old) => [...(old || []), optimistic]);
+      return { previous, projectKey };
+    },
+    onError: (e: Error, _body, context) => {
+      // Roll back optimistic update on error
+      if (context?.previous !== undefined) {
+        qc.setQueryData(context.projectKey, context.previous);
+      }
+      toast.error(e.message);
+    },
+    onSuccess: (_data, body) => {
+      toast.success("Work created");
+      // Refetch to replace optimistic entry with real server data
+      qc.invalidateQueries({ queryKey: ["registry-works"] });
+      qc.invalidateQueries({ queryKey: ["registry-works-by-project", user!.id, body.project_id] });
+    },
   });
 }
 
@@ -133,12 +169,26 @@ export function useUpdateWork() {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["registry-works"] });
-      qc.invalidateQueries({ queryKey: ["registry-work-full"] });
-      toast.success("Work updated");
+    onMutate: async ({ workId, ...body }) => {
+      // Optimistic update — reflect changes instantly in the work detail view
+      const fullKey = ["registry-work-full", user!.id, workId];
+      await qc.cancelQueries({ queryKey: fullKey });
+      const previous = qc.getQueryData<WorkFull>(fullKey);
+      if (previous) {
+        qc.setQueryData<WorkFull>(fullKey, { ...previous, ...body, updated_at: new Date().toISOString() });
+      }
+      return { previous, fullKey };
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error, _vars, context) => {
+      if (context?.previous) qc.setQueryData(context.fullKey, context.previous);
+      toast.error(e.message);
+    },
+    onSuccess: () => {
+      toast.success("Work updated");
+      qc.invalidateQueries({ queryKey: ["registry-works"] });
+      qc.invalidateQueries({ queryKey: ["registry-works-by-project"] });
+      qc.invalidateQueries({ queryKey: ["registry-work-full"] });
+    },
   });
 }
 
@@ -148,7 +198,11 @@ export function useDeleteWork() {
   return useMutation({
     mutationFn: async (workId: string) =>
       apiFetch(`${API_URL}/registry/works/${workId}?user_id=${user!.id}`, { method: "DELETE" }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-works"] }); toast.success("Work deleted"); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["registry-works"] });
+      qc.invalidateQueries({ queryKey: ["registry-works-by-project"] });
+      toast.success("Work deleted");
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 }

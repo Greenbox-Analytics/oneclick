@@ -12,6 +12,7 @@ class WorkCreate(BaseModel):
     project_id: str
     title: str
     work_type: str = "single"
+    custom_work_type: Optional[str] = None
     isrc: Optional[str] = None
     iswc: Optional[str] = None
     upc: Optional[str] = None

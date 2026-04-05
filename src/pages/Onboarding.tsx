@@ -15,6 +15,7 @@ const Onboarding = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
+  const [checkingStatus, setCheckingStatus] = useState(true);
 
   const [formData, setFormData] = useState({
     firstName: "",
@@ -24,16 +25,24 @@ const Onboarding = () => {
     company: "",
   });
 
-  // Pre-populate from existing profile data
+  // Check if onboarding already completed and pre-populate profile data in one query
   useEffect(() => {
-    const loadExistingProfile = async () => {
-      if (!user) return;
+    const loadProfile = async () => {
+      if (!user) {
+        setCheckingStatus(false);
+        return;
+      }
 
       const { data } = await supabase
         .from("profiles")
-        .select("first_name, last_name, given_name, full_name, company")
+        .select("first_name, last_name, given_name, full_name, company, onboarding_completed")
         .eq("id", user.id)
         .single();
+
+      if (data?.onboarding_completed) {
+        navigate("/dashboard", { replace: true });
+        return;
+      }
 
       if (data) {
         let firstName = data.first_name || "";
@@ -52,26 +61,11 @@ const Onboarding = () => {
           company: data.company || prev.company,
         }));
       }
+
+      setCheckingStatus(false);
     };
 
-    loadExistingProfile();
-  }, [user]);
-
-  // Redirect if onboarding already completed
-  useEffect(() => {
-    const checkIfCompleted = async () => {
-      if (!user) return;
-      const { data } = await supabase
-        .from("profiles")
-        .select("onboarding_completed")
-        .eq("id", user.id)
-        .single();
-
-      if (data?.onboarding_completed) {
-        navigate("/dashboard", { replace: true });
-      }
-    };
-    checkIfCompleted();
+    loadProfile();
   }, [user, navigate]);
 
   const handleUpdate = (field: string, value: string) => {
@@ -103,6 +97,14 @@ const Onboarding = () => {
       }
     });
   };
+
+  if (checkingStatus) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background via-background to-secondary/20 p-4">

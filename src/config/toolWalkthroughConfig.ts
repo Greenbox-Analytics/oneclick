@@ -5,6 +5,10 @@ import {
   Users,
   LayoutGrid,
   FolderOpen,
+  Shield,
+  Layers,
+  UserCog,
+  FileText,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -219,38 +223,194 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       icon: FolderOpen,
       title: "Portfolio",
       description:
-        "Manage all your assets in one place. The page is organized per year, with each project created in that year shown per artist — giving you a clear, structured view of everything.",
+        "Your entire catalog organized by year and artist. Create projects, track works and members, and see projects shared with you by collaborators — all from one view.",
     },
     steps: [
       {
-        targetSelector: '[data-walkthrough="portfolio-filters"]',
-        title: "Filter Bar",
+        targetSelector: '[data-walkthrough="portfolio-add"]',
+        title: "Create a Project",
         description:
-          "Filter by artist, search projects, set date ranges, or change sort order.",
+          "Start a new project for an artist — albums, EPs, singles, or any body of work. Each project holds documents, audio files, works, and team members.",
         placement: "bottom",
       },
       {
-        targetSelector: '[data-walkthrough="portfolio-add"]',
-        title: "Add Project",
+        targetSelector: '[data-walkthrough="portfolio-filters"]',
+        title: "Filter & Search",
         description:
-          "Create projects per artist. Each project holds documents, audio files, and linked tasks.",
+          "Filter by artist, search projects by name, and sort alphabetically or by date. Use these to quickly find what you need as your catalog grows.",
         placement: "bottom",
       },
       {
         targetSelector: '[data-walkthrough="portfolio-year"]',
-        title: "Year Groups",
+        title: "Year & Artist Groups",
         description:
-          "Projects are organized by year, then by artist. Click to expand any section.",
+          "Projects are grouped by year, then by artist. Each project card shows work count and member count. Click any project to open its detail page.",
         placement: "bottom",
         skipIfMissing: true,
       },
       {
-        targetSelector: '[data-walkthrough="portfolio-folders"]',
-        title: "Project Assets",
+        targetSelector: '[data-walkthrough="portfolio-shared"]',
+        title: "Shared with Me",
         description:
-          "Each project has four document folders (Contracts, Split Sheets, Royalty Statements, Other), audio files/folders, and tasks created for the project.",
+          "Projects where you've been invited as a member appear here. Your role badge (Admin, Editor, or Viewer) shows your access level in each project.",
+        placement: "top",
+        skipIfMissing: true,
+      },
+    ],
+  },
+
+  registry: {
+    key: "registry",
+    intro: {
+      icon: Shield,
+      title: "Rights Registry",
+      description:
+        "Track and protect ownership of your works. Register master and publishing stakes, invite collaborators with defined roles and splits, and manage licensing and agreements — all in one place.",
+    },
+    steps: [
+      {
+        targetSelector: '[data-walkthrough="registry-summary"]',
+        title: "Your Catalog at a Glance",
+        description:
+          "See how many works you own, how many are fully registered, which are pending approval, and how many collaborations you're part of.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="registry-search"]',
+        title: "Find Any Work",
+        description:
+          "Search by title, ISRC, or ISWC to quickly locate a specific work across all your projects.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="registry-tabs"]',
+        title: "Organized by Priority",
+        description:
+          "Action Required shows pending invitations you need to accept or decline. My Works lists everything you own. Collaborations shows works where others invited you. Activity tracks all changes.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="registry-action"]',
+        title: "Accept or Decline Invites",
+        description:
+          "When someone invites you as a collaborator on their work, it appears here. Review the ownership details, then accept to confirm your stake or decline to remove yourself.",
         placement: "bottom",
         skipIfMissing: true,
+      },
+    ],
+  },
+
+  project_detail: {
+    key: "project_detail",
+    intro: {
+      icon: Layers,
+      title: "Project Detail",
+      description:
+        "Everything about a project in one place — works (tracks/compositions), files, audio, team members, notes, and settings. Your role determines what you can do here.",
+    },
+    steps: [
+      {
+        targetSelector: '[data-walkthrough="project-role"]',
+        title: "Your Role",
+        description:
+          "Your role badge shows your access level. Owners and admins can manage members and settings. Editors can add works and files. Viewers have read-only access.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="project-tabs"]',
+        title: "Project Tabs",
+        description:
+          "Works: tracks and compositions linked to this project. Files: contracts, split sheets, and documents. Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="project-add-work"]',
+        title: "Add Works",
+        description:
+          "Create a new work (track or composition) inside this project. Works can then be registered in the Rights Registry with ownership stakes and collaborators.",
+        placement: "bottom",
+        skipIfMissing: true,
+      },
+      {
+        targetSelector: '[data-walkthrough="project-members"]',
+        title: "Team Members",
+        description:
+          "Invite people by email and assign them a role — Admin, Editor, or Viewer. Members see all works in this project. For work-level access only, invite collaborators from the Rights Registry instead.",
+        placement: "bottom",
+      },
+    ],
+  },
+
+  profile: {
+    key: "profile",
+    intro: {
+      icon: UserCog,
+      title: "Profile & TeamCard",
+      description:
+        "Set up your account details and configure your TeamCard — the identity collaborators see when you're invited to a work or project. Control exactly what information is visible.",
+    },
+    steps: [
+      {
+        targetSelector: '[data-walkthrough="profile-info"]',
+        title: "Account Information",
+        description:
+          "Your name and contact details. The 'Preferred Name' is how Msanii addresses you throughout the app — use a nickname or stage name if you like.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="profile-teamcard"]',
+        title: "Your TeamCard",
+        description:
+          "Your TeamCard is your collaboration identity. When someone invites you to a project or work, this is what they see. Click 'Configure' to edit your details and control which fields are visible.",
+        placement: "top",
+      },
+      {
+        targetSelector: '[data-walkthrough="profile-theme"]',
+        title: "Appearance",
+        description:
+          "Toggle between dark and light mode to match your preference.",
+        placement: "top",
+      },
+    ],
+  },
+
+  work_detail: {
+    key: "work_detail",
+    intro: {
+      icon: FileText,
+      title: "Work Detail",
+      description:
+        "This is where you manage a single work — a track, composition, or recording. Define ownership splits, invite collaborators, set up licensing, and record agreements. Everything about this work lives here.",
+    },
+    steps: [
+      {
+        targetSelector: '[data-walkthrough="work-header"]',
+        title: "Work Identity",
+        description:
+          "ISRC (International Standard Recording Code) identifies a specific recording. ISWC (International Standard Musical Work Code) identifies the underlying composition. UPC (Universal Product Code) identifies the release/product. These codes are used by distributors and royalty collection societies worldwide.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="work-status"]',
+        title: "Registration Status",
+        description:
+          "Draft: still being set up. Pending: submitted for collaborator approval. Registered: all collaborators have accepted their stakes and the work is fully confirmed.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="work-actions"]',
+        title: "Owner Actions",
+        description:
+          "Invite collaborators to claim their ownership stake. Upload proof-of-ownership documents. Edit metadata like ISRC codes and release dates. Register the work once everything is in order.",
+        placement: "bottom",
+        skipIfMissing: true,
+      },
+      {
+        targetSelector: '[data-walkthrough="work-tabs"]',
+        title: "Ownership, Licensing & Agreements",
+        description:
+          "Ownership: master (recording) and publishing (songwriting) splits with percentages. Licensing: rights granted to third parties (sync, mechanical, performance). Agreements: formal records of ownership transfers, split agreements, and amendments.",
+        placement: "bottom",
       },
     ],
   },
