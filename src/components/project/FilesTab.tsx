@@ -267,7 +267,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           <p className="text-xs text-muted-foreground/60 mt-1">Upload contracts, split sheets, and other documents to keep everything organized</p>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-4">
           {FOLDER_CATEGORIES.map((cat) => {
             const catFiles = filesByCategory.get(cat.key) || [];
             return (
