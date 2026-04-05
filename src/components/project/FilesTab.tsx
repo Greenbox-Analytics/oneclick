@@ -19,11 +19,12 @@ interface FilesTabProps {
   userRole: string | null;
 }
 
+// Hoisted to module scope (rendering-hoist-jsx) — each folder gets a unique accent color
 const FOLDER_CATEGORIES = [
-  { key: "contract", label: "Contracts" },
-  { key: "split_sheet", label: "Split Sheets" },
-  { key: "royalty_statement", label: "Royalty Statements" },
-  { key: "other", label: "Other" },
+  { key: "contract", label: "Contracts", accent: "border-l-blue-600 dark:border-l-blue-500", iconColor: "text-blue-600 dark:text-blue-400", barColor: "bg-blue-500" },
+  { key: "split_sheet", label: "Split Sheets", accent: "border-l-purple-600 dark:border-l-purple-500", iconColor: "text-purple-600 dark:text-purple-400", barColor: "bg-purple-500" },
+  { key: "royalty_statement", label: "Royalty Statements", accent: "border-l-orange-600 dark:border-l-orange-500", iconColor: "text-orange-600 dark:text-orange-400", barColor: "bg-orange-500" },
+  { key: "other", label: "Other", accent: "border-l-slate-500 dark:border-l-slate-400", iconColor: "text-slate-600 dark:text-slate-400", barColor: "bg-slate-500" },
 ];
 
 const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
@@ -277,16 +278,17 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                   setOpenSections((prev) => ({ ...prev, [cat.key]: open }))
                 }
               >
-                <Card className="overflow-hidden">
-                  <div className="flex items-center justify-between w-full p-3 hover:bg-muted/50 transition-colors">
-                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                <Card className={`overflow-hidden border-l-[3px] ${cat.accent}`}>
+                  <div className="flex items-center justify-between w-full p-3 hover:bg-muted/30 transition-colors">
+                    <CollapsibleTrigger className="flex items-center gap-2.5 flex-1">
                       <ChevronRight
                         className={`w-4 h-4 text-muted-foreground transition-transform ${
                           openSections[cat.key] ? "rotate-90" : ""
                         }`}
                       />
-                      <span className="text-sm font-medium">{cat.label}</span>
-                      <span className="text-xs text-muted-foreground">({catFiles.length})</span>
+                      <FileText className={`w-4 h-4 ${cat.iconColor}`} />
+                      <span className="text-sm font-semibold text-foreground">{cat.label}</span>
+                      <span className="text-xs text-muted-foreground/70 tabular-nums">({catFiles.length})</span>
                     </CollapsibleTrigger>
                     {canEdit(userRole) && (
                       <Button
@@ -318,13 +320,13 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                     {catFiles.length === 0 ? (
                       <p className="px-3 pb-3 text-xs text-muted-foreground">No files in this folder.</p>
                     ) : (
-                      <div className="border-t border-border">
+                      <div className="border-t border-border/50">
                         {catFiles.map((file) => {
                           const linkedWorks = fileWorksMap.get(file.id);
                           return (
                             <div
                               key={file.id}
-                              className="flex items-center justify-between px-3 py-2 hover:bg-muted/30 border-b border-border last:border-b-0"
+                              className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 border-b border-border/30 last:border-b-0 transition-colors"
                             >
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm text-foreground truncate">{file.file_name}</p>
