@@ -9,7 +9,7 @@ DROP POLICY IF EXISTS "Collaborator can read own invitations" ON registry_collab
 
 CREATE POLICY "collaborators_select_by_email_or_id" ON registry_collaborators
   FOR SELECT USING (
-    LOWER(email) = LOWER((SELECT email FROM auth.users WHERE id = auth.uid()))
+    LOWER(email) = LOWER(auth.jwt() ->> 'email')
     OR collaborator_user_id = auth.uid()
     OR invited_by = auth.uid()
   );
