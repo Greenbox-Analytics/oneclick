@@ -42,10 +42,10 @@ const DASHBOARD_CARDS: {
   iconBg: string;
   iconColor: string;
 }[] = [
-  { route: "/tools", label: "Tools", icon: Calculator, desc: "Access OneClick and other management tools", buttonText: "Open Tools", walkthrough: "tools", iconBg: "bg-teal-500/10", iconColor: "text-teal-500" },
-  { route: "/artists", label: "Artist Profiles", icon: Users, desc: "View and manage your artist roster", buttonText: "View Artists", walkthrough: "artists", iconBg: "bg-blue-500/10", iconColor: "text-blue-500" },
-  { route: "/workspace", label: "Workspace", icon: LayoutGrid, desc: "Project boards, integrations, and connected services", buttonText: "Open Workspace", walkthrough: "workspace", iconBg: "bg-amber-500/10", iconColor: "text-amber-500" },
-  { route: "/portfolio", label: "Portfolio", icon: Folder, desc: "Your profile organized by year, artist, and project", buttonText: "View Portfolio", walkthrough: "portfolio", iconBg: "bg-indigo-500/10", iconColor: "text-indigo-500" },
+  { route: "/tools", label: "Tools", icon: Calculator, desc: "Access OneClick and other management tools", buttonText: "Open Tools", walkthrough: "tools", iconBg: "bg-primary/10", iconColor: "text-primary" },
+  { route: "/artists", label: "Artist Profiles", icon: Users, desc: "View and manage your artist roster", buttonText: "View Artists", walkthrough: "artists", iconBg: "bg-primary/[0.07]", iconColor: "text-primary/90" },
+  { route: "/workspace", label: "Workspace", icon: LayoutGrid, desc: "Project boards, integrations, and connected services", buttonText: "Open Workspace", walkthrough: "workspace", iconBg: "bg-primary/10", iconColor: "text-primary" },
+  { route: "/portfolio", label: "Portfolio", icon: Folder, desc: "Your profile organized by year, artist, and project", buttonText: "View Portfolio", walkthrough: "portfolio", iconBg: "bg-primary/[0.07]", iconColor: "text-primary/90" },
 ];
 
 interface RecentTool {

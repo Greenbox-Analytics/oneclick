@@ -1,16 +1,26 @@
+import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Music, Calculator, ArrowRight, ArrowLeft, Bot, FileText, Shield, BookOpen } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
+
+// Hoisted to module scope (rendering-hoist-jsx, rerender-no-inline-components)
+const TOOL_CARDS: { route: string; label: string; icon: LucideIcon; desc: string }[] = [
+  { route: "/tools/oneclick", label: "OneClick", icon: Calculator, desc: "Calculate royalty splits and manage contracts for your artists in one click." },
+  { route: "/tools/zoe", label: "Zoe", icon: Bot, desc: "Ask questions about your contracts and get AI-powered answers with source citations." },
+  { route: "/tools/split-sheet", label: "Split Sheet", icon: FileText, desc: "Generate professional split sheet agreements to document royalty ownership for your music." },
+  { route: "/tools/registry", label: "Rights Registry", icon: Shield, desc: "Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents." },
+];
 
 const Tools = () => {
   const navigate = useNavigate();
 
-  const handleNavigate = (route: string, label: string) => {
+  const handleNavigate = useCallback((route: string, label: string) => {
     trackToolUsage(label, route);
     navigate(route);
-  };
+  }, [navigate]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -56,94 +66,37 @@ const Tools = () => {
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground mb-2">Tools</h2>
-          <p className="text-muted-foreground">Select a tool to manage your music data</p>
+          <h2 className="text-3xl font-bold text-foreground mb-1">Tools</h2>
+          <p className="text-muted-foreground mb-3">Select a tool to manage your music data</p>
+          <div className="h-0.5 w-16 bg-gradient-to-r from-primary to-primary/0 rounded-full" />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {/* OneClick Tool Card */}
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleNavigate("/tools/oneclick", "OneClick")}>
-            <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-                <Calculator className="w-6 h-6 text-primary" />
-              </div>
-              <CardTitle className="flex items-center gap-2">
-                OneClick
-                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-[-10px] group-hover:translate-x-0" />
-              </CardTitle>
-              <CardDescription>
-                Calculate royalty splits and manage contracts for your artists in one click.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="ghost" className="w-full justify-start p-0 hover:bg-transparent hover:text-primary">
-                Launch Tool →
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Zoe AI Chatbot Tool Card */}
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleNavigate("/tools/zoe", "Zoe")}>
-            <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-                <Bot className="w-6 h-6 text-primary" />
-              </div>
-              <CardTitle className="flex items-center gap-2">
-                Zoe
-                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-[-10px] group-hover:translate-x-0" />
-              </CardTitle>
-              <CardDescription>
-                Ask questions about your contracts and get AI-powered answers with source citations.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="ghost" className="w-full justify-start p-0 hover:bg-transparent hover:text-primary">
-                Launch Tool →
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Split Sheet Generator Tool Card */}
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => navigate("/tools/split-sheet")}>
-            <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-                <FileText className="w-6 h-6 text-primary" />
-              </div>
-              <CardTitle className="flex items-center gap-2">
-                Split Sheet
-                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-[-10px] group-hover:translate-x-0" />
-              </CardTitle>
-              <CardDescription>
-                Generate professional split sheet agreements to document royalty ownership for your music.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="ghost" className="w-full justify-start p-0 hover:bg-transparent hover:text-primary">
-                Launch Tool →
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Rights Registry Tool Card */}
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer group" onClick={() => handleNavigate("/tools/registry", "Registry")}>
-            <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4 group-hover:bg-primary/20 transition-colors">
-                <Shield className="w-6 h-6 text-primary" />
-              </div>
-              <CardTitle className="flex items-center gap-2">
-                Rights Registry
-                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-[-10px] group-hover:translate-x-0" />
-              </CardTitle>
-              <CardDescription>
-                Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="ghost" className="w-full justify-start p-0 hover:bg-transparent hover:text-primary">
-                Launch Tool
-              </Button>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {TOOL_CARDS.map((tool) => (
+            <Card
+              key={tool.route}
+              className="hover:border-primary/40 transition-all cursor-pointer group border border-border"
+              onClick={() => handleNavigate(tool.route, tool.label)}
+            >
+              <CardHeader>
+                <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center mb-3 group-hover:bg-primary/15 group-hover:scale-105 transition-all">
+                  <tool.icon className="w-5 h-5 text-primary" />
+                </div>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  {tool.label}
+                  <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all translate-x-[-8px] group-hover:translate-x-0 text-primary" />
+                </CardTitle>
+                <CardDescription className="leading-relaxed">
+                  {tool.desc}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <span className="text-sm font-medium text-primary/80 group-hover:text-primary transition-colors">
+                  Launch Tool →
+                </span>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       </main>
     </div>
