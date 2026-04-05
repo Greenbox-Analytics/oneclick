@@ -52,14 +52,14 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 const ARTIST_ACCENT_COLORS = [
-  { border: "border-l-blue-700", bg: "bg-blue-900/10", text: "text-blue-400", avatar: "bg-blue-900/20 text-blue-300 dark:text-blue-400", topBg: "bg-blue-600" },
-  { border: "border-l-red-700", bg: "bg-red-900/10", text: "text-red-400", avatar: "bg-red-900/20 text-red-300 dark:text-red-400", topBg: "bg-red-600" },
-  { border: "border-l-orange-600", bg: "bg-orange-900/10", text: "text-orange-400", avatar: "bg-orange-900/20 text-orange-300 dark:text-orange-400", topBg: "bg-orange-500" },
-  { border: "border-l-purple-800", bg: "bg-purple-900/10", text: "text-purple-400", avatar: "bg-purple-900/20 text-purple-300 dark:text-purple-400", topBg: "bg-purple-700" },
-  { border: "border-l-teal-600", bg: "bg-teal-900/10", text: "text-teal-400", avatar: "bg-teal-900/20 text-teal-300 dark:text-teal-400", topBg: "bg-teal-500" },
-  { border: "border-l-slate-500", bg: "bg-slate-800/10", text: "text-slate-400", avatar: "bg-slate-800/20 text-slate-300 dark:text-slate-400", topBg: "bg-slate-500" },
-  { border: "border-l-indigo-700", bg: "bg-indigo-900/10", text: "text-indigo-400", avatar: "bg-indigo-900/20 text-indigo-300 dark:text-indigo-400", topBg: "bg-indigo-600" },
-  { border: "border-l-amber-600", bg: "bg-amber-900/10", text: "text-amber-400", avatar: "bg-amber-900/20 text-amber-300 dark:text-amber-400", topBg: "bg-amber-500" },
+  { border: "border-l-blue-600 dark:border-l-blue-500", bg: "bg-blue-50 dark:bg-blue-900/15", text: "text-blue-700 dark:text-blue-400", avatar: "bg-blue-100 text-blue-700 dark:bg-blue-900/25 dark:text-blue-400", topBg: "bg-blue-600 dark:bg-blue-500" },
+  { border: "border-l-red-600 dark:border-l-red-500", bg: "bg-red-50 dark:bg-red-900/15", text: "text-red-700 dark:text-red-400", avatar: "bg-red-100 text-red-700 dark:bg-red-900/25 dark:text-red-400", topBg: "bg-red-600 dark:bg-red-500" },
+  { border: "border-l-orange-500 dark:border-l-orange-500", bg: "bg-orange-50 dark:bg-orange-900/15", text: "text-orange-700 dark:text-orange-400", avatar: "bg-orange-100 text-orange-700 dark:bg-orange-900/25 dark:text-orange-400", topBg: "bg-orange-500" },
+  { border: "border-l-purple-700 dark:border-l-purple-500", bg: "bg-purple-50 dark:bg-purple-900/15", text: "text-purple-700 dark:text-purple-400", avatar: "bg-purple-100 text-purple-700 dark:bg-purple-900/25 dark:text-purple-400", topBg: "bg-purple-700 dark:bg-purple-600" },
+  { border: "border-l-teal-600 dark:border-l-teal-500", bg: "bg-teal-50 dark:bg-teal-900/15", text: "text-teal-700 dark:text-teal-400", avatar: "bg-teal-100 text-teal-700 dark:bg-teal-900/25 dark:text-teal-400", topBg: "bg-teal-600 dark:bg-teal-500" },
+  { border: "border-l-slate-500 dark:border-l-slate-400", bg: "bg-slate-50 dark:bg-slate-800/15", text: "text-slate-700 dark:text-slate-400", avatar: "bg-slate-100 text-slate-700 dark:bg-slate-800/25 dark:text-slate-400", topBg: "bg-slate-500" },
+  { border: "border-l-indigo-600 dark:border-l-indigo-500", bg: "bg-indigo-50 dark:bg-indigo-900/15", text: "text-indigo-700 dark:text-indigo-400", avatar: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/25 dark:text-indigo-400", topBg: "bg-indigo-600 dark:bg-indigo-500" },
+  { border: "border-l-amber-500 dark:border-l-amber-500", bg: "bg-amber-50 dark:bg-amber-900/15", text: "text-amber-700 dark:text-amber-400", avatar: "bg-amber-100 text-amber-700 dark:bg-amber-900/25 dark:text-amber-400", topBg: "bg-amber-500" },
 ];
 
 function getArtistColor(name: string) {

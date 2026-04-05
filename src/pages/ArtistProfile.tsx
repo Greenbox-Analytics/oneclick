@@ -373,14 +373,25 @@ const ArtistProfile = () => {
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-secondary/10">
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div 
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/dashboard")}
-          >
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center p-1.5">
-              <Music className="w-full h-full text-primary-foreground" />
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => navigate(-1)}
+            >
+              <ArrowLeft className="w-4 h-4 mr-1" /> Back
+            </Button>
+            <div className="w-px h-6 bg-border" />
+            <div
+              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+              onClick={() => navigate("/dashboard")}
+            >
+              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center p-1.5">
+                <Music className="w-full h-full text-primary-foreground" />
+              </div>
+              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
           </div>
           <div className="flex gap-2 items-center">
             <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")} title="Back to Dashboard">

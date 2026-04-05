@@ -101,11 +101,13 @@ const Workspace = () => {
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
-              size="icon"
-              onClick={() => navigate("/dashboard")}
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => navigate(-1)}
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>
+            <div className="w-px h-6 bg-border" />
             <div
               className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
               onClick={() => navigate("/dashboard")}
