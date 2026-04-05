@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen } from "lucide-react";
+import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, type LucideIcon } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   DropdownMenu,
@@ -31,6 +31,22 @@ const TOOL_REGISTRY: Record<string, { icon: typeof Calculator; label: string }> 
   "/profile": { icon: User, label: "Profile" },
   "/docs": { icon: BookOpen, label: "Documentation" },
 };
+
+const DASHBOARD_CARDS: {
+  route: string;
+  label: string;
+  icon: LucideIcon;
+  desc: string;
+  buttonText: string;
+  walkthrough: string;
+  iconBg: string;
+  iconColor: string;
+}[] = [
+  { route: "/tools", label: "Tools", icon: Calculator, desc: "Access OneClick and other management tools", buttonText: "Open Tools", walkthrough: "tools", iconBg: "bg-teal-500/10", iconColor: "text-teal-500" },
+  { route: "/artists", label: "Artist Profiles", icon: Users, desc: "View and manage your artist roster", buttonText: "View Artists", walkthrough: "artists", iconBg: "bg-blue-500/10", iconColor: "text-blue-500" },
+  { route: "/workspace", label: "Workspace", icon: LayoutGrid, desc: "Project boards, integrations, and connected services", buttonText: "Open Workspace", walkthrough: "workspace", iconBg: "bg-amber-500/10", iconColor: "text-amber-500" },
+  { route: "/portfolio", label: "Portfolio", icon: Folder, desc: "Your profile organized by year, artist, and project", buttonText: "View Portfolio", walkthrough: "portfolio", iconBg: "bg-indigo-500/10", iconColor: "text-indigo-500" },
+];
 
 interface RecentTool {
   route: string;
@@ -64,7 +80,7 @@ const Dashboard = () => {
     first_name: string | null;
   } | null>(null);
   const [now, setNow] = useState(new Date());
-  const [recentTools, setRecentTools] = useState<RecentTool[]>(getRecentTools());
+  const [recentTools, setRecentTools] = useState<RecentTool[]>(() => getRecentTools());
   const location = useLocation();
   const { settings } = useWorkspaceSettings();
   const { walkthroughCompleted, loading: onboardingLoading } = useOnboardingStatus();
@@ -128,7 +144,6 @@ const Dashboard = () => {
         console.error("Dashboard profile fetch error:", error);
       }
       if (data) {
-        console.log("Dashboard profile data:", { given_name: data.given_name, first_name: data.first_name, full_name: data.full_name });
         setProfile(data);
       }
     };
@@ -225,74 +240,37 @@ const Dashboard = () => {
 
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground mb-2">Dashboard</h2>
-          <p className="text-lg text-foreground/80">{greeting}</p>
-          <p className="text-sm text-muted-foreground">{formattedDateTime}</p>
+          <h2 className="text-3xl font-bold text-foreground mb-1">Dashboard</h2>
+          <p className="text-lg text-foreground/80 mb-1">{greeting}</p>
+          <p className="text-sm text-muted-foreground mb-3">{formattedDateTime}</p>
+          <div className="h-0.5 w-24 bg-gradient-to-r from-primary to-primary/0 rounded-full" />
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4 mb-8">
-          <Card data-walkthrough="tools" className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/tools", "Tools")}>
-            <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
-                <Calculator className="w-6 h-6 text-primary" />
-              </div>
-              <CardTitle>Tools</CardTitle>
-              <CardDescription>Access OneClick and other management tools</CardDescription>
-            </CardHeader>
-            <CardContent className="mt-auto">
-              <Button variant="outline" className="w-full">
-                Open Tools
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card data-walkthrough="artists" className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/artists", "Artist Profiles")}>
-            <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
-                <Users className="w-6 h-6 text-primary" />
-              </div>
-              <CardTitle>Artist Profiles</CardTitle>
-              <CardDescription>View and manage your artist roster</CardDescription>
-            </CardHeader>
-            <CardContent className="mt-auto">
-              <Button variant="outline" className="w-full">
-                View Artists
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card data-walkthrough="workspace" className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/workspace", "Workspace")}>
-            <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
-                <LayoutGrid className="w-6 h-6 text-primary" />
-              </div>
-              <CardTitle>Workspace</CardTitle>
-              <CardDescription>Project boards, integrations, and connected services</CardDescription>
-            </CardHeader>
-            <CardContent className="mt-auto">
-              <Button variant="outline" className="w-full">
-                Open Workspace
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card data-walkthrough="portfolio" className="flex flex-col border-primary/40 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleNavigate("/portfolio", "Portfolio")}>
-            <CardHeader>
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-3">
-                <Folder className="w-6 h-6 text-primary" />
-              </div>
-              <CardTitle>Portfolio</CardTitle>
-              <CardDescription>Your profile organized by year, artist, and project</CardDescription>
-            </CardHeader>
-            <CardContent className="mt-auto">
-              <Button variant="outline" className="w-full">
-                View Portfolio
-              </Button>
-            </CardContent>
-          </Card>
+          {DASHBOARD_CARDS.map((card) => (
+            <Card
+              key={card.route}
+              data-walkthrough={card.walkthrough}
+              className="flex flex-col hover:shadow-lg transition-shadow cursor-pointer group border border-border hover:border-primary/30"
+              onClick={() => handleNavigate(card.route, card.label)}
+            >
+              <CardHeader>
+                <div className={`w-12 h-12 rounded-xl ${card.iconBg} flex items-center justify-center mb-3 group-hover:scale-105 transition-transform`}>
+                  <card.icon className={`w-6 h-6 ${card.iconColor}`} />
+                </div>
+                <CardTitle>{card.label}</CardTitle>
+                <CardDescription>{card.desc}</CardDescription>
+              </CardHeader>
+              <CardContent className="mt-auto">
+                <Button variant="outline" className="w-full">
+                  {card.buttonText}
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
-        <Card className="border-primary/40">
+        <Card className="border border-border">
           <CardHeader>
             <div className="flex items-center gap-2">
               <Clock className="w-5 h-5 text-primary" />
@@ -302,7 +280,11 @@ const Dashboard = () => {
           </CardHeader>
           <CardContent>
             {recentTools.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-4">No recent activity yet</p>
+              <div className="flex flex-col items-center justify-center py-6 text-center">
+                <Clock className="w-8 h-8 text-muted-foreground/30 mb-2" />
+                <p className="text-sm text-muted-foreground">No recent activity yet</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">Tools you use will appear here for quick access</p>
+              </div>
             ) : (
               <div className="flex flex-wrap gap-3">
                 {recentTools.map((tool) => {
@@ -312,7 +294,7 @@ const Dashboard = () => {
                     <Button
                       key={tool.route}
                       variant="outline"
-                      className="gap-2 border-primary/40 hover:border-primary hover:bg-primary/5 hover:text-foreground transition-colors"
+                      className="gap-2 border-border hover:border-primary hover:bg-primary/5 hover:text-foreground transition-colors"
                       onClick={() => handleNavigate(tool.route, tool.name)}
                     >
                       <IconComponent className="w-4 h-4 text-primary" />

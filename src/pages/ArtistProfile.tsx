@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, BookOpen } from "lucide-react";
+import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, BookOpen, Plus, StickyNote } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery } from "@tanstack/react-query";
@@ -436,11 +436,11 @@ const ArtistProfile = () => {
 
       <main className="container mx-auto px-4 py-8 max-w-5xl">
         {/* Profile Header */}
-        <Card className="mb-6 border-2 shadow-lg">
+        <Card className="mb-6 border border-border shadow-sm">
           <CardContent className="pt-6">
             <div className="flex items-start gap-6">
               <div className="relative group">
-                <Avatar className="w-28 h-28 ring-4 ring-primary/10">
+                <Avatar className="w-28 h-28 ring-2 ring-primary/20">
                   <AvatarImage src={displayAvatar} alt={displayName} />
                   <AvatarFallback className="bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-3xl">
                     {displayName.charAt(0)}
@@ -474,7 +474,7 @@ const ArtistProfile = () => {
 
         <div className="grid gap-6">
           {/* Basic Information */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="bg-gradient-to-r from-primary/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 text-primary" />
@@ -492,8 +492,10 @@ const ArtistProfile = () => {
                     onChange={(e) => updateField('name', e.target.value)}
                     className="bg-background border-2 focus:border-primary transition-colors"
                   />
-                ) : (
+                ) : formData.name ? (
                   <p className="text-foreground text-lg font-medium">{formData.name}</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -507,8 +509,10 @@ const ArtistProfile = () => {
                     onChange={(e) => updateField('email', e.target.value)}
                     className="bg-background border-2 focus:border-primary transition-colors"
                   />
-                ) : (
+                ) : formData.email ? (
                   <p className="text-foreground text-lg">{formData.email}</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -522,8 +526,10 @@ const ArtistProfile = () => {
                     rows={4}
                     className="bg-background border-2 focus:border-primary transition-colors resize-none"
                   />
-                ) : (
+                ) : formData.bio ? (
                   <p className="text-foreground leading-relaxed">{formData.bio}</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -566,7 +572,7 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Social Media */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="bg-gradient-to-r from-pink-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Instagram className="w-5 h-5 text-pink-500" />
@@ -587,8 +593,10 @@ const ArtistProfile = () => {
                     placeholder="https://instagram.com/username"
                     className="bg-background border-2 focus:border-pink-500 transition-colors"
                   />
+                ) : formData.social.instagram ? (
+                  <p className="text-foreground">{formData.social.instagram}</p>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.social.instagram}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -605,8 +613,10 @@ const ArtistProfile = () => {
                     placeholder="https://tiktok.com/@username"
                     className="bg-background border-2 focus:border-blue-500 transition-colors"
                   />
+                ) : formData.social.tiktok ? (
+                  <p className="text-foreground">{formData.social.tiktok}</p>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.social.tiktok}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -623,8 +633,10 @@ const ArtistProfile = () => {
                     placeholder="https://youtube.com/@channel"
                     className="bg-background border-2 focus:border-red-500 transition-colors"
                   />
+                ) : formData.social.youtube ? (
+                  <p className="text-foreground">{formData.social.youtube}</p>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.social.youtube}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -700,7 +712,7 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Streaming Platforms */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="bg-gradient-to-r from-green-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Mic2 className="w-5 h-5 text-green-500" />
@@ -721,8 +733,10 @@ const ArtistProfile = () => {
                     placeholder="https://open.spotify.com/artist/..."
                     className="bg-background border-2 focus:border-green-500 transition-colors"
                   />
+                ) : formData.dsp.spotify ? (
+                  <p className="text-foreground font-mono text-sm">{formData.dsp.spotify}</p>
                 ) : (
-                  <p className="text-foreground text-lg font-mono text-sm">{formData.dsp.spotify}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -739,8 +753,10 @@ const ArtistProfile = () => {
                     placeholder="https://music.apple.com/..."
                     className="bg-background border-2 focus:border-red-500 transition-colors"
                   />
+                ) : formData.dsp.appleMusic ? (
+                  <p className="text-foreground break-all">{formData.dsp.appleMusic}</p>
                 ) : (
-                  <p className="text-foreground text-lg break-all">{formData.dsp.appleMusic}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -757,8 +773,10 @@ const ArtistProfile = () => {
                     placeholder="https://soundcloud.com/artist"
                     className="bg-background border-2 focus:border-orange-500 transition-colors"
                   />
+                ) : formData.dsp.soundcloud ? (
+                  <p className="text-foreground">{formData.dsp.soundcloud}</p>
                 ) : (
-                  <p className="text-foreground text-lg">{formData.dsp.soundcloud}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -834,7 +852,7 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Additional Links */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="bg-gradient-to-r from-purple-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <LinkIcon className="w-5 h-5 text-purple-500" />
@@ -856,8 +874,10 @@ const ArtistProfile = () => {
                     placeholder="https://epk.example.com"
                     className="bg-background border-2 focus:border-purple-500 transition-colors"
                   />
+                ) : formData.additional.epk ? (
+                  <p className="text-foreground break-all">{formData.additional.epk}</p>
                 ) : (
-                  <p className="text-foreground text-lg break-all">{formData.additional.epk}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -874,8 +894,10 @@ const ArtistProfile = () => {
                     placeholder="https://press.example.com"
                     className="bg-background border-2 focus:border-blue-500 transition-colors"
                   />
+                ) : formData.additional.pressKit ? (
+                  <p className="text-foreground break-all">{formData.additional.pressKit}</p>
                 ) : (
-                  <p className="text-foreground text-lg break-all">{formData.additional.pressKit}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -892,8 +914,10 @@ const ArtistProfile = () => {
                     placeholder="https://linktr.ee/artist"
                     className="bg-background border-2 focus:border-green-500 transition-colors"
                   />
+                ) : formData.additional.linktree ? (
+                  <p className="text-foreground break-all">{formData.additional.linktree}</p>
                 ) : (
-                  <p className="text-foreground text-lg break-all">{formData.additional.linktree}</p>
+                  <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
               </FieldContainer>
 
@@ -969,10 +993,10 @@ const ArtistProfile = () => {
           </Card>
 
           {/* My Notes -- private to you */}
-          <Card className="border-2 shadow-md hover:shadow-lg transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="bg-gradient-to-r from-amber-500/5 to-transparent">
               <div className="flex items-center gap-2">
-                <Music2 className="w-5 h-5 text-amber-500" />
+                <StickyNote className="w-5 h-5 text-amber-500" />
                 <CardTitle>My Notes</CardTitle>
               </div>
               <CardDescription>Private notes about this artist</CardDescription>
