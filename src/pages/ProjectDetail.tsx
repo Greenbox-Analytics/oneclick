@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Music, ArrowLeft, Loader2, Plus,
-  FileText, Volume2, Users, Settings,
+  FileText, Volume2, Users, Settings, StickyNote,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -20,6 +20,7 @@ import AudioTab from "@/components/project/AudioTab";
 import MembersTab from "@/components/project/MembersTab";
 import SettingsTab from "@/components/project/SettingsTab";
 import AddWorkDialog from "@/components/project/AddWorkDialog";
+import NotesView from "@/components/notes/NotesView";
 
 const ROLE_COLORS: Record<string, string> = {
   owner: "bg-purple-500/20 text-purple-400 border-purple-500/30",
@@ -156,6 +157,9 @@ const ProjectDetail = () => {
             <TabsTrigger value="members" className="gap-1.5">
               <Users className="w-4 h-4" /> Members
             </TabsTrigger>
+            <TabsTrigger value="notes" className="gap-1.5">
+              <StickyNote className="w-4 h-4" /> Notes
+            </TabsTrigger>
             <TabsTrigger value="settings" className="gap-1.5">
               <Settings className="w-4 h-4" /> Settings
             </TabsTrigger>
@@ -187,6 +191,10 @@ const ProjectDetail = () => {
 
           <TabsContent value="members">
             {projectId && <MembersTab projectId={projectId} userRole={userRole} />}
+          </TabsContent>
+
+          <TabsContent value="notes">
+            {projectId && <NotesView scope={{ projectId }} />}
           </TabsContent>
 
           <TabsContent value="settings">

@@ -47,7 +47,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const [linkingInProgress, setLinkingInProgress] = useState(false);
 
   // Fetch project files
-  const { data: files, isLoading } = useQuery({
+  const { data: files, isLoading, isError } = useQuery({
     queryKey: ["project-files-tab", projectId],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -222,6 +222,16 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
     );
   }
 
+  if (isError) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <FileText className="w-10 h-10 text-destructive/40 mb-3" />
+        <p className="text-sm text-muted-foreground">Failed to load files</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">Please try refreshing the page</p>
+      </div>
+    );
+  }
+
   const allFiles = files || [];
   const filteredFiles = search
     ? allFiles.filter((f) => f.file_name.toLowerCase().includes(search.toLowerCase()))
@@ -250,9 +260,10 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
       </div>
 
       {allFiles.length === 0 && !search ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-2">
-          <FileText className="w-12 h-12 text-muted-foreground/40" />
-          <p className="text-muted-foreground">No files yet. Upload your first file.</p>
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <FileText className="w-10 h-10 text-muted-foreground/40 mb-3" />
+          <p className="text-sm text-muted-foreground">No files yet</p>
+          <p className="text-xs text-muted-foreground/60 mt-1">Upload contracts, split sheets, and other documents to keep everything organized</p>
         </div>
       ) : (
         <div className="space-y-2">

@@ -52,7 +52,7 @@ function getInitials(name: string): string {
 }
 
 export default function MembersTab({ projectId, userRole }: MembersTabProps) {
-  const { data: members, isLoading: membersLoading } = useProjectMembers(projectId);
+  const { data: members, isLoading: membersLoading, isError: membersError } = useProjectMembers(projectId);
   const { data: pendingInvites } = usePendingInvites(projectId);
   const { data: works } = useWorksByProject(projectId);
   const addMember = useAddProjectMember();
@@ -145,6 +145,16 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     );
   }
 
+  if (membersError) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <Users className="w-10 h-10 text-destructive/40 mb-3" />
+        <p className="text-sm text-muted-foreground">Failed to load members</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">Please try refreshing the page</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Project Members */}
@@ -161,7 +171,11 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
         </div>
 
         {(!members || members.length === 0) ? (
-          <p className="text-sm text-muted-foreground">No members found.</p>
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <Users className="w-10 h-10 text-muted-foreground/40 mb-3" />
+            <p className="text-sm text-muted-foreground">No members yet</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">Invite collaborators to work together on this project</p>
+          </div>
         ) : (
           <div className="grid gap-2">
             {members.map((member: ProjectMember) => {

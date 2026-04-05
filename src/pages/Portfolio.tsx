@@ -51,6 +51,25 @@ const ROLE_COLORS: Record<string, string> = {
   viewer: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
 };
 
+const ARTIST_ACCENT_COLORS = [
+  { border: "border-l-rose-400", bg: "bg-rose-500/10", text: "text-rose-400", avatar: "bg-rose-500/15 text-rose-600 dark:text-rose-400", topBg: "bg-rose-400" },
+  { border: "border-l-amber-400", bg: "bg-amber-500/10", text: "text-amber-400", avatar: "bg-amber-500/15 text-amber-600 dark:text-amber-400", topBg: "bg-amber-400" },
+  { border: "border-l-violet-400", bg: "bg-violet-500/10", text: "text-violet-400", avatar: "bg-violet-500/15 text-violet-600 dark:text-violet-400", topBg: "bg-violet-400" },
+  { border: "border-l-cyan-400", bg: "bg-cyan-500/10", text: "text-cyan-400", avatar: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400", topBg: "bg-cyan-400" },
+  { border: "border-l-emerald-400", bg: "bg-emerald-500/10", text: "text-emerald-400", avatar: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400", topBg: "bg-emerald-400" },
+  { border: "border-l-pink-400", bg: "bg-pink-500/10", text: "text-pink-400", avatar: "bg-pink-500/15 text-pink-600 dark:text-pink-400", topBg: "bg-pink-400" },
+  { border: "border-l-sky-400", bg: "bg-sky-500/10", text: "text-sky-400", avatar: "bg-sky-500/15 text-sky-600 dark:text-sky-400", topBg: "bg-sky-400" },
+  { border: "border-l-orange-400", bg: "bg-orange-500/10", text: "text-orange-400", avatar: "bg-orange-500/15 text-orange-600 dark:text-orange-400", topBg: "bg-orange-400" },
+];
+
+function getArtistColor(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return ARTIST_ACCENT_COLORS[Math.abs(hash) % ARTIST_ACCENT_COLORS.length];
+}
+
 const Portfolio = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -253,6 +272,17 @@ const Portfolio = () => {
       const next = new Set(prev);
       if (next.has(year)) next.delete(year);
       else next.add(year);
+      return next;
+    });
+  };
+
+  // Track collapsed artists
+  const [collapsedArtists, setCollapsedArtists] = useState<Set<string>>(new Set());
+  const toggleArtist = (key: string) => {
+    setCollapsedArtists((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -475,27 +505,38 @@ const Portfolio = () => {
                 </button>
 
                 {/* Artists and projects within this year */}
-                {!collapsedYears.has(year) && artists.map(({ name: artistName, projects }) => (
-                  <div key={artistName} className="mb-5 ml-6">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Avatar className="h-6 w-6">
-                        <AvatarImage src={projects[0]?.artist_avatar || ""} />
-                        <AvatarFallback className="text-[10px] bg-primary/10">
-                          {artistName.slice(0, 2).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span className="text-sm font-medium text-muted-foreground">{artistName}</span>
-                      <Badge variant="outline" className="text-xs">
-                        {projects.length} project{projects.length !== 1 ? "s" : ""}
-                      </Badge>
+                {!collapsedYears.has(year) && artists.map(({ name: artistName, projects }) => {
+                  const artistColor = getArtistColor(artistName);
+                  const artistKey = `my-${year}-${artistName}`;
+                  const isCollapsed = collapsedArtists.has(artistKey);
+                  return (
+                    <div key={artistName} className={`mb-5 ml-6 border-l-4 ${artistColor.border} pl-4 rounded-sm`}>
+                      <button
+                        onClick={() => toggleArtist(artistKey)}
+                        className="flex items-center gap-2 mb-3 w-full group cursor-pointer hover:opacity-80 transition-opacity"
+                      >
+                        <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${!isCollapsed ? "rotate-90" : ""}`} />
+                        <Avatar className="h-6 w-6">
+                          <AvatarImage src={projects[0]?.artist_avatar || ""} />
+                          <AvatarFallback className={`text-[10px] ${artistColor.avatar}`}>
+                            {artistName.slice(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className={`text-sm font-semibold ${artistColor.text}`}>{artistName}</span>
+                        <Badge variant="outline" className="text-xs">
+                          {projects.length} project{projects.length !== 1 ? "s" : ""}
+                        </Badge>
+                      </button>
+                      <div className={`transition-all duration-300 overflow-hidden ${isCollapsed ? "max-h-0 opacity-0" : "max-h-[2000px] opacity-100"}`}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {projects.map((project) => (
+                            <ProjectCardComponent key={project.id} project={project} artistColor={artistColor} onClick={() => navigate(`/projects/${project.id}`)} />
+                          ))}
+                        </div>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {projects.map((project) => (
-                        <ProjectCardComponent key={project.id} project={project} onClick={() => navigate(`/projects/${project.id}`)} />
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </section>
@@ -526,30 +567,42 @@ const Portfolio = () => {
                   </Badge>
                 </button>
 
-                {!collapsedYears.has(year + 10000) && artists.map(({ name: artistName, projects }) => (
-                  <div key={artistName} className="mb-5 ml-6">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Avatar className="h-6 w-6">
-                        <AvatarFallback className="text-[10px] bg-primary/10">
-                          {artistName.slice(0, 2).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span className="text-sm font-medium text-muted-foreground">{artistName}</span>
-                      <Badge variant="outline" className="text-xs">
-                        {projects.length} project{projects.length !== 1 ? "s" : ""}
-                      </Badge>
+                {!collapsedYears.has(year + 10000) && artists.map(({ name: artistName, projects }) => {
+                  const artistColor = getArtistColor(artistName);
+                  const artistKey = `shared-${year}-${artistName}`;
+                  const isCollapsed = collapsedArtists.has(artistKey);
+                  return (
+                    <div key={artistName} className={`mb-5 ml-6 border-l-4 ${artistColor.border} pl-4 rounded-sm`}>
+                      <button
+                        onClick={() => toggleArtist(artistKey)}
+                        className="flex items-center gap-2 mb-3 w-full group cursor-pointer hover:opacity-80 transition-opacity"
+                      >
+                        <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${!isCollapsed ? "rotate-90" : ""}`} />
+                        <Avatar className="h-6 w-6">
+                          <AvatarFallback className={`text-[10px] ${artistColor.avatar}`}>
+                            {artistName.slice(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className={`text-sm font-semibold ${artistColor.text}`}>{artistName}</span>
+                        <Badge variant="outline" className="text-xs">
+                          {projects.length} project{projects.length !== 1 ? "s" : ""}
+                        </Badge>
+                      </button>
+                      <div className={`transition-all duration-300 overflow-hidden ${isCollapsed ? "max-h-0 opacity-0" : "max-h-[2000px] opacity-100"}`}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {projects.map((project) => (
+                            <SharedProjectCardComponent
+                              key={project.id}
+                              project={project}
+                              artistColor={artistColor}
+                              onClick={() => navigate(`/projects/${project.id}`)}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {projects.map((project) => (
-                        <SharedProjectCardComponent
-                          key={project.id}
-                          project={project}
-                          onClick={() => navigate(`/projects/${project.id}`)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </section>
@@ -589,17 +642,20 @@ const Portfolio = () => {
 
 function ProjectCardComponent({
   project,
+  artistColor,
   onClick,
 }: {
   project: ProjectCard;
+  artistColor?: (typeof ARTIST_ACCENT_COLORS)[number];
   onClick: () => void;
 }) {
   return (
     <Card
-      className="group cursor-pointer border border-border/50 hover:border-border hover:shadow-md transition-all duration-200 rounded-xl overflow-hidden"
+      className="group cursor-pointer border border-border/50 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 rounded-xl overflow-hidden"
       onClick={onClick}
     >
-      <CardContent className="p-5">
+      {artistColor && <div className={`h-0.5 ${artistColor.topBg}`} />}
+      <CardContent className="p-6">
         <div className="flex items-start justify-between gap-2 mb-3">
           <div className="min-w-0 flex-1">
             <h4 className="font-semibold text-foreground truncate">{project.name}</h4>
@@ -642,17 +698,20 @@ function ProjectCardComponent({
 
 function SharedProjectCardComponent({
   project,
+  artistColor,
   onClick,
 }: {
   project: SharedProjectCard;
+  artistColor?: (typeof ARTIST_ACCENT_COLORS)[number];
   onClick: () => void;
 }) {
   return (
     <Card
-      className="group cursor-pointer border border-border/50 hover:border-border hover:shadow-md transition-all duration-200 rounded-xl overflow-hidden"
+      className="group cursor-pointer border border-border/50 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 rounded-xl overflow-hidden"
       onClick={onClick}
     >
-      <CardContent className="p-5">
+      {artistColor && <div className={`h-0.5 ${artistColor.topBg}`} />}
+      <CardContent className="p-6">
         <div className="flex items-start justify-between gap-2 mb-3">
           <div className="min-w-0 flex-1">
             <h4 className="font-semibold text-foreground truncate">{project.name}</h4>

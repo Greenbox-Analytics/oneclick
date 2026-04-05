@@ -19,7 +19,9 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Loader2, Trash2, LogOut } from "lucide-react";
+import { Loader2, Trash2, LogOut, Settings, UserMinus, AlertTriangle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useRemoveProjectMember, useProjectMembers } from "@/hooks/useProjectMembers";
 
@@ -114,10 +116,13 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
   const isOwner = userRole === "owner";
 
   return (
-    <div className="space-y-6 max-w-lg">
+    <div className="space-y-6 max-w-2xl">
       {/* General Settings */}
-      <Card className="p-5 space-y-4">
-        <h3 className="text-sm font-semibold text-foreground">General</h3>
+      <Card className="p-6 space-y-5">
+        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <Settings className="w-4 h-4 text-muted-foreground" />
+          General
+        </h3>
 
         <div className="space-y-2">
           <Label htmlFor="project-name">Project Name</Label>
@@ -142,8 +147,10 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
         </div>
 
         <div className="space-y-2">
-          <Label>Artist</Label>
-          <Input value={project.artists?.name || "Unknown"} disabled className="opacity-70" />
+          <Label>Primary Artist</Label>
+          <Badge variant="outline" className="text-sm px-3 py-1">
+            {project.artists?.name || "Unknown"}
+          </Badge>
         </div>
 
         {canEdit(userRole) && (
@@ -154,39 +161,50 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
         )}
       </Card>
 
+      <Separator />
+
       {/* Leave Project (non-owners only) */}
       {!isOwner && userRole && (
-        <Card className="p-5 space-y-3">
-          <h3 className="text-sm font-semibold text-foreground">Leave Project</h3>
-          <p className="text-xs text-muted-foreground">
-            You will lose access to this project. This action cannot be undone.
-          </p>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="outline" size="sm">
-                <LogOut className="w-4 h-4 mr-2" /> Leave Project
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Leave project?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  You will be removed from "{project.name}" and lose access. You'll need to be re-invited to rejoin.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleLeave}>Leave</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </Card>
+        <>
+          <Card className="p-6 space-y-3">
+            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <UserMinus className="w-4 h-4 text-muted-foreground" />
+              Leave Project
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              You will lose access to this project. This action cannot be undone.
+            </p>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <LogOut className="w-4 h-4 mr-2" /> Leave Project
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Leave project?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    You will be removed from "{project.name}" and lose access. You'll need to be re-invited to rejoin.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleLeave}>Leave</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </Card>
+          <Separator />
+        </>
       )}
 
       {/* Danger Zone (owner only) */}
       {isOwner && (
-        <Card className="p-5 space-y-3 border-destructive/30">
-          <h3 className="text-sm font-semibold text-destructive">Danger Zone</h3>
+        <Card className="p-6 space-y-3 border-destructive/30 bg-gradient-to-r from-destructive/5 to-transparent">
+          <h3 className="text-sm font-semibold text-destructive flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            Danger Zone
+          </h3>
           <p className="text-xs text-muted-foreground">
             Deleting this project will permanently remove all associated files and data.
           </p>

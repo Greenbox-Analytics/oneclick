@@ -37,7 +37,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
   const [linkingInProgress, setLinkingInProgress] = useState(false);
 
   // Fetch audio files linked to this project via project_audio_links
-  const { data: audioLinks, isLoading: linksLoading } = useQuery<
+  const { data: audioLinks, isLoading: linksLoading, isError: linksError } = useQuery<
     (ProjectAudioLink & { audio_files: AudioFile })[]
   >({
     queryKey: ["project-audio-tab", projectId],
@@ -194,6 +194,16 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     );
   }
 
+  if (linksError) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <Volume2 className="w-10 h-10 text-destructive/40 mb-3" />
+        <p className="text-sm text-muted-foreground">Failed to load audio files</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">Please try refreshing the page</p>
+      </div>
+    );
+  }
+
   const audioFiles = (audioLinks || [])
     .map((l) => l.audio_files)
     .filter(Boolean) as AudioFile[];
@@ -221,13 +231,15 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       )}
 
       {audioFiles.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-2">
-          <Volume2 className="w-12 h-12 text-muted-foreground/40" />
-          <p className="text-muted-foreground">No audio files linked to this project.</p>
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <Volume2 className="w-10 h-10 text-muted-foreground/40 mb-3" />
+          <p className="text-sm text-muted-foreground">No audio files yet</p>
+          <p className="text-xs text-muted-foreground/60 mt-1">Upload audio files to link them to works in this project</p>
           {canEdit(userRole) && (
             <Button
               variant="outline"
               size="sm"
+              className="mt-4"
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload className="w-4 h-4 mr-2" /> Upload Audio

@@ -31,7 +31,7 @@ const canEdit = (role: string | null) => role === "owner" || role === "admin" ||
 
 export default function WorksTab({ projectId, userRole, artistId }: WorksTabProps) {
   const navigate = useNavigate();
-  const { data: works, isLoading } = useWorksByProject(projectId);
+  const { data: works, isLoading, isError } = useWorksByProject(projectId);
   const updateWork = useUpdateWork();
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -43,13 +43,24 @@ export default function WorksTab({ projectId, userRole, artistId }: WorksTabProp
     );
   }
 
+  if (isError) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <Music2 className="w-10 h-10 text-destructive/40 mb-3" />
+        <p className="text-sm text-muted-foreground">Failed to load works</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">Please try refreshing the page</p>
+      </div>
+    );
+  }
+
   if (!works || works.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 gap-4">
-        <Music2 className="w-12 h-12 text-muted-foreground/40" />
-        <p className="text-muted-foreground">No works yet. Add your first work.</p>
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <Music2 className="w-10 h-10 text-muted-foreground/40 mb-3" />
+        <p className="text-sm text-muted-foreground">No works yet</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">Add your first work to start tracking compositions and registrations</p>
         {canEdit(userRole) && (
-          <>
+          <div className="mt-4">
             <Button onClick={() => setDialogOpen(true)}>
               <Plus className="w-4 h-4 mr-2" /> Add Work
             </Button>
@@ -59,7 +70,7 @@ export default function WorksTab({ projectId, userRole, artistId }: WorksTabProp
               projectId={projectId}
               artistId={artistId}
             />
-          </>
+          </div>
         )}
       </div>
     );
