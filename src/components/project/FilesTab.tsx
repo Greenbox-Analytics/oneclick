@@ -267,8 +267,8 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                 }
               >
                 <Card className="overflow-hidden">
-                  <CollapsibleTrigger className="flex items-center justify-between w-full p-3 hover:bg-muted/50 transition-colors">
-                    <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-between w-full p-3 hover:bg-muted/50 transition-colors">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
                       <ChevronRight
                         className={`w-4 h-4 text-muted-foreground transition-transform ${
                           openSections[cat.key] ? "rotate-90" : ""
@@ -276,7 +276,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                       />
                       <span className="text-sm font-medium">{cat.label}</span>
                       <span className="text-xs text-muted-foreground">({catFiles.length})</span>
-                    </div>
+                    </CollapsibleTrigger>
                     {canEdit(userRole) && (
                       <Button
                         size="sm"
@@ -302,7 +302,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                       className="hidden"
                       onChange={(e) => handleUpload(cat.key, e)}
                     />
-                  </CollapsibleTrigger>
+                  </div>
                   <CollapsibleContent>
                     {catFiles.length === 0 ? (
                       <p className="px-3 pb-3 text-xs text-muted-foreground">No files in this folder.</p>
