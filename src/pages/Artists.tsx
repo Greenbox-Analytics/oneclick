@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, Plus, Search, FileText, Trash2, CheckCircle, ArrowLeft, BookOpen } from "lucide-react";
+import { Music, Plus, Search, FileText, Trash2, CheckCircle, ArrowLeft, BookOpen, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -164,8 +164,9 @@ const Artists = () => {
       <main className="container mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-3xl font-bold text-foreground mb-2">Artist Profiles</h2>
-            <p className="text-muted-foreground">Manage your artist roster</p>
+            <h2 className="text-3xl font-bold text-foreground mb-1">Artist Profiles</h2>
+            <p className="text-muted-foreground mb-3">Manage your artist roster</p>
+            <div className="h-0.5 w-20 bg-gradient-to-r from-primary to-primary/0 rounded-full" />
           </div>
           <Button data-walkthrough="artists-add" onClick={() => navigate("/artists/new")}>
             <Plus className="w-4 h-4 mr-2" />
@@ -186,8 +187,21 @@ const Artists = () => {
         </div>
 
         {isLoading ? (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground">Loading artists...</p>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Card key={i} className="border border-border">
+                <div className="h-0.5 bg-muted" />
+                <CardContent className="p-5">
+                  <div className="flex items-start gap-4">
+                    <div className="w-14 h-14 rounded-full bg-muted animate-pulse shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-5 bg-muted rounded animate-pulse w-2/3" />
+                      <div className="h-4 bg-muted rounded animate-pulse w-1/2" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         ) : (
           <>
@@ -198,51 +212,51 @@ const Artists = () => {
                 const cardIsVerified = artist.verified === true;
 
                 return (
-                <Card key={artist.id} className="hover:shadow-lg transition-shadow" data-walkthrough={index === 0 ? "artists-card" : undefined}>
-                  <CardHeader>
-                    <div className="flex items-start justify-between mb-4">
-                      <Avatar className="w-16 h-16">
+                <Card
+                  key={artist.id}
+                  className="group cursor-pointer border border-border hover:border-primary/30 hover:shadow-md transition-all overflow-hidden"
+                  onClick={() => navigate(`/artists/${artist.id}`)}
+                  data-walkthrough={index === 0 ? "artists-card" : undefined}
+                >
+                  <div className="h-0.5 bg-primary/40 group-hover:bg-primary transition-colors" />
+                  <CardContent className="p-5">
+                    <div className="flex items-start gap-4">
+                      <Avatar className="w-14 h-14 ring-2 ring-primary/10">
                         <AvatarImage src={cardDisplayAvatar || undefined} alt={cardDisplayName} />
-                        <AvatarFallback className="bg-primary text-primary-foreground text-xl">
+                        <AvatarFallback className="bg-primary/10 text-primary text-lg font-semibold">
                           {cardDisplayName.charAt(0)}
                         </AvatarFallback>
                       </Avatar>
-                      <div className="flex flex-col items-end gap-1">
-                        {cardIsVerified && (
-                          <Badge className="bg-green-100 text-green-800 text-xs flex items-center gap-1">
-                            <CheckCircle className="w-3 h-3" /> Verified
-                          </Badge>
-                        )}
-                        {artist.has_contract && (
-                          <div className="flex items-center gap-1 text-xs text-success bg-success/10 px-2 py-1 rounded-full">
-                            <FileText className="w-3 h-3" />
-                            Contract
-                          </div>
-                        )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="font-semibold text-foreground truncate">{cardDisplayName}</h3>
+                          {cardIsVerified && (
+                            <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                          )}
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2 truncate">
+                          {artist.genres.length > 0 ? artist.genres.join(' \u00b7 ') : 'No genres set'}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          {artist.has_contract && (
+                            <Badge variant="outline" className="text-xs gap-1 text-primary border-primary/30">
+                              <FileText className="w-3 h-3" /> Contract
+                            </Badge>
+                          )}
+                        </div>
                       </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setArtistToDelete(artist);
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
                     </div>
-                    <CardTitle>{cardDisplayName}</CardTitle>
-                    <CardDescription>{artist.genres.join(', ')}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => navigate(`/artists/${artist.id}`)}
-                    >
-                      View Profile
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="w-full text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setArtistToDelete(artist);
-                      }}
-                    >
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Delete Artist
-                    </Button>
                   </CardContent>
                 </Card>
                 );
@@ -250,8 +264,12 @@ const Artists = () => {
             </div>
 
             {filteredArtists.length === 0 && !isLoading && (
-              <div className="text-center py-12">
-                <p className="text-muted-foreground">No artists found</p>
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Users className="w-12 h-12 text-muted-foreground/30 mb-3" />
+                <p className="text-muted-foreground font-medium">No artists found</p>
+                <p className="text-sm text-muted-foreground/60 mt-1">
+                  {searchQuery ? 'Try a different search term' : 'Add your first artist to get started'}
+                </p>
               </div>
             )}
           </>

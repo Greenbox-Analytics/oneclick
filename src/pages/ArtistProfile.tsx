@@ -454,7 +454,7 @@ const ArtistProfile = () => {
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-3">
-                  <h2 className="text-4xl font-bold text-foreground bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">{displayName}</h2>
+                  <h2 className="text-2xl font-bold text-foreground">{displayName}</h2>
                   {isVerified && (
                     <Badge className="bg-green-100 text-green-800 flex items-center gap-1">
                       <CheckCircle className="w-3 h-3" /> Verified
@@ -474,7 +474,8 @@ const ArtistProfile = () => {
 
         <div className="grid gap-6">
           {/* Basic Information */}
-          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-primary/40" />
             <CardHeader className="bg-gradient-to-r from-primary/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 text-primary" />
@@ -493,7 +494,7 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-primary transition-colors"
                   />
                 ) : formData.name ? (
-                  <p className="text-foreground text-lg font-medium">{formData.name}</p>
+                  <p className="text-sm font-medium text-foreground">{formData.name}</p>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -510,7 +511,7 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-primary transition-colors"
                   />
                 ) : formData.email ? (
-                  <p className="text-foreground text-lg">{formData.email}</p>
+                  <p className="text-sm text-foreground">{formData.email}</p>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -562,9 +563,13 @@ const ArtistProfile = () => {
                   </div>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {formData.genres.map(genre => (
-                      <Badge key={genre} variant="secondary" className="px-3 py-1">{genre}</Badge>
-                    ))}
+                    {formData.genres.length > 0 ? (
+                      formData.genres.map(genre => (
+                        <Badge key={genre} variant="secondary" className="px-3 py-1">{genre}</Badge>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground/50 italic">No genres added</p>
+                    )}
                   </div>
                 )}
               </FieldContainer>
@@ -572,7 +577,8 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Social Media */}
-          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-pink-500/40" />
             <CardHeader className="bg-gradient-to-r from-pink-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Instagram className="w-5 h-5 text-pink-500" />
@@ -594,7 +600,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-pink-500 transition-colors"
                   />
                 ) : formData.social.instagram ? (
-                  <p className="text-foreground">{formData.social.instagram}</p>
+                  <a href={formData.social.instagram} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.social.instagram}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -614,7 +622,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-blue-500 transition-colors"
                   />
                 ) : formData.social.tiktok ? (
-                  <p className="text-foreground">{formData.social.tiktok}</p>
+                  <a href={formData.social.tiktok} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.social.tiktok}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -634,7 +644,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-red-500 transition-colors"
                   />
                 ) : formData.social.youtube ? (
-                  <p className="text-foreground">{formData.social.youtube}</p>
+                  <a href={formData.social.youtube} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.social.youtube}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -694,12 +706,18 @@ const ArtistProfile = () => {
                               <LinkIcon className="w-4 h-4 text-pink-500" />
                               <Label className="text-sm font-semibold text-muted-foreground">{link.label}</Label>
                             </div>
-                            <p className="text-foreground text-lg break-all">{link.url}</p>
+                            {link.url ? (
+                              <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                                {link.url}
+                              </a>
+                            ) : (
+                              <p className="text-sm text-muted-foreground/50 italic">Not set</p>
+                            )}
                           </div>
                         )}
                       </FieldContainer>
                     ))}
-                    
+
                     {formData.customSocialLinks.length === 0 && isEditMode && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom social links added. Click "Add Link" to create one.
@@ -712,7 +730,8 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Streaming Platforms */}
-          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-green-500/40" />
             <CardHeader className="bg-gradient-to-r from-green-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <Mic2 className="w-5 h-5 text-green-500" />
@@ -734,7 +753,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-green-500 transition-colors"
                   />
                 ) : formData.dsp.spotify ? (
-                  <p className="text-foreground font-mono text-sm">{formData.dsp.spotify}</p>
+                  <a href={formData.dsp.spotify} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all font-mono">
+                    {formData.dsp.spotify}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -754,7 +775,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-red-500 transition-colors"
                   />
                 ) : formData.dsp.appleMusic ? (
-                  <p className="text-foreground break-all">{formData.dsp.appleMusic}</p>
+                  <a href={formData.dsp.appleMusic} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.dsp.appleMusic}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -774,7 +797,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-orange-500 transition-colors"
                   />
                 ) : formData.dsp.soundcloud ? (
-                  <p className="text-foreground">{formData.dsp.soundcloud}</p>
+                  <a href={formData.dsp.soundcloud} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.dsp.soundcloud}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -834,12 +859,18 @@ const ArtistProfile = () => {
                               <LinkIcon className="w-4 h-4 text-green-500" />
                               <Label className="text-sm font-semibold text-muted-foreground">{link.label}</Label>
                             </div>
-                            <p className="text-foreground text-lg break-all">{link.url}</p>
+                            {link.url ? (
+                              <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                                {link.url}
+                              </a>
+                            ) : (
+                              <p className="text-sm text-muted-foreground/50 italic">Not set</p>
+                            )}
                           </div>
                         )}
                       </FieldContainer>
                     ))}
-                    
+
                     {formData.customDspLinks.length === 0 && isEditMode && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom DSP links added. Click "Add Link" to create one.
@@ -852,7 +883,8 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Additional Links */}
-          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-purple-500/40" />
             <CardHeader className="bg-gradient-to-r from-purple-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <LinkIcon className="w-5 h-5 text-purple-500" />
@@ -875,7 +907,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-purple-500 transition-colors"
                   />
                 ) : formData.additional.epk ? (
-                  <p className="text-foreground break-all">{formData.additional.epk}</p>
+                  <a href={formData.additional.epk} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.additional.epk}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -895,7 +929,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-blue-500 transition-colors"
                   />
                 ) : formData.additional.pressKit ? (
-                  <p className="text-foreground break-all">{formData.additional.pressKit}</p>
+                  <a href={formData.additional.pressKit} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.additional.pressKit}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -915,7 +951,9 @@ const ArtistProfile = () => {
                     className="bg-background border-2 focus:border-green-500 transition-colors"
                   />
                 ) : formData.additional.linktree ? (
-                  <p className="text-foreground break-all">{formData.additional.linktree}</p>
+                  <a href={formData.additional.linktree} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.additional.linktree}
+                  </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
                 )}
@@ -975,12 +1013,18 @@ const ArtistProfile = () => {
                               <LinkIcon className="w-4 h-4 text-purple-500" />
                               <Label className="text-sm font-semibold text-muted-foreground">{link.label}</Label>
                             </div>
-                            <p className="text-foreground text-lg break-all">{link.url}</p>
+                            {link.url ? (
+                              <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                                {link.url}
+                              </a>
+                            ) : (
+                              <p className="text-sm text-muted-foreground/50 italic">Not set</p>
+                            )}
                           </div>
                         )}
                       </FieldContainer>
                     ))}
-                    
+
                     {formData.customLinks.length === 0 && isEditMode && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom links added. Click "Add Link" to create one.
@@ -993,7 +1037,8 @@ const ArtistProfile = () => {
           </Card>
 
           {/* My Notes -- private to you */}
-          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow">
+          <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+            <div className="h-0.5 bg-amber-500/40" />
             <CardHeader className="bg-gradient-to-r from-amber-500/5 to-transparent">
               <div className="flex items-center gap-2">
                 <StickyNote className="w-5 h-5 text-amber-500" />
