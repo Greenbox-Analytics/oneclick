@@ -7,12 +7,12 @@
 CREATE OR REPLACE FUNCTION public.is_project_member(p_id UUID)
 RETURNS BOOLEAN
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, auth, extensions
 LANGUAGE plpgsql
 AS $$
 BEGIN
   RETURN EXISTS (
-    SELECT 1 FROM project_members
+    SELECT 1 FROM public.project_members
     WHERE project_id = p_id AND user_id = auth.uid()
   );
 END;
@@ -22,13 +22,13 @@ $$;
 CREATE OR REPLACE FUNCTION public.get_project_role(p_id UUID)
 RETURNS TEXT
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, auth, extensions
 LANGUAGE plpgsql
 AS $$
 DECLARE
   r TEXT;
 BEGIN
-  SELECT role INTO r FROM project_members
+  SELECT role INTO r FROM public.project_members
   WHERE project_id = p_id AND user_id = auth.uid();
   RETURN r;
 END;

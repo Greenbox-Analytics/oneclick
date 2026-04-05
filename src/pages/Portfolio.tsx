@@ -57,18 +57,26 @@ const Portfolio = () => {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  // Profile for header
+  // Profile for header — profiles table has full_name but no avatar_url; get avatar from team_cards
   const [profile, setProfile] = useState<{ full_name: string | null; avatar_url: string | null } | null>(null);
 
   useEffect(() => {
     const fetchProfile = async () => {
       if (!user) return;
-      const { data } = await supabase
+      const { data: prof } = await supabase
         .from("profiles")
-        .select("full_name, avatar_url")
+        .select("full_name")
         .eq("id", user.id)
         .single();
-      if (data) setProfile(data);
+      const { data: tc } = await supabase
+        .from("team_cards")
+        .select("avatar_url")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      setProfile({
+        full_name: prof?.full_name || null,
+        avatar_url: tc?.avatar_url || null,
+      });
     };
     fetchProfile();
   }, [user]);

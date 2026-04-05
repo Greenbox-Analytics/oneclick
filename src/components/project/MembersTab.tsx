@@ -80,7 +80,9 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     enabled: workIds.length > 0,
   });
 
-  // Fetch user profiles for members to get names/emails
+  // Fetch user profiles for members to get names
+  // Note: profiles table has full_name, first_name, last_name, given_name — no email or avatar_url
+  // Email is on team_cards table (if exists) or auth.users (not queryable from client)
   const memberUserIds = (members || []).map((m) => m.user_id);
   const { data: memberProfiles } = useQuery({
     queryKey: ["member-profiles", memberUserIds],
@@ -88,36 +90,38 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
       if (memberUserIds.length === 0) return [];
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, full_name, first_name, last_name, avatar_url")
+        .select("id, full_name, first_name, last_name, given_name")
         .in("id", memberUserIds);
+      if (error) { console.error("Error fetching profiles:", error); return []; }
+      return data || [];
+    },
+    enabled: memberUserIds.length > 0,
+  });
+
+  // Fetch emails from team_cards (has email column)
+  const { data: teamCards } = useQuery({
+    queryKey: ["member-teamcards", memberUserIds],
+    queryFn: async () => {
+      if (memberUserIds.length === 0) return [];
+      const { data, error } = await supabase
+        .from("team_cards")
+        .select("user_id, email, avatar_url")
+        .in("user_id", memberUserIds);
       if (error) return [];
       return data || [];
     },
     enabled: memberUserIds.length > 0,
   });
 
-  const profileMap = new Map<string, { full_name: string | null; first_name: string | null; last_name: string | null; avatar_url: string | null; email?: string | null }>();
+  const profileMap = new Map<string, { full_name: string | null; first_name: string | null; last_name: string | null; given_name: string | null }>();
   for (const p of memberProfiles || []) {
     profileMap.set(p.id, p);
   }
 
-  // Fetch emails for all member user_ids
-  const { data: emailProfiles } = useQuery({
-    queryKey: ["member-email-profiles", projectId, memberUserIds],
-    queryFn: async () => {
-      if (memberUserIds.length === 0) return {};
-      const { data } = await supabase
-        .from("profiles")
-        .select("id, email")
-        .in("id", memberUserIds);
-      const map: Record<string, string> = {};
-      for (const p of data || []) {
-        if (p.email) map[p.id] = p.email;
-      }
-      return map;
-    },
-    enabled: memberUserIds.length > 0,
-  });
+  const teamCardMap = new Map<string, { email: string | null; avatar_url: string | null }>();
+  for (const tc of teamCards || []) {
+    teamCardMap.set(tc.user_id, tc);
+  }
 
   const handleInvite = () => {
     if (!inviteEmail.trim()) return;
@@ -162,11 +166,13 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
           <div className="grid gap-2">
             {members.map((member: ProjectMember) => {
               const profile = profileMap.get(member.user_id);
+              const tc = teamCardMap.get(member.user_id);
               const displayName =
                 profile?.full_name ||
+                profile?.given_name ||
                 [profile?.first_name, profile?.last_name].filter(Boolean).join(" ") ||
-                member.user_id;
-              const email = emailProfiles?.[member.user_id] || "";
+                "Member";
+              const email = tc?.email || "";
               return (
                 <Card key={member.id} className="p-3">
                   <div className="flex items-center gap-3">
