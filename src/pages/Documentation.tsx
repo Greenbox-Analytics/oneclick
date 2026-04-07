@@ -7,9 +7,18 @@ import {
   Users, LayoutGrid, Folder, FolderOpen, Shield, Lightbulb, Rocket,
   Info, CheckCircle2, Zap, Volume2, StickyNote, Settings, Lock,
   ChevronDown, ChevronRight, Scale, FileCheck, UserPlus, Pencil,
+  User, LogOut,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // ---------------------------------------------------------------------------
 // Types & Constants — hoisted to module scope (rendering-hoist-jsx)
@@ -670,7 +679,7 @@ const SECTION_CONTENT: Record<string, React.FC> = {
 
 const Documentation = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const [activeSection, setActiveSection] = useState("getting-started");
   // Track which sidebar groups are expanded (js-set-map-lookups)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(["portfolio"]));
@@ -720,7 +729,7 @@ const Documentation = () => {
                   <ArrowLeft className="w-4 h-4 mr-1" /> Back
                 </Button>
                 <div className="w-px h-5 bg-border" />
-                <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/dashboard")}>
+                <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/")}>
                   <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
                     <Music className="w-4 h-4 text-primary-foreground" />
                   </div>
@@ -732,13 +741,30 @@ const Documentation = () => {
               </div>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => navigate("/dashboard")}>Dashboard</Button>
-                <div
-                  className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-sm font-medium text-primary cursor-pointer hover:bg-primary/30 transition-colors"
-                  title="Profile Settings"
-                  onClick={() => navigate("/profile")}
-                >
-                  {(user.email ?? "U")[0].toUpperCase()}
-                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <div
+                      className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-sm font-medium text-primary cursor-pointer hover:bg-primary/30 transition-colors"
+                    >
+                      {(user.email ?? "U")[0].toUpperCase()}
+                    </div>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-56" align="end" forceMount>
+                    <DropdownMenuLabel className="font-normal">
+                      <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => navigate("/profile")}>
+                      <User className="mr-2 h-4 w-4" />
+                      <span>Profile Settings</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={async () => { await signOut(); navigate("/"); }}>
+                      <LogOut className="mr-2 h-4 w-4" />
+                      <span>Log out</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </>
           ) : (

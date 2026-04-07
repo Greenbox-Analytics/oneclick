@@ -1,10 +1,20 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Music, FolderOpen, TrendingUp, Shield, FileText, Users, BookOpen } from "lucide-react";
+import { Music, FolderOpen, TrendingUp, Shield, FileText, Users, BookOpen, User, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const Index = () => {
   const navigate = useNavigate();
+  const { user, loading, signOut } = useAuth();
 
   const features = [
     {
@@ -59,9 +69,41 @@ const Index = () => {
               <Button variant="ghost" onClick={() => navigate("/docs")}>
                 Docs
               </Button>
-              <Button onClick={() => navigate("/auth")} className="text-base">
-                Sign In
-              </Button>
+              {!loading && user ? (
+                <div className="flex items-center gap-3">
+                  <Button variant="ghost" onClick={() => navigate("/dashboard")} className="text-base">
+                    Dashboard
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <div
+                        className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-sm font-medium text-primary cursor-pointer hover:bg-primary/30 transition-colors"
+                      >
+                        {(user.email ?? "U")[0].toUpperCase()}
+                      </div>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-56" align="end" forceMount>
+                      <DropdownMenuLabel className="font-normal">
+                        <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => navigate("/profile")}>
+                        <User className="mr-2 h-4 w-4" />
+                        <span>Profile Settings</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={async () => { await signOut(); navigate("/"); }}>
+                        <LogOut className="mr-2 h-4 w-4" />
+                        <span>Log out</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              ) : (
+                <Button onClick={() => navigate("/auth")} className="text-base">
+                  Sign In
+                </Button>
+              )}
             </div>
           </div>
         </div>

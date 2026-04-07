@@ -85,7 +85,7 @@ def _convert_pdf_background(
 
 
 # Configure CORS - support multiple origins from environment variable
-ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")]
+ALLOWED_ORIGINS = [origin.strip().rstrip("/") for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")]
 
 app.add_middleware(
     CORSMiddleware,
