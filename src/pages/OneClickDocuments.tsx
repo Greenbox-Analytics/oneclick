@@ -1,138 +1,72 @@
 import { useState, useEffect, useRef } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Music, ArrowLeft, Upload, FileText, X, FileSignature, Receipt, Users, DollarSign, Download, FileSpreadsheet, CheckCircle2, Folder, Loader2, AlertCircle, Search, Plus, RefreshCw, BookOpen } from "lucide-react";
+import { Music, ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-import ExcelJS from "exceljs";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { toPng } from 'html-to-image';
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
-import { useWorks, type Work } from "@/hooks/useRegistry";
+import { useWorks } from "@/hooks/useRegistry";
 import { type WorkFileLink } from "@/hooks/useWorkFiles";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import ContractSelector from "@/components/oneclick/ContractSelector";
+import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
+import CalculationResults from "@/components/oneclick/CalculationResults";
 
-interface RoyaltyPayment {
-  song_title: string;
-  party_name: string;
-  role: string;
-  royalty_type: string;
-  percentage: number;
-  total_royalty: number;
-  amount_to_pay: number;
-  terms?: string;
-}
-
-interface CalculationResult {
-  status: string;
-  total_payments: number;
-  payments: RoyaltyPayment[];
-  excel_file_url?: string;
-  message: string;
-  is_cached?: boolean;
-}
-
-interface Project {
-  id: string;
-  name: string;
-}
-
-interface ArtistFile {
-  id: string;
-  file_name: string;
-  created_at: string;
-  folder_category: string;
-  file_path: string; // Needed for calculation
-  project_id: string;
-}
-
-interface Artist {
-  id: string;
-  name: string;
-}
+interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; }
+interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; }
+interface Project { id: string; name: string; }
+interface ArtistFile { id: string; file_name: string; created_at: string; folder_category: string; file_path: string; project_id: string; }
+interface Artist { id: string; name: string; }
 
 const OneClickDocuments = () => {
   const navigate = useNavigate();
   const { artistId } = useParams<{ artistId: string }>();
   const { user } = useAuth();
-  
-  // File Upload State
   const [contractFiles, setContractFiles] = useState<File[]>([]);
   const [royaltyStatementFile, setRoyaltyStatementFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
-  
-  // Calculation Results State
   const [calculationResult, setCalculationResult] = useState<CalculationResult | null>(null);
   const [error, setError] = useState<string>("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-
-  // Existing Documents Selection State
-  const [selectedExistingContracts, setSelectedExistingContracts] = useState<string[]>([]); // Array of file_ids (OneClick uses IDs)
+  const [selectedExistingContracts, setSelectedExistingContracts] = useState<string[]>([]);
   const [selectedExistingRoyaltyStatement, setSelectedExistingRoyaltyStatement] = useState<string | null>(null);
-
-  // Data from Backend
   const [projects, setProjects] = useState<Project[]>([]);
   const [existingContracts, setExistingContracts] = useState<ArtistFile[]>([]);
   const [existingRoyaltyStatements, setExistingRoyaltyStatements] = useState<ArtistFile[]>([]);
   const [projectFilesById, setProjectFilesById] = useState<Record<string, ArtistFile[]>>({});
-  
-  // UI State - Separate project selection for each card
   const [selectedContractProject, setSelectedContractProject] = useState<string | null>(null);
   const [selectedRoyaltyStatementProject, setSelectedRoyaltyStatementProject] = useState<string | null>(null);
   const [newContractProjectId, setNewContractProjectId] = useState<string>("");
-  
-  // Tab state to maintain which tab is active in each card
   const [contractTabValue, setContractTabValue] = useState<string>("upload");
   const [royaltyStatementTabValue, setRoyaltyStatementTabValue] = useState<string>("upload");
   const [newRoyaltyStatementProjectId, setNewRoyaltyStatementProjectId] = useState<string>("");
-
   const [artistName, setArtistName] = useState<string>("");
   const [isLoadingArtist, setIsLoadingArtist] = useState(true);
   const [isLoadingProjectFiles, setIsLoadingProjectFiles] = useState(false);
-
-  // Progress tracking state for SSE
   const [calculationProgress, setCalculationProgress] = useState(0);
   const [calculationStage, setCalculationStage] = useState("");
   const [calculationMessage, setCalculationMessage] = useState("");
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [contractSearchTerm, setContractSearchTerm] = useState("");
   const [royaltySearchTerm, setRoyaltySearchTerm] = useState("");
-
-  // Create Project State
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [newProjectNameInput, setNewProjectNameInput] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
-
-  // From Works state
   const { data: artistWorks = [], isLoading: isLoadingWorks } = useWorks(artistId);
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
   const [workFiles, setWorkFiles] = useState<WorkFileLink[]>([]);
   const [loadingWorkFiles, setLoadingWorkFiles] = useState(false);
-
-  // Ref for chart download (only the chart content, not the entire card)
-  const chartContentRef = useRef<HTMLDivElement>(null);
-  
-  // Ref to track if auto-save has been triggered for current result
   const autoSaveTriggeredRef = useRef<string | null>(null);
-
-  // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
   const walkthrough = useToolWalkthrough(TOOL_CONFIGS.oneclick, {
     onComplete: () => markToolCompleted("oneclick"),
@@ -149,29 +83,19 @@ const OneClickDocuments = () => {
 
   const showPersistentDuplicateToast = (message: string) => {
     toast.error(message, {
-      duration: Infinity,
-      closeButton: true,
-      style: {
-        background: "hsl(var(--destructive))",
-        color: "hsl(var(--destructive-foreground))",
-        border: "1px solid hsl(var(--destructive))",
-      },
+      duration: Infinity, closeButton: true,
+      style: { background: "hsl(var(--destructive))", color: "hsl(var(--destructive-foreground))", border: "1px solid hsl(var(--destructive))" },
     });
   };
 
   const findDuplicateFileNames = (files: File[]) => {
     const seen = new Set<string>();
     const duplicates = new Set<string>();
-
     for (const file of files) {
       const normalized = normalizeFileName(file.name);
-      if (seen.has(normalized)) {
-        duplicates.add(file.name);
-      } else {
-        seen.add(normalized);
-      }
+      if (seen.has(normalized)) duplicates.add(file.name);
+      else seen.add(normalized);
     }
-
     return Array.from(duplicates);
   };
 
@@ -191,7 +115,6 @@ const OneClickDocuments = () => {
     return data;
   };
 
-  // Fetch Artist Name
   useEffect(() => {
     if (artistId && user) {
       setIsLoadingArtist(true);
@@ -208,76 +131,50 @@ const OneClickDocuments = () => {
     }
   }, [artistId, user]);
 
-  // Fetch Projects on Mount
   useEffect(() => {
     if (artistId) {
       apiFetch<any>(`${API_URL}/projects/${artistId}`)
         .then(data => setProjects(data))
         .catch(err => console.error("Error fetching projects:", err));
-
-      // Fetch all royalty statements for the artist (since view is "all")
-      // fetch(`${API_URL}/files/artist/${artistId}/category/royalty_statement`)
-      //   .then(res => res.json())
-      //   .then(data => setExistingRoyaltyStatements(data))
-      //   .catch(err => console.error("Error fetching royalty statements:", err));
     }
   }, [artistId]);
 
-  // Fetch Contracts when Contract Project Selected
   useEffect(() => {
     if (selectedContractProject) {
-      // Clear previous contract selections when changing projects
       setSelectedExistingContracts([]);
-      
       setIsLoadingProjectFiles(true);
       apiFetch<ArtistFile[]>(`${API_URL}/files/${selectedContractProject}`)
         .then((data: ArtistFile[]) => {
             setProjectFilesById(prev => ({ ...prev, [selectedContractProject]: data }));
-            // Filter contracts and split sheets
-            const contracts = data.filter(f => f.folder_category === 'contract' || f.folder_category === 'split_sheet');
-            setExistingContracts(contracts);
+            setExistingContracts(data.filter(f => f.folder_category === 'contract' || f.folder_category === 'split_sheet'));
             setIsLoadingProjectFiles(false);
         })
-        .catch(err => {
-          console.error("Error fetching contract files:", err);
-          setIsLoadingProjectFiles(false);
-        });
+        .catch(err => { console.error("Error fetching contract files:", err); setIsLoadingProjectFiles(false); });
     } else {
         setExistingContracts([]);
         setSelectedExistingContracts([]);
     }
   }, [selectedContractProject]);
 
-  // Fetch Royalty Statements when Royalty Statement Project Selected
   useEffect(() => {
     if (selectedRoyaltyStatementProject) {
       setSelectedExistingRoyaltyStatement(null);
-      
       setIsLoadingProjectFiles(true);
       apiFetch<ArtistFile[]>(`${API_URL}/files/${selectedRoyaltyStatementProject}`)
         .then((data: ArtistFile[]) => {
             setProjectFilesById(prev => ({ ...prev, [selectedRoyaltyStatementProject]: data }));
-            // Filter royalty statements
-            const statements = data.filter(f => f.folder_category === 'royalty_statement');
-            setExistingRoyaltyStatements(statements);
+            setExistingRoyaltyStatements(data.filter(f => f.folder_category === 'royalty_statement'));
             setIsLoadingProjectFiles(false);
         })
-        .catch(err => {
-          console.error("Error fetching royalty statement files:", err);
-          setIsLoadingProjectFiles(false);
-        });
+        .catch(err => { console.error("Error fetching royalty statement files:", err); setIsLoadingProjectFiles(false); });
     } else {
         setExistingRoyaltyStatements([]);
         setSelectedExistingRoyaltyStatement(null);
     }
   }, [selectedRoyaltyStatementProject]);
 
-  // Fetch files when a work is selected in "From Works" tab
   useEffect(() => {
-    if (!selectedWorkId || !user) {
-      setWorkFiles([]);
-      return;
-    }
+    if (!selectedWorkId || !user) { setWorkFiles([]); return; }
     setLoadingWorkFiles(true);
     apiFetch<any>(`${API_URL}/registry/works/${selectedWorkId}/files`)
       .then((data) => {
@@ -291,152 +188,41 @@ const OneClickDocuments = () => {
       });
   }, [selectedWorkId, user]);
 
-  const handleContractFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-
-    const incomingFiles = Array.from(files);
-    const blockedNames = new Set<string>();
-    const existingSelectedNames = new Set(contractFiles.map(file => normalizeFileName(file.name)));
-    const seenInBatch = new Set<string>();
-    const projectFileNames = new Set<string>();
-
-    if (newContractProjectId && newContractProjectId !== "none") {
-      try {
-        const projectFiles = await fetchProjectFilesForValidation(newContractProjectId);
-        projectFiles.forEach(file => projectFileNames.add(normalizeFileName(file.file_name)));
-      } catch (err) {
-        console.error("Error checking contract duplicates:", err);
-      }
-    }
-
-    const allowedFiles: File[] = [];
-    incomingFiles.forEach(file => {
-      const normalizedName = normalizeFileName(file.name);
-
-      if (seenInBatch.has(normalizedName) || existingSelectedNames.has(normalizedName) || projectFileNames.has(normalizedName)) {
-        blockedNames.add(file.name);
-        return;
-      }
-
-      seenInBatch.add(normalizedName);
-      allowedFiles.push(file);
-    });
-
-    if (blockedNames.size > 0) {
-      showPersistentDuplicateToast(`Duplicate file name(s) blocked: ${Array.from(blockedNames).join(", ")}`);
-    }
-
-    if (allowedFiles.length > 0) {
-      setContractFiles(prev => [...prev, ...allowedFiles]);
-    }
-
-    e.target.value = "";
-  };
-
-  const handleRoyaltyStatementFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const file = files[0];
-    const projectFileNames = new Set<string>();
-
-    if (newRoyaltyStatementProjectId && newRoyaltyStatementProjectId !== "none") {
-      try {
-        const projectFiles = await fetchProjectFilesForValidation(newRoyaltyStatementProjectId);
-        projectFiles.forEach(f => projectFileNames.add(normalizeFileName(f.file_name)));
-      } catch (err) {
-        console.error("Error checking royalty statement duplicates:", err);
-      }
-    }
-
-    if (projectFileNames.has(normalizeFileName(file.name))) {
-      showPersistentDuplicateToast(`Duplicate file name blocked: ${file.name}`);
-    } else {
-      setRoyaltyStatementFile(file);
-    }
-
-    e.target.value = "";
-  };
-
-  const handleRemoveContractFile = (index: number) => {
-    setContractFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleRemoveRoyaltyStatementFile = () => {
-    setRoyaltyStatementFile(null);
-  };
-
   const handleCreateProject = async () => {
     if (!artistId || !newProjectNameInput.trim()) return;
-    
     setIsCreatingProject(true);
     try {
         const response = await fetch(`${API_URL}/projects`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                artist_id: artistId,
-                name: newProjectNameInput,
-                description: "Created via OneClick",
-                user_id: user?.id
-            })
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ artist_id: artistId, name: newProjectNameInput, description: "Created via OneClick", user_id: user?.id })
         });
-        
         if (!response.ok) throw new Error("Failed to create project");
-        
         const newProject = await response.json();
         setProjects([newProject, ...projects]);
-        setNewContractProjectId(newProject.id); // Auto-select for contract
-        setNewRoyaltyStatementProjectId(newProject.id); // Auto-select for royalty statement
-        setNewProjectNameInput("");
-        setIsCreateProjectOpen(false);
+        setNewContractProjectId(newProject.id);
+        setNewRoyaltyStatementProjectId(newProject.id);
+        setNewProjectNameInput(""); setIsCreateProjectOpen(false);
         toast.success("Project created successfully");
-    } catch (err) {
-        console.error("Error creating project:", err);
-        toast.error("Failed to create project");
-    } finally {
-        setIsCreatingProject(false);
-    }
-  };
-
-  // Toggle selection store ID instead of file_path for easier backend processing with existing endpoints
-  const handleToggleExistingContract = (fileId: string) => {
-    setSelectedExistingContracts(prev =>
-      prev.includes(fileId) ? prev.filter(p => p !== fileId) : [...prev, fileId]
-    );
-  };
-
-  const handleToggleExistingRoyaltyStatement = (fileId: string) => {
-    setSelectedExistingRoyaltyStatement(prev => prev === fileId ? null : fileId);
+    } catch (err) { console.error("Error creating project:", err); toast.error("Failed to create project"); }
+    finally { setIsCreatingProject(false); }
   };
 
   const handleCalculateRoyalties = async (forceRecalculate = false) => {
-    if (!artistId || !user) {
-        toast.error("User or Artist not found.");
-        return;
-    }
-
+    if (!artistId || !user) { toast.error("User or Artist not found."); return; }
     const hasContracts = contractFiles.length > 0 || selectedExistingContracts.length > 0;
     const hasRoyaltyStatement = royaltyStatementFile !== null || selectedExistingRoyaltyStatement !== null;
-    
     if (!hasContracts || !hasRoyaltyStatement) {
-        toast.error("Please provide both contracts/split sheets and a royalty statement.");
-        return;
+        toast.error("Please provide both contracts/split sheets and a royalty statement."); return;
     }
-
     setIsUploading(true);
     setCalculationResult(null);
     setError("");
-    
     try {
         let finalContractIds: string[] = [];
         let finalStatementId = "";
         let finalProjectId = "";
 
-        // 1. Determine Contract IDs
         if (contractFiles.length > 0) {
-            // Upload new contracts
             if (!newContractProjectId || newContractProjectId === "none") {
                  toast.error("Please select a project to save the new document.");
                  throw new Error("You must select a project to save the new document to.");
@@ -471,31 +257,27 @@ const OneClickDocuments = () => {
                      headers: uploadAuthHeaders,
                      body: formData
                  });
-                 
+
                  if (!uploadRes.ok) {
                      const errData = await uploadRes.json();
                      throw new Error(errData.detail || `Failed to upload and process contract: ${file.name}`);
                  }
-                 
+
                  const uploadData = await uploadRes.json();
                  finalContractIds.push(uploadData.contract_id);
              }
-             
+
              finalProjectId = newContractProjectId;
              toast.success(`${contractFiles.length} contract(s) uploaded and processed successfully!`);
-
         }
-        
         if (selectedExistingContracts.length > 0) {
             finalContractIds = [...finalContractIds, ...selectedExistingContracts];
-            // Find project ID for this contract if not set
             if (!finalProjectId) {
                 const contract = existingContracts.find(c => c.id === selectedExistingContracts[0]);
                 if (contract) finalProjectId = contract.project_id;
             }
         }
 
-        // 2. Determine Statement ID
         if (royaltyStatementFile) {
              const formData = new FormData();
              formData.append("file", royaltyStatementFile);
@@ -514,7 +296,7 @@ const OneClickDocuments = () => {
                throw new Error("Duplicate file name found in selected project.");
              }
            }
-             
+
              const stmtAuthHeaders = await getAuthHeaders();
              const uploadRes = await fetch(`${API_URL}/upload`, {
                  method: "POST",
@@ -534,226 +316,72 @@ const OneClickDocuments = () => {
         }
 
         if (finalContractIds.length === 0 || !finalStatementId) {
-             throw new Error("Could not determine contracts or statement to process.");
+            throw new Error("Could not determine contracts or statement to process.");
         }
 
-        // Store context for confirmation
-        setLastCalculationContext({
-            contractIds: finalContractIds,
-            statementId: finalStatementId,
-            projectId: finalProjectId
-        });
-
-        // 3. Show progress modal and start SSE connection
-        // 3. Show progress modal and start SSE connection
+        setLastCalculationContext({ contractIds: finalContractIds, statementId: finalStatementId, projectId: finalProjectId });
         setShowProgressModal(true);
         setCalculationProgress(0);
         setCalculationStage("starting");
         setCalculationMessage("Starting calculation...");
-        setSaveSuccess(false); // Reset save state
+        setSaveSuccess(false);
 
         // Use EventSource for SSE
         const queryParams = new URLSearchParams({
             project_id: finalProjectId,
             royalty_statement_file_id: finalStatementId
         });
-        
-        if (forceRecalculate) {
-            queryParams.append("force_recalculate", "true");
-        }
-        
-        // Append each contract_id
+        if (forceRecalculate) queryParams.append("force_recalculate", "true");
         finalContractIds.forEach(id => queryParams.append("contract_ids", id));
 
-        const eventSource = new EventSource(
-            `${API_URL}/oneclick/calculate-royalties-stream?` + queryParams.toString()
-        );
-
-        // Set timeout for 2 minutes
+        const eventSource = new EventSource(`${API_URL}/oneclick/calculate-royalties-stream?` + queryParams.toString());
         const timeout = setTimeout(() => {
-            eventSource.close();
-            setShowProgressModal(false);
-            setError("Calculation timed out. Please try again.");
-            toast.error("Calculation timed out");
-            setIsUploading(false);
+            eventSource.close(); setShowProgressModal(false);
+            setError("Calculation timed out. Please try again."); toast.error("Calculation timed out"); setIsUploading(false);
         }, 120000);
+
+        const handleSSEComplete = (data: any) => {
+            clearTimeout(timeout); eventSource.close();
+            setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached });
+            setShowProgressModal(false);
+            toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
+            setContractFiles([]); setRoyaltyStatementFile(null); setIsUploading(false);
+        };
 
         eventSource.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                
                 if (data.type === 'status') {
-                    setCalculationProgress(data.progress || 0);
-                    setCalculationStage(data.stage || "");
-                    setCalculationMessage(data.message || "");
-                } else if (data.type === 'complete') {
-                    clearTimeout(timeout);
-                    eventSource.close();
-                    
-                    // Set results
-                    const result: CalculationResult = {
-                        status: data.status,
-                        total_payments: data.total_payments,
-                        payments: data.payments,
-                        message: data.message,
-                        is_cached: data.is_cached
-                    };
-                    
-                    setCalculationResult(result);
-                    setShowProgressModal(false);
-                    
-                    if (data.is_cached) {
-                        toast.success("Royalties loaded successfully!");
-                    } else {
-                        toast.success("Royalties calculated successfully!");
-                    }
-                    
-                    // Clear uploaded files from state
-                    setContractFiles([]);
-                    setRoyaltyStatementFile(null);
-                    setIsUploading(false);
+                    setCalculationProgress(data.progress || 0); setCalculationStage(data.stage || ""); setCalculationMessage(data.message || "");
+                } else if (data.type === 'complete' || (data.status === 'success' && data.payments)) {
+                    handleSSEComplete(data);
                 } else if (data.type === 'error') {
-                    clearTimeout(timeout);
-                    eventSource.close();
-                    setShowProgressModal(false);
-                    setError(data.message || "An error occurred");
-                    toast.error(data.message || "Calculation failed");
-                    setIsUploading(false);
-                } else if (data.status === 'success' && data.payments) {
-                    // Defensive: Handle completion messages without explicit type field
-                    // This catches cached results that may have been stored before type field was added
-                    clearTimeout(timeout);
-                    eventSource.close();
-                    
-                    const result: CalculationResult = {
-                        status: data.status,
-                        total_payments: data.total_payments,
-                        payments: data.payments,
-                        message: data.message,
-                        is_cached: data.is_cached
-                    };
-                    
-                    setCalculationResult(result);
-                    setShowProgressModal(false);
-                    
-                    if (data.is_cached) {
-                        toast.success("Royalties loaded successfully!");
-                    } else {
-                        toast.success("Royalties calculated successfully!");
-                    }
-                    
-                    setContractFiles([]);
-                    setRoyaltyStatementFile(null);
-                    setIsUploading(false);
+                    clearTimeout(timeout); eventSource.close(); setShowProgressModal(false);
+                    setError(data.message || "An error occurred"); toast.error(data.message || "Calculation failed"); setIsUploading(false);
                 }
-            } catch (err) {
-                console.error("Error parsing SSE data:", err);
-            }
+            } catch (err) { console.error("Error parsing SSE data:", err); }
         };
 
-        eventSource.onerror = (err) => {
-            console.error("EventSource error:", err);
-            clearTimeout(timeout);
-            eventSource.close();
-            setShowProgressModal(false);
-            setError("Connection error. Please try again.");
-            toast.error("Connection error during calculation");
-            setIsUploading(false);
+        eventSource.onerror = () => {
+            clearTimeout(timeout); eventSource.close(); setShowProgressModal(false);
+            setError("Connection error. Please try again."); toast.error("Connection error during calculation"); setIsUploading(false);
         };
 
     } catch (error: any) {
         console.error("Error:", error);
-      const errorMessage = error?.message || "An error occurred.";
-      setError(errorMessage);
-      if (!String(errorMessage).toLowerCase().includes("duplicate file")) {
-        toast.error(errorMessage || "An error occurred during processing.");
-      }
-        setShowProgressModal(false);
-        setIsUploading(false);
-    }
-  };
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(amount);
-  };
-
-  const handleExportCSV = () => {
-    if (!calculationResult) return;
-    const headers = ["Song Title", "Payee", "Role", "Royalty Type", "Total Revenue", "Share %", "Amount to Pay"];
-    const rows = calculationResult.payments.map(p => [
-      p.song_title,
-      p.party_name,
-      p.role,
-      p.royalty_type,
-      p.total_royalty,
-      `${p.percentage}%`,
-      p.amount_to_pay
-    ]);
-    const csvContent = [headers.join(","), ...rows.map(row => row.map(cell => `"${cell}"`).join(","))].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `royalty_breakdown.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleExportExcel = async () => {
-    if (!calculationResult) return;
-    const excelData = [
-      ["Song Title", "Payee", "Role", "Royalty Type", "Total Revenue", "Share %", "Amount to Pay"],
-      ...calculationResult.payments.map(p => [
-        p.song_title, p.party_name, p.role, p.royalty_type, p.total_royalty, p.percentage, p.amount_to_pay
-      ])
-    ];
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Royalty Breakdown");
-    excelData.forEach(row => ws.addRow(row));
-    const buffer = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = "royalty_breakdown.xlsx";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleDownloadChart = async () => {
-    if (!chartContentRef.current || !calculationResult) return;
-    
-    try {
-      const dataUrl = await toPng(chartContentRef.current, {
-        quality: 1,
-        pixelRatio: 2,
-        backgroundColor: '#ffffff'
-      });
-      
-      const link = document.createElement('a');
-      link.download = `royalty-distribution.png`;
-      link.href = dataUrl;
-      link.click();
-      toast.success("Chart downloaded successfully!");
-    } catch (error) {
-      console.error("Error downloading chart:", error);
-      toast.error("Failed to download chart. Please try again.");
+        const errorMessage = error?.message || "An error occurred.";
+        setError(errorMessage);
+        if (!String(errorMessage).toLowerCase().includes("duplicate file")) toast.error(errorMessage || "An error occurred during processing.");
+        setShowProgressModal(false); setIsUploading(false);
     }
   };
 
   const [lastCalculationContext, setLastCalculationContext] = useState<{
-      contractIds: string[],
-      statementId: string,
-      projectId: string
+      contractIds: string[], statementId: string, projectId: string
   } | null>(null);
 
   const handleConfirmResultsWithContext = async () => {
       if (!lastCalculationContext || !calculationResult || !user) return;
-
       setIsSaving(true);
       try {
           const confirmAuthHeaders = await getAuthHeaders();
@@ -767,35 +395,18 @@ const OneClickDocuments = () => {
                   results: calculationResult
               })
           });
-
           if (!response.ok) throw new Error("Failed to save results");
-
           setSaveSuccess(true);
-      } catch (err) {
-          console.error("Error saving results:", err);
-          toast.error("Failed to save results");
-      } finally {
-          setIsSaving(false);
-      }
+      } catch (err) { console.error("Error saving results:", err); toast.error("Failed to save results"); }
+      finally { setIsSaving(false); }
   };
 
-  // Auto-save non-cached results
   useEffect(() => {
       if (!calculationResult || !lastCalculationContext || !user) return;
-      
-      // Only auto-save new calculations (not cached results)
       if (calculationResult.is_cached) return;
-      
-      // Create unique key for this result to prevent duplicate saves
       const resultKey = `${lastCalculationContext.statementId}-${lastCalculationContext.contractIds.join(',')}`;
-      
-      // Check if we've already triggered save for this result
       if (autoSaveTriggeredRef.current === resultKey) return;
-      
-      // Mark as triggered
       autoSaveTriggeredRef.current = resultKey;
-      
-      // Trigger auto-save
       handleConfirmResultsWithContext();
   }, [calculationResult, lastCalculationContext, user]);
 
@@ -875,420 +486,52 @@ const OneClickDocuments = () => {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          {/* Contract Upload Card */}
-          <Card data-walkthrough="oneclick-contracts">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileSignature className="w-5 h-5 text-primary" />
-                Upload Contracts
-              </CardTitle>
-              <CardDescription>Upload or select contract documents</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Tabs value={contractTabValue} onValueChange={setContractTabValue} className="w-full">
-                <TabsList className="grid w-full grid-cols-3">
-                  <TabsTrigger value="upload">Upload New</TabsTrigger>
-                  <TabsTrigger value="existing">Select Existing</TabsTrigger>
-                  <TabsTrigger value="works">From Works</TabsTrigger>
-                </TabsList>
-                
-                <TabsContent value="upload" className="space-y-4 mt-4">
-                  <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
-                    <FileSignature className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                    <p className="text-foreground font-medium mb-2 text-sm">Upload Contract or Split Sheet</p>
-                    <div className="flex items-center justify-center gap-2 mb-4">
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-md">
-                        <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                        <span className="text-xs font-medium text-blue-700 dark:text-blue-300">PDF accepted</span>
-                      </div>
-                    </div>
-                    <Input
-                      id="contract-upload"
-                      type="file"
-                      // Removed multiple for OneClick simplicity
-                      accept=".pdf,application/pdf"
-                      onChange={handleContractFileChange}
-                      className="hidden"
-                    />
-                    <label htmlFor="contract-upload">
-                      <Button variant="outline" size="sm" asChild className="cursor-pointer">
-                        <span><Upload className="w-4 h-4 mr-2" />Select File</span>
-                      </Button>
-                    </label>
-                  </div>
+          <ContractSelector
+            contractTabValue={contractTabValue}
+            setContractTabValue={setContractTabValue}
+            contractFiles={contractFiles}
+            setContractFiles={setContractFiles}
+            newContractProjectId={newContractProjectId}
+            setNewContractProjectId={setNewContractProjectId}
+            projects={projects}
+            setIsCreateProjectOpen={setIsCreateProjectOpen}
+            selectedContractProject={selectedContractProject}
+            setSelectedContractProject={setSelectedContractProject}
+            contractSearchTerm={contractSearchTerm}
+            setContractSearchTerm={setContractSearchTerm}
+            isLoadingProjectFiles={isLoadingProjectFiles}
+            existingContracts={existingContracts}
+            selectedExistingContracts={selectedExistingContracts}
+            setSelectedExistingContracts={setSelectedExistingContracts}
+            isLoadingWorks={isLoadingWorks}
+            artistWorks={artistWorks}
+            selectedWorkId={selectedWorkId}
+            setSelectedWorkId={setSelectedWorkId}
+            workFiles={workFiles}
+            setWorkFiles={setWorkFiles}
+            loadingWorkFiles={loadingWorkFiles}
+            fetchProjectFilesForValidation={fetchProjectFilesForValidation}
+          />
 
-                  {contractFiles.length > 0 && (
-                    <div className="space-y-2 pt-2 border-t border-border">
-                      <div className="flex items-center gap-2">
-                        <Folder className="w-4 h-4 text-muted-foreground" />
-                        <label htmlFor="project-select" className="text-sm font-medium text-foreground">
-                          Save to Project (Required)
-                        </label>
-                      </div>
-                      <div className="flex items-center gap-2 w-full">
-                        <Select value={newContractProjectId} onValueChange={setNewContractProjectId}>
-                          <SelectTrigger id="project-select" className="w-full">
-                            <SelectValue placeholder="Select a project..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {projects.map((project) => (
-                              <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => setIsCreateProjectOpen(true)}
-                          title="Create New Project"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">Select a project to save the document.</p>
-                    </div>
-                  )}
-
-                  {contractFiles.length > 0 && (
-                    <div className="space-y-2 mt-4">
-                      {contractFiles.map((file, index) => (
-                        <div key={index} className="flex items-center justify-between p-2 border border-border rounded-lg bg-secondary/50">
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            <FileText className="w-4 h-4 text-primary flex-shrink-0" />
-                            <p className="text-xs font-medium text-foreground truncate">{file.name}</p>
-                          </div>
-                          <Button variant="ghost" size="sm" onClick={() => handleRemoveContractFile(index)} className="text-destructive hover:text-destructive flex-shrink-0">
-                            <X className="w-3 h-3" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </TabsContent>
-
-                <TabsContent value="existing" className="space-y-4 mt-4">
-                  {!selectedContractProject ? (
-                    <div className="space-y-4">
-                      <p className="text-sm font-medium text-foreground">Select a Project:</p>
-                      <div className="grid gap-3">
-                        {projects.length > 0 ? projects.map((project) => (
-                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedContractProject(project.id)}>
-                            <Folder className="w-5 h-5 text-primary" />
-                            <span className="font-medium text-foreground">{project.name}</span>
-                          </div>
-                        )) : (
-                           <p className="text-sm text-muted-foreground text-center py-4">No projects found.</p>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-sm font-medium text-foreground">
-                          Documents in {projects.find(p => p.id === selectedContractProject)?.name}:
-                        </p>
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedContractProject(null)} className="text-xs h-8">
-                          Change Project
-                        </Button>
-                      </div>
-                      
-                      <div className="relative">
-                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          placeholder="Search contracts..."
-                          value={contractSearchTerm}
-                          onChange={(e) => setContractSearchTerm(e.target.value)}
-                          className="pl-8"
-                        />
-                      </div>
-
-                      {isLoadingProjectFiles ? (
-                        <div className="text-center py-8">
-                          <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
-                          <p className="text-sm text-muted-foreground">Loading documents...</p>
-                        </div>
-                      ) : existingContracts.length > 0 ? (
-                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                          {existingContracts
-                            .filter(contract => 
-                              contract.file_name.toLowerCase().includes(contractSearchTerm.toLowerCase())
-                            )
-                            .map((contract) => (
-                              <div key={contract.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                                <div className="flex items-center gap-3 flex-1">
-                                  <Checkbox
-                                    id={`existing-contract-${contract.id}`}
-                                    checked={selectedExistingContracts.includes(contract.id)}
-                                    onCheckedChange={() => handleToggleExistingContract(contract.id)}
-                                  />
-                                  <label htmlFor={`existing-contract-${contract.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
-                                    <FileText className="w-4 h-4 text-primary" />
-                                    <div>
-                                      <p className="text-sm font-medium text-foreground">{contract.file_name}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(contract.created_at).toLocaleDateString()}</p>
-                                    </div>
-                                  </label>
-                                </div>
-                              </div>
-                            ))}
-                          {existingContracts.filter(contract => 
-                            contract.file_name.toLowerCase().includes(contractSearchTerm.toLowerCase())
-                          ).length === 0 && (
-                             <p className="text-sm text-muted-foreground text-center py-4">No matching documents found.</p>
-                          )}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground text-center py-4">No contracts or split sheets found in this project.</p>
-                      )}
-                    </div>
-                  )}
-                </TabsContent>
-
-                <TabsContent value="works" className="space-y-4 mt-4">
-                  {isLoadingWorks ? (
-                    <div className="text-center py-8">
-                      <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
-                      <p className="text-sm text-muted-foreground">Loading works...</p>
-                    </div>
-                  ) : artistWorks.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">No registered works found for this artist.</p>
-                  ) : !selectedWorkId ? (
-                    <div className="space-y-4">
-                      <p className="text-sm font-medium text-foreground">Select a Work:</p>
-                      <div className="grid gap-3 max-h-[300px] overflow-y-auto">
-                        {artistWorks.map((work: Work) => (
-                          <div
-                            key={work.id}
-                            className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer"
-                            onClick={() => setSelectedWorkId(work.id)}
-                          >
-                            <FileText className="w-5 h-5 text-primary" />
-                            <div>
-                              <p className="font-medium text-foreground">{work.title}</p>
-                              <p className="text-xs text-muted-foreground">{work.work_type}{work.release_date ? ` \u00b7 ${new Date(work.release_date).toLocaleDateString()}` : ''}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-sm font-medium text-foreground">
-                          Files in {artistWorks.find((w: Work) => w.id === selectedWorkId)?.title}:
-                        </p>
-                        <Button variant="ghost" size="sm" onClick={() => { setSelectedWorkId(null); setWorkFiles([]); }} className="text-xs h-8">
-                          Change Work
-                        </Button>
-                      </div>
-                      {loadingWorkFiles ? (
-                        <div className="text-center py-8">
-                          <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
-                          <p className="text-sm text-muted-foreground">Loading files...</p>
-                        </div>
-                      ) : workFiles.length === 0 ? (
-                        <p className="text-sm text-muted-foreground text-center py-4">No files linked to this work.</p>
-                      ) : (
-                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                          {workFiles.map((link: WorkFileLink) => {
-                            const file = link.project_files;
-                            if (!file) return null;
-                            return (
-                              <div key={link.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                                <div className="flex items-center gap-3 flex-1">
-                                  <Checkbox
-                                    id={`work-file-${file.id}`}
-                                    checked={selectedExistingContracts.includes(file.id)}
-                                    onCheckedChange={() => handleToggleExistingContract(file.id)}
-                                  />
-                                  <label htmlFor={`work-file-${file.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
-                                    <FileText className="w-4 h-4 text-primary" />
-                                    <div>
-                                      <p className="text-sm font-medium text-foreground">{file.file_name}</p>
-                                      <p className="text-xs text-muted-foreground">{file.folder_category}</p>
-                                    </div>
-                                  </label>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-
-          {/* Royalty Statement Upload Card */}
-          <Card data-walkthrough="oneclick-royalty">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Receipt className="w-5 h-5 text-primary" />
-                Upload Royalty Statement
-              </CardTitle>
-              <CardDescription>Upload or select royalty statement documents</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Tabs value={royaltyStatementTabValue} onValueChange={setRoyaltyStatementTabValue} className="w-full">
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="upload">Upload New</TabsTrigger>
-                  <TabsTrigger value="existing">Select Existing</TabsTrigger>
-                </TabsList>
-                
-                <TabsContent value="upload" className="space-y-4 mt-4">
-                  <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
-                    <Receipt className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-                    <p className="text-foreground font-medium mb-2 text-sm">Upload Royalty Statement</p>
-                    <div className="flex items-center justify-center gap-2 mb-4">
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
-                        <FileSpreadsheet className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
-                        <span className="text-xs font-medium text-green-700 dark:text-green-300">XLSX or CSV only</span>
-                      </div>
-                    </div>
-                    <Input
-                      id="royalty-upload"
-                      type="file"
-                      // Removed multiple
-                      accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-                      onChange={handleRoyaltyStatementFileChange}
-                      className="hidden"
-                    />
-                    <label htmlFor="royalty-upload">
-                      <Button variant="outline" size="sm" asChild className="cursor-pointer">
-                        <span><Upload className="w-4 h-4 mr-2" />Select File</span>
-                      </Button>
-                    </label>
-                  </div>
-
-                  {royaltyStatementFile && (
-                    <div className="space-y-2 pt-2 border-t border-border">
-                      <div className="flex items-center gap-2">
-                        <Folder className="w-4 h-4 text-muted-foreground" />
-                        <label htmlFor="royalty-project-select" className="text-sm font-medium text-foreground">
-                          Save to Project (Optional)
-                        </label>
-                      </div>
-                      <div className="flex items-center gap-2 w-full">
-                        <Select value={newRoyaltyStatementProjectId} onValueChange={setNewRoyaltyStatementProjectId}>
-                          <SelectTrigger id="royalty-project-select" className="w-full">
-                            <SelectValue placeholder="Select a project..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {projects.map((project) => (
-                              <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => setIsCreateProjectOpen(true)}
-                          title="Create New Project"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">Select a project to save the royalty statement.</p>
-                    </div>
-                  )}
-
-                  {royaltyStatementFile && (
-                    <div className="space-y-2 mt-4">
-                      <div className="flex items-center justify-between p-2 border border-border rounded-lg bg-secondary/50">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <FileText className="w-4 h-4 text-primary flex-shrink-0" />
-                          <p className="text-xs font-medium text-foreground truncate">{royaltyStatementFile.name}</p>
-                        </div>
-                        <Button variant="ghost" size="sm" onClick={() => handleRemoveRoyaltyStatementFile()} className="text-destructive hover:text-destructive flex-shrink-0">
-                          <X className="w-3 h-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </TabsContent>
-
-                <TabsContent value="existing" className="space-y-4 mt-4">
-                  {!selectedRoyaltyStatementProject ? (
-                    <div className="space-y-4">
-                      <p className="text-sm font-medium text-foreground">Select a Project:</p>
-                      <div className="grid gap-3">
-                        {projects.length > 0 ? projects.map((project) => (
-                          <div key={project.id} className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer" onClick={() => setSelectedRoyaltyStatementProject(project.id)}>
-                            <Folder className="w-5 h-5 text-primary" />
-                            <span className="font-medium text-foreground">{project.name}</span>
-                          </div>
-                        )) : (
-                           <p className="text-sm text-muted-foreground text-center py-4">No projects found.</p>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-sm font-medium text-foreground">
-                          Royalty Statements in {projects.find(p => p.id === selectedRoyaltyStatementProject)?.name}:
-                        </p>
-                        <Button variant="ghost" size="sm" onClick={() => setSelectedRoyaltyStatementProject(null)} className="text-xs h-8">
-                          Change Project
-                        </Button>
-                      </div>
-                      
-                      <div className="relative">
-                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          placeholder="Search royalty statements..."
-                          value={royaltySearchTerm}
-                          onChange={(e) => setRoyaltySearchTerm(e.target.value)}
-                          className="pl-8"
-                        />
-                      </div>
-                      
-                      {isLoadingProjectFiles ? (
-                        <div className="text-center py-8">
-                          <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
-                          <p className="text-sm text-muted-foreground">Loading royalty statements...</p>
-                        </div>
-                      ) : existingRoyaltyStatements.length > 0 ? (
-                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                          {existingRoyaltyStatements
-                            .filter(statement => 
-                              statement.file_name.toLowerCase().includes(royaltySearchTerm.toLowerCase())
-                            )
-                            .map((statement) => (
-                              <div key={statement.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                                <div className="flex items-center gap-3 flex-1">
-                                  <Checkbox
-                                    id={`existing-royalty-${statement.id}`}
-                                    checked={selectedExistingRoyaltyStatement === statement.id}
-                                    onCheckedChange={() => handleToggleExistingRoyaltyStatement(statement.id)}
-                                  />
-                                  <label htmlFor={`existing-royalty-${statement.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
-                                    <FileText className="w-4 h-4 text-primary" />
-                                    <div>
-                                      <p className="text-sm font-medium text-foreground">{statement.file_name}</p>
-                                      <p className="text-xs text-muted-foreground">{new Date(statement.created_at).toLocaleDateString()}</p>
-                                    </div>
-                                  </label>
-                                </div>
-                              </div>
-                            ))}
-                          {existingRoyaltyStatements.filter(statement => 
-                            statement.file_name.toLowerCase().includes(royaltySearchTerm.toLowerCase())
-                          ).length === 0 && (
-                             <p className="text-sm text-muted-foreground text-center py-4">No matching royalty statements found.</p>
-                          )}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground text-center py-4">No royalty statements found in this project.</p>
-                      )}
-                    </div>
-                  )}
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
+          <RoyaltyStatementSelector
+            royaltyStatementTabValue={royaltyStatementTabValue}
+            setRoyaltyStatementTabValue={setRoyaltyStatementTabValue}
+            royaltyStatementFile={royaltyStatementFile}
+            setRoyaltyStatementFile={setRoyaltyStatementFile}
+            newRoyaltyStatementProjectId={newRoyaltyStatementProjectId}
+            setNewRoyaltyStatementProjectId={setNewRoyaltyStatementProjectId}
+            projects={projects}
+            setIsCreateProjectOpen={setIsCreateProjectOpen}
+            selectedRoyaltyStatementProject={selectedRoyaltyStatementProject}
+            setSelectedRoyaltyStatementProject={setSelectedRoyaltyStatementProject}
+            royaltySearchTerm={royaltySearchTerm}
+            setRoyaltySearchTerm={setRoyaltySearchTerm}
+            isLoadingProjectFiles={isLoadingProjectFiles}
+            existingRoyaltyStatements={existingRoyaltyStatements}
+            selectedExistingRoyaltyStatement={selectedExistingRoyaltyStatement}
+            setSelectedExistingRoyaltyStatement={setSelectedExistingRoyaltyStatement}
+            fetchProjectFilesForValidation={fetchProjectFilesForValidation}
+          />
         </div>
 
         <div className="flex gap-3 justify-center mb-8">
@@ -1321,113 +564,15 @@ const OneClickDocuments = () => {
             </Alert>
         )}
 
-        {/* Inline Progress Display */}
-        {showProgressModal && (
-          <Card className="mb-6">
-            <CardHeader>
-              <CardTitle className="text-center">Calculating Royalties</CardTitle>
-              <CardDescription className="text-center">
-                Please wait while we process your documents
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6 py-4">
-              {/* Circular Progress */}
-              <div className="flex flex-col items-center justify-center">
-                <div className="relative w-32 h-32">
-                  {/* Background circle */}
-                  <svg className="w-32 h-32 transform -rotate-90">
-                    <circle
-                      cx="64"
-                      cy="64"
-                      r="56"
-                      stroke="currentColor"
-                      strokeWidth="8"
-                      fill="none"
-                      className="text-muted"
-                    />
-                    {/* Progress circle */}
-                    <circle
-                      cx="64"
-                      cy="64"
-                      r="56"
-                      stroke="currentColor"
-                      strokeWidth="8"
-                      fill="none"
-                      strokeDasharray={`${2 * Math.PI * 56}`}
-                      strokeDashoffset={`${2 * Math.PI * 56 * (1 - calculationProgress / 100)}`}
-                      className="text-primary transition-all duration-500 ease-out"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                  {/* Percentage text */}
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-2xl font-bold text-foreground">{Math.round(calculationProgress)}%</span>
-                  </div>
-                </div>
-                
-                {/* Current stage message */}
-                <p className="mt-4 text-sm font-medium text-center text-muted-foreground">
-                  {calculationMessage}
-                </p>
-              </div>
-
-              {/* Stage indicators */}
-              <div className="space-y-3">
-                {[
-                  { id: 'downloading', label: 'Downloading files', icon: FileText },
-                  { id: 'extracting', label: 'Extracting data', icon: FileText },
-                  { id: 'calculating', label: 'Calculating payments', icon: DollarSign },
-                ].map((stageItem) => {
-                  const getStageStatus = (stageId: string) => {
-                    if (calculationStage.includes('download')) {
-                      if (stageId === 'downloading') return 'active';
-                      return 'pending';
-                    } else if (calculationStage.includes('extract') || calculationStage.includes('parties') || calculationStage.includes('works') || calculationStage.includes('royalty') || calculationStage.includes('summary')) {
-                      if (stageId === 'downloading') return 'complete';
-                      if (stageId === 'extracting') return 'active';
-                      return 'pending';
-                    } else if (calculationStage.includes('processing') || calculationStage.includes('calculating')) {
-                      if (stageId === 'downloading' || stageId === 'extracting') return 'complete';
-                      if (stageId === 'calculating') return 'active';
-                      return 'pending';
-                    }
-                    return 'pending';
-                  };
-                  
-                  const status = getStageStatus(stageItem.id);
-                  const Icon = stageItem.icon;
-                  
-                  return (
-                    <div key={stageItem.id} className="flex items-center gap-3">
-                      <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${
-                        status === 'complete' 
-                          ? 'bg-primary text-primary-foreground' 
-                          : status === 'active'
-                          ? 'bg-primary/20 text-primary'
-                          : 'bg-muted text-muted-foreground'
-                      }`}>
-                        {status === 'complete' ? (
-                          <CheckCircle2 className="w-4 h-4" />
-                        ) : status === 'active' ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Icon className="w-4 h-4" />
-                        )}
-                      </div>
-                      <span className={`text-sm ${
-                        status === 'complete' || status === 'active'
-                          ? 'text-foreground font-medium'
-                          : 'text-muted-foreground'
-                      }`}>
-                        {stageItem.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        <CalculationResults
+          showProgressModal={showProgressModal}
+          calculationProgress={calculationProgress}
+          calculationStage={calculationStage}
+          calculationMessage={calculationMessage}
+          calculationResult={calculationResult}
+          isUploading={isUploading}
+          handleCalculateRoyalties={handleCalculateRoyalties}
+        />
 
         {/* Create Project Dialog */}
         <Dialog open={isCreateProjectOpen} onOpenChange={setIsCreateProjectOpen}>
@@ -1470,139 +615,6 @@ const OneClickDocuments = () => {
           </DialogContent>
         </Dialog>
 
-        {calculationResult && (
-          <div className="mt-8 space-y-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-foreground">Royalty Calculation Results</h2>
-                <p className="text-muted-foreground">{calculationResult.message}</p>
-              </div>
-              
-              <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => handleCalculateRoyalties(true)} disabled={isUploading}>
-                      <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
-                      Recalculate
-                  </Button>
-              </div>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Songs Processed</CardTitle>
-                  <Music className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent><div className="text-2xl font-bold text-foreground">{new Set(calculationResult.payments.map(p => p.song_title)).size}</div></CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Payees</CardTitle>
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent><div className="text-2xl font-bold text-foreground">{new Set(calculationResult.payments.map(p => p.party_name)).size}</div></CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
-                  <DollarSign className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-foreground">
-                    {formatCurrency(
-                      Array.from(new Map(calculationResult.payments.map(p => [p.song_title, p.total_royalty])).values())
-                        .reduce((sum, val) => sum + val, 0)
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Royalty Distribution</CardTitle>
-                  <Button variant="outline" size="sm" onClick={handleDownloadChart}>
-                    <Download className="mr-2 h-4 w-4" />
-                    Download Chart
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div ref={chartContentRef} className="h-[450px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={Object.values(calculationResult.payments.reduce((acc, curr) => {
-                            if (!acc[curr.party_name]) acc[curr.party_name] = { name: curr.party_name, value: 0 };
-                            acc[curr.party_name].value += curr.amount_to_pay;
-                            return acc;
-                        }, {} as Record<string, {name: string, value: number}>)).sort((a, b) => b.value - a.value)}
-                        cx="50%" 
-                        cy="50%" 
-                        outerRadius={130} 
-                        dataKey="value"
-                        nameKey="name"
-                        label={({ name, value, percent }) => `${name} (${(percent * 100).toFixed(1)}%): ${formatCurrency(value)}`}
-                        labelLine={true}
-                        style={{ fontSize: '11px' }}
-                      >
-                         {Object.values(calculationResult.payments.reduce((acc, curr) => {
-                            if (!acc[curr.party_name]) acc[curr.party_name] = { name: curr.party_name, value: 0 };
-                            acc[curr.party_name].value += curr.amount_to_pay;
-                            return acc;
-                        }, {} as Record<string, {name: string, value: number}>))
-                        .sort((a, b) => b.value - a.value)
-                        .map((entry, index, arr) => (
-                          <Cell key={`cell-${index}`} fill={`hsl(150, ${50 + (index / (arr.length || 1)) * 10}%, ${25 + (index / (arr.length || 1)) * 40}%)`} />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-                <CardHeader>
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <CardTitle>Royalty Breakdown</CardTitle>
-                            <p className="text-sm text-muted-foreground mt-1">All calculations are based on net revenue from the uploaded royalty statement.</p>
-                        </div>
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild><Button variant="outline" size="sm"><Download className="mr-2 h-4 w-4"/> Export</Button></DropdownMenuTrigger>
-                            <DropdownMenuContent>
-                                <DropdownMenuItem onClick={handleExportCSV}>Export as CSV</DropdownMenuItem>
-                                <DropdownMenuItem onClick={handleExportExcel}>Export as Excel</DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-                    </div>
-                </CardHeader>
-                <CardContent>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Song</TableHead><TableHead>Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Total Revenue</TableHead><TableHead>Share %</TableHead><TableHead>Amount</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {calculationResult.payments.map((row, i) => (
-                                <TableRow key={i}>
-                                    <TableCell>{row.song_title}</TableCell>
-                                    <TableCell>{row.party_name}</TableCell>
-                                    <TableCell className="capitalize">{row.role}</TableCell>
-                                    <TableCell className="capitalize">{row.royalty_type}</TableCell>
-                                    <TableCell>{formatCurrency(row.total_royalty)}</TableCell>
-                                    <TableCell>{row.percentage}%</TableCell>
-                                    <TableCell>{formatCurrency(row.amount_to_pay)}</TableCell>
-                                </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
-                </CardContent>
-            </Card>
-          </div>
-        )}
         <ToolIntroModal
           config={TOOL_CONFIGS.oneclick}
           isOpen={walkthrough.phase === "modal"}
