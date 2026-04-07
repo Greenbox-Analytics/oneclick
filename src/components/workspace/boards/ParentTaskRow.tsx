@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +31,7 @@ interface ParentTaskRowProps {
   onDelete: (taskId: string) => void;
 }
 
-export function ParentTaskRow({
+export const ParentTaskRow = React.memo(function ParentTaskRow({
   parent,
   onTaskClick,
   onParentClick,
@@ -235,7 +235,7 @@ export function ParentTaskRow({
       )}
     </div>
   );
-}
+});
 
 function ChildRow({
   child,
