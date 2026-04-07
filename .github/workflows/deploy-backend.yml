@@ -66,7 +66,8 @@ jobs:
             --timeout 300 \
             --max-instances 10 \
             --min-instances 0 \
-            --update-env-vars ALLOWED_ORIGINS=${{ secrets.PROD_ALLOWED_ORIGINS }}
+            --update-env-vars ALLOWED_ORIGINS=${{ secrets.PROD_ALLOWED_ORIGINS }} \
+            --update-secrets VITE_SUPABASE_URL=VITE_SUPABASE_URL:latest,VITE_SUPABASE_SECRET_KEY=VITE_SUPABASE_SECRET_KEY:latest
 
       - name: Get Cloud Run URL
         id: get-url

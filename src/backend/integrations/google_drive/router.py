@@ -1,6 +1,6 @@
 """FastAPI router for Google Drive integration."""
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 import sys
 from pathlib import Path
@@ -13,6 +13,7 @@ from integrations.oauth import (
     build_auth_url, verify_oauth_state, exchange_code_for_tokens,
     store_connection, get_valid_token, FRONTEND_URL,
 )
+from auth import get_current_user_id
 from integrations.google_drive.models import DriveImportRequest, DriveExportRequest, DriveSyncSetup
 
 router = APIRouter()
@@ -24,7 +25,7 @@ def _get_supabase():
 
 
 @router.get("/auth")
-async def initiate_auth(user_id: str = Query(...)):
+async def initiate_auth(user_id: str = Depends(get_current_user_id)):
     """Start Google Drive OAuth flow."""
     auth_url = build_auth_url("google_drive", user_id)
     return {"auth_url": auth_url}
@@ -50,7 +51,7 @@ async def oauth_callback(code: str, state: str):
 
 
 @router.delete("/disconnect")
-async def disconnect(user_id: str = Query(...)):
+async def disconnect(user_id: str = Depends(get_current_user_id)):
     """Disconnect Google Drive integration."""
     _get_supabase().table("integration_connections").delete().eq(
         "user_id", user_id
@@ -60,7 +61,7 @@ async def disconnect(user_id: str = Query(...)):
 
 @router.get("/browse")
 async def browse_files(
-    user_id: str = Query(...),
+    user_id: str = Depends(get_current_user_id),
     folder_id: str = Query(default="root"),
 ):
     """List files and folders in Google Drive."""
@@ -74,7 +75,7 @@ async def browse_files(
 
 
 @router.post("/import")
-async def import_file(body: DriveImportRequest, user_id: str = Query(...)):
+async def import_file(body: DriveImportRequest, user_id: str = Depends(get_current_user_id)):
     """Import a file from Google Drive into a project."""
     token = await get_valid_token(_get_supabase(), user_id, "google_drive")
     if not token:
@@ -86,7 +87,7 @@ async def import_file(body: DriveImportRequest, user_id: str = Query(...)):
 
 
 @router.post("/export")
-async def export_file(body: DriveExportRequest, user_id: str = Query(...)):
+async def export_file(body: DriveExportRequest, user_id: str = Depends(get_current_user_id)):
     """Export a project file to Google Drive."""
     token = await get_valid_token(_get_supabase(), user_id, "google_drive")
     if not token:
@@ -98,7 +99,7 @@ async def export_file(body: DriveExportRequest, user_id: str = Query(...)):
 
 
 @router.post("/sync/setup")
-async def setup_sync(body: DriveSyncSetup, user_id: str = Query(...)):
+async def setup_sync(body: DriveSyncSetup, user_id: str = Depends(get_current_user_id)):
     """Configure bidirectional sync for a project folder."""
     token = await get_valid_token(_get_supabase(), user_id, "google_drive")
     if not token:
@@ -115,7 +116,7 @@ async def setup_sync(body: DriveSyncSetup, user_id: str = Query(...)):
 
 
 @router.get("/sync/status")
-async def sync_status(user_id: str = Query(...)):
+async def sync_status(user_id: str = Depends(get_current_user_id)):
     """Get sync status for all configured projects."""
     result = (
         _get_supabase()

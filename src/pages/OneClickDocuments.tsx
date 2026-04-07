@@ -104,13 +104,7 @@ const OneClickDocuments = () => {
       return projectFilesById[projectId];
     }
 
-    const authHeaders = await getAuthHeaders();
-    const response = await fetch(`${API_URL}/files/${projectId}`, { headers: authHeaders });
-    if (!response.ok) {
-      throw new Error("Failed to load existing files for duplicate check");
-    }
-
-    const data: ArtistFile[] = await response.json();
+    const data = await apiFetch<ArtistFile[]>(`${API_URL}/files/${projectId}`);
     setProjectFilesById(prev => ({ ...prev, [projectId]: data }));
     return data;
   };
@@ -192,12 +186,11 @@ const OneClickDocuments = () => {
     if (!artistId || !newProjectNameInput.trim()) return;
     setIsCreatingProject(true);
     try {
-        const response = await fetch(`${API_URL}/projects`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ artist_id: artistId, name: newProjectNameInput, description: "Created via OneClick", user_id: user?.id })
+        const newProject = await apiFetch<any>(`${API_URL}/projects`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ artist_id: artistId, name: newProjectNameInput, description: "Created via OneClick" })
         });
-        if (!response.ok) throw new Error("Failed to create project");
-        const newProject = await response.json();
         setProjects([newProject, ...projects]);
         setNewContractProjectId(newProject.id);
         setNewRoyaltyStatementProjectId(newProject.id);
@@ -326,7 +319,7 @@ const OneClickDocuments = () => {
         setCalculationMessage("Starting calculation...");
         setSaveSuccess(false);
 
-        // Use EventSource for SSE
+        // Use fetch + SSE for authenticated streaming
         const queryParams = new URLSearchParams({
             project_id: finalProjectId,
             royalty_statement_file_id: finalStatementId
@@ -334,38 +327,59 @@ const OneClickDocuments = () => {
         if (forceRecalculate) queryParams.append("force_recalculate", "true");
         finalContractIds.forEach(id => queryParams.append("contract_ids", id));
 
-        const eventSource = new EventSource(`${API_URL}/oneclick/calculate-royalties-stream?` + queryParams.toString());
+        const authHeaders = await getAuthHeaders();
+        const response = await fetch(`${API_URL}/oneclick/calculate-royalties-stream?` + queryParams.toString(), {
+            headers: { ...authHeaders },
+        });
+
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.detail || `Calculation request failed: ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No response stream available");
+        const decoder = new TextDecoder();
+
         const timeout = setTimeout(() => {
-            eventSource.close(); setShowProgressModal(false);
+            reader.cancel(); setShowProgressModal(false);
             setError("Calculation timed out. Please try again."); toast.error("Calculation timed out"); setIsUploading(false);
         }, 120000);
 
-        const handleSSEComplete = (data: any) => {
-            clearTimeout(timeout); eventSource.close();
-            setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached });
-            setShowProgressModal(false);
-            toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
-            setContractFiles([]); setRoyaltyStatementFile(null); setIsUploading(false);
-        };
-
-        eventSource.onmessage = (event) => {
+        let buffer = "";
+        const processLine = (line: string) => {
+            if (!line.startsWith("data: ")) return;
             try {
-                const data = JSON.parse(event.data);
+                const data = JSON.parse(line.slice(6));
                 if (data.type === 'status') {
                     setCalculationProgress(data.progress || 0); setCalculationStage(data.stage || ""); setCalculationMessage(data.message || "");
                 } else if (data.type === 'complete' || (data.status === 'success' && data.payments)) {
-                    handleSSEComplete(data);
+                    clearTimeout(timeout);
+                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached });
+                    setShowProgressModal(false);
+                    toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
+                    setContractFiles([]); setRoyaltyStatementFile(null); setIsUploading(false);
                 } else if (data.type === 'error') {
-                    clearTimeout(timeout); eventSource.close(); setShowProgressModal(false);
+                    clearTimeout(timeout); setShowProgressModal(false);
                     setError(data.message || "An error occurred"); toast.error(data.message || "Calculation failed"); setIsUploading(false);
                 }
             } catch (err) { console.error("Error parsing SSE data:", err); }
         };
 
-        eventSource.onerror = () => {
-            clearTimeout(timeout); eventSource.close(); setShowProgressModal(false);
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
+                for (const line of lines) processLine(line.trim());
+            }
+            if (buffer.trim()) processLine(buffer.trim());
+        } catch {
+            clearTimeout(timeout); setShowProgressModal(false);
             setError("Connection error. Please try again."); toast.error("Connection error during calculation"); setIsUploading(false);
-        };
+        }
 
     } catch (error: any) {
         console.error("Error:", error);
@@ -384,10 +398,9 @@ const OneClickDocuments = () => {
       if (!lastCalculationContext || !calculationResult || !user) return;
       setIsSaving(true);
       try {
-          const confirmAuthHeaders = await getAuthHeaders();
-          const response = await fetch(`${API_URL}/oneclick/confirm`, {
+          await apiFetch(`${API_URL}/oneclick/confirm`, {
               method: "POST",
-              headers: { "Content-Type": "application/json", ...confirmAuthHeaders },
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                   contract_ids: lastCalculationContext.contractIds,
                   royalty_statement_id: lastCalculationContext.statementId,
@@ -395,7 +408,6 @@ const OneClickDocuments = () => {
                   results: calculationResult
               })
           });
-          if (!response.ok) throw new Error("Failed to save results");
           setSaveSuccess(true);
       } catch (err) { console.error("Error saving results:", err); toast.error("Failed to save results"); }
       finally { setIsSaving(false); }

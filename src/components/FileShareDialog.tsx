@@ -23,8 +23,7 @@ import { Send, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import type { Tables } from "@/integrations/supabase/types";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 interface FileToShare {
   file_name: string;
@@ -82,11 +81,10 @@ export const FileShareDialog = ({
     setSending(true);
 
     try {
-      const res = await fetch(`${API_URL}/share/files`, {
+      await apiFetch(`${API_URL}/share/files`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: user.id,
           contact_id: selectedContactId || null,
           recipient_email: recipientEmail,
           recipient_name: recipientName || null,
@@ -99,11 +97,6 @@ export const FileShareDialog = ({
           message: message || null,
         }),
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Failed to share files");
-      }
 
       toast({
         title: "Files shared",

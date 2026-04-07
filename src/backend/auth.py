@@ -34,27 +34,39 @@ def _get_jwks_client() -> PyJWKClient:
 async def get_current_user_id(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
 ) -> str:
-    """Extract and verify user_id from Supabase JWT Bearer token."""
+    """Extract and verify user_id from Supabase JWT Bearer token (RS256/ES256 via JWKS)."""
     if not credentials:
         raise HTTPException(status_code=401, detail="Authentication required")
 
+    token = credentials.credentials
+
     try:
-        signing_key = _get_jwks_client().get_signing_key_from_jwt(
-            credentials.credentials
-        )
-        payload = jwt.decode(
-            credentials.credentials,
-            signing_key.key,
-            algorithms=["RS256", "ES256"],
-            audience="authenticated",
-        )
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(
-                status_code=401, detail="Invalid token: missing subject"
+        header = jwt.get_unverified_header(token)
+    except jwt.DecodeError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+
+    alg = header.get("alg", "")
+
+    try:
+        if alg in ("RS256", "ES256"):
+            signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=[alg],
+                audience="authenticated",
             )
-        return user_id
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail="Unsupported token algorithm — only ES256/RS256 signing keys are accepted",
+            )
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except (jwt.InvalidTokenError, PyJWKClientError) as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token: missing subject")
+    return user_id

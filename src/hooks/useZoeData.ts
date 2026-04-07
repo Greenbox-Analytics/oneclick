@@ -11,8 +11,7 @@ import type {
   ArtistDataExtracted, ExtractedContractData,
   ConversationContext,
 } from "@/components/zoe/types";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { apiFetch, getAuthHeaders, API_URL } from "@/lib/apiFetch";
 
 export function useZoeData() {
   const { user } = useAuth();
@@ -118,8 +117,7 @@ export function useZoeData() {
 
   useEffect(() => {
     if (!user) return;
-    fetch(`${API_URL}/artists?user_id=${user.id}`)
-      .then((res) => res.json())
+    apiFetch<Artist[]>(`${API_URL}/artists`)
       .then((data) => setArtists(data))
       .catch((err) => {
         console.error("Error fetching artists:", err);
@@ -129,8 +127,7 @@ export function useZoeData() {
 
   useEffect(() => {
     if (selectedArtist) {
-      fetch(`${API_URL}/artists/${selectedArtist}/projects?user_id=${user?.id}`)
-        .then((res) => res.json())
+      apiFetch<Project[]>(`${API_URL}/artists/${selectedArtist}/projects`)
         .then((data) => setProjects(data))
         .catch((err) => {
           console.error("Error fetching projects:", err);
@@ -144,8 +141,7 @@ export function useZoeData() {
 
   const fetchContracts = () => {
     if (selectedProject) {
-      fetch(`${API_URL}/projects/${selectedProject}/documents?user_id=${user?.id}`)
-        .then((res) => res.json())
+      apiFetch<Contract[]>(`${API_URL}/projects/${selectedProject}/documents`)
         .then((data) => setContracts(data))
         .catch((err) => {
           console.error("Error fetching documents:", err);
@@ -299,10 +295,13 @@ export function useZoeData() {
       const missing = selectedContracts.filter(id => !contractMarkdowns[id]);
       if (missing.length === 0) return;
       const results: Record<string, string> = {};
+      const authHeaders = await getAuthHeaders();
       await Promise.all(
         missing.map(async (cid) => {
           try {
-            const res = await fetch(`${API_URL}/contracts/${cid}/markdown?user_id=${user.id}`);
+            const res = await fetch(`${API_URL}/contracts/${cid}/markdown`, {
+              headers: authHeaders,
+            });
             if (res.ok) {
               const data = await res.json();
               if (data.markdown) {
@@ -327,8 +326,7 @@ export function useZoeData() {
       return;
     }
     setLoadingWorkFiles(true);
-    fetch(`${API_URL}/registry/works/${selectedSharedWork}/files?user_id=${user.id}`)
-      .then((res) => res.json())
+    apiFetch<{ files: WorkFileLink[] }>(`${API_URL}/registry/works/${selectedSharedWork}/files`)
       .then((data) => {
         setSharedWorkFiles(data.files || []);
         setLoadingWorkFiles(false);
@@ -360,18 +358,15 @@ export function useZoeData() {
     if (!selectedArtist || !newProjectNameInput.trim()) return;
     setIsCreatingProject(true);
     try {
-        const response = await fetch(`${API_URL}/projects`, {
+        const newProject = await apiFetch<Project>(`${API_URL}/projects`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 artist_id: selectedArtist,
                 name: newProjectNameInput,
                 description: "Created via Zoe",
-                user_id: user?.id
             })
         });
-        if (!response.ok) throw new Error("Failed to create project");
-        const newProject = await response.json();
         setProjects([newProject, ...projects]);
         setSelectedProject(newProject.id);
         setNewProjectNameInput("");
@@ -401,11 +396,10 @@ export function useZoeData() {
     if (!contractToDelete || !user) return;
     setDeleting(true);
     try {
-      const formData = new FormData();
-      formData.append("user_id", user.id);
+      const authHeaders = await getAuthHeaders();
       const response = await fetch(`${API_URL}/contracts/${contractToDelete.id}`, {
         method: "DELETE",
-        body: formData,
+        headers: authHeaders,
       });
       if (!response.ok) {
         const errorData = await response.json();

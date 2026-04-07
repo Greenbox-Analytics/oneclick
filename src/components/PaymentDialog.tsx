@@ -23,8 +23,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import type { Tables } from "@/integrations/supabase/types";
-
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 interface PaymentDialogProps {
   open: boolean;
@@ -65,11 +64,10 @@ export const PaymentDialog = ({
 
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/payments/record`, {
+      await apiFetch(`${API_URL}/payments/record`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: user.id,
           contact_id: contact.id,
           party_name: contact.name,
           amount: parsedAmount,
@@ -77,11 +75,6 @@ export const PaymentDialog = ({
           metadata: note ? { note } : null,
         }),
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Failed to record payment");
-      }
 
       setRecorded(true);
       setTimeout(() => {

@@ -1,6 +1,6 @@
 """FastAPI router for Slack integration."""
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -11,6 +11,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from auth import get_current_user_id
 from integrations.oauth import (
     build_auth_url, verify_oauth_state, exchange_code_for_tokens,
     store_connection, get_valid_token, FRONTEND_URL,
@@ -31,7 +32,7 @@ class NotificationSettingsUpdate(BaseModel):
 
 
 @router.get("/auth")
-async def initiate_auth(user_id: str = Query(...)):
+async def initiate_auth(user_id: str = Depends(get_current_user_id)):
     """Start Slack OAuth flow."""
     auth_url = build_auth_url("slack", user_id)
     return {"auth_url": auth_url}
@@ -57,7 +58,7 @@ async def oauth_callback(code: str, state: str):
 
 
 @router.delete("/disconnect")
-async def disconnect(user_id: str = Query(...)):
+async def disconnect(user_id: str = Depends(get_current_user_id)):
     """Disconnect Slack integration."""
     _get_supabase().table("integration_connections").delete().eq(
         "user_id", user_id
@@ -70,7 +71,7 @@ async def disconnect(user_id: str = Query(...)):
 
 
 @router.get("/channels")
-async def list_channels(user_id: str = Query(...)):
+async def list_channels(user_id: str = Depends(get_current_user_id)):
     """List available Slack channels."""
     token = await get_valid_token(_get_supabase(), user_id, "slack")
     if not token:
@@ -82,7 +83,7 @@ async def list_channels(user_id: str = Query(...)):
 
 
 @router.put("/settings")
-async def update_settings(body: NotificationSettingsUpdate, user_id: str = Query(...)):
+async def update_settings(body: NotificationSettingsUpdate, user_id: str = Depends(get_current_user_id)):
     """Update notification settings for Slack."""
     supabase = _get_supabase()
 
@@ -112,7 +113,7 @@ async def update_settings(body: NotificationSettingsUpdate, user_id: str = Query
 
 
 @router.get("/settings")
-async def get_settings(user_id: str = Query(...)):
+async def get_settings(user_id: str = Depends(get_current_user_id)):
     """Get all Slack notification settings."""
     result = (
         _get_supabase()
