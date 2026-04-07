@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from supabase import create_client, Client
@@ -24,6 +24,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from vector_search.contract_chatbot import ContractChatbot
 from vector_search.helpers import calculate_royalty_payments
+from pagination import PaginatedResponse, paginate_query
 
 # Load environment variables
 load_dotenv()
@@ -50,6 +51,37 @@ app.include_router(settings_router, prefix="/settings", tags=["Workspace Setting
 app.include_router(splitsheet_router, prefix="/splitsheet", tags=["Split Sheet"])
 app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"])
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
+
+def _convert_pdf_background(
+    db_url: str, db_key: str,
+    file_id: str, file_path: str,
+):
+    """Background task: download PDF from storage, convert to markdown, cache in DB."""
+    import tempfile
+    from supabase import create_client
+    from vector_search.helpers import pdf_to_markdown
+
+    try:
+        db = create_client(db_url, db_key)
+
+        # Download the PDF from storage
+        file_data = db.storage.from_("project-files").download(file_path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
+
+        try:
+            markdown_text = pdf_to_markdown(tmp_path)
+            # Cache the markdown in the DB
+            db.table("project_files").update(
+                {"contract_markdown": markdown_text}
+            ).eq("id", file_id).execute()
+            print(f"Background: PDF conversion complete for file {file_id}")
+        finally:
+            os.unlink(tmp_path)
+    except Exception as e:
+        print(f"Background: PDF conversion failed for file {file_id}: {e}")
+
 
 # Configure CORS - support multiple origins from environment variable
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")]
@@ -311,13 +343,19 @@ def health_check():
     }
 
 @app.get("/artists")
-async def get_artists(user_id: str):
+async def get_artists(
+    user_id: str,
+    page: Optional[int] = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+):
     """
     Fetch artists belonging to the authenticated user.
     """
     try:
-        response = get_supabase_client().table("artists").select("*").eq("user_id", user_id).execute()
-        return response.data
+        query = get_supabase_client().table("artists")\
+            .select("*", count="exact")\
+            .eq("user_id", user_id)
+        return paginate_query(query, page, page_size)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -377,15 +415,22 @@ async def create_project(project: ProjectCreateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/{project_id}")
-async def get_project_files(project_id: str, user_id: str):
+async def get_project_files(
+    project_id: str,
+    user_id: str,
+    page: Optional[int] = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+):
     """
     Fetch files associated with a specific project, verifying user ownership.
     """
     try:
         if not verify_user_owns_project(user_id, project_id):
             raise HTTPException(status_code=403, detail="Access denied")
-        response = get_supabase_client().table("project_files").select("*").eq("project_id", project_id).execute()
-        return response.data
+        query = get_supabase_client().table("project_files")\
+            .select("*", count="exact")\
+            .eq("project_id", project_id)
+        return paginate_query(query, page, page_size)
     except HTTPException:
         raise
     except Exception as e:
@@ -522,16 +567,24 @@ async def upload_file(
 # --- Zoe AI Chatbot Endpoints ---
 
 @app.get("/projects")
-async def get_all_projects(user_id: str):
+async def get_all_projects(
+    user_id: str,
+    page: Optional[int] = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+):
     """
     Fetch projects belonging to the authenticated user's artists.
     """
     try:
         artist_ids = get_user_artist_ids(user_id)
         if not artist_ids:
+            if page is not None:
+                return PaginatedResponse(data=[], total=0, page=page, page_size=page_size)
             return []
-        response = get_supabase_client().table("projects").select("*").in_("artist_id", artist_ids).execute()
-        return response.data
+        query = get_supabase_client().table("projects")\
+            .select("*", count="exact")\
+            .in_("artist_id", artist_ids)
+        return paginate_query(query, page, page_size)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -612,9 +665,10 @@ class ContractDeleteResponse(BaseModel):
 
 @app.post("/contracts/upload", response_model=ContractUploadResponse)
 async def upload_contract(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     project_id: str = Form(...),
-    user_id: str = Form(...)
+    user_id: str = Form(...),
 ):
     """
     Upload and process a contract PDF:
@@ -698,37 +752,25 @@ async def upload_contract(
             raise db_error
 
         contract_id = db_res.data[0]["id"]
-        
-        # 3. Save PDF temporarily for processing
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            tmp_file.write(file_content)
-            tmp_path = tmp_file.name
-        
-        try:
-            # 4. Convert PDF to markdown and store (skip Pinecone)
-            from vector_search.helpers import pdf_to_markdown
-            markdown_text = pdf_to_markdown(tmp_path)
 
-            if not markdown_text.strip():
-                raise ValueError("No text content found in PDF")
+        # 3. Queue background PDF-to-markdown conversion
+        # contract_markdown starts as NULL; background task populates it.
+        # GET /contracts/{id}/markdown serves as lazy fallback if task hasn't completed.
+        background_tasks.add_task(
+            _convert_pdf_background,
+            db_url=os.getenv("VITE_SUPABASE_URL"),
+            db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
+            file_id=contract_id,
+            file_path=file_path,
+        )
 
-            try:
-                get_supabase_client().table("project_files").update(
-                    {"contract_markdown": markdown_text}
-                ).eq("id", contract_id).execute()
-            except Exception as md_err:
-                print(f"Warning: Failed to store contract markdown: {md_err}")
-
-            return ContractUploadResponse(
-                status="success",
-                contract_id=contract_id,
-                contract_filename=file.filename,
-                total_chunks=0,
-                message="Contract uploaded successfully."
-            )
-        finally:
-            # Clean up temporary file
-            os.unlink(tmp_path)
+        return ContractUploadResponse(
+            status="success",
+            contract_id=contract_id,
+            contract_filename=file.filename,
+            total_chunks=0,
+            message="Contract uploaded successfully."
+        )
             
     except HTTPException:
         raise
@@ -1023,18 +1065,25 @@ async def confirm_calculation(request: ConfirmCalculationRequest):
             .eq("royalty_statement_id", request.royalty_statement_id)\
             .execute()
 
-        for calc in existing.data:
-            contracts_res = get_supabase_client().table("royalty_calculation_contracts")\
-                .select("contract_id")\
-                .eq("calculation_id", calc['id'])\
+        if existing.data:
+            calc_ids = [calc["id"] for calc in existing.data]
+            all_contracts_res = get_supabase_client().table("royalty_calculation_contracts")\
+                .select("calculation_id, contract_id")\
+                .in_("calculation_id", calc_ids)\
                 .execute()
-            cached_ids = set(c['contract_id'] for c in contracts_res.data)
-            if cached_ids == set(request.contract_ids):
-                get_supabase_client().table("royalty_calculation_contracts")\
-                    .delete().eq("calculation_id", calc['id']).execute()
-                get_supabase_client().table("royalty_calculations")\
-                    .delete().eq("id", calc['id']).execute()
-                break
+
+            contract_map = {}
+            for row in (all_contracts_res.data or []):
+                contract_map.setdefault(row["calculation_id"], set()).add(row["contract_id"])
+
+            for calc in existing.data:
+                cached_ids = contract_map.get(calc["id"], set())
+                if cached_ids == set(request.contract_ids):
+                    get_supabase_client().table("royalty_calculation_contracts")\
+                        .delete().eq("calculation_id", calc['id']).execute()
+                    get_supabase_client().table("royalty_calculations")\
+                        .delete().eq("id", calc['id']).execute()
+                    break
 
         # 1. Insert into royalty_calculations
         calc_res = get_supabase_client().table("royalty_calculations").insert({
@@ -1128,28 +1177,35 @@ async def oneclick_calculate_royalties_stream(
                         .eq("royalty_statement_id", royalty_statement_file_id)\
                         .execute()
                     
-                    for calc in calcs_res.data:
-                        # 2. For each candidate, get its contracts
-                        contracts_res = get_supabase_client().table("royalty_calculation_contracts")\
-                            .select("contract_id")\
-                            .eq("calculation_id", calc['id'])\
+                    if calcs_res.data:
+                        calc_ids = [calc["id"] for calc in calcs_res.data]
+
+                        # Single batch query for ALL calculation-contract associations
+                        all_contracts_res = get_supabase_client().table("royalty_calculation_contracts")\
+                            .select("calculation_id, contract_id")\
+                            .in_("calculation_id", calc_ids)\
                             .execute()
-                        
-                        cached_contract_ids = [c['contract_id'] for c in contracts_res.data]
-                        
-                        # 3. Compare sets (order doesn't matter)
-                        if set(cached_contract_ids) == set(target_contract_ids):
-                            # CACHE HIT!
-                            yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
-                            
-                            result = calc['results']
-                            # Ensure is_cached flag is set
-                            result['is_cached'] = True
-                            # Add type field so frontend SSE handler recognizes it
-                            result['type'] = 'complete'
-                            
-                            yield f"data: {json.dumps(result)}\n\n"
-                            return
+
+                        # Build lookup map: calculation_id -> set of contract_ids
+                        contract_map = {}
+                        for row in (all_contracts_res.data or []):
+                            contract_map.setdefault(row["calculation_id"], set()).add(row["contract_id"])
+
+                        # Check each cached calculation against target contracts
+                        for calc in calcs_res.data:
+                            cached_ids = contract_map.get(calc["id"], set())
+                            if cached_ids == set(target_contract_ids):
+                                # CACHE HIT!
+                                yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
+
+                                result = calc['results']
+                                # Ensure is_cached flag is set
+                                result['is_cached'] = True
+                                # Add type field so frontend SSE handler recognizes it
+                                result['type'] = 'complete'
+
+                                yield f"data: {json.dumps(result)}\n\n"
+                                return
 
                 except Exception as e:
                     print(f"Cache check failed (continuing to calculate): {e}")
