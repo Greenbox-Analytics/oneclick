@@ -41,7 +41,7 @@ interface Artist {
   };
 }
 
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 const Artists = () => {
   const navigate = useNavigate();
@@ -57,11 +57,8 @@ const Artists = () => {
       if (!user?.id) return [];
       // Try batch overlay endpoint first, fall back to direct Supabase query
       try {
-        const res = await fetch(`${API_URL}/registry/artists/with-teamcards?user_id=${user.id}`);
-        if (res.ok) {
-          const data = await res.json();
-          return data.artists || [];
-        }
+        const data = await apiFetch<{ artists: Artist[] }>(`${API_URL}/registry/artists/with-teamcards`);
+        return data.artists || [];
       } catch {
         // Fall back to direct Supabase query
       }

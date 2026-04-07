@@ -1,6 +1,6 @@
 """FastAPI router for Notion integration."""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -11,6 +11,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from auth import get_current_user_id
 from integrations.oauth import (
     build_auth_url, verify_oauth_state, exchange_code_for_tokens,
     store_connection, get_valid_token, FRONTEND_URL,
@@ -30,7 +31,7 @@ class NotionSyncConfig(BaseModel):
 
 
 @router.get("/auth")
-async def initiate_auth(user_id: str = Query(...)):
+async def initiate_auth(user_id: str = Depends(get_current_user_id)):
     """Start Notion OAuth flow."""
     auth_url = build_auth_url("notion", user_id)
     return {"auth_url": auth_url}
@@ -56,7 +57,7 @@ async def oauth_callback(code: str, state: str):
 
 
 @router.delete("/disconnect")
-async def disconnect(user_id: str = Query(...)):
+async def disconnect(user_id: str = Depends(get_current_user_id)):
     """Disconnect Notion integration."""
     _get_supabase().table("integration_connections").delete().eq(
         "user_id", user_id
@@ -65,7 +66,7 @@ async def disconnect(user_id: str = Query(...)):
 
 
 @router.get("/databases")
-async def list_databases(user_id: str = Query(...)):
+async def list_databases(user_id: str = Depends(get_current_user_id)):
     """List available Notion databases."""
     token = await get_valid_token(_get_supabase(), user_id, "notion")
     if not token:
@@ -77,7 +78,7 @@ async def list_databases(user_id: str = Query(...)):
 
 
 @router.post("/sync/tasks")
-async def sync_tasks(body: NotionSyncConfig, user_id: str = Query(...)):
+async def sync_tasks(body: NotionSyncConfig, user_id: str = Depends(get_current_user_id)):
     """Sync board tasks with a Notion database."""
     token = await get_valid_token(_get_supabase(), user_id, "notion")
     if not token:
@@ -89,7 +90,7 @@ async def sync_tasks(body: NotionSyncConfig, user_id: str = Query(...)):
 
 
 @router.put("/settings")
-async def update_settings(body: NotionSyncConfig, user_id: str = Query(...)):
+async def update_settings(body: NotionSyncConfig, user_id: str = Depends(get_current_user_id)):
     """Update Notion sync settings."""
     supabase = _get_supabase()
     data = {

@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 export interface ProjectOption {
   id: string;
@@ -31,9 +30,9 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const artistId of artistIds) {
-          const res = await fetch(`${API_URL}/artists/${artistId}/projects?user_id=${user.id}`);
-          if (!res.ok) continue;
-          const data = await res.json();
+          let data: any;
+          try { data = await apiFetch<any>(`${API_URL}/artists/${artistId}/projects`); }
+          catch { continue; }
           const projects = Array.isArray(data) ? data : data.projects || data.data || [];
           for (const p of projects) {
             if (!seen.has(p.id)) {
@@ -46,9 +45,7 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
       }
 
       // No artist selected — fetch all user projects
-      const res = await fetch(`${API_URL}/projects?user_id=${user.id}`);
-      if (!res.ok) return [];
-      const data = await res.json();
+      const data = await apiFetch<any>(`${API_URL}/projects`);
       const projects = Array.isArray(data) ? data : data.projects || data.data || [];
       return projects.map((p: Record<string, unknown>) => ({
         id: p.id as string,
@@ -69,9 +66,9 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const projId of projectIds) {
-          const res = await fetch(`${API_URL}/projects/${projId}/contracts?user_id=${user.id}`);
-          if (!res.ok) continue;
-          const data = await res.json();
+          let data: any;
+          try { data = await apiFetch<any>(`${API_URL}/projects/${projId}/contracts`); }
+          catch { continue; }
           const files = Array.isArray(data) ? data : data.contracts || data.data || [];
           for (const f of files) {
             if (!seen.has(f.id)) {
@@ -90,9 +87,9 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const proj of projects) {
-          const res = await fetch(`${API_URL}/projects/${proj.id}/contracts?user_id=${user.id}`);
-          if (!res.ok) continue;
-          const data = await res.json();
+          let data: any;
+          try { data = await apiFetch<any>(`${API_URL}/projects/${proj.id}/contracts`); }
+          catch { continue; }
           const files = Array.isArray(data) ? data : data.contracts || data.data || [];
           for (const f of files) {
             if (!seen.has(f.id)) {

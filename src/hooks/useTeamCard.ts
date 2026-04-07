@@ -30,7 +30,7 @@ export function useMyTeamCard() {
     queryKey: ["team-card", user?.id],
     queryFn: async () => {
       if (!user?.id) return null;
-      return apiFetch<TeamCard>(`${API_URL}/registry/teamcard?user_id=${user.id}`);
+      return apiFetch<TeamCard>(`${API_URL}/registry/teamcard`);
     },
     enabled: !!user?.id,
   });
@@ -41,7 +41,7 @@ export function useUpdateTeamCard() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (body: Partial<Omit<TeamCard, "id" | "user_id" | "email" | "created_at" | "updated_at">>) =>
-      apiFetch<TeamCard>(`${API_URL}/registry/teamcard?user_id=${user!.id}`, {
+      apiFetch<TeamCard>(`${API_URL}/registry/teamcard`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -61,7 +61,7 @@ export function useCollaboratorTeamCard(collaboratorUserId: string | undefined) 
     queryFn: async () => {
       if (!user?.id || !collaboratorUserId) return null;
       return apiFetch<TeamCard>(
-        `${API_URL}/registry/teamcard/${collaboratorUserId}?user_id=${user.id}`
+        `${API_URL}/registry/teamcard/${collaboratorUserId}`
       );
     },
     enabled: !!user?.id && !!collaboratorUserId,

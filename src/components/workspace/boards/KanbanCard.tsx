@@ -1,3 +1,4 @@
+import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,7 @@ const PRIORITY_COLORS: Record<string, string> = {
   urgent: "bg-red-100 text-red-700",
 };
 
-export function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
+export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
   const {
     attributes,
     listeners,
@@ -177,4 +178,4 @@ export function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
       </CardContent>
     </Card>
   );
-}
+});

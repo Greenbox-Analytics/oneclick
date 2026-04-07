@@ -1,12 +1,19 @@
 import io
 import re
+import sys
 import time
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from auth import get_current_user_id
 from splitsheet.pdf_generator import generate_split_sheet_pdf
 from splitsheet.docx_generator import generate_split_sheet_docx
 
@@ -35,7 +42,7 @@ class SplitSheetRequest(BaseModel):
 
 
 @router.post("/generate")
-async def generate_split_sheet(req: SplitSheetRequest):
+async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(get_current_user_id)):
     if not req.contributors:
         raise HTTPException(status_code=400, detail="At least one contributor is required")
 

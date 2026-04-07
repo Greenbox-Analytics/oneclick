@@ -1,3 +1,4 @@
+import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ interface ParentKanbanCardProps {
   onClick: (taskId: string) => void;
 }
 
-export function ParentKanbanCard({ parent, onClick }: ParentKanbanCardProps) {
+export const ParentKanbanCard = React.memo(function ParentKanbanCard({ parent, onClick }: ParentKanbanCardProps) {
   const {
     attributes,
     listeners,
@@ -96,4 +97,4 @@ export function ParentKanbanCard({ parent, onClick }: ParentKanbanCardProps) {
       </CardContent>
     </Card>
   );
-}
+});

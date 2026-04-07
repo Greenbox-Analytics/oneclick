@@ -36,8 +36,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-const API_URL =
-  import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 const ROLES = [
   "Artist",
@@ -136,8 +135,7 @@ const SplitSheet = () => {
   useEffect(() => {
     if (!user?.id) return;
     setLoadingArtists(true);
-    fetch(`${API_URL}/artists?user_id=${user.id}`)
-      .then((res) => res.json())
+    apiFetch<any>(`${API_URL}/artists`)
       .then((data) => setArtists(data || []))
       .catch(() => setArtists([]))
       .finally(() => setLoadingArtists(false));
@@ -151,8 +149,7 @@ const SplitSheet = () => {
       return;
     }
     setLoadingProjects(true);
-    fetch(`${API_URL}/projects/${selectedArtistId}`)
-      .then((res) => res.json())
+    apiFetch<any>(`${API_URL}/projects/${selectedArtistId}`)
       .then((data) => setProjects(data || []))
       .catch(() => setProjects([]))
       .finally(() => setLoadingProjects(false));
@@ -206,9 +203,10 @@ const SplitSheet = () => {
     setHasGenerated(false);
     setGeneratedBlob(null);
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch(`${API_URL}/splitsheet/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({
           work_title: workTitle,
           work_type: workType,

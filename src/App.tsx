@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -5,30 +6,40 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+
+// Eager — small, needed on initial load
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
-import Artists from "./pages/Artists";
-import ArtistProfile from "./pages/ArtistProfile";
-import NewArtist from "./pages/NewArtist";
-import Tools from "./pages/Tools";
-import OneClick from "./pages/OneClick";
-import OneClickDocuments from "./pages/OneClickDocuments";
-import Zoe from "./pages/Zoe";
-import Profile from "./pages/Profile";
-import Workspace from "./pages/Workspace";
-import WorkspaceBoards from "./pages/WorkspaceBoards";
-import Portfolio from "./pages/Portfolio";
-import SplitSheet from "./pages/SplitSheet";
-import Onboarding from "./pages/Onboarding";
 import NotFound from "./pages/NotFound";
-import Documentation from "./pages/Documentation";
-import Registry from "./pages/Registry";
-import WorkDetail from "./pages/WorkDetail";
-import InviteClaim from "./pages/InviteClaim";
-import ProjectDetail from "./pages/ProjectDetail";
+
+// Lazy-load — heavy pages loaded on demand
+const Artists = lazy(() => import("./pages/Artists"));
+const ArtistProfile = lazy(() => import("./pages/ArtistProfile"));
+const NewArtist = lazy(() => import("./pages/NewArtist"));
+const Tools = lazy(() => import("./pages/Tools"));
+const OneClick = lazy(() => import("./pages/OneClick"));
+const OneClickDocuments = lazy(() => import("./pages/OneClickDocuments"));
+const Zoe = lazy(() => import("./pages/Zoe"));
+const Profile = lazy(() => import("./pages/Profile"));
+const Workspace = lazy(() => import("./pages/Workspace"));
+const WorkspaceBoards = lazy(() => import("./pages/WorkspaceBoards"));
+const Portfolio = lazy(() => import("./pages/Portfolio"));
+const SplitSheet = lazy(() => import("./pages/SplitSheet"));
+const Onboarding = lazy(() => import("./pages/Onboarding"));
+const Documentation = lazy(() => import("./pages/Documentation"));
+const Registry = lazy(() => import("./pages/Registry"));
+const WorkDetail = lazy(() => import("./pages/WorkDetail"));
+const InviteClaim = lazy(() => import("./pages/InviteClaim"));
+const ProjectDetail = lazy(() => import("./pages/ProjectDetail"));
 
 const queryClient = new QueryClient();
+
+const PageLoader = () => (
+  <div className="min-h-screen bg-background flex items-center justify-center">
+    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+  </div>
+);
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -37,6 +48,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <AuthProvider>
+          <Suspense fallback={<PageLoader />}>
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
@@ -168,6 +180,7 @@ const App = () => (
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
+          </Suspense>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>
