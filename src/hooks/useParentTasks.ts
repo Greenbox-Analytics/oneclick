@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import type { ParentTaskWithChildren, BoardTask } from "@/types/integrations";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 interface ParentsResponse {
   parents: ParentTaskWithChildren[];
@@ -17,12 +16,11 @@ export function useParentTasks(search?: string, artistId?: string) {
     queryKey: ["parent-tasks", user?.id, search, artistId],
     queryFn: async () => {
       if (!user?.id) return { parents: [], ungrouped: [] };
-      const params = new URLSearchParams({ user_id: user.id });
+      const params = new URLSearchParams();
       if (search) params.set("search", search);
       if (artistId) params.set("artist_id", artistId);
-      const res = await fetch(`${API_URL}/boards/parents?${params}`);
-      if (!res.ok) throw new Error("Failed to fetch parent tasks");
-      return res.json();
+      const qs = params.toString();
+      return apiFetch<ParentsResponse>(`${API_URL}/boards/parents${qs ? `?${qs}` : ""}`);
     },
     enabled: !!user?.id,
   });
@@ -40,13 +38,11 @@ export function useParentTasks(search?: string, artistId?: string) {
       labels?: string[];
     }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/boards/parents?user_id=${user.id}`, {
+      return apiFetch(`${API_URL}/boards/parents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("Failed to create parent task");
-      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["parent-tasks"] });
@@ -57,9 +53,10 @@ export function useParentTasks(search?: string, artistId?: string) {
   const deleteParentMutation = useMutation({
     mutationFn: async (taskId: string) => {
       if (!user?.id) throw new Error("Not authenticated");
+      const authHeaders = await getAuthHeaders();
       const res = await fetch(
-        `${API_URL}/boards/tasks/${taskId}?user_id=${user.id}`,
-        { method: "DELETE" }
+        `${API_URL}/boards/tasks/${taskId}`,
+        { method: "DELETE", headers: authHeaders }
       );
       if (!res.ok) throw new Error("Failed to delete parent task");
     },

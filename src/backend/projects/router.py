@@ -6,6 +6,8 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from auth import get_current_user_id
+
 from projects import service
 from projects.models import MemberAdd, MemberUpdate
 
@@ -18,7 +20,7 @@ def _get_supabase():
 
 
 @router.get("/{project_id}/members")
-async def list_members(project_id: str, user_id: str = Query(...)):
+async def list_members(project_id: str, user_id: str = Depends(get_current_user_id)):
     members = await service.get_members(_get_supabase(), user_id, project_id)
     return {"members": members}
 
@@ -46,7 +48,7 @@ def _send_invite_email_background(
 
 
 @router.post("/{project_id}/members")
-async def add_member(project_id: str, body: MemberAdd, background_tasks: BackgroundTasks, user_id: str = Query(...)):
+async def add_member(project_id: str, body: MemberAdd, background_tasks: BackgroundTasks, user_id: str = Depends(get_current_user_id)):
     try:
         result = await service.add_member(
             _get_supabase(), user_id, project_id, body.email, body.role
@@ -70,7 +72,7 @@ async def add_member(project_id: str, body: MemberAdd, background_tasks: Backgro
 
 
 @router.put("/{project_id}/members/{member_id}")
-async def update_member(project_id: str, member_id: str, body: MemberUpdate, user_id: str = Query(...)):
+async def update_member(project_id: str, member_id: str, body: MemberUpdate, user_id: str = Depends(get_current_user_id)):
     try:
         result = await service.update_member_role(
             _get_supabase(), user_id, project_id, member_id, body.role
@@ -83,7 +85,7 @@ async def update_member(project_id: str, member_id: str, body: MemberUpdate, use
 
 
 @router.delete("/{project_id}/members/{member_id}")
-async def remove_member(project_id: str, member_id: str, user_id: str = Query(...)):
+async def remove_member(project_id: str, member_id: str, user_id: str = Depends(get_current_user_id)):
     try:
         return await service.remove_member(_get_supabase(), user_id, project_id, member_id)
     except PermissionError as e:
@@ -93,13 +95,13 @@ async def remove_member(project_id: str, member_id: str, user_id: str = Query(..
 
 
 @router.get("/{project_id}/pending-invites")
-async def list_pending_invites(project_id: str, user_id: str = Query(...)):
+async def list_pending_invites(project_id: str, user_id: str = Depends(get_current_user_id)):
     invites = await service.get_pending_invites(_get_supabase(), user_id, project_id)
     return {"invites": invites}
 
 
 @router.delete("/{project_id}/pending-invites/{invite_id}")
-async def cancel_pending_invite(project_id: str, invite_id: str, user_id: str = Query(...)):
+async def cancel_pending_invite(project_id: str, invite_id: str, user_id: str = Depends(get_current_user_id)):
     try:
         return await service.delete_pending_invite(_get_supabase(), user_id, project_id, invite_id)
     except PermissionError as e:

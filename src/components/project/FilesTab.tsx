@@ -188,7 +188,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
     try {
       for (const workId of selectedWorkIds) {
         await apiFetch(
-          `${API_URL}/registry/works/${workId}/files?file_id=${linkingFileId}&user_id=${user.id}`,
+          `${API_URL}/registry/works/${workId}/files?file_id=${linkingFileId}`,
           { method: "POST" }
         );
       }

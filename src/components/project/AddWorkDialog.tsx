@@ -70,7 +70,7 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
           if (selectedAudioId && data?.id && user?.id) {
             try {
               await apiFetch(
-                `${API_URL}/registry/works/${data.id}/audio?audio_file_id=${selectedAudioId}&user_id=${user.id}`,
+                `${API_URL}/registry/works/${data.id}/audio?audio_file_id=${selectedAudioId}`,
                 { method: "POST" }
               );
             } catch {

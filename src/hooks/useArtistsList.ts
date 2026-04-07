@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 export interface ArtistOption {
   id: string;
@@ -16,9 +15,7 @@ export function useArtistsList() {
     queryKey: ["artists-list", user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const res = await fetch(`${API_URL}/artists?user_id=${user.id}`);
-      if (!res.ok) return [];
-      const data = await res.json();
+      const data = await apiFetch<any>(`${API_URL}/artists`);
       // Backend returns array of artist objects
       return (Array.isArray(data) ? data : data.artists || data.data || []).map(
         (a: Record<string, unknown>) => ({

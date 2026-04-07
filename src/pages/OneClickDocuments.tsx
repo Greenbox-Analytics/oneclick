@@ -26,9 +26,7 @@ import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { useWorks, type Work } from "@/hooks/useRegistry";
 import { type WorkFileLink } from "@/hooks/useWorkFiles";
-
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 interface RoyaltyPayment {
   song_title: string;
@@ -182,7 +180,8 @@ const OneClickDocuments = () => {
       return projectFilesById[projectId];
     }
 
-    const response = await fetch(`${API_URL}/files/${projectId}?user_id=${user?.id}`);
+    const authHeaders = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/files/${projectId}`, { headers: authHeaders });
     if (!response.ok) {
       throw new Error("Failed to load existing files for duplicate check");
     }
@@ -196,8 +195,7 @@ const OneClickDocuments = () => {
   useEffect(() => {
     if (artistId && user) {
       setIsLoadingArtist(true);
-      fetch(`${API_URL}/artists?user_id=${user.id}`)
-        .then(res => res.json())
+      apiFetch<Artist[]>(`${API_URL}/artists`)
         .then((data: Artist[]) => {
           const artist = data.find(a => a.id === artistId);
           if (artist) setArtistName(artist.name);
@@ -213,8 +211,7 @@ const OneClickDocuments = () => {
   // Fetch Projects on Mount
   useEffect(() => {
     if (artistId) {
-      fetch(`${API_URL}/projects/${artistId}?user_id=${user?.id}`)
-        .then(res => res.json())
+      apiFetch<any>(`${API_URL}/projects/${artistId}`)
         .then(data => setProjects(data))
         .catch(err => console.error("Error fetching projects:", err));
 
@@ -233,8 +230,7 @@ const OneClickDocuments = () => {
       setSelectedExistingContracts([]);
       
       setIsLoadingProjectFiles(true);
-      fetch(`${API_URL}/files/${selectedContractProject}?user_id=${user?.id}`)
-        .then(res => res.json())
+      apiFetch<ArtistFile[]>(`${API_URL}/files/${selectedContractProject}`)
         .then((data: ArtistFile[]) => {
             setProjectFilesById(prev => ({ ...prev, [selectedContractProject]: data }));
             // Filter contracts and split sheets
@@ -258,8 +254,7 @@ const OneClickDocuments = () => {
       setSelectedExistingRoyaltyStatement(null);
       
       setIsLoadingProjectFiles(true);
-      fetch(`${API_URL}/files/${selectedRoyaltyStatementProject}?user_id=${user?.id}`)
-        .then(res => res.json())
+      apiFetch<ArtistFile[]>(`${API_URL}/files/${selectedRoyaltyStatementProject}`)
         .then((data: ArtistFile[]) => {
             setProjectFilesById(prev => ({ ...prev, [selectedRoyaltyStatementProject]: data }));
             // Filter royalty statements
@@ -284,8 +279,7 @@ const OneClickDocuments = () => {
       return;
     }
     setLoadingWorkFiles(true);
-    fetch(`${API_URL}/registry/works/${selectedWorkId}/files?user_id=${user.id}`)
-      .then((res) => res.json())
+    apiFetch<any>(`${API_URL}/registry/works/${selectedWorkId}/files`)
       .then((data) => {
         setWorkFiles(data.files || []);
         setLoadingWorkFiles(false);
@@ -470,10 +464,11 @@ const OneClickDocuments = () => {
                  const formData = new FormData();
                  formData.append("file", file);
                  formData.append("project_id", newContractProjectId);
-                 formData.append("user_id", user.id); 
-                 
+
+                 const uploadAuthHeaders = await getAuthHeaders();
                  const uploadRes = await fetch(`${API_URL}/contracts/upload`, {
                      method: "POST",
+                     headers: uploadAuthHeaders,
                      body: formData
                  });
                  
@@ -506,7 +501,6 @@ const OneClickDocuments = () => {
              formData.append("file", royaltyStatementFile);
              formData.append("artist_id", artistId);
              formData.append("category", "royalty_statement");
-             formData.append("user_id", user.id);
              const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
              if (targetProjectId) formData.append("project_id", targetProjectId);
 
@@ -521,8 +515,10 @@ const OneClickDocuments = () => {
              }
            }
              
+             const stmtAuthHeaders = await getAuthHeaders();
              const uploadRes = await fetch(`${API_URL}/upload`, {
                  method: "POST",
+                 headers: stmtAuthHeaders,
                  body: formData
              });
 
@@ -556,19 +552,10 @@ const OneClickDocuments = () => {
         setCalculationMessage("Starting calculation...");
         setSaveSuccess(false); // Reset save state
 
-        // Build request body
-        const requestBody = {
-            contract_ids: finalContractIds,
-            user_id: user.id,
-            project_id: finalProjectId,
-            royalty_statement_file_id: finalStatementId
-        };
-
         // Use EventSource for SSE
         const queryParams = new URLSearchParams({
-            user_id: requestBody.user_id,
-            project_id: requestBody.project_id,
-            royalty_statement_file_id: requestBody.royalty_statement_file_id
+            project_id: finalProjectId,
+            royalty_statement_file_id: finalStatementId
         });
         
         if (forceRecalculate) {
@@ -769,14 +756,14 @@ const OneClickDocuments = () => {
 
       setIsSaving(true);
       try {
+          const confirmAuthHeaders = await getAuthHeaders();
           const response = await fetch(`${API_URL}/oneclick/confirm`, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...confirmAuthHeaders },
               body: JSON.stringify({
                   contract_ids: lastCalculationContext.contractIds,
                   royalty_statement_id: lastCalculationContext.statementId,
                   project_id: lastCalculationContext.projectId,
-                  user_id: user.id,
                   results: calculationResult
               })
           });

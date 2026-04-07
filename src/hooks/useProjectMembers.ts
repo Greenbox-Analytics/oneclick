@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 export interface ProjectMember {
   id: string;
@@ -30,9 +29,7 @@ export function useProjectMembers(projectId?: string) {
     queryKey: ["project-members", projectId],
     queryFn: async () => {
       if (!user?.id || !projectId) return [];
-      const res = await fetch(`${API_URL}/projects/${projectId}/members?user_id=${user.id}`);
-      if (!res.ok) throw new Error("Failed to fetch members");
-      const data = await res.json();
+      const data = await apiFetch<{ members: ProjectMember[] }>(`${API_URL}/projects/${projectId}/members`);
       return data.members;
     },
     enabled: !!user?.id && !!projectId,
@@ -51,18 +48,12 @@ export function useAddProjectMember() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async ({ projectId, email, role }: { projectId: string; email: string; role: string }) => {
-      const res = await fetch(`${API_URL}/projects/${projectId}/members?user_id=${user!.id}`, {
+    mutationFn: async ({ projectId, email, role }: { projectId: string; email: string; role: string }) =>
+      apiFetch(`${API_URL}/projects/${projectId}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, role }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to add member");
-      }
-      return res.json();
-    },
+      }),
     onSuccess: (_, { projectId }) => {
       queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
       toast.success("Member added");
@@ -75,18 +66,12 @@ export function useUpdateMemberRole() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async ({ projectId, memberId, role }: { projectId: string; memberId: string; role: string }) => {
-      const res = await fetch(`${API_URL}/projects/${projectId}/members/${memberId}?user_id=${user!.id}`, {
+    mutationFn: async ({ projectId, memberId, role }: { projectId: string; memberId: string; role: string }) =>
+      apiFetch(`${API_URL}/projects/${projectId}/members/${memberId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to update role");
-      }
-      return res.json();
-    },
+      }),
     onSuccess: (_, { projectId }) => {
       queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
       toast.success("Role updated");
@@ -99,16 +84,10 @@ export function useRemoveProjectMember() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async ({ projectId, memberId }: { projectId: string; memberId: string }) => {
-      const res = await fetch(`${API_URL}/projects/${projectId}/members/${memberId}?user_id=${user!.id}`, {
+    mutationFn: async ({ projectId, memberId }: { projectId: string; memberId: string }) =>
+      apiFetch(`${API_URL}/projects/${projectId}/members/${memberId}`, {
         method: "DELETE",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to remove member");
-      }
-      return res.json();
-    },
+      }),
     onSuccess: (_, { projectId }) => {
       queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
       toast.success("Member removed");
@@ -123,9 +102,7 @@ export function usePendingInvites(projectId?: string) {
     queryKey: ["project-pending-invites", projectId],
     queryFn: async () => {
       if (!user?.id || !projectId) return [];
-      const res = await fetch(`${API_URL}/projects/${projectId}/pending-invites?user_id=${user.id}`);
-      if (!res.ok) throw new Error("Failed to fetch pending invites");
-      const data = await res.json();
+      const data = await apiFetch<{ invites: PendingInvite[] }>(`${API_URL}/projects/${projectId}/pending-invites`);
       return data.invites;
     },
     enabled: !!user?.id && !!projectId,
@@ -136,13 +113,10 @@ export function useCancelPendingInvite() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async ({ projectId, inviteId }: { projectId: string; inviteId: string }) => {
-      const res = await fetch(`${API_URL}/projects/${projectId}/pending-invites/${inviteId}?user_id=${user!.id}`, {
+    mutationFn: async ({ projectId, inviteId }: { projectId: string; inviteId: string }) =>
+      apiFetch(`${API_URL}/projects/${projectId}/pending-invites/${inviteId}`, {
         method: "DELETE",
-      });
-      if (!res.ok) throw new Error("Failed to cancel invite");
-      return res.json();
-    },
+      }),
     onSuccess: (_, { projectId }) => {
       queryClient.invalidateQueries({ queryKey: ["project-pending-invites", projectId] });
       toast.success("Invite cancelled");
