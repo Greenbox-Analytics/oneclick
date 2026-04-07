@@ -34,11 +34,12 @@ export function useNotes(scope: { artistId?: string; projectId?: string; folderI
     queryKey: ["notes", user?.id, scope.artistId, scope.projectId, scope.folderId],
     queryFn: async () => {
       if (!user?.id) return [];
-      const params = new URLSearchParams({ user_id: user.id });
+      const params = new URLSearchParams();
       if (scope.artistId) params.set("artist_id", scope.artistId);
       if (scope.projectId) params.set("project_id", scope.projectId);
       if (scope.folderId) params.set("folder_id", scope.folderId);
-      const data = await apiFetch<{ notes: Note[] }>(`${API_URL}/registry/notes?${params}`);
+      const qs = params.toString();
+      const data = await apiFetch<{ notes: Note[] }>(`${API_URL}/registry/notes${qs ? `?${qs}` : ""}`);
       return data.notes;
     },
     enabled: !!user?.id,
@@ -51,7 +52,7 @@ export function useNote(noteId: string | undefined) {
     queryKey: ["note", user?.id, noteId],
     queryFn: async () => {
       if (!user?.id || !noteId) return null;
-      return apiFetch<Note>(`${API_URL}/registry/notes/${noteId}?user_id=${user.id}`);
+      return apiFetch<Note>(`${API_URL}/registry/notes/${noteId}`);
     },
     enabled: !!user?.id && !!noteId,
   });
@@ -65,7 +66,7 @@ export function useCreateNote() {
       title?: string; content?: unknown[]; artist_id?: string;
       project_id?: string; folder_id?: string; pinned?: boolean;
     }) =>
-      apiFetch<Note>(`${API_URL}/registry/notes?user_id=${user!.id}`, {
+      apiFetch<Note>(`${API_URL}/registry/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -86,7 +87,7 @@ export function useUpdateNote() {
       noteId: string; title?: string; content?: unknown[];
       folder_id?: string | null; pinned?: boolean;
     }) =>
-      apiFetch<Note>(`${API_URL}/registry/notes/${noteId}?user_id=${user!.id}`, {
+      apiFetch<Note>(`${API_URL}/registry/notes/${noteId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -104,7 +105,7 @@ export function useDeleteNote() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (noteId: string) =>
-      apiFetch(`${API_URL}/registry/notes/${noteId}?user_id=${user!.id}`, { method: "DELETE" }),
+      apiFetch(`${API_URL}/registry/notes/${noteId}`, { method: "DELETE" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notes"] });
       toast.success("Note deleted");
@@ -119,10 +120,11 @@ export function useFolders(scope: { artistId?: string; projectId?: string }) {
     queryKey: ["note-folders", user?.id, scope.artistId, scope.projectId],
     queryFn: async () => {
       if (!user?.id) return [];
-      const params = new URLSearchParams({ user_id: user.id });
+      const params = new URLSearchParams();
       if (scope.artistId) params.set("artist_id", scope.artistId);
       if (scope.projectId) params.set("project_id", scope.projectId);
-      const data = await apiFetch<{ folders: NoteFolder[] }>(`${API_URL}/registry/folders?${params}`);
+      const qs = params.toString();
+      const data = await apiFetch<{ folders: NoteFolder[] }>(`${API_URL}/registry/folders${qs ? `?${qs}` : ""}`);
       return data.folders;
     },
     enabled: !!user?.id,
@@ -137,7 +139,7 @@ export function useCreateFolder() {
       name: string; artist_id?: string; project_id?: string;
       parent_folder_id?: string; sort_order?: number;
     }) =>
-      apiFetch<NoteFolder>(`${API_URL}/registry/folders?user_id=${user!.id}`, {
+      apiFetch<NoteFolder>(`${API_URL}/registry/folders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -157,7 +159,7 @@ export function useUpdateFolder() {
     mutationFn: async ({ folderId, ...body }: {
       folderId: string; name?: string; parent_folder_id?: string | null; sort_order?: number;
     }) =>
-      apiFetch<NoteFolder>(`${API_URL}/registry/folders/${folderId}?user_id=${user!.id}`, {
+      apiFetch<NoteFolder>(`${API_URL}/registry/folders/${folderId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -172,7 +174,7 @@ export function useDeleteFolder() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (folderId: string) =>
-      apiFetch(`${API_URL}/registry/folders/${folderId}?user_id=${user!.id}`, { method: "DELETE" }),
+      apiFetch(`${API_URL}/registry/folders/${folderId}`, { method: "DELETE" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["note-folders"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
@@ -189,7 +191,7 @@ export function useProjectAbout(projectId: string | undefined) {
     queryFn: async () => {
       if (!user?.id || !projectId) return [];
       const data = await apiFetch<{ about_content: unknown[] }>(
-        `${API_URL}/registry/projects/${projectId}/about?user_id=${user.id}`
+        `${API_URL}/registry/projects/${projectId}/about`
       );
       return data.about_content;
     },
@@ -202,7 +204,7 @@ export function useUpdateProjectAbout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ projectId, about_content }: { projectId: string; about_content: unknown[] }) =>
-      apiFetch(`${API_URL}/registry/projects/${projectId}/about?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/projects/${projectId}/about`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ about_content }),

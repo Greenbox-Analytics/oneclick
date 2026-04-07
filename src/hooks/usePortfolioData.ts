@@ -2,8 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 export interface ArtistInfo {
   id: string;
@@ -41,9 +40,7 @@ export function usePortfolioData(filters: PortfolioFilters) {
     queryKey: ["portfolio-artists", user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const res = await fetch(`${API_URL}/artists?user_id=${user.id}`);
-      if (!res.ok) return [];
-      const data = await res.json();
+      const data = await apiFetch<any>(`${API_URL}/artists`);
       return (Array.isArray(data) ? data : data.artists || data.data || []).map(
         (a: Record<string, unknown>) => ({
           id: a.id as string,

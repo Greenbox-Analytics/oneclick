@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from supabase import create_client, Client
@@ -24,6 +24,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from vector_search.contract_chatbot import ContractChatbot
 from vector_search.helpers import calculate_royalty_payments
+from auth import get_current_user_id
 
 # Load environment variables
 load_dotenv()
@@ -197,7 +198,6 @@ class ZoeAskRequest(BaseModel):
     query: str
     project_id: Optional[str] = None  # Optional - not needed for artist-only queries
     contract_ids: Optional[List[str]] = None  # Changed to support multiple contracts
-    user_id: str
     session_id: Optional[str] = None  # Session ID for conversation memory
     artist_id: Optional[str] = None  # Artist ID for artist-related queries
     context: Optional[ConversationContext] = None  # Conversation context for structured tracking
@@ -311,7 +311,7 @@ def health_check():
     }
 
 @app.get("/artists")
-async def get_artists(user_id: str):
+async def get_artists(user_id: str = Depends(get_current_user_id)):
     """
     Fetch artists belonging to the authenticated user.
     """
@@ -322,7 +322,7 @@ async def get_artists(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/artists/{artist_id}")
-async def get_artist_by_id(artist_id: str, user_id: str):
+async def get_artist_by_id(artist_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Fetch a single artist by ID, verifying user ownership.
     """
@@ -337,7 +337,7 @@ async def get_artist_by_id(artist_id: str, user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{artist_id}")
-async def get_projects(artist_id: str, user_id: str):
+async def get_projects(artist_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Fetch projects for a specific artist, verifying user ownership.
     """
@@ -355,15 +355,14 @@ class ProjectCreateRequest(BaseModel):
     artist_id: str
     name: str
     description: Optional[str] = None
-    user_id: str
 
 @app.post("/projects")
-async def create_project(project: ProjectCreateRequest):
+async def create_project(project: ProjectCreateRequest, user_id: str = Depends(get_current_user_id)):
     """
     Create a new project for an artist, verifying user ownership.
     """
     try:
-        if not verify_user_owns_artist(project.user_id, project.artist_id):
+        if not verify_user_owns_artist(user_id, project.artist_id):
             raise HTTPException(status_code=403, detail="Access denied")
         res = get_supabase_client().table("projects").insert({
             "artist_id": project.artist_id,
@@ -377,7 +376,7 @@ async def create_project(project: ProjectCreateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/{project_id}")
-async def get_project_files(project_id: str, user_id: str):
+async def get_project_files(project_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Fetch files associated with a specific project, verifying user ownership.
     """
@@ -392,7 +391,7 @@ async def get_project_files(project_id: str, user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/artist/{artist_id}/category/{category}")
-async def get_artist_files_by_category(artist_id: str, category: str, user_id: str):
+async def get_artist_files_by_category(artist_id: str, category: str, user_id: str = Depends(get_current_user_id)):
     """
     Fetch all files for an artist filtered by category, verifying user ownership.
     """
@@ -428,7 +427,7 @@ async def upload_file(
     artist_id: str = Form(...),
     category: str = Form(...), # 'contract' or 'royalty_statement'
     project_id: Optional[str] = Form(None),
-    user_id: str = Form(...)
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Uploads a file to Supabase Storage and creates a record in project_files.
@@ -522,7 +521,7 @@ async def upload_file(
 # --- Zoe AI Chatbot Endpoints ---
 
 @app.get("/projects")
-async def get_all_projects(user_id: str):
+async def get_all_projects(user_id: str = Depends(get_current_user_id)):
     """
     Fetch projects belonging to the authenticated user's artists.
     """
@@ -536,7 +535,7 @@ async def get_all_projects(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/artists/{artist_id}/projects")
-async def get_artist_projects(artist_id: str, user_id: str):
+async def get_artist_projects(artist_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Fetch projects for a specific artist, verifying user ownership.
     """
@@ -551,7 +550,7 @@ async def get_artist_projects(artist_id: str, user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/contracts")
-async def get_project_contracts(project_id: str, user_id: str):
+async def get_project_contracts(project_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Fetch contracts (PDF files) for a specific project, verifying user ownership.
     """
@@ -567,7 +566,7 @@ async def get_project_contracts(project_id: str, user_id: str):
 
 
 @app.get("/projects/{project_id}/documents")
-async def get_project_documents(project_id: str, user_id: str):
+async def get_project_documents(project_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Fetch contracts and split sheets for a project (used by Zoe).
     """
@@ -592,7 +591,6 @@ async def get_project_documents(project_id: str, user_id: str):
 
 class ContractUploadRequest(BaseModel):
     project_id: str
-    user_id: str
 
 class ContractUploadResponse(BaseModel):
     status: str
@@ -603,7 +601,6 @@ class ContractUploadResponse(BaseModel):
 
 class ContractDeleteRequest(BaseModel):
     contract_id: str
-    user_id: str
 
 class ContractDeleteResponse(BaseModel):
     status: str
@@ -614,7 +611,7 @@ class ContractDeleteResponse(BaseModel):
 async def upload_contract(
     file: UploadFile = File(...),
     project_id: str = Form(...),
-    user_id: str = Form(...)
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Upload and process a contract PDF:
@@ -740,7 +737,7 @@ async def upload_contract(
 async def upload_multiple_contracts(
     files: List[UploadFile] = File(...),
     project_id: str = Form(...),
-    user_id: str = Form(...)
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Upload and process multiple contract PDFs in one request
@@ -780,7 +777,7 @@ async def upload_multiple_contracts(
     }
 
 @app.get("/contracts/{contract_id}/markdown")
-async def get_contract_markdown(contract_id: str, user_id: str):
+async def get_contract_markdown(contract_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Get the full markdown text of a contract for full-document context.
     If markdown is not cached, lazily converts the PDF and caches the result.
@@ -828,7 +825,7 @@ async def get_contract_markdown(contract_id: str, user_id: str):
 
 
 @app.delete("/contracts/{contract_id}", response_model=ContractDeleteResponse)
-async def delete_contract(contract_id: str, user_id: str = Form(...)):
+async def delete_contract(contract_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Delete a contract and all its vector embeddings
     
@@ -877,7 +874,7 @@ async def delete_contract(contract_id: str, user_id: str = Form(...)):
         raise HTTPException(status_code=500, detail=f"Failed to delete contract: {str(e)}")
 
 @app.post("/zoe/ask-stream")
-async def zoe_ask_stream(request: ZoeAskRequest):
+async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_current_user_id)):
     """
     Zoe AI Chatbot streaming endpoint — returns Server-Sent Events (SSE).
 
@@ -924,7 +921,7 @@ async def zoe_ask_stream(request: ZoeAskRequest):
             try:
                 for event in chatbot.ask_stream(
                     query=request.query,
-                    user_id=request.user_id,
+                    user_id=user_id,
                     project_id=request.project_id,
                     contract_ids=request.contract_ids,
                     top_k=8,
@@ -982,7 +979,6 @@ async def zoe_get_session_history(session_id: str):
 class OneClickRoyaltyRequest(BaseModel):
     contract_id: Optional[str] = None
     contract_ids: Optional[List[str]] = None
-    user_id: str
     project_id: str
     royalty_statement_file_id: str
 
@@ -1008,11 +1004,10 @@ class ConfirmCalculationRequest(BaseModel):
     contract_ids: List[str]
     royalty_statement_id: str
     project_id: str
-    user_id: str
     results: Dict[str, Any]
 
 @app.post("/oneclick/confirm")
-async def confirm_calculation(request: ConfirmCalculationRequest):
+async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str = Depends(get_current_user_id)):
     """
     Save confirmed calculation results to the database.
     """
@@ -1040,7 +1035,7 @@ async def confirm_calculation(request: ConfirmCalculationRequest):
         calc_res = get_supabase_client().table("royalty_calculations").insert({
             "royalty_statement_id": request.royalty_statement_id,
             "project_id": request.project_id,
-            "user_id": request.user_id,
+            "user_id": user_id,
             "results": request.results
         }).execute()
         
@@ -1065,9 +1060,9 @@ async def confirm_calculation(request: ConfirmCalculationRequest):
 
 @app.get("/oneclick/calculate-royalties-stream")
 async def oneclick_calculate_royalties_stream(
-    user_id: str,
     project_id: str,
     royalty_statement_file_id: str,
+    user_id: str = Depends(get_current_user_id),
     contract_id: Optional[str] = None,
     contract_ids: Optional[List[str]] = Query(None),
     force_recalculate: bool = False
@@ -1308,7 +1303,7 @@ async def oneclick_calculate_royalties_stream(
     return StreamingResponse(generate_progress(), media_type="text/event-stream")
 
 @app.post("/oneclick/calculate-royalties", response_model=OneClickRoyaltyResponse)
-async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
+async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id: str = Depends(get_current_user_id)):
     """
     OneClick Royalty Calculation:
     1. Retrieve streamingroyalty splits from selected contract(s) using vector search
@@ -1329,7 +1324,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
         print(f"{'='*80}")
         print(f"Contract ID: {request.contract_id}")
         print(f"Contract IDs: {request.contract_ids}")
-        print(f"User ID: {request.user_id}")
+        print(f"User ID: {user_id}")
         print(f"Project ID: {request.project_id}")
         print(f"Royalty Statement File ID: {request.royalty_statement_file_id}")
         
@@ -1403,7 +1398,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest):
             payments = calculate_royalty_payments(
                 contract_path=contract_path,
                 statement_path=statement_path,
-                user_id=request.user_id,
+                user_id=user_id,
                 contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
                 contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None
             )
@@ -1467,7 +1462,6 @@ class ShareFileItem(BaseModel):
     file_id: str
 
 class ShareFilesRequest(BaseModel):
-    user_id: str
     contact_id: Optional[str] = None
     recipient_email: str
     recipient_name: Optional[str] = None
@@ -1475,7 +1469,7 @@ class ShareFilesRequest(BaseModel):
     message: Optional[str] = None
 
 @app.post("/share/files")
-async def share_files(req: ShareFilesRequest):
+async def share_files(req: ShareFilesRequest, user_id: str = Depends(get_current_user_id)):
     """Generate signed download URLs and send them via Resend email."""
     try:
         if not req.files:
@@ -1531,7 +1525,7 @@ async def share_files(req: ShareFilesRequest):
         # Fetch sender profile name
         sender_name = "Someone"
         try:
-            profile = sb.table("profiles").select("full_name").eq("id", req.user_id).single().execute()
+            profile = sb.table("profiles").select("full_name").eq("id", user_id).single().execute()
             if profile.data and profile.data.get("full_name"):
                 sender_name = profile.data["full_name"]
         except Exception:
@@ -1613,7 +1607,7 @@ async def share_files(req: ShareFilesRequest):
         for fl in file_links:
             try:
                 sb.table("file_shares").insert({
-                    "user_id": req.user_id,
+                    "user_id": user_id,
                     "contact_id": req.contact_id,
                     "recipient_email": req.recipient_email,
                     "recipient_name": req.recipient_name,

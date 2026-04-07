@@ -14,8 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 const ROLES = ["Artist", "Producer", "Songwriter", "Composer", "Publisher", "Label", "Other"];
 const STAKE_TYPES = ["none", "master", "publishing", "both"] as const;
@@ -44,18 +43,12 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
   const [notes, setNotes] = useState("");
 
   const inviteWithStakes = useMutation({
-    mutationFn: async (body: any) => {
-      const res = await fetch(`${API_URL}/registry/collaborators/invite-with-stakes?user_id=${user!.id}`, {
+    mutationFn: async (body: any) =>
+      apiFetch(`${API_URL}/registry/collaborators/invite-with-stakes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to invite");
-      }
-      return res.json();
-    },
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["registry-work-full"] });
       toast.success("Invitation sent");

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-import { API_URL } from "@/lib/apiFetch";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 export interface RegistryNotification {
   id: string;
@@ -20,11 +20,9 @@ export function useRegistryNotifications(unreadOnly = false) {
     queryKey: ["registry-notifications", user?.id, unreadOnly],
     queryFn: async () => {
       if (!user?.id) return [];
-      const res = await fetch(
-        `${API_URL}/registry/notifications?user_id=${user.id}&unread_only=${unreadOnly}`
+      const data = await apiFetch<{ notifications: RegistryNotification[] }>(
+        `${API_URL}/registry/notifications?unread_only=${unreadOnly}`
       );
-      if (!res.ok) return [];
-      const data = await res.json();
       return data.notifications || [];
     },
     enabled: !!user?.id,
@@ -42,8 +40,8 @@ export function useMarkNotificationRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (notificationId: string) => {
-      await fetch(
-        `${API_URL}/registry/notifications/${notificationId}/read?user_id=${user!.id}`,
+      await apiFetch(
+        `${API_URL}/registry/notifications/${notificationId}/read`,
         { method: "POST" }
       );
     },
@@ -56,8 +54,8 @@ export function useMarkAllRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      await fetch(
-        `${API_URL}/registry/notifications/read-all?user_id=${user!.id}`,
+      await apiFetch(
+        `${API_URL}/registry/notifications/read-all`,
         { method: "POST" }
       );
     },

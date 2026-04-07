@@ -13,6 +13,7 @@ import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCir
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery } from "@tanstack/react-query";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 import NotesView from "@/components/notes/NotesView";
 import {
   AlertDialog,
@@ -71,16 +72,12 @@ const ArtistProfile = () => {
   
   const [originalData, setOriginalData] = useState(formData);
 
-  const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
-
   // Fetch TeamCard overlay for verified artists
   const teamcardQuery = useQuery({
     queryKey: ["artist-teamcard", id],
     queryFn: async () => {
       if (!user?.id || !id) return null;
-      const res = await fetch(`${API_URL}/registry/artists/${id}/with-teamcard?user_id=${user.id}`);
-      if (!res.ok) return null;
-      return res.json();
+      return apiFetch<any>(`${API_URL}/registry/artists/${id}/with-teamcard`);
     },
     enabled: !!user?.id && !!id,
   });

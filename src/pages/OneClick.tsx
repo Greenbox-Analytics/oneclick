@@ -7,8 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/contexts/AuthContext";
 
-// Backend API URL
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 interface Artist {
   id: string; // UUID in database
@@ -36,8 +35,7 @@ const OneClick = () => {
     
     hasFetchedRef.current = true;
     
-    fetch(`${API_URL}/artists?user_id=${user.id}`)
-      .then((res) => res.json())
+    apiFetch<any>(`${API_URL}/artists`)
       .then((data) => setArtists(data))
       .catch((err) => {
         console.error("Error fetching artists:", err);

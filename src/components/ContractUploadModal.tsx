@@ -8,8 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Upload, FileText, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, getAuthHeaders } from "@/lib/apiFetch";
 
 interface ContractUploadModalProps {
   open: boolean;
@@ -53,7 +52,8 @@ export const ContractUploadModal = ({
   };
 
   const getProjectFileNames = async (): Promise<Set<string>> => {
-    const response = await fetch(`${API_URL}/files/${projectId}?user_id=${user?.id}`);
+    const projAuthHeaders = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/files/${projectId}`, { headers: projAuthHeaders });
     if (!response.ok) {
       throw new Error("Failed to check existing project files");
     }
@@ -129,11 +129,12 @@ export const ContractUploadModal = ({
       const formData = new FormData();
       formData.append("file", file);
       formData.append("project_id", projectId);
-      formData.append("user_id", user.id);
 
       try {
+        const uploadAuthHeaders = await getAuthHeaders();
         const response = await fetch(`${API_URL}/contracts/upload`, {
           method: "POST",
+          headers: uploadAuthHeaders,
           body: formData,
         });
 

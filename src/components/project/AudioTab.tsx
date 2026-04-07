@@ -102,7 +102,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     setLinkingInProgress(true);
     try {
       await apiFetch(
-        `${API_URL}/registry/works/${workId}/audio?audio_file_id=${audioFileId}&user_id=${user.id}`,
+        `${API_URL}/registry/works/${workId}/audio?audio_file_id=${audioFileId}`,
         { method: "POST" }
       );
       queryClient.invalidateQueries({ queryKey: ["work-audio-links-for-project", projectId] });

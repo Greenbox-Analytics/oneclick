@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 // --- Types ---
 
@@ -54,8 +54,8 @@ export function useWorks(artistId?: string) {
     queryKey: ["registry-works", user?.id, artistId],
     queryFn: async () => {
       if (!user?.id) return [];
-      let url = `${API_URL}/registry/works?user_id=${user.id}`;
-      if (artistId) url += `&artist_id=${artistId}`;
+      let url = `${API_URL}/registry/works`;
+      if (artistId) url += `?artist_id=${artistId}`;
       const data = await apiFetch<{ works: Work[] }>(url);
       return data.works;
     },
@@ -70,7 +70,7 @@ export function useMyCollaborations() {
     queryFn: async () => {
       if (!user?.id) return [];
       const data = await apiFetch<{ works: Work[] }>(
-        `${API_URL}/registry/works/my-collaborations?user_id=${user.id}`
+        `${API_URL}/registry/works/my-collaborations`
       );
       return data.works;
     },
@@ -85,7 +85,7 @@ export function useWorksByProject(projectId: string | undefined) {
     queryFn: async () => {
       if (!user?.id || !projectId) return [];
       const data = await apiFetch<{ works: Work[] }>(
-        `${API_URL}/registry/works/by-project/${projectId}?user_id=${user.id}`
+        `${API_URL}/registry/works/by-project/${projectId}`
       );
       return data.works;
     },
@@ -100,7 +100,7 @@ export function useWorkFull(workId: string | undefined) {
     queryFn: async () => {
       if (!user?.id || !workId) return null;
       return apiFetch<WorkFull>(
-        `${API_URL}/registry/works/${workId}/full?user_id=${user.id}`
+        `${API_URL}/registry/works/${workId}/full`
       );
     },
     enabled: !!user?.id && !!workId,
@@ -116,7 +116,7 @@ export function useCreateWork() {
       custom_work_type?: string; isrc?: string; iswc?: string; upc?: string;
       release_date?: string; notes?: string;
     }) =>
-      apiFetch(`${API_URL}/registry/works?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/works`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
@@ -165,7 +165,7 @@ export function useUpdateWork() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ workId, ...body }: { workId: string; [key: string]: unknown }) =>
-      apiFetch(`${API_URL}/registry/works/${workId}?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/works/${workId}`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
@@ -197,7 +197,7 @@ export function useDeleteWork() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (workId: string) =>
-      apiFetch(`${API_URL}/registry/works/${workId}?user_id=${user!.id}`, { method: "DELETE" }),
+      apiFetch(`${API_URL}/registry/works/${workId}`, { method: "DELETE" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["registry-works"] });
       qc.invalidateQueries({ queryKey: ["registry-works-by-project"] });
@@ -218,7 +218,7 @@ export function useCreateStake() {
       percentage: number; holder_email?: string; holder_ipi?: string;
       publisher_or_label?: string; notes?: string;
     }) =>
-      apiFetch(`${API_URL}/registry/stakes?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/stakes`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
@@ -232,7 +232,7 @@ export function useUpdateStake() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ stakeId, ...body }: { stakeId: string; [key: string]: unknown }) =>
-      apiFetch(`${API_URL}/registry/stakes/${stakeId}?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/stakes/${stakeId}`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
@@ -246,7 +246,7 @@ export function useDeleteStake() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (stakeId: string) =>
-      apiFetch(`${API_URL}/registry/stakes/${stakeId}?user_id=${user!.id}`, { method: "DELETE" }),
+      apiFetch(`${API_URL}/registry/stakes/${stakeId}`, { method: "DELETE" }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-full"] }); toast.success("Ownership stake removed"); },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -263,7 +263,7 @@ export function useCreateLicense() {
       licensee_email?: string; territory?: string; start_date: string;
       end_date?: string; terms?: string;
     }) =>
-      apiFetch(`${API_URL}/registry/licenses?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/licenses`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
@@ -277,7 +277,7 @@ export function useUpdateLicense() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ licenseId, ...body }: { licenseId: string; [key: string]: unknown }) =>
-      apiFetch(`${API_URL}/registry/licenses/${licenseId}?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/licenses/${licenseId}`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
@@ -291,7 +291,7 @@ export function useDeleteLicense() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (licenseId: string) =>
-      apiFetch(`${API_URL}/registry/licenses/${licenseId}?user_id=${user!.id}`, { method: "DELETE" }),
+      apiFetch(`${API_URL}/registry/licenses/${licenseId}`, { method: "DELETE" }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-full"] }); toast.success("License removed"); },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -308,7 +308,7 @@ export function useCreateAgreement() {
       effective_date: string; parties: Array<{ name: string; role: string; email?: string }>;
       file_id?: string; document_hash?: string;
     }) =>
-      apiFetch(`${API_URL}/registry/agreements?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/agreements`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
@@ -326,7 +326,7 @@ export function useInviteCollaborator() {
     mutationFn: async (body: {
       work_id: string; email: string; name: string; role: string; stake_id?: string;
     }) =>
-      apiFetch<Collaborator>(`${API_URL}/registry/collaborators/invite?user_id=${user!.id}`, {
+      apiFetch<Collaborator>(`${API_URL}/registry/collaborators/invite`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
@@ -341,7 +341,7 @@ export function useClaimInvitation() {
   return useMutation({
     mutationFn: async (inviteToken: string) =>
       apiFetch<Collaborator>(
-        `${API_URL}/registry/collaborators/claim?invite_token=${inviteToken}&user_id=${user!.id}`,
+        `${API_URL}/registry/collaborators/claim?invite_token=${inviteToken}`,
         { method: "POST" }
       ),
     onSuccess: () => {
@@ -358,7 +358,7 @@ export function useConfirmStake() {
   return useMutation({
     mutationFn: async (collaboratorId: string) =>
       apiFetch<Collaborator>(
-        `${API_URL}/registry/collaborators/${collaboratorId}/confirm?user_id=${user!.id}`,
+        `${API_URL}/registry/collaborators/${collaboratorId}/confirm`,
         { method: "POST" }
       ),
     onSuccess: () => {
@@ -375,7 +375,7 @@ export function useSubmitForApproval() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (workId: string) =>
-      apiFetch(`${API_URL}/registry/works/${workId}/submit-for-approval?user_id=${user!.id}`, {
+      apiFetch(`${API_URL}/registry/works/${workId}/submit-for-approval`, {
         method: "POST",
       }),
     onSuccess: () => {
@@ -393,7 +393,7 @@ export function useRevokeCollaborator() {
   return useMutation({
     mutationFn: async (collaboratorId: string) =>
       apiFetch<Collaborator>(
-        `${API_URL}/registry/collaborators/${collaboratorId}/revoke?user_id=${user!.id}`,
+        `${API_URL}/registry/collaborators/${collaboratorId}/revoke`,
         { method: "POST" }
       ),
     onSuccess: () => {
@@ -410,7 +410,7 @@ export function useResendInvitation() {
   return useMutation({
     mutationFn: async (collaboratorId: string) =>
       apiFetch<Collaborator>(
-        `${API_URL}/registry/collaborators/${collaboratorId}/resend?user_id=${user!.id}`,
+        `${API_URL}/registry/collaborators/${collaboratorId}/resend`,
         { method: "POST" }
       ),
     onSuccess: () => {
@@ -451,9 +451,8 @@ export function useMyInvites() {
     queryKey: ["registry-my-invites", user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const res = await fetch(`${API_URL}/registry/collaborators/my-invites?user_id=${user.id}`);
-      if (!res.ok) return [];
-      const data = await res.json();
+      const data = await apiFetch<{ invites: DashboardInvite[] }>(`${API_URL}/registry/collaborators/my-invites`);
+      if (!data) return [];
       return data.invites;
     },
     enabled: !!user?.id,
@@ -464,17 +463,11 @@ export function useAcceptFromDashboard() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async (collaboratorId: string) => {
-      const res = await fetch(
-        `${API_URL}/registry/collaborators/${collaboratorId}/accept-from-dashboard?user_id=${user!.id}`,
+    mutationFn: async (collaboratorId: string) =>
+      apiFetch(
+        `${API_URL}/registry/collaborators/${collaboratorId}/accept-from-dashboard`,
         { method: "POST" }
-      );
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to accept");
-      }
-      return res.json();
-    },
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["registry-my-invites"] });
       queryClient.invalidateQueries({ queryKey: ["registry-works"] });
@@ -489,17 +482,11 @@ export function useDeclineInvitation() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async (collaboratorId: string) => {
-      const res = await fetch(
-        `${API_URL}/registry/collaborators/${collaboratorId}/decline?user_id=${user!.id}`,
+    mutationFn: async (collaboratorId: string) =>
+      apiFetch(
+        `${API_URL}/registry/collaborators/${collaboratorId}/decline`,
         { method: "POST" }
-      );
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to decline");
-      }
-      return res.json();
-    },
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["registry-my-invites"] });
       toast.success("Invitation declined");
@@ -514,7 +501,10 @@ export function useExportProof() {
   const { user } = useAuth();
   return useMutation({
     mutationFn: async (workId: string) => {
-      const res = await fetch(`${API_URL}/registry/works/${workId}/export?user_id=${user!.id}`);
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API_URL}/registry/works/${workId}/export`, {
+        headers: authHeaders,
+      });
       if (!res.ok) throw new Error("Failed to generate proof of ownership");
       const blob = await res.blob();
       const disposition = res.headers.get("Content-Disposition") || "";

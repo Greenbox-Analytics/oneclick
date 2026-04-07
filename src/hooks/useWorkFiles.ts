@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 export interface WorkFileLink {
   id: string;
@@ -25,9 +24,7 @@ export function useWorkFiles(workId?: string) {
     queryKey: ["work-files", workId],
     queryFn: async () => {
       if (!user?.id || !workId) return [];
-      const res = await fetch(`${API_URL}/registry/works/${workId}/files?user_id=${user.id}`);
-      if (!res.ok) throw new Error("Failed to fetch work files");
-      const data = await res.json();
+      const data = await apiFetch<{ files: WorkFileLink[] }>(`${API_URL}/registry/works/${workId}/files`);
       return data.files;
     },
     enabled: !!user?.id && !!workId,
@@ -38,14 +35,11 @@ export function useLinkFileToWork() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async ({ workId, fileId }: { workId: string; fileId: string }) => {
-      const res = await fetch(
-        `${API_URL}/registry/works/${workId}/files?file_id=${fileId}&user_id=${user!.id}`,
+    mutationFn: async ({ workId, fileId }: { workId: string; fileId: string }) =>
+      apiFetch(
+        `${API_URL}/registry/works/${workId}/files?file_id=${fileId}`,
         { method: "POST" }
-      );
-      if (!res.ok) throw new Error("Failed to link file");
-      return res.json();
-    },
+      ),
     onSuccess: (_, { workId }) => {
       queryClient.invalidateQueries({ queryKey: ["work-files", workId] });
       toast.success("File linked to work");
@@ -58,14 +52,11 @@ export function useUnlinkFileFromWork() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async ({ workId, linkId }: { workId: string; linkId: string }) => {
-      const res = await fetch(
-        `${API_URL}/registry/works/${workId}/files/${linkId}?user_id=${user!.id}`,
+    mutationFn: async ({ workId, linkId }: { workId: string; linkId: string }) =>
+      apiFetch(
+        `${API_URL}/registry/works/${workId}/files/${linkId}`,
         { method: "DELETE" }
-      );
-      if (!res.ok) throw new Error("Failed to unlink file");
-      return res.json();
-    },
+      ),
     onSuccess: (_, { workId }) => {
       queryClient.invalidateQueries({ queryKey: ["work-files", workId] });
       toast.success("File unlinked");

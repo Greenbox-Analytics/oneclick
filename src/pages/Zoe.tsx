@@ -45,8 +45,7 @@ import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { useMyCollaborations, type Work } from "@/hooks/useRegistry";
 import { type WorkFileLink } from "@/hooks/useWorkFiles";
 
-// Backend API URL
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 interface Artist {
   id: string;
@@ -263,8 +262,7 @@ const Zoe = () => {
   useEffect(() => {
     if (!user) return;
     
-    fetch(`${API_URL}/artists?user_id=${user.id}`)
-      .then((res) => res.json())
+    apiFetch<any>(`${API_URL}/artists`)
       .then((data) => setArtists(data))
       .catch((err) => {
         console.error("Error fetching artists:", err);
@@ -275,8 +273,7 @@ const Zoe = () => {
   // Fetch projects when artist is selected
   useEffect(() => {
     if (selectedArtist) {
-      fetch(`${API_URL}/artists/${selectedArtist}/projects?user_id=${user?.id}`)
-        .then((res) => res.json())
+      apiFetch<any>(`${API_URL}/artists/${selectedArtist}/projects`)
         .then((data) => setProjects(data))
         .catch((err) => {
           console.error("Error fetching projects:", err);
@@ -291,8 +288,7 @@ const Zoe = () => {
   // Fetch contracts and split sheets when project is selected
   const fetchContracts = () => {
     if (selectedProject) {
-      fetch(`${API_URL}/projects/${selectedProject}/documents?user_id=${user?.id}`)
-        .then((res) => res.json())
+      apiFetch<any>(`${API_URL}/projects/${selectedProject}/documents`)
         .then((data) => setContracts(data))
         .catch((err) => {
           console.error("Error fetching documents:", err);
@@ -482,12 +478,9 @@ const Zoe = () => {
       await Promise.all(
         missing.map(async (cid) => {
           try {
-            const res = await fetch(`${API_URL}/contracts/${cid}/markdown?user_id=${user.id}`);
-            if (res.ok) {
-              const data = await res.json();
-              if (data.markdown) {
-                results[cid] = data.markdown;
-              }
+            const data = await apiFetch<{ markdown?: string }>(`${API_URL}/contracts/${cid}/markdown`);
+            if (data.markdown) {
+              results[cid] = data.markdown;
             }
           } catch (err) {
             console.warn(`Failed to fetch markdown for contract ${cid}:`, err);
@@ -510,8 +503,7 @@ const Zoe = () => {
       return;
     }
     setLoadingWorkFiles(true);
-    fetch(`${API_URL}/registry/works/${selectedSharedWork}/files?user_id=${user.id}`)
-      .then((res) => res.json())
+    apiFetch<any>(`${API_URL}/registry/works/${selectedSharedWork}/files`)
       .then((data) => {
         setSharedWorkFiles(data.files || []);
         setLoadingWorkFiles(false);
@@ -593,12 +585,10 @@ const Zoe = () => {
 
     setDeleting(true);
     try {
-      const formData = new FormData();
-      formData.append("user_id", user.id);
-
+      const deleteAuthHeaders = await getAuthHeaders();
       const response = await fetch(`${API_URL}/contracts/${contractToDelete.id}`, {
         method: "DELETE",
-        body: formData,
+        headers: deleteAuthHeaders,
       });
 
       if (!response.ok) {
@@ -633,7 +623,6 @@ const Zoe = () => {
     }
 
     return {
-      userId: user!.id,
       artistId: selectedArtist,
       projectId: selectedProject || undefined,
       contractIds: selectedContracts.length > 0 ? selectedContracts : undefined,

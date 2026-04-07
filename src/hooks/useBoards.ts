@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import type { BoardColumn, BoardTask, ParentTaskWithChildren } from "@/types/integrations";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 interface UseBoardsOptions {
   artistId?: string;
@@ -24,11 +23,10 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
     queryKey: ["board-columns", user?.id, artistId],
     queryFn: async () => {
       if (!user?.id) return [];
-      const params = new URLSearchParams({ user_id: user.id });
+      const params = new URLSearchParams();
       if (artistId) params.set("artist_id", artistId);
-      const res = await fetch(`${API_URL}/boards/columns?${params}`);
-      if (!res.ok) throw new Error("Failed to fetch columns");
-      const data = await res.json();
+      const qs = params.toString();
+      const data = await apiFetch<{ columns: BoardColumn[] }>(`${API_URL}/boards/columns${qs ? `?${qs}` : ""}`);
       return data.columns;
     },
     enabled: !!user?.id,
@@ -46,19 +44,14 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       if (!user?.id) return [];
       if (hasPeriod) {
         const params = new URLSearchParams({
-          user_id: user.id,
           period_start: periodStart!,
           period_end: periodEnd!,
           is_current: String(isCurrentPeriod ?? true),
         });
-        const res = await fetch(`${API_URL}/boards/tasks/period?${params}`);
-        if (!res.ok) throw new Error("Failed to fetch period tasks");
-        const data = await res.json();
+        const data = await apiFetch<{ tasks: BoardTask[] }>(`${API_URL}/boards/tasks/period?${params}`);
         return data.tasks;
       }
-      const res = await fetch(`${API_URL}/boards/tasks?user_id=${user.id}`);
-      if (!res.ok) throw new Error("Failed to fetch tasks");
-      const data = await res.json();
+      const data = await apiFetch<{ tasks: BoardTask[] }>(`${API_URL}/boards/tasks`);
       return data.tasks;
     },
     enabled: !!user?.id,
@@ -68,13 +61,11 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const createColumnMutation = useMutation({
     mutationFn: async (data: { title: string; color?: string; artist_id?: string; position?: number }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/boards/columns?user_id=${user.id}`, {
+      return apiFetch(`${API_URL}/boards/columns`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("Failed to create column");
-      return res.json();
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["board-columns"] }),
   });
@@ -82,13 +73,11 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const updateColumnMutation = useMutation({
     mutationFn: async ({ id, ...data }: { id: string; title?: string; color?: string; position?: number }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/boards/columns/${id}?user_id=${user.id}`, {
+      return apiFetch(`${API_URL}/boards/columns/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("Failed to update column");
-      return res.json();
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["board-columns"] }),
   });
@@ -96,8 +85,10 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const deleteColumnMutation = useMutation({
     mutationFn: async (columnId: string) => {
       if (!user?.id) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/boards/columns/${columnId}?user_id=${user.id}`, {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API_URL}/boards/columns/${columnId}`, {
         method: "DELETE",
+        headers: authHeaders,
       });
       if (!res.ok) throw new Error("Failed to delete column");
     },
@@ -124,13 +115,11 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       labels?: string[];
     }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/boards/tasks?user_id=${user.id}`, {
+      return apiFetch(`${API_URL}/boards/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("Failed to create task");
-      return res.json();
     },
     onMutate: async (data) => {
       // Cancel outgoing refetches
@@ -223,13 +212,11 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       parent_task_id?: string | null;
     }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/boards/tasks/${id}?user_id=${user.id}`, {
+      return apiFetch(`${API_URL}/boards/tasks/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("Failed to update task");
-      return res.json();
     },
     onMutate: async ({ id, ...data }) => {
       // Cancel outgoing refetches
@@ -282,8 +269,10 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const deleteTaskMutation = useMutation({
     mutationFn: async (taskId: string) => {
       if (!user?.id) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/boards/tasks/${taskId}?user_id=${user.id}`, {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API_URL}/boards/tasks/${taskId}`, {
         method: "DELETE",
+        headers: authHeaders,
       });
       if (!res.ok) throw new Error("Failed to delete task");
     },
@@ -335,9 +324,10 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const reorderTasksMutation = useMutation({
     mutationFn: async (reorders: { task_id: string; target_column_id: string; position: number }[]) => {
       if (!user?.id) throw new Error("Not authenticated");
-      const res = await fetch(`${API_URL}/boards/tasks/reorder?user_id=${user.id}`, {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API_URL}/boards/tasks/reorder`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify({ reorders }),
       });
       if (!res.ok) throw new Error("Failed to reorder tasks");
@@ -372,13 +362,12 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const createDefaultsMutation = useMutation({
     mutationFn: async () => {
       if (!user?.id) throw new Error("Not authenticated");
-      const params = new URLSearchParams({ user_id: user.id });
+      const params = new URLSearchParams();
       if (artistId) params.set("artist_id", artistId);
-      const res = await fetch(`${API_URL}/boards/columns/defaults?${params}`, {
+      const qs = params.toString();
+      return apiFetch(`${API_URL}/boards/columns/defaults${qs ? `?${qs}` : ""}`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error("Failed to create default columns");
-      return res.json();
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["board-columns"] }),
   });

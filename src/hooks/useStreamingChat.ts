@@ -111,7 +111,7 @@ type SSEEvent =
 
 // ── Hook ──
 
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
+import { API_URL, getAuthHeaders } from "@/lib/apiFetch";
 const MAX_CONVERSATION_MESSAGES = 100;
 
 export function useStreamingChat() {
@@ -154,7 +154,6 @@ export function useStreamingChat() {
     async (
       query: string,
       params: {
-        userId: string;
         artistId: string;
         projectId?: string;
         contractIds?: string[];
@@ -212,9 +211,10 @@ export function useStreamingChat() {
       let returnSources: MessageSource[] | undefined;
 
       try {
+        const authHeaders = await getAuthHeaders();
         const response = await fetch(`${API_URL}/zoe/ask-stream`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           signal: controller.signal,
           body: JSON.stringify({
             query,
@@ -223,7 +223,6 @@ export function useStreamingChat() {
               params.contractIds && params.contractIds.length > 0
                 ? params.contractIds
                 : null,
-            user_id: params.userId,
             session_id: params.sessionId,
             artist_id: params.artistId,
             context: params.context,
@@ -416,7 +415,6 @@ export function useStreamingChat() {
   const retryLastMessage = useCallback(
     async (
       params: {
-        userId: string;
         artistId: string;
         projectId?: string;
         contractIds?: string[];
