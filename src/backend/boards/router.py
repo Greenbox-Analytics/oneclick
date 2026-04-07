@@ -150,10 +150,14 @@ async def reorder_tasks(body: BatchReorder, user_id: str = Query(...)):
 async def list_tasks(
     user_id: str = Query(...),
     column_id: Optional[str] = Query(None),
+    page: Optional[int] = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
 ):
     """Get all tasks for a user, optionally filtered by column."""
-    tasks = await service.get_tasks(_get_supabase(), user_id, column_id)
-    return {"tasks": tasks}
+    result = await service.get_tasks(_get_supabase(), user_id, column_id, page, page_size)
+    if isinstance(result, list):
+        return {"tasks": result}
+    return result
 
 
 @router.post("/tasks")

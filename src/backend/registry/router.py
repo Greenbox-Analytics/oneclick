@@ -37,15 +37,28 @@ def _get_supabase():
 # ============================================================
 
 @router.get("/works")
-async def list_works(user_id: str = Query(...), artist_id: Optional[str] = Query(None)):
-    works = await service.get_works(_get_supabase(), user_id, artist_id)
-    return {"works": works}
+async def list_works(
+    user_id: str = Query(...),
+    artist_id: Optional[str] = Query(None),
+    page: Optional[int] = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+):
+    result = await service.get_works(_get_supabase(), user_id, artist_id, page, page_size)
+    if isinstance(result, list):
+        return {"works": result}
+    return result
 
 
 @router.get("/works/my-collaborations")
-async def list_my_collaborations(user_id: str = Query(...)):
-    works = await service.get_works_as_collaborator(_get_supabase(), user_id)
-    return {"works": works}
+async def list_my_collaborations(
+    user_id: str = Query(...),
+    page: Optional[int] = Query(None, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+):
+    result = await service.get_works_as_collaborator(_get_supabase(), user_id, page, page_size)
+    if isinstance(result, list):
+        return {"works": result}
+    return result
 
 
 @router.get("/works/by-project/{project_id}")

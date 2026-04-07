@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
 from pathlib import Path
 import sys
 
@@ -23,26 +23,45 @@ async def list_members(project_id: str, user_id: str = Query(...)):
     return {"members": members}
 
 
+def _send_invite_email_background(
+    db_url: str, db_key: str,
+    project_id: str, user_id: str, email: str, role: str,
+):
+    """Background task: fetch context and send invite email."""
+    from supabase import create_client
+    from projects.emails import send_project_invite_email
+
+    try:
+        db = create_client(db_url, db_key)
+        project = db.table("projects").select("name").eq("id", project_id).single().execute()
+        inviter = db.table("profiles").select("full_name").eq("id", user_id).maybe_single().execute()
+        send_project_invite_email(
+            recipient_email=email,
+            project_name=project.data["name"] if project.data else "Unknown",
+            inviter_name=inviter.data.get("full_name", "Someone") if inviter.data else "Someone",
+            role=role,
+        )
+    except Exception as e:
+        print(f"Background: Failed to send project invite email: {e}")
+
+
 @router.post("/{project_id}/members")
-async def add_member(project_id: str, body: MemberAdd, user_id: str = Query(...)):
+async def add_member(project_id: str, body: MemberAdd, background_tasks: BackgroundTasks, user_id: str = Query(...)):
     try:
         result = await service.add_member(
             _get_supabase(), user_id, project_id, body.email, body.role
         )
         if result["type"] == "pending":
-            try:
-                from projects.emails import send_project_invite_email
-                db = _get_supabase()
-                project = db.table("projects").select("name").eq("id", project_id).single().execute()
-                inviter = db.table("profiles").select("full_name").eq("id", user_id).maybe_single().execute()
-                send_project_invite_email(
-                    recipient_email=body.email,
-                    project_name=project.data["name"] if project.data else "Unknown",
-                    inviter_name=inviter.data.get("full_name", "Someone") if inviter.data else "Someone",
-                    role=body.role,
-                )
-            except Exception as e:
-                print(f"Warning: Failed to send project invite email: {e}")
+            import os
+            background_tasks.add_task(
+                _send_invite_email_background,
+                db_url=os.getenv("VITE_SUPABASE_URL"),
+                db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
+                project_id=project_id,
+                user_id=user_id,
+                email=body.email,
+                role=body.role,
+            )
         return result
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))

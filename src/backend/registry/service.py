@@ -2,21 +2,26 @@
 
 import hashlib
 from supabase import Client
+from pagination import paginate_query, PaginatedResponse
 
 
 # ============================================================
 # Works
 # ============================================================
 
-async def get_works(db: Client, user_id: str, artist_id: str = None):
-    query = db.table("works_registry").select("*").eq("user_id", user_id)
+async def get_works(db: Client, user_id: str, artist_id: str = None,
+                    page: int = None, page_size: int = 50):
+    query = db.table("works_registry")\
+        .select("*", count="exact")\
+        .eq("user_id", user_id)
     if artist_id:
         query = query.eq("artist_id", artist_id)
-    result = query.order("created_at", desc=True).execute()
-    return result.data
+    query = query.order("created_at", desc=True)
+    return paginate_query(query, page, page_size)
 
 
-async def get_works_as_collaborator(db: Client, user_id: str):
+async def get_works_as_collaborator(db: Client, user_id: str,
+                                    page: int = None, page_size: int = 50):
     """Get ALL works where user is a collaborator (not the creator) — any status."""
     collab_rows = (
         db.table("registry_collaborators")
@@ -27,16 +32,17 @@ async def get_works_as_collaborator(db: Client, user_id: str):
     )
     work_ids = [r["work_id"] for r in (collab_rows.data or [])]
     if not work_ids:
+        if page is not None:
+            return PaginatedResponse(data=[], total=0, page=page, page_size=page_size)
         return []
-    result = (
+    query = (
         db.table("works_registry")
-        .select("*")
+        .select("*", count="exact")
         .in_("id", work_ids)
         .neq("user_id", user_id)
         .order("updated_at", desc=True)
-        .execute()
     )
-    return result.data
+    return paginate_query(query, page, page_size)
 
 
 async def get_works_by_project(db: Client, user_id: str, project_id: str):

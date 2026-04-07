@@ -4,6 +4,7 @@ from typing import Optional, List
 from datetime import date, datetime, timezone
 from supabase import Client
 from integrations import events
+from pagination import paginate_query
 
 
 # --- Junction table helpers ---
@@ -114,20 +115,27 @@ async def delete_column(supabase: Client, user_id: str, column_id: str) -> bool:
 
 # --- Tasks (board tasks only — excludes parent tasks) ---
 
-async def get_tasks(supabase: Client, user_id: str, column_id: Optional[str] = None) -> list:
+async def get_tasks(supabase: Client, user_id: str, column_id: Optional[str] = None,
+                    page: int = None, page_size: int = 50):
     """Get board tasks (non-parent) with junction data, optionally filtered by column."""
     query = (
         supabase.table("board_tasks")
-        .select("*")
+        .select("*", count="exact")
         .eq("user_id", user_id)
         .or_("is_parent.eq.false,is_parent.is.null")
         .order("position")
     )
     if column_id:
         query = query.eq("column_id", column_id)
-    result = query.execute()
-    tasks = result.data or []
-    return _enrich_tasks(supabase, tasks)
+
+    result = paginate_query(query, page, page_size)
+
+    # Enrich with artist/project/contract names
+    if isinstance(result, list):
+        return _enrich_tasks(supabase, result)
+    else:
+        result.data = _enrich_tasks(supabase, result.data)
+        return result
 
 
 async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
