@@ -64,12 +64,28 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
   const { parents, createParent } = useParentTasks();
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialSelectedTaskId || null);
+  const [creatingInColumnId, setCreatingInColumnId] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialSelectedTaskId) {
       setSelectedTaskId(initialSelectedTaskId);
     }
   }, [initialSelectedTaskId]);
+
+  const handleCreateTaskSidebar = useCallback((columnId: string) => {
+    setSelectedTaskId(null);
+    setCreatingInColumnId(columnId);
+  }, []);
+
+  const handleClosePanel = useCallback(() => {
+    setSelectedTaskId(null);
+    setCreatingInColumnId(null);
+  }, []);
+
+  const handleTaskClick = useCallback((taskId: string) => {
+    setCreatingInColumnId(null);
+    setSelectedTaskId(taskId);
+  }, []);
 
   // Auto-add Backlog column if it doesn't exist yet
   const [backlogChecked, setBacklogChecked] = useState(false);
@@ -227,12 +243,12 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
                 column={column}
                 tasks={tasks}
                 parentTasks={parents}
-                onCreateTask={createTask}
-                onCreateParent={createParent}
                 onDeleteTask={deleteTask}
                 onDeleteColumn={deleteColumn}
                 onUpdateColumn={updateColumn}
-                onTaskClick={setSelectedTaskId}
+                onTaskClick={handleTaskClick}
+                onCreateTaskSidebar={handleCreateTaskSidebar}
+                timezone={settings?.timezone}
               />
             ))}
 
@@ -277,7 +293,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
             const t = tasks.find((t) => t.id === activeTaskId);
             return t ? (
               <div className="w-72 shadow-xl">
-                <KanbanCard task={t} onDelete={() => {}} onClick={() => {}} />
+                <KanbanCard task={t} onDelete={() => {}} onClick={() => {}} timezone={settings?.timezone} />
               </div>
             ) : null;
           })() : null}
@@ -294,10 +310,22 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
       </div>
       <TasksOverview />
 
-      {/* Task detail side panel */}
+      {/* Task detail side panel — edit mode */}
       <TaskDetailPanel
         taskId={selectedTaskId}
-        onClose={() => setSelectedTaskId(null)}
+        onClose={handleClosePanel}
+        onNavigateToTask={(id) => { setCreatingInColumnId(null); setSelectedTaskId(id); }}
+        mode="edit"
+        timezone={settings?.timezone}
+      />
+
+      {/* Task detail side panel — create mode */}
+      <TaskDetailPanel
+        taskId={null}
+        onClose={handleClosePanel}
+        mode="create"
+        createColumnId={creatingInColumnId || undefined}
+        timezone={settings?.timezone}
       />
     </>
   );

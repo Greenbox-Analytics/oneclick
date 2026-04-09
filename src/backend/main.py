@@ -22,8 +22,8 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from vector_search.contract_chatbot import ContractChatbot
-from vector_search.helpers import calculate_royalty_payments
+from zoe_chatbot.contract_chatbot import ContractChatbot
+from zoe_chatbot.helpers import calculate_royalty_payments
 from pagination import PaginatedResponse, paginate_query
 from auth import get_current_user_id
 
@@ -60,7 +60,7 @@ def _convert_pdf_background(
     """Background task: download PDF from storage, convert to markdown, cache in DB."""
     import tempfile
     from supabase import create_client
-    from vector_search.helpers import pdf_to_markdown
+    from zoe_chatbot.helpers import pdf_to_markdown
 
     try:
         db = create_client(db_url, db_key)
@@ -841,7 +841,7 @@ async def get_contract_markdown(contract_id: str, user_id: str = Depends(get_cur
 
         if not markdown:
             # Lazy migration: convert PDF to markdown and cache it
-            from vector_search.helpers import pdf_to_markdown
+            from zoe_chatbot.helpers import pdf_to_markdown
             file_data = get_supabase_client().storage.from_("project-files").download(record["file_path"])
             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
                 tmp.write(file_data)
@@ -1240,7 +1240,7 @@ async def oneclick_calculate_royalties_stream(
                         md = c_res.data[0].get("contract_markdown")
                         if not md:
                             # Lazy migration: convert PDF to markdown
-                            from vector_search.helpers import pdf_to_markdown
+                            from zoe_chatbot.helpers import pdf_to_markdown
                             pdf_data = get_supabase_client().storage.from_("project-files").download(c_res.data[0]["file_path"])
                             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
                                 tmp_pdf.write(pdf_data)

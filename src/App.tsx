@@ -32,6 +32,7 @@ const Registry = lazy(() => import("./pages/Registry"));
 const WorkDetail = lazy(() => import("./pages/WorkDetail"));
 const InviteClaim = lazy(() => import("./pages/InviteClaim"));
 const ProjectDetail = lazy(() => import("./pages/ProjectDetail"));
+const ConfirmEmail = lazy(() => import("./pages/ConfirmEmail"));
 
 const queryClient = new QueryClient();
 
@@ -52,6 +53,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
+            <Route path="/auth/confirm-email" element={<ConfirmEmail />} />
             <Route
               path="/onboarding"
               element={

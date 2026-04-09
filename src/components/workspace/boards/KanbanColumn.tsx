@@ -1,14 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Plus, MoreHorizontal, Trash2, Pencil } from "lucide-react";
 import {
   DropdownMenu,
@@ -24,29 +16,25 @@ interface KanbanColumnProps {
   column: BoardColumn;
   tasks: BoardTask[];
   parentTasks: ParentTaskWithChildren[];
-  onCreateTask: (data: { column_id?: string; title: string; parent_task_id?: string; is_parent?: boolean }) => void;
-  onCreateParent: (data: { title: string }) => void;
   onDeleteTask: (taskId: string) => void;
   onDeleteColumn: (columnId: string) => void;
   onUpdateColumn: (data: { id: string; title?: string }) => void;
   onTaskClick: (taskId: string) => void;
+  onCreateTaskSidebar: (columnId: string) => void;
+  timezone?: string;
 }
 
 export function KanbanColumn({
   column,
   tasks,
   parentTasks,
-  onCreateTask,
-  onCreateParent,
   onDeleteTask,
   onDeleteColumn,
   onUpdateColumn,
   onTaskClick,
+  onCreateTaskSidebar,
+  timezone,
 }: KanbanColumnProps) {
-  const [isAdding, setIsAdding] = useState(false);
-  const [newTaskTitle, setNewTaskTitle] = useState("");
-  const [isParent, setIsParent] = useState(false);
-  const [selectedParentId, setSelectedParentId] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState(column.title);
 
@@ -62,27 +50,6 @@ export function KanbanColumn({
     id: `column-${column.id}`,
     data: { type: "column", columnId: column.id },
   });
-
-  const handleAddTask = () => {
-    if (!newTaskTitle.trim()) return;
-
-    const today = new Date().toISOString().split("T")[0];
-    if (isParent) {
-      onCreateParent({ title: newTaskTitle.trim(), start_date: today });
-    } else {
-      onCreateTask({
-        column_id: column.id,
-        title: newTaskTitle.trim(),
-        parent_task_id: selectedParentId || undefined,
-        start_date: today,
-      });
-    }
-
-    setNewTaskTitle("");
-    setIsParent(false);
-    setSelectedParentId("");
-    setIsAdding(false);
-  };
 
   const columnTasks = tasks
     .filter((t) => t.column_id === column.id)
@@ -170,86 +137,22 @@ export function KanbanColumn({
             task={task}
             onDelete={onDeleteTask}
             onClick={onTaskClick}
+            timezone={timezone}
           />
         ))}
       </div>
 
       {/* Add task */}
       <div className="px-2 pb-2">
-        {isAdding ? (
-          <div className="space-y-2">
-            <Input
-              placeholder="Task title..."
-              value={newTaskTitle}
-              onChange={(e) => setNewTaskTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleAddTask();
-                if (e.key === "Escape") {
-                  setIsAdding(false);
-                  setIsParent(false);
-                  setSelectedParentId("");
-                }
-              }}
-              autoFocus
-            />
-
-            {/* Parent task checkbox */}
-            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-              <Checkbox
-                checked={isParent}
-                onCheckedChange={(checked) => {
-                  setIsParent(!!checked);
-                  if (checked) setSelectedParentId("");
-                }}
-              />
-              Make this an epic
-            </label>
-
-            {/* Link to parent dropdown (only if not making a parent) */}
-            {!isParent && parentTasks.length > 0 && (
-              <Select value={selectedParentId} onValueChange={setSelectedParentId}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Link to parent (optional)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No parent</SelectItem>
-                  {parentTasks.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.title}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-
-            <div className="flex gap-2">
-              <Button size="sm" onClick={handleAddTask} className="flex-1">
-                Add
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setIsAdding(false);
-                  setIsParent(false);
-                  setSelectedParentId("");
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start text-muted-foreground"
-            onClick={() => setIsAdding(true)}
-          >
-            <Plus className="h-4 w-4 mr-1" />
-            Add task
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start text-muted-foreground"
+          onClick={() => onCreateTaskSidebar(column.id)}
+        >
+          <Plus className="h-4 w-4 mr-1" />
+          Add task
+        </Button>
       </div>
     </div>
   );

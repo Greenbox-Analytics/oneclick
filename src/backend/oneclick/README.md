@@ -8,81 +8,93 @@ OneClick analyzes music contracts using AI and calculates royalty payments by ma
 
 ## How It Works
 
-### 1. **Contract Analysis**
-- Contracts are uploaded and stored in Pinecone vector database
-- AI extracts key information:
-  - Party names (artists, producers, songwriters)
-  - Song titles covered by the contract
-  - Royalty percentages for each party
-  - Royalty types (streaming, mechanical, sync, etc.)
+### 1. Contract Analysis
+- Contracts are parsed via AI (GPT-5.2) to extract structured data:
+  - **Parties** — artists, producers, songwriters, labels, publishers, etc.
+  - **Works** — song titles and composition types covered by the contract
+  - **Royalty shares** — per-party percentages, royalty types, and terms
+- Role taxonomy mapping standardizes verbose contract language (e.g., "master points" -> Streaming)
+- Multi-contract support with intelligent merging and conflict resolution
 
-### 2. **Royalty Statement Processing**
+### 2. Royalty Statement Processing
 - Supports both CSV and Excel formats
-- Auto-detects column names for song titles and revenue amounts
+- 3-layer auto-detection for column identification:
+  1. **Keyword matching** — priority terms like "net payable", "total payable"
+  2. **Fuzzy matching** — sequence matching with 80% similarity threshold
+  3. **Semantic (LLM)** — GPT-based fallback for ambiguous headers
 - Aggregates revenue by song title across all rows
 
-### 3. **Payment Calculation**
-- Matches songs from contracts to songs in royalty statements (fuzzy matching)
-- Applies each party's percentage to the total revenue per song
-- Generates detailed payment breakdown showing:
-  - Who gets paid
-  - How much they receive
-  - Which songs generated the revenue
-  - What percentage they're entitled to
+### 3. Payment Calculation
+- 3-tier fuzzy song matching (exact normalized, partial, word-level)
+- Aggregates amounts from all matching statement entries per song
+- Filters for streaming-equivalent royalties (master, producer, digital, etc.)
+- Computes payment: `total_royalty * (percentage / 100)` per party per song
 
-### 4. **Output**
-- Returns structured payment data via API
-- Can export to Excel with formatted breakdown
-- Includes summary totals and validation
+### 4. Output
+- Real-time progress via Server-Sent Events (SSE) streaming endpoint
+- Caches results per statement + contract combination to avoid recalculation
+- Excel export with formatted headers, currency columns, auto-width, and SUM totals
+- JSON export with summary statistics
+- Confirmed results saved to `royalty_calculations` table in Supabase
 
 ## Key Features
 
-- **Smart Matching**: Fuzzy matching handles variations in song titles
-- **Multi-Contract Support**: Merge multiple contracts for the same project
-- **Auto-Detection**: Automatically identifies relevant columns in statements
+- **Smart Matching**: 3-tier fuzzy matching handles song title variations and aggregates revenue correctly
+- **Multi-Contract Support**: Parallel parsing with intelligent merging — deduplicates parties, combines roles, resolves royalty share conflicts
+- **Auto-Detection**: 3-layer column identification handles various statement formats
+- **Caching**: Statement + contract combination caching with `force_recalculate` override
+- **Streaming Progress**: SSE endpoint sends real-time status updates during calculation
 - **Validation**: Checks for missing data and provides helpful error messages
-- **Flexible Input**: Accepts various royalty statement formats
 
 ## File Structure
 
 ```
 oneclick/
-├── contract_parser.py      # AI-powered contract extraction
-├── royalty_calculator.py   # Payment calculation engine
-├── helpers.py              # Utility functions (matching, normalization)
-└── README.md              # This file
+├── contract_parser.py      # AI-powered contract extraction (GPT-5.2)
+├── royalty_calculator.py   # Payment calculation engine + multi-contract merging
+├── helpers.py              # Title normalization, fuzzy matching, role simplification
+└── README.md               # This file
 ```
 
-## Usage Example
+## API Endpoints
 
-```python
-from oneclick.royalty_calculator import RoyaltyCalculator
+### `POST /oneclick/confirm`
+Save confirmed calculation results to the database.
 
-calculator = RoyaltyCalculator()
-
-# Calculate payments
-payments = calculator.calculate_payments(
-    contract_path="contract.pdf",
-    statement_path="royalties.csv",
-    user_id="user-123",
-    contract_id="contract-456"
-)
-
-# Export to Excel
-calculator.save_payments_to_excel(payments, "output.xlsx")
+**Request:**
+```json
+{
+  "contract_ids": ["uuid", "uuid"],
+  "royalty_statement_id": "uuid",
+  "project_id": "uuid",
+  "results": { ... }
+}
 ```
 
-## API Integration
+### `GET /oneclick/calculate-royalties-stream`
+SSE streaming endpoint with real-time progress updates.
 
-The OneClick functionality is exposed via FastAPI endpoint:
+**Query Params:**
+- `project_id` (required)
+- `royalty_statement_file_id` (required)
+- `contract_id` or `contract_ids` (one required)
+- `force_recalculate` (optional, bypasses cache)
 
-**POST** `/oneclick/calculate-royalties`
+**SSE Events:**
+```
+data: {"type": "progress", "message": "Parsing contracts..."}
+data: {"type": "progress", "message": "Processing royalty statement..."}
+data: {"type": "result", "payments": [...], "is_cached": false}
+```
+
+### `POST /oneclick/calculate-royalties`
+Standard blocking endpoint for royalty calculation.
 
 **Request:**
 ```json
 {
   "contract_id": "uuid",
-  "user_id": "uuid",
+  "contract_ids": ["uuid"],
   "project_id": "uuid",
   "royalty_statement_file_id": "uuid"
 }
@@ -103,14 +115,15 @@ The OneClick functionality is exposed via FastAPI endpoint:
       "total_royalty": 125000.00,
       "amount_to_pay": 56250.00
     }
-  ]
+  ],
+  "is_cached": false,
+  "message": "Calculated from 2 contracts"
 }
 ```
 
 ## Requirements
 
-- OpenAI API key (for contract parsing)
-- Pinecone API key (for vector storage)
+- OpenAI API key (for contract parsing and semantic column detection)
 - Python packages: `openpyxl`, `openai`, `python-dotenv`, `PyMuPDF`
 
 ## Error Handling

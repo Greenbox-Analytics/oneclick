@@ -9,7 +9,7 @@ A comprehensive semantic search and RAG (Retrieval-Augmented Generation) system 
 These files are part of the new Contract RAG system and should be **KEPT**:
 
 ```
-src/backend/vector_search/
+src/backend/zoe_chatbot/
 ├── config.py                    # Central configuration for all settings
 ├── contract_ingestion.py        # PDF upload, chunking, and indexing
 ├── contract_search.py           # Semantic search with metadata filtering
@@ -518,10 +518,10 @@ The full-document path sends **entire contract markdowns on every message** when
 
 ### Key Files
 
-- `vector_search/contract_chatbot.py` — RAG chatbot, streaming, conversation memory
-- `vector_search/contract_ingestion.py` — PDF ingestion pipeline
-- `vector_search/contract_search.py` — Semantic search with metadata filtering
-- `vector_search/helpers.py` — PDF → markdown, section splitting, table extraction
+- `zoe_chatbot/contract_chatbot.py` — RAG chatbot, streaming, conversation memory
+- `zoe_chatbot/contract_ingestion.py` — PDF ingestion pipeline
+- `zoe_chatbot/contract_search.py` — Semantic search with metadata filtering
+- `zoe_chatbot/helpers.py` — PDF → markdown, section splitting, table extraction
 - Frontend: `src/pages/Zoe.tsx`, `src/hooks/useStreamingChat.ts`
 
 ---
@@ -600,5 +600,5 @@ The contract parser runs **separate Pinecone queries for prose and table chunks*
 - `oneclick/contract_parser.py` — Structured data extraction from vectors
 - `oneclick/royalty_calculator.py` — Payment calculation engine
 - `oneclick/helpers.py` — Statement reading, column detection, fuzzy matching
-- `vector_search/contract_ingestion.py` — Shared ingestion pipeline (table linearization)
+- `zoe_chatbot/contract_ingestion.py` — Shared ingestion pipeline (table linearization)
 - `main.py` — API endpoints (`/oneclick/*`)

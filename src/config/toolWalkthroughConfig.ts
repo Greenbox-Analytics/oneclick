@@ -86,6 +86,7 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         description:
           "Upload PDF contracts here — Zoe will index them for analysis.",
         placement: "bottom",
+        skipIfMissing: true,
       },
       {
         targetSelector: '[data-walkthrough="zoe-chat"]',
@@ -100,6 +101,7 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         description:
           "Start a fresh conversation anytime. Your previous chats are saved automatically.",
         placement: "bottom",
+        skipIfMissing: true,
       },
     ],
   },
