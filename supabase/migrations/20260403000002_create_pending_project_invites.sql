@@ -37,7 +37,7 @@ CREATE POLICY "pending_invites_delete" ON pending_project_invites
 
 -- On signup: convert pending invites to project_members
 CREATE OR REPLACE FUNCTION process_pending_project_invites()
-RETURNS TRIGGER SECURITY DEFINER AS $$
+RETURNS TRIGGER SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   INSERT INTO project_members (project_id, user_id, role, invited_by)
   SELECT pi.project_id, NEW.id, pi.role, pi.invited_by

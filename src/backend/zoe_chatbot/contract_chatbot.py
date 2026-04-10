@@ -29,7 +29,7 @@ from enum import Enum
 from dotenv import load_dotenv
 from openai import OpenAI
 from oneclick.helpers import normalize_name
-from vector_search.helpers import detect_and_extract_tables, linearize_table
+from zoe_chatbot.helpers import detect_and_extract_tables, linearize_table
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')

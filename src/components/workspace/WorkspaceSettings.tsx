@@ -1,9 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Loader2 } from "lucide-react";
+import { Loader2, Check, ChevronsUpDown } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -11,6 +11,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 
 const COMMON_TIMEZONES = [
@@ -38,20 +49,55 @@ const COMMON_TIMEZONES = [
   "Africa/Johannesburg",
 ];
 
+const REGION_LABELS: Record<string, string> = {
+  America: "Americas",
+  Europe: "Europe",
+  Asia: "Asia",
+  Africa: "Africa",
+  Pacific: "Pacific",
+  Australia: "Australia",
+  Indian: "Indian Ocean",
+  Atlantic: "Atlantic",
+  Arctic: "Arctic",
+  Antarctica: "Antarctica",
+};
+
 export function WorkspaceSettings() {
   const { settings, isLoading, updateSettings } = useWorkspaceSettings();
+  const [tzOpen, setTzOpen] = useState(false);
+  const [regionFilter, setRegionFilter] = useState<string | null>(null);
 
-  const allTimezones = useMemo(() => {
+  const { regions, filteredTimezones } = useMemo(() => {
+    let all: string[];
     try {
-      const all = Intl.supportedValuesOf("timeZone");
-      // Put common ones first, then the rest
-      const commonSet = new Set(COMMON_TIMEZONES);
-      const rest = all.filter((tz) => !commonSet.has(tz));
-      return { common: COMMON_TIMEZONES, rest };
+      all = Intl.supportedValuesOf("timeZone");
     } catch {
-      return { common: COMMON_TIMEZONES, rest: [] };
+      all = COMMON_TIMEZONES;
     }
-  }, []);
+
+    // Extract unique regions
+    const regionSet = new Set<string>();
+    for (const tz of all) {
+      const region = tz.split("/")[0];
+      if (REGION_LABELS[region]) regionSet.add(region);
+    }
+    const regions = Array.from(regionSet).sort();
+
+    // Filter by region if one is selected
+    const filtered = regionFilter
+      ? all.filter((tz) => tz.startsWith(regionFilter + "/"))
+      : all;
+
+    // When no region filter, group common first then rest
+    if (!regionFilter) {
+      const commonSet = new Set(COMMON_TIMEZONES);
+      const common = COMMON_TIMEZONES.filter((tz) => all.includes(tz));
+      const rest = filtered.filter((tz) => !commonSet.has(tz));
+      return { regions, filteredTimezones: { common, rest } };
+    }
+
+    return { regions, filteredTimezones: { common: [], rest: filtered } };
+  }, [regionFilter]);
 
   const systemTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -153,27 +199,98 @@ export function WorkspaceSettings() {
 
           <div className="space-y-2">
             <Label>Timezone</Label>
-            <Select
-              value={settings.timezone || "system"}
-              onValueChange={(value) => updateSettings({ timezone: value === "system" ? undefined : value } as any)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={`System (${systemTimezone})`} />
-              </SelectTrigger>
-              <SelectContent className="max-h-[300px]">
-                <SelectItem value="system">System ({systemTimezone})</SelectItem>
-                {allTimezones.common.map((tz) => (
-                  <SelectItem key={tz} value={tz}>
-                    {tz.replace(/_/g, " ")}
-                  </SelectItem>
-                ))}
-                {allTimezones.rest.map((tz) => (
-                  <SelectItem key={tz} value={tz}>
-                    {tz.replace(/_/g, " ")}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={tzOpen} onOpenChange={setTzOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={tzOpen}
+                  className="w-full justify-between font-normal"
+                >
+                  {settings.timezone
+                    ? settings.timezone.replace(/_/g, " ")
+                    : `System (${systemTimezone})`}
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search timezone..." />
+                  <div className="flex flex-wrap gap-1 px-2 py-2 border-b">
+                    <Button
+                      variant={regionFilter === null ? "secondary" : "ghost"}
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => setRegionFilter(null)}
+                    >
+                      All
+                    </Button>
+                    {regions.map((region) => (
+                      <Button
+                        key={region}
+                        variant={regionFilter === region ? "secondary" : "ghost"}
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        onClick={() => setRegionFilter(regionFilter === region ? null : region)}
+                      >
+                        {REGION_LABELS[region] || region}
+                      </Button>
+                    ))}
+                  </div>
+                  <CommandList>
+                    <CommandEmpty>No timezone found.</CommandEmpty>
+                    {!regionFilter && (
+                      <CommandGroup heading="System">
+                        <CommandItem
+                          value={`system ${systemTimezone}`}
+                          onSelect={() => {
+                            updateSettings({ timezone: undefined } as any);
+                            setTzOpen(false);
+                          }}
+                        >
+                          <Check className={cn("mr-2 h-4 w-4", !settings.timezone ? "opacity-100" : "opacity-0")} />
+                          System ({systemTimezone})
+                        </CommandItem>
+                      </CommandGroup>
+                    )}
+                    {filteredTimezones.common.length > 0 && (
+                      <CommandGroup heading="Common">
+                        {filteredTimezones.common.map((tz) => (
+                          <CommandItem
+                            key={tz}
+                            value={tz}
+                            onSelect={() => {
+                              updateSettings({ timezone: tz } as any);
+                              setTzOpen(false);
+                            }}
+                          >
+                            <Check className={cn("mr-2 h-4 w-4", settings.timezone === tz ? "opacity-100" : "opacity-0")} />
+                            {tz.replace(/_/g, " ")}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {filteredTimezones.rest.length > 0 && (
+                      <CommandGroup heading={regionFilter ? (REGION_LABELS[regionFilter] || regionFilter) : "All Timezones"}>
+                        {filteredTimezones.rest.map((tz) => (
+                          <CommandItem
+                            key={tz}
+                            value={tz}
+                            onSelect={() => {
+                              updateSettings({ timezone: tz } as any);
+                              setTzOpen(false);
+                            }}
+                          >
+                            <Check className={cn("mr-2 h-4 w-4", settings.timezone === tz ? "opacity-100" : "opacity-0")} />
+                            {tz.replace(/_/g, " ")}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
             <p className="text-xs text-muted-foreground">
               Leave as "System" to use your device timezone
             </p>

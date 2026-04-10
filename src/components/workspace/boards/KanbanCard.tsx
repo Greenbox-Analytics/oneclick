@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar, MoreHorizontal, Trash2, ExternalLink, Users, CornerDownRight, AlertCircle } from "lucide-react";
-import { format } from "date-fns";
+import { parseDateString, getTodayString } from "@/lib/dateUtils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +19,7 @@ interface KanbanCardProps {
   task: BoardTask;
   onDelete: (taskId: string) => void;
   onClick: (taskId: string) => void;
+  timezone?: string;
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -28,7 +29,7 @@ const PRIORITY_COLORS: Record<string, string> = {
   urgent: "bg-red-100 text-red-700",
 };
 
-export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onClick }: KanbanCardProps) {
+export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onClick, timezone }: KanbanCardProps) {
   const {
     attributes,
     listeners,
@@ -46,13 +47,13 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
     borderLeftWidth: task.color ? 3 : 1,
   };
 
-  const today = format(new Date(), "yyyy-MM-dd");
+  const today = getTodayString(timezone);
   const isDueToday = task.due_date === today;
   const isOverdue = !!(task.due_date && task.due_date < today && !task.completed_at);
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return null;
-    return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return parseDateString(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
 
   const dateDisplay = (() => {

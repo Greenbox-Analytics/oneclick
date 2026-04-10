@@ -49,9 +49,9 @@ const Auth = () => {
       await signUp(signUpEmail, signUpPassword, signUpName);
       toast({
         title: "Welcome!",
-        description: "Account created! Let's set up your profile.",
+        description: "Check your email to confirm your account.",
       });
-      navigate("/onboarding");
+      navigate("/auth/confirm-email", { state: { email: signUpEmail } });
     } catch (error: any) {
       toast({
         title: "Error",
