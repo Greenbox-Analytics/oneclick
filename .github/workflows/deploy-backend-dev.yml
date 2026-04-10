@@ -54,6 +54,12 @@ jobs:
           docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.IMAGE_NAME }}:latest
 
+      - name: Clear conflicting ALLOWED_ORIGINS type
+        run: |
+          gcloud run services update ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --remove-secrets ALLOWED_ORIGINS 2>/dev/null || true
+
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.SERVICE_NAME }} \
