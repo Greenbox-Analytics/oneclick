@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { IntegrationCard } from "./IntegrationCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
+import { DrivePanel } from "./integrations/DrivePanel";
+import { SlackPanel } from "./integrations/SlackPanel";
 import type { IntegrationProvider, ConnectionStatus } from "@/types/integrations";
 
 const INTEGRATIONS = [
@@ -33,13 +36,19 @@ const INTEGRATIONS = [
   },
 ];
 
+const CONFIGURABLE_PROVIDERS: IntegrationProvider[] = ["google_drive", "slack"];
+
 export function IntegrationHub() {
   const { connections, connect, disconnect, isConnecting } = useIntegrations();
+  const [activePanel, setActivePanel] = useState<IntegrationProvider | null>(null);
 
   const getStatus = (provider: IntegrationProvider): ConnectionStatus => {
     const conn = connections.find((c) => c.provider === provider);
     return conn?.status || "disconnected";
   };
+
+  const isConnected = (provider: IntegrationProvider) =>
+    getStatus(provider) === "active";
 
   return (
     <div className="space-y-4">
@@ -56,11 +65,33 @@ export function IntegrationHub() {
             {...integration}
             status={getStatus(integration.provider)}
             onConnect={() => connect(integration.provider)}
-            onDisconnect={() => disconnect(integration.provider)}
+            onDisconnect={() => {
+              disconnect(integration.provider);
+              if (activePanel === integration.provider) setActivePanel(null);
+            }}
+            onConfigure={
+              CONFIGURABLE_PROVIDERS.includes(integration.provider) &&
+              isConnected(integration.provider)
+                ? () =>
+                    setActivePanel(
+                      activePanel === integration.provider
+                        ? null
+                        : integration.provider
+                    )
+                : undefined
+            }
             isConnecting={isConnecting}
           />
         ))}
       </div>
+
+      {/* Provider-specific configuration panels */}
+      {activePanel === "google_drive" && (
+        <DrivePanel onClose={() => setActivePanel(null)} />
+      )}
+      {activePanel === "slack" && (
+        <SlackPanel onClose={() => setActivePanel(null)} />
+      )}
     </div>
   );
 }
