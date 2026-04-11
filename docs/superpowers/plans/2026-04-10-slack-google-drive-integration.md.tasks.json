@@ -1,0 +1,61 @@
+{
+  "planPath": "docs/superpowers/plans/2026-04-10-slack-google-drive-integration.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Backend — Connections List Endpoint",
+      "status": "pending",
+      "description": "**Goal:** Add a GET endpoint that returns all integration connections for the authenticated user.\n\n**Files:**\n- Create: `src/backend/integrations/connections_router.py`\n- Modify: `src/backend/main.py:36-54`\n\n**Acceptance Criteria:**\n- GET /integrations/connections returns connections list\n- Uses JWT auth\n- No encrypted tokens in response\n\n**Verify:** `curl -H \"Authorization: Bearer $TOKEN\" http://localhost:8000/integrations/connections`\n\n```json:metadata\n{\"files\": [\"src/backend/integrations/connections_router.py\", \"src/backend/main.py\"], \"verifyCommand\": \"curl http://localhost:8000/integrations/connections\", \"acceptanceCriteria\": [\"GET /integrations/connections returns connections list\", \"Uses JWT auth\", \"No encrypted tokens in response\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: Frontend — Unstub useIntegrations Hook",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** Replace stubbed useIntegrations hook with real API calls.\n\n**Files:**\n- Modify: `src/hooks/useIntegrations.ts`\n\n**Acceptance Criteria:**\n- connectionsQuery fetches from GET /integrations/connections\n- connectMutation redirects to OAuth URL\n- disconnectMutation calls DELETE and invalidates cache\n\n**Verify:** Click Connect → browser redirects to OAuth\n\n```json:metadata\n{\"files\": [\"src/hooks/useIntegrations.ts\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"connectionsQuery fetches real connections\", \"connectMutation redirects to OAuth URL\", \"disconnectMutation calls DELETE and invalidates cache\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Google Drive — File Browser Hook",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Create a React Query hook for Google Drive browse/import/export.\n\n**Files:**\n- Create: `src/hooks/useGoogleDrive.ts`\n\n**Acceptance Criteria:**\n- useDriveBrowse returns files in a folder\n- useDriveImport mutation works\n- useDriveExport mutation works\n\n**Verify:** `npm run build`\n\n```json:metadata\n{\"files\": [\"src/hooks/useGoogleDrive.ts\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"useDriveBrowse returns files\", \"useDriveImport mutation works\", \"useDriveExport mutation works\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Google Drive — File Browser Panel",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** Build Drive file browser component with folder navigation and import.\n\n**Files:**\n- Create: `src/components/workspace/integrations/DrivePanel.tsx`\n\n**Acceptance Criteria:**\n- File list renders from Drive root\n- Folder navigation with breadcrumbs\n- Import with project picker\n- Loading skeleton\n\n**Verify:** `npm run build`\n\n```json:metadata\n{\"files\": [\"src/components/workspace/integrations/DrivePanel.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"File list renders\", \"Folder navigation works\", \"Import works\", \"Loading skeleton shows\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Slack — Settings Hook & Notification Panel",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Create Slack channels/settings hook and notification configuration panel.\n\n**Files:**\n- Create: `src/hooks/useSlackSettings.ts`\n- Create: `src/components/workspace/integrations/SlackPanel.tsx`\n\n**Acceptance Criteria:**\n- useSlackChannels returns channels\n- useSlackSettings fetches and updates settings\n- SlackPanel shows event types with channel pickers\n- Toggle updates backend\n\n**Verify:** `npm run build`\n\n```json:metadata\n{\"files\": [\"src/hooks/useSlackSettings.ts\", \"src/components/workspace/integrations/SlackPanel.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"useSlackChannels returns channels\", \"useSlackSettings works\", \"SlackPanel renders\", \"Toggle updates backend\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: IntegrationHub — Show Provider Panels When Connected",
+      "status": "pending",
+      "blockedBy": [3, 4],
+      "description": "**Goal:** Update IntegrationHub to show DrivePanel/SlackPanel when connected, add Configure button.\n\n**Files:**\n- Modify: `src/components/workspace/IntegrationHub.tsx`\n- Modify: `src/components/workspace/IntegrationCard.tsx`\n\n**Acceptance Criteria:**\n- Configure button on connected cards\n- DrivePanel opens for Google Drive\n- SlackPanel opens for Slack\n- Only one panel at a time\n- Panel closeable\n\n**Verify:** `npm run build`\n\n```json:metadata\n{\"files\": [\"src/components/workspace/IntegrationHub.tsx\", \"src/components/workspace/IntegrationCard.tsx\"], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"Configure button shows\", \"Panels open correctly\", \"One panel at a time\", \"Closeable\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Backend — Wire Slack Event Handlers at Startup",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Register Slack notify_for_event as handler for all events in the event bus.\n\n**Files:**\n- Modify: `src/backend/main.py`\n\n**Acceptance Criteria:**\n- Slack handler registered for all events at startup\n- Task creation triggers Slack notification\n- Handler failures isolated\n\n**Verify:** Create task → check Slack channel → notification appears\n\n```json:metadata\n{\"files\": [\"src/backend/main.py\"], \"verifyCommand\": \"curl -X POST http://localhost:8000/boards/tasks\", \"acceptanceCriteria\": [\"Slack handler registered at startup\", \"Notifications fire on events\", \"Failures isolated\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Integration Testing & Polish",
+      "status": "pending",
+      "blockedBy": [5, 6],
+      "description": "**Goal:** End-to-end test and polish both integrations.\n\n**Acceptance Criteria:**\n- Google Drive full flow works\n- Slack full flow works\n- OAuth redirect works\n- Loading states correct\n- Error states handled\n\n**Verify:** Complete manual test checklist\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"npm run build\", \"acceptanceCriteria\": [\"Google Drive flow works\", \"Slack flow works\", \"OAuth redirect works\", \"Loading states correct\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-04-10T00:00:00Z"
+}

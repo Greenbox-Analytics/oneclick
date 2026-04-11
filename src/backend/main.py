@@ -34,6 +34,7 @@ app = FastAPI()
 
 # --- Mount Integration & Board Routers ---
 from boards.router import router as boards_router
+from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
 from integrations.monday.router import router as monday_router
 from integrations.notion.router import router as notion_router
@@ -47,11 +48,36 @@ app.include_router(google_drive_router, prefix="/integrations/google-drive", tag
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
 app.include_router(notion_router, prefix="/integrations/notion", tags=["Notion"])
 app.include_router(monday_router, prefix="/integrations/monday", tags=["Monday.com"])
+app.include_router(connections_router, prefix="/integrations", tags=["Integrations"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
 app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])
 app.include_router(splitsheet_router, prefix="/splitsheet", tags=["Split Sheet"])
 app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"])
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
+
+# --- Register Slack notification handlers on events ---
+from integrations import events
+from integrations.slack.service import notify_for_event as slack_notify
+
+
+async def _slack_event_handler(event_name: str, payload: dict):
+    """Bridge between event bus and Slack notification service."""
+    user_id = payload.get("user_id")
+    if not user_id:
+        return
+    await slack_notify(get_supabase_client(), user_id, event_name, payload)
+
+
+# Register for all notifiable events
+for _event in [
+    events.TASK_CREATED,
+    events.TASK_UPDATED,
+    events.TASK_COMPLETED,
+    events.CONTRACT_UPLOADED,
+    events.CONTRACT_DELETED,
+    events.ROYALTY_CALCULATED,
+]:
+    events.on(_event, _slack_event_handler)
 
 
 def _convert_pdf_background(
