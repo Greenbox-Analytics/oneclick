@@ -14,40 +14,43 @@ Features:
 - Rolling conversation summaries
 """
 
-import os
-import uuid
-import time
-import json
 import hashlib
-import re
+import json
 import logging
-from typing import List, Dict, Optional, Tuple, Literal, Any
+import os
+import re
+import time
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any, Literal
+
 from dotenv import load_dotenv
 from openai import OpenAI
+
 from oneclick.helpers import normalize_name
 from zoe_chatbot.helpers import detect_and_extract_tables, linearize_table
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
 # Confidence thresholds for graduated answering
 class ConfidenceLevel(Enum):
-    HIGH = "high"           # >= 0.85 - Answer directly
-    MEDIUM = "medium"       # 0.60-0.84 - Answer with caveat
-    LOW = "low"             # < 0.60 - Reverify or clarify
-    CONTEXT = "context"     # From pinned facts
+    HIGH = "high"  # >= 0.85 - Answer directly
+    MEDIUM = "medium"  # 0.60-0.84 - Answer with caveat
+    LOW = "low"  # < 0.60 - Reverify or clarify
+    CONTEXT = "context"  # From pinned facts
     CONVERSATIONAL = "conversational"  # Greetings, etc.
 
 
 @dataclass
 class RouteDecision:
     """Routing decision for the current turn."""
+
     route: Literal["artist", "contract", "disambiguate"] = "contract"
     answer_mode: Literal["context", "retrieve"] = "retrieve"
     confidence: float = 0.0
@@ -58,11 +61,12 @@ class RouteDecision:
 @dataclass
 class Scope:
     """Defines the scope for facts and assumptions"""
-    artist_id: Optional[str] = None
-    project_id: Optional[str] = None
-    contract_id: Optional[str] = None
-    
-    def matches(self, other: 'Scope') -> bool:
+
+    artist_id: str | None = None
+    project_id: str | None = None
+    contract_id: str | None = None
+
+    def matches(self, other: "Scope") -> bool:
         """Check if this scope matches or is a subset of another scope"""
         if self.artist_id and other.artist_id and self.artist_id != other.artist_id:
             return False
@@ -71,12 +75,12 @@ class Scope:
         if self.contract_id and other.contract_id and self.contract_id != other.contract_id:
             return False
         return True
-    
+
     def is_global(self) -> bool:
         """Check if this is a global (unscoped) fact"""
         return not self.artist_id and not self.project_id and not self.contract_id
-    
-    def to_dict(self) -> Dict:
+
+    def to_dict(self) -> dict:
         return {"artist_id": self.artist_id, "project_id": self.project_id, "contract_id": self.contract_id}
 
 
@@ -86,6 +90,7 @@ class PinnedFact:
     A verified fact extracted from documents or user input.
     Includes confidence scoring and scope tracking.
     """
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     fact_type: str = ""  # royalty_split, payment_terms, parties, etc.
     description: str = ""  # Human-readable description
@@ -96,8 +101,8 @@ class PinnedFact:
     scope: Scope = field(default_factory=Scope)
     extracted_at: datetime = field(default_factory=datetime.now)
     last_verified: datetime = field(default_factory=datetime.now)
-    
-    def to_dict(self) -> Dict:
+
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "fact_type": self.fact_type,
@@ -108,9 +113,9 @@ class PinnedFact:
             "source_reference": self.source_reference,
             "scope": self.scope.to_dict(),
             "extracted_at": self.extracted_at.isoformat(),
-            "last_verified": self.last_verified.isoformat()
+            "last_verified": self.last_verified.isoformat(),
         }
-    
+
     def get_confidence_level(self) -> ConfidenceLevel:
         """Get the confidence level based on thresholds"""
         if self.confidence >= 0.85:
@@ -127,6 +132,7 @@ class Assumption:
     An unverified assumption made during conversation.
     Must be tracked separately from facts and invalidated on scope change.
     """
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     statement: str = ""  # The assumption being made
     context: str = ""  # What triggered this assumption
@@ -134,10 +140,10 @@ class Assumption:
     introduced_at: datetime = field(default_factory=datetime.now)
     verified: bool = False
     invalidated: bool = False
-    invalidated_at: Optional[datetime] = None
-    invalidation_reason: Optional[str] = None
-    
-    def to_dict(self) -> Dict:
+    invalidated_at: datetime | None = None
+    invalidation_reason: str | None = None
+
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "statement": self.statement,
@@ -147,9 +153,9 @@ class Assumption:
             "verified": self.verified,
             "invalidated": self.invalidated,
             "invalidated_at": self.invalidated_at.isoformat() if self.invalidated_at else None,
-            "invalidation_reason": self.invalidation_reason
+            "invalidation_reason": self.invalidation_reason,
         }
-    
+
     def invalidate(self, reason: str) -> None:
         """Mark this assumption as invalidated"""
         self.invalidated = True
@@ -162,51 +168,51 @@ class FactLedger:
     Manages pinned facts per session with confidence scoring and scope filtering.
     Facts are stored per session and can be filtered by current scope.
     """
-    
+
     def __init__(self):
-        self._facts: Dict[str, List[PinnedFact]] = defaultdict(list)
-        self._session_timestamps: Dict[str, float] = {}
-    
+        self._facts: dict[str, list[PinnedFact]] = defaultdict(list)
+        self._session_timestamps: dict[str, float] = {}
+
     def add_fact(self, session_id: str, fact: PinnedFact) -> None:
         """Add or update a pinned fact for a session"""
         existing_idx = None
         for idx, existing in enumerate(self._facts[session_id]):
-            if (existing.fact_type == fact.fact_type and 
-                existing.scope.matches(fact.scope) and
-                existing.source_reference == fact.source_reference):
+            if (
+                existing.fact_type == fact.fact_type
+                and existing.scope.matches(fact.scope)
+                and existing.source_reference == fact.source_reference
+            ):
                 existing_idx = idx
                 break
-        
+
         if existing_idx is not None:
             if fact.confidence >= self._facts[session_id][existing_idx].confidence:
                 self._facts[session_id][existing_idx] = fact
         else:
             self._facts[session_id].append(fact)
-        
+
         self._session_timestamps[session_id] = time.time()
-    
-    def get_facts(self, session_id: str, scope: Optional[Scope] = None, 
-                  min_confidence: float = 0.0) -> List[PinnedFact]:
+
+    def get_facts(self, session_id: str, scope: Scope | None = None, min_confidence: float = 0.0) -> list[PinnedFact]:
         """Get facts for a session, optionally filtered by scope and confidence"""
         facts = self._facts.get(session_id, [])
-        
+
         if scope:
             facts = [f for f in facts if f.scope.matches(scope) or f.scope.is_global()]
-        
+
         if min_confidence > 0:
             facts = [f for f in facts if f.confidence >= min_confidence]
-        
+
         return facts
-    
-    def get_fact_by_type(self, session_id: str, fact_type: str, 
-                         scope: Optional[Scope] = None) -> Optional[PinnedFact]:
+
+    def get_fact_by_type(self, session_id: str, fact_type: str, scope: Scope | None = None) -> PinnedFact | None:
         """Get the highest confidence fact of a given type"""
         facts = self.get_facts(session_id, scope)
         matching = [f for f in facts if f.fact_type == fact_type]
         if matching:
             return max(matching, key=lambda f: f.confidence)
         return None
-    
+
     def clear_session(self, session_id: str) -> None:
         """Clear all facts for a session"""
         if session_id in self._facts:
@@ -220,56 +226,59 @@ class AssumptionLedger:
     Manages assumptions per session with scope-based invalidation.
     Assumptions are tracked separately from verified facts.
     """
-    
+
     def __init__(self):
-        self._assumptions: Dict[str, List[Assumption]] = defaultdict(list)
-    
+        self._assumptions: dict[str, list[Assumption]] = defaultdict(list)
+
     def add_assumption(self, session_id: str, assumption: Assumption) -> None:
         """Add an assumption for a session"""
         self._assumptions[session_id].append(assumption)
-    
-    def get_active_assumptions(self, session_id: str, scope: Optional[Scope] = None) -> List[Assumption]:
+
+    def get_active_assumptions(self, session_id: str, scope: Scope | None = None) -> list[Assumption]:
         """Get non-invalidated assumptions, optionally filtered by scope"""
         assumptions = [a for a in self._assumptions.get(session_id, []) if not a.invalidated]
-        
+
         if scope:
             assumptions = [a for a in assumptions if a.scope.matches(scope) or a.scope.is_global()]
-        
+
         return assumptions
-    
-    def invalidate_for_scope_change(self, session_id: str, old_scope: Scope, 
-                                     new_scope: Scope) -> List[Assumption]:
+
+    def invalidate_for_scope_change(self, session_id: str, old_scope: Scope, new_scope: Scope) -> list[Assumption]:
         """
         Invalidate assumptions that are no longer valid due to scope change.
         Returns list of invalidated assumptions.
         """
         invalidated = []
-        
+
         for assumption in self._assumptions.get(session_id, []):
             if assumption.invalidated:
                 continue
-            
+
             should_invalidate = False
             reason = ""
-            
-            if (assumption.scope.artist_id and 
-                old_scope.artist_id == assumption.scope.artist_id and
-                new_scope.artist_id != assumption.scope.artist_id):
+
+            if (
+                assumption.scope.artist_id
+                and old_scope.artist_id == assumption.scope.artist_id
+                and new_scope.artist_id != assumption.scope.artist_id
+            ):
                 should_invalidate = True
                 reason = f"Artist changed from {old_scope.artist_id} to {new_scope.artist_id}"
-            
-            if (assumption.scope.project_id and
-                old_scope.project_id == assumption.scope.project_id and
-                new_scope.project_id != assumption.scope.project_id):
+
+            if (
+                assumption.scope.project_id
+                and old_scope.project_id == assumption.scope.project_id
+                and new_scope.project_id != assumption.scope.project_id
+            ):
                 should_invalidate = True
                 reason = f"Project changed from {old_scope.project_id} to {new_scope.project_id}"
-            
+
             if should_invalidate:
                 assumption.invalidate(reason)
                 invalidated.append(assumption)
-        
+
         return invalidated
-    
+
     def verify_assumption(self, session_id: str, assumption_id: str) -> bool:
         """Mark an assumption as verified"""
         for assumption in self._assumptions.get(session_id, []):
@@ -277,7 +286,7 @@ class AssumptionLedger:
                 assumption.verified = True
                 return True
         return False
-    
+
     def clear_session(self, session_id: str) -> None:
         """Clear all assumptions for a session"""
         if session_id in self._assumptions:
@@ -289,19 +298,19 @@ class ConversationSummary:
     Manages rolling conversation summaries per session.
     Compresses older turns into a summary while keeping recent turns verbatim.
     """
-    
+
     def __init__(self, recent_turns_limit: int = 6):
-        self._summaries: Dict[str, str] = {}
+        self._summaries: dict[str, str] = {}
         self._recent_turns_limit = recent_turns_limit
-    
+
     def get_summary(self, session_id: str) -> str:
         """Get the rolling summary for a session"""
         return self._summaries.get(session_id, "")
-    
+
     def update_summary(self, session_id: str, summary: str) -> None:
         """Update the rolling summary for a session"""
         self._summaries[session_id] = summary
-    
+
     def clear_session(self, session_id: str) -> None:
         """Clear summary for a session"""
         if session_id in self._summaries:
@@ -311,10 +320,11 @@ class ConversationSummary:
 @dataclass
 class ChatMessage:
     """Represents a single chat message"""
+
     role: str  # "user" or "assistant"
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
-    metadata: Dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=dict)
 
 
 class InMemoryChatMessageHistory:
@@ -322,53 +332,48 @@ class InMemoryChatMessageHistory:
     In-memory storage for chat message history per session.
     Provides efficient retrieval and automatic cleanup of old sessions.
     """
-    
+
     def __init__(self, max_messages_per_session: int = 20, session_ttl_seconds: int = 3600):
         """
         Initialize the chat message history.
-        
+
         Args:
             max_messages_per_session: Maximum number of messages to keep per session
             session_ttl_seconds: Time-to-live for inactive sessions (default: 1 hour)
         """
-        self._sessions: Dict[str, List[ChatMessage]] = defaultdict(list)
-        self._session_timestamps: Dict[str, float] = {}
-        self._last_contract_ids: Dict[str, Optional[List[str]]] = {}
+        self._sessions: dict[str, list[ChatMessage]] = defaultdict(list)
+        self._session_timestamps: dict[str, float] = {}
+        self._last_contract_ids: dict[str, list[str] | None] = {}
         self.max_messages = max_messages_per_session
         self.session_ttl = session_ttl_seconds
-    
-    def add_message(self, session_id: str, role: str, content: str, metadata: Dict = None) -> None:
+
+    def add_message(self, session_id: str, role: str, content: str, metadata: dict = None) -> None:
         """
         Add a message to the session history.
-        
+
         Args:
             session_id: Unique session identifier
             role: Message role ("user" or "assistant")
             content: Message content
             metadata: Optional metadata (sources, confidence, etc.)
         """
-        message = ChatMessage(
-            role=role,
-            content=content,
-            timestamp=datetime.now(),
-            metadata=metadata or {}
-        )
-        
+        message = ChatMessage(role=role, content=content, timestamp=datetime.now(), metadata=metadata or {})
+
         self._sessions[session_id].append(message)
         self._session_timestamps[session_id] = time.time()
-        
+
         # Trim to max messages (keep most recent)
         if len(self._sessions[session_id]) > self.max_messages:
-            self._sessions[session_id] = self._sessions[session_id][-self.max_messages:]
-    
-    def get_messages(self, session_id: str, limit: Optional[int] = None) -> List[ChatMessage]:
+            self._sessions[session_id] = self._sessions[session_id][-self.max_messages :]
+
+    def get_messages(self, session_id: str, limit: int | None = None) -> list[ChatMessage]:
         """
         Get messages for a session.
-        
+
         Args:
             session_id: Unique session identifier
             limit: Maximum number of messages to return (most recent)
-            
+
         Returns:
             List of ChatMessage objects
         """
@@ -376,21 +381,21 @@ class InMemoryChatMessageHistory:
         if limit and len(messages) > limit:
             return messages[-limit:]
         return messages
-    
-    def get_messages_for_llm(self, session_id: str, limit: int = 10) -> List[Dict]:
+
+    def get_messages_for_llm(self, session_id: str, limit: int = 10) -> list[dict]:
         """
         Get messages formatted for OpenAI API.
-        
+
         Args:
             session_id: Unique session identifier
             limit: Maximum number of message pairs to include
-            
+
         Returns:
             List of message dicts with 'role' and 'content'
         """
         messages = self.get_messages(session_id, limit=limit * 2)  # user + assistant pairs
         return [{"role": msg.role, "content": msg.content} for msg in messages]
-    
+
     def clear_session(self, session_id: str) -> None:
         """Clear all messages for a session."""
         if session_id in self._sessions:
@@ -402,46 +407,46 @@ class InMemoryChatMessageHistory:
         if session_id in self._last_contract_ids:
             del self._last_contract_ids[session_id]
 
-    def set_last_contract_ids(self, session_id: str, contract_ids: Optional[List[str]]) -> None:
+    def set_last_contract_ids(self, session_id: str, contract_ids: list[str] | None) -> None:
         """Store the contract_ids used for the last query in this session."""
         self._last_contract_ids[session_id] = contract_ids
 
-    def get_last_contract_ids(self, session_id: str) -> Optional[List[str]]:
+    def get_last_contract_ids(self, session_id: str) -> list[str] | None:
         """Get the contract_ids used for the last query in this session."""
         return self._last_contract_ids.get(session_id)
 
     def set_pending_suggestion(self, session_id: str, suggestion: str, context_hash: str) -> None:
         """
         Store a pending suggestion for the session.
-        
+
         Args:
             session_id: Unique session identifier
             suggestion: The suggested follow-up question/action
             context_hash: Hash of contracts_discussed to detect context changes
         """
-        if not hasattr(self, '_pending_suggestions'):
-            self._pending_suggestions: Dict[str, Dict] = {}
+        if not hasattr(self, "_pending_suggestions"):
+            self._pending_suggestions: dict[str, dict] = {}
         self._pending_suggestions[session_id] = {
-            'suggestion': suggestion,
-            'context_hash': context_hash,
-            'timestamp': time.time()
+            "suggestion": suggestion,
+            "context_hash": context_hash,
+            "timestamp": time.time(),
         }
-    
-    def get_pending_suggestion(self, session_id: str) -> Optional[Dict]:
+
+    def get_pending_suggestion(self, session_id: str) -> dict | None:
         """
         Get the pending suggestion for a session.
-        
+
         Returns:
             Dict with 'suggestion' and 'context_hash', or None if no pending suggestion
         """
-        if not hasattr(self, '_pending_suggestions'):
-            self._pending_suggestions: Dict[str, Dict] = {}
+        if not hasattr(self, "_pending_suggestions"):
+            self._pending_suggestions: dict[str, dict] = {}
             return None
         return self._pending_suggestions.get(session_id)
-    
+
     def clear_pending_suggestion(self, session_id: str) -> None:
         """Clear the pending suggestion for a session."""
-        if hasattr(self, '_pending_suggestions') and session_id in self._pending_suggestions:
+        if hasattr(self, "_pending_suggestions") and session_id in self._pending_suggestions:
             del self._pending_suggestions[session_id]
 
     def estimate_token_count(self, session_id: str) -> int:
@@ -459,7 +464,7 @@ class InMemoryChatMessageHistory:
         total_chars = sum(len(msg.content) for msg in messages)
         return total_chars // 4
 
-    def trim_to_recent(self, session_id: str, keep_recent: int = 6) -> List[ChatMessage]:
+    def trim_to_recent(self, session_id: str, keep_recent: int = 6) -> list[ChatMessage]:
         """
         Remove older messages and return them, keeping only the most recent ones.
 
@@ -501,10 +506,7 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env file")
 
-openai_client = OpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None
-)
+openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None)
 
 # Configuration
 DEFAULT_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")  # Updated to stable model
@@ -515,64 +517,159 @@ MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
 # Load music industry knowledge context (cached once at module load)
 _MUSIC_CONTEXT_PATH = os.path.join(os.path.dirname(__file__), "music_context.md")
-with open(_MUSIC_CONTEXT_PATH, "r") as _f:
+with open(_MUSIC_CONTEXT_PATH) as _f:
     MUSIC_INDUSTRY_CONTEXT = _f.read()
 del _f
 
 
 class ContractChatbot:
     """RAG-based chatbot for contract Q&A with session-based memory, fact tracking, and assumptions"""
-    
+
     # Conversational patterns that don't require document search
     CONVERSATIONAL_PATTERNS = [
-        "hello", "hi", "hey", "greetings", "good morning", "good afternoon", 
-        "good evening", "howdy", "what's up", "whats up", "sup",
-        "how are you", "how's it going", "hows it going",
-        "thanks", "thank you", "thx", "appreciated",
-        "bye", "goodbye", "see you", "later", "cya",
-        "help", "what can you do", "who are you", "what are you",
-        "nice", "great", "awesome", "cool", "ok", "okay",
+        "hello",
+        "hi",
+        "hey",
+        "greetings",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "howdy",
+        "what's up",
+        "whats up",
+        "sup",
+        "how are you",
+        "how's it going",
+        "hows it going",
+        "thanks",
+        "thank you",
+        "thx",
+        "appreciated",
+        "bye",
+        "goodbye",
+        "see you",
+        "later",
+        "cya",
+        "help",
+        "what can you do",
+        "who are you",
+        "what are you",
+        "nice",
+        "great",
+        "awesome",
+        "cool",
+        "ok",
+        "okay",
     ]
-    
+
     # Affirmative patterns that indicate user wants to proceed with a pending suggestion
     AFFIRMATIVE_PATTERNS = [
-        "yes", "yeah", "yep", "yup", "sure", "please", "please do", 
-        "go ahead", "do it", "yes please", "sounds good", "that would be great",
-        "absolutely", "definitely", "of course", "ok", "okay", "alright",
-        "let's do it", "show me", "tell me", "i'd like that", "yes do that"
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "sure",
+        "please",
+        "please do",
+        "go ahead",
+        "do it",
+        "yes please",
+        "sounds good",
+        "that would be great",
+        "absolutely",
+        "definitely",
+        "of course",
+        "ok",
+        "okay",
+        "alright",
+        "let's do it",
+        "show me",
+        "tell me",
+        "i'd like that",
+        "yes do that",
     ]
 
     ARTIST_INTENT_PHRASES = [
         # Profile / bio
-        "artist", "bio", "biography", "about the artist", "about this artist",
-        "tell me about", "who is", "who are",
+        "artist",
+        "bio",
+        "biography",
+        "about the artist",
+        "about this artist",
+        "tell me about",
+        "who is",
+        "who are",
         # Social media
-        "social", "social media", "instagram", "tiktok", "youtube", "twitter",
-        "facebook", "socials",
+        "social",
+        "social media",
+        "instagram",
+        "tiktok",
+        "youtube",
+        "twitter",
+        "facebook",
+        "socials",
         # Streaming / DSP
-        "spotify", "apple music", "soundcloud", "dsp", "streaming link",
-        "where can i listen", "where to listen", "music link",
+        "spotify",
+        "apple music",
+        "soundcloud",
+        "dsp",
+        "streaming link",
+        "where can i listen",
+        "where to listen",
+        "music link",
         # Contact / press
-        "email", "contact", "epk", "press kit", "linktree", "website",
+        "email",
+        "contact",
+        "epk",
+        "press kit",
+        "linktree",
+        "website",
         # Genre / style
-        "genre", "genres", "what type of music", "what kind of music",
-        "music style", "sound like",
+        "genre",
+        "genres",
+        "what type of music",
+        "what kind of music",
+        "music style",
+        "sound like",
         # General artist info
-        "artist info", "artist profile", "artist page", "artist details",
-        "background", "artist background",
+        "artist info",
+        "artist profile",
+        "artist page",
+        "artist details",
+        "background",
+        "artist background",
     ]
 
     CONTRACT_INTENT_KEYWORDS = [
-        "contract", "agreement", "clause", "royalty", "royalties", "split", "splits",
-        "payment", "advance", "term", "termination", "copyright", "master rights",
-        "publishing rights", "parties", "legal", "streaming", "spotify", "apple music",
-        "dsp", "revenue", "net revenue", "gross revenue"
+        "contract",
+        "agreement",
+        "clause",
+        "royalty",
+        "royalties",
+        "split",
+        "splits",
+        "payment",
+        "advance",
+        "term",
+        "termination",
+        "copyright",
+        "master rights",
+        "publishing rights",
+        "parties",
+        "legal",
+        "streaming",
+        "spotify",
+        "apple music",
+        "dsp",
+        "revenue",
+        "net revenue",
+        "gross revenue",
     ]
-    
+
     def __init__(self, llm_model: str = DEFAULT_LLM_MODEL):
         """
         Initialize the contract chatbot
-        
+
         Args:
             llm_model: LLM model to use for answer generation
         """
@@ -581,33 +678,33 @@ class ContractChatbot:
         self.fact_ledger = _fact_ledger  # Use global fact ledger
         self.assumption_ledger = _assumption_ledger  # Use global assumption ledger
         self.conversation_summary = _conversation_summary  # Use global conversation summary
-    
-    def _get_current_scope(self, artist_id: Optional[str] = None, 
-                           project_id: Optional[str] = None,
-                           contract_id: Optional[str] = None) -> Scope:
+
+    def _get_current_scope(
+        self, artist_id: str | None = None, project_id: str | None = None, contract_id: str | None = None
+    ) -> Scope:
         """Create a Scope object from current context"""
         return Scope(artist_id=artist_id, project_id=project_id, contract_id=contract_id)
-    
+
     def _calculate_confidence(self, similarity_score: float) -> float:
         """
         Calculate confidence score from vector similarity.
         Maps similarity (typically 0.3-0.95) to confidence (0.0-1.0).
-        
+
         Args:
             similarity_score: Raw similarity score from vector search
-            
+
         Returns:
             Confidence score between 0.0 and 1.0
         """
         if similarity_score < MIN_SIMILARITY_THRESHOLD:
             return 0.0
-        
+
         # Normalize to 0-1 range based on practical bounds
         normalized = (similarity_score - MIN_SIMILARITY_THRESHOLD) / (0.95 - MIN_SIMILARITY_THRESHOLD)
         # Apply slight curve to favor higher similarities
-        confidence = min(1.0, normalized ** 0.8)
+        confidence = min(1.0, normalized**0.8)
         return round(confidence, 3)
-    
+
     def _get_confidence_level(self, confidence: float) -> ConfidenceLevel:
         """Get the confidence level enum from a confidence score"""
         if confidence >= CONFIDENCE_HIGH_THRESHOLD:
@@ -616,10 +713,17 @@ class ContractChatbot:
             return ConfidenceLevel.MEDIUM
         else:
             return ConfidenceLevel.LOW
-    
-    def _create_pinned_fact(self, fact_type: str, description: str, value: Any,
-                            confidence: float, source_reference: str,
-                            scope: Scope, source_type: str = "document") -> PinnedFact:
+
+    def _create_pinned_fact(
+        self,
+        fact_type: str,
+        description: str,
+        value: Any,
+        confidence: float,
+        source_reference: str,
+        scope: Scope,
+        source_type: str = "document",
+    ) -> PinnedFact:
         """Helper to create a PinnedFact with proper defaults"""
         return PinnedFact(
             fact_type=fact_type,
@@ -628,309 +732,305 @@ class ContractChatbot:
             confidence=confidence,
             source_type=source_type,
             source_reference=source_reference,
-            scope=scope
+            scope=scope,
         )
-    
-    def _extract_and_pin_facts(self, answer: str, query: str, sources: List[Dict],
-                               session_id: str, scope: Scope) -> List[PinnedFact]:
+
+    def _extract_and_pin_facts(
+        self, answer: str, query: str, sources: list[dict], session_id: str, scope: Scope
+    ) -> list[PinnedFact]:
         """
         Extract facts from an answer and pin them to the ledger.
-        
+
         Args:
             answer: The LLM-generated answer
             query: The original query
             sources: Source documents used
             session_id: Session ID for storage
             scope: Current scope for the facts
-            
+
         Returns:
             List of extracted and pinned facts
         """
         extracted_facts = []
-        
+
         # Use existing extraction logic
         extracted_data = self._extract_structured_data(answer, query)
-        
+
         # Calculate base confidence from sources
         base_confidence = 0.0
         source_ref = "unknown"
         if sources:
-            highest_score = max(s.get('score', 0) for s in sources)
+            highest_score = max(s.get("score", 0) for s in sources)
             base_confidence = self._calculate_confidence(highest_score)
-            source_ref = sources[0].get('contract_file', 'document')
-        
+            source_ref = sources[0].get("contract_file", "document")
+
         # Pin royalty splits
-        if 'royalty_splits' in extracted_data:
-            for royalty_type, splits in extracted_data['royalty_splits'].items():
+        if "royalty_splits" in extracted_data:
+            for royalty_type, splits in extracted_data["royalty_splits"].items():
                 fact = self._create_pinned_fact(
                     fact_type=f"royalty_splits_{royalty_type}",
                     description=f"{royalty_type.title()} royalty splits",
                     value=splits,
                     confidence=base_confidence,
                     source_reference=source_ref,
-                    scope=scope
+                    scope=scope,
                 )
                 self.fact_ledger.add_fact(session_id, fact)
                 extracted_facts.append(fact)
-        
+
         # Pin parties
-        if 'parties' in extracted_data:
+        if "parties" in extracted_data:
             fact = self._create_pinned_fact(
                 fact_type="parties",
                 description="Contract parties",
-                value=extracted_data['parties'],
+                value=extracted_data["parties"],
                 confidence=base_confidence,
                 source_reference=source_ref,
-                scope=scope
+                scope=scope,
             )
             self.fact_ledger.add_fact(session_id, fact)
             extracted_facts.append(fact)
-        
+
         # Pin payment terms
-        if 'payment_terms' in extracted_data:
+        if "payment_terms" in extracted_data:
             fact = self._create_pinned_fact(
                 fact_type="payment_terms",
                 description="Payment terms",
-                value=extracted_data['payment_terms'],
+                value=extracted_data["payment_terms"],
                 confidence=base_confidence,
                 source_reference=source_ref,
-                scope=scope
+                scope=scope,
             )
             self.fact_ledger.add_fact(session_id, fact)
             extracted_facts.append(fact)
-        
+
         # Pin term length
-        if 'term_length' in extracted_data:
+        if "term_length" in extracted_data:
             fact = self._create_pinned_fact(
                 fact_type="term_length",
                 description="Contract term length",
-                value=extracted_data['term_length'],
+                value=extracted_data["term_length"],
                 confidence=base_confidence,
                 source_reference=source_ref,
-                scope=scope
+                scope=scope,
             )
             self.fact_ledger.add_fact(session_id, fact)
             extracted_facts.append(fact)
-        
+
         # Pin advances
-        if 'advances' in extracted_data:
+        if "advances" in extracted_data:
             fact = self._create_pinned_fact(
                 fact_type="advances",
                 description="Advance payment",
-                value=extracted_data['advances'],
+                value=extracted_data["advances"],
                 confidence=base_confidence,
                 source_reference=source_ref,
-                scope=scope
+                scope=scope,
             )
             self.fact_ledger.add_fact(session_id, fact)
             extracted_facts.append(fact)
-        
+
         return extracted_facts
-    
-    def _get_pinned_facts_for_query(self, query: str, session_id: str, 
-                                     scope: Scope) -> List[PinnedFact]:
+
+    def _get_pinned_facts_for_query(self, query: str, session_id: str, scope: Scope) -> list[PinnedFact]:
         """
         Get relevant pinned facts for a query based on detected type.
-        
+
         Args:
             query: User's question
             session_id: Session ID
             scope: Current scope
-            
+
         Returns:
             List of relevant facts sorted by confidence
         """
         query_lower = query.lower()
         relevant_facts = []
-        
+
         # Determine what type of fact might be relevant
-        if any(kw in query_lower for kw in ['royalty', 'split', 'percentage', 'share']):
+        if any(kw in query_lower for kw in ["royalty", "split", "percentage", "share"]):
             royalty_type = self._detect_royalty_type(query_lower)
-            fact = self.fact_ledger.get_fact_by_type(
-                session_id, f"royalty_splits_{royalty_type}", scope
-            )
+            fact = self.fact_ledger.get_fact_by_type(session_id, f"royalty_splits_{royalty_type}", scope)
             if fact:
                 relevant_facts.append(fact)
             # Also check general if specific type not found
-            if not fact and royalty_type != 'general':
-                fact = self.fact_ledger.get_fact_by_type(
-                    session_id, "royalty_splits_general", scope
-                )
+            if not fact and royalty_type != "general":
+                fact = self.fact_ledger.get_fact_by_type(session_id, "royalty_splits_general", scope)
                 if fact:
                     relevant_facts.append(fact)
-        
-        if any(kw in query_lower for kw in ['parties', 'who signed', 'signatories']):
+
+        if any(kw in query_lower for kw in ["parties", "who signed", "signatories"]):
             fact = self.fact_ledger.get_fact_by_type(session_id, "parties", scope)
             if fact:
                 relevant_facts.append(fact)
-        
-        if any(kw in query_lower for kw in ['payment', 'terms', 'net', 'days']):
+
+        if any(kw in query_lower for kw in ["payment", "terms", "net", "days"]):
             fact = self.fact_ledger.get_fact_by_type(session_id, "payment_terms", scope)
             if fact:
                 relevant_facts.append(fact)
-        
-        if any(kw in query_lower for kw in ['term', 'duration', 'length', 'period']):
+
+        if any(kw in query_lower for kw in ["term", "duration", "length", "period"]):
             fact = self.fact_ledger.get_fact_by_type(session_id, "term_length", scope)
             if fact:
                 relevant_facts.append(fact)
-        
-        if any(kw in query_lower for kw in ['advance', 'upfront', 'signing']):
+
+        if any(kw in query_lower for kw in ["advance", "upfront", "signing"]):
             fact = self.fact_ledger.get_fact_by_type(session_id, "advances", scope)
             if fact:
                 relevant_facts.append(fact)
-        
+
         # Sort by confidence (highest first)
         relevant_facts.sort(key=lambda f: f.confidence, reverse=True)
         return relevant_facts
-    
-    def _answer_from_pinned_facts(self, query: str, facts: List[PinnedFact],
-                                   session_id: str) -> Optional[Dict]:
+
+    def _answer_from_pinned_facts(self, query: str, facts: list[PinnedFact], session_id: str) -> dict | None:
         """
         Try to answer a query using pinned facts if confidence is sufficient.
-        
+
         Args:
             query: User's question
             facts: Relevant pinned facts
             session_id: Session ID
-            
+
         Returns:
             Response dict if answerable from facts, None otherwise
         """
         if not facts:
             return None
-        
+
         # Get the highest confidence fact
         best_fact = facts[0]
         confidence_level = best_fact.get_confidence_level()
-        
+
         # Only answer from facts if confidence is high enough
         if confidence_level == ConfidenceLevel.LOW:
             logger.info(f"[Facts] Low confidence ({best_fact.confidence:.2f}) - will search documents")
             return None
-        
+
         # Generate answer from fact
         self._add_to_memory(session_id, "user", query)
-        
+
         # Format the answer based on fact type and confidence level
         value = best_fact.value
         caveat = "" if confidence_level == ConfidenceLevel.HIGH else "Based on what we discussed earlier, "
-        
-        if best_fact.fact_type.startswith('royalty_splits'):
+
+        if best_fact.fact_type.startswith("royalty_splits"):
             if isinstance(value, list):
                 splits_text = ", ".join([f"{s['party']}: {s['percentage']}%" for s in value])
                 answer = f"{caveat}The royalty splits are: {splits_text}"
             else:
                 answer = f"{caveat}The royalty information: {value}"
-        elif best_fact.fact_type == 'parties':
+        elif best_fact.fact_type == "parties":
             if isinstance(value, list):
                 answer = f"{caveat}The contract parties are: {', '.join(value)}"
             else:
                 answer = f"{caveat}The contract parties are: {value}"
-        elif best_fact.fact_type == 'payment_terms':
+        elif best_fact.fact_type == "payment_terms":
             answer = f"{caveat}The payment terms: {value}"
-        elif best_fact.fact_type == 'term_length':
+        elif best_fact.fact_type == "term_length":
             answer = f"{caveat}The contract term is {value}."
-        elif best_fact.fact_type == 'advances':
+        elif best_fact.fact_type == "advances":
             answer = f"{caveat}The advance is {value}."
         else:
             answer = f"{caveat}{value}"
-        
+
         self._add_to_memory(session_id, "assistant", answer)
-        
+
         return {
             "query": query,
             "answer": answer,
             "confidence": ConfidenceLevel.CONTEXT.value,
-            "sources": [{"contract_file": best_fact.source_reference, "score": best_fact.confidence, "project_name": ""}],
+            "sources": [
+                {"contract_file": best_fact.source_reference, "score": best_fact.confidence, "project_name": ""}
+            ],
             "search_results_count": 0,
             "session_id": session_id,
             "answered_from": "pinned_facts",
             "highest_score": best_fact.confidence,
             "extracted_facts": [f.to_dict() for f in facts],
-            "confidence_score": best_fact.confidence
+            "confidence_score": best_fact.confidence,
         }
-    
+
     def _add_confidence_caveat(self, answer: str, confidence_level: ConfidenceLevel) -> str:
         """Add appropriate caveat based on confidence level"""
         if confidence_level == ConfidenceLevel.MEDIUM:
             if not answer.lower().startswith("based on"):
                 return f"Based on the available information: {answer}"
         return answer
-    
+
     def _is_affirmative_response(self, query: str) -> bool:
         """
         Check if the query is an affirmative response to a pending suggestion.
-        
+
         Args:
             query: User's message
-            
+
         Returns:
             True if it's an affirmative response
         """
         query_lower = query.lower().strip()
-        query_clean = ''.join(c for c in query_lower if c.isalnum() or c.isspace()).strip()
-        
+        query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace()).strip()
+
         for pattern in self.AFFIRMATIVE_PATTERNS:
             if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
                 return True
-        
+
         return False
 
-    def _no_result_message(self, contract_ids: Optional[List[str]] = None) -> str:
+    def _no_result_message(self, contract_ids: list[str] | None = None) -> str:
         """Return a context-aware, actionable fallback message when no results are found."""
         if contract_ids:
-            return ("I couldn't find relevant information in your selected contracts. "
-                    "Try rephrasing your question or selecting different contracts.")
-        return ("Please select one or more contracts from the sidebar so I can answer your question.")
+            return (
+                "I couldn't find relevant information in your selected contracts. "
+                "Try rephrasing your question or selecting different contracts."
+            )
+        return "Please select one or more contracts from the sidebar so I can answer your question."
 
-    def _compute_context_hash(self, context: Optional[Dict]) -> str:
+    def _compute_context_hash(self, context: dict | None) -> str:
         """
         Compute a hash of key context entities to detect context changes.
-        
+
         Args:
             context: Conversation context
-            
+
         Returns:
             Hash string of contract IDs
         """
         if not context:
             return ""
-        
-        contracts_discussed = context.get('contracts_discussed', [])
-        artists_discussed = context.get('artists_discussed', [])
-        contract_ids = sorted([c.get('id', '') for c in contracts_discussed if isinstance(c, dict)])
-        artist_ids = sorted([a.get('id', '') for a in artists_discussed if isinstance(a, dict)])
-        payload = {
-            "contract_ids": contract_ids,
-            "artist_ids": artist_ids
-        }
+
+        contracts_discussed = context.get("contracts_discussed", [])
+        artists_discussed = context.get("artists_discussed", [])
+        contract_ids = sorted([c.get("id", "") for c in contracts_discussed if isinstance(c, dict)])
+        artist_ids = sorted([a.get("id", "") for a in artists_discussed if isinstance(a, dict)])
+        payload = {"contract_ids": contract_ids, "artist_ids": artist_ids}
         return hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-    
-    def _extract_structured_data(self, answer: str, query: str) -> Dict:
+
+    def _extract_structured_data(self, answer: str, query: str) -> dict:
         """
         Extract structured data from the LLM answer using pattern matching.
         This replaces client-side regex extraction with server-side extraction.
-        
+
         Args:
             answer: The LLM-generated answer
             query: The original query (to determine what data to extract)
-            
+
         Returns:
             Dict with extracted data fields
         """
         extracted = {}
         query_lower = query.lower()
-        
+
         # Determine royalty type from query
         royalty_type = self._detect_royalty_type(query_lower)
-        
+
         # Extract royalty splits if discussing royalties/splits/percentages
-        if any(kw in query_lower for kw in ['royalty', 'split', 'percentage', 'share', '%']):
+        if any(kw in query_lower for kw in ["royalty", "split", "percentage", "share", "%"]):
             # Pattern: "Name: 35%" or "Name - 35%" or "Name (35%)"
             split_patterns = [
-                r'([A-Za-z][A-Za-z\s\.\'-]+?):\s*(\d+(?:\.\d+)?)\s*%',
-                r'([A-Za-z][A-Za-z\s\.\'-]+?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*%',
-                r'([A-Za-z][A-Za-z\s\.\'-]+?)\s*\((\d+(?:\.\d+)?)\s*%\)',
+                r"([A-Za-z][A-Za-z\s\.\'-]+?):\s*(\d+(?:\.\d+)?)\s*%",
+                r"([A-Za-z][A-Za-z\s\.\'-]+?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*%",
+                r"([A-Za-z][A-Za-z\s\.\'-]+?)\s*\((\d+(?:\.\d+)?)\s*%\)",
             ]
             splits = []
             for pattern in split_patterns:
@@ -939,14 +1039,14 @@ class ContractChatbot:
                     party = match[0].strip()
                     percentage = float(match[1])
                     # Avoid duplicates
-                    if not any(s['party'].lower() == party.lower() for s in splits):
-                        splits.append({'party': party, 'percentage': percentage})
+                    if not any(s["party"].lower() == party.lower() for s in splits):
+                        splits.append({"party": party, "percentage": percentage})
             if splits:
                 # Store under the specific royalty type
-                extracted['royalty_splits'] = {royalty_type: splits}
-        
+                extracted["royalty_splits"] = {royalty_type: splits}
+
         # Extract parties/signatories
-        if any(kw in query_lower for kw in ['parties', 'who signed', 'signatories', 'between']):
+        if any(kw in query_lower for kw in ["parties", "who signed", "signatories", "between"]):
             # Pattern: quoted names or bullet points
             party_matches = re.findall(r'"([^"]+)"|•\s*([^\n•]+)|^\s*[-*]\s*([^\n]+)', answer, re.MULTILINE)
             parties = []
@@ -955,88 +1055,88 @@ class ContractChatbot:
                     if group and group.strip():
                         parties.append(group.strip())
             if parties:
-                extracted['parties'] = parties
-        
+                extracted["parties"] = parties
+
         # Extract payment terms
-        if any(kw in query_lower for kw in ['payment', 'terms', 'net', 'days']):
+        if any(kw in query_lower for kw in ["payment", "terms", "net", "days"]):
             if len(answer) > 0 and len(answer) < 500:
-                extracted['payment_terms'] = answer.strip()
-        
+                extracted["payment_terms"] = answer.strip()
+
         # Extract term length
-        if any(kw in query_lower for kw in ['term', 'duration', 'length', 'period', 'years', 'months']):
-            term_match = re.search(r'(\d+)\s*(year|month|day)s?', answer, re.IGNORECASE)
+        if any(kw in query_lower for kw in ["term", "duration", "length", "period", "years", "months"]):
+            term_match = re.search(r"(\d+)\s*(year|month|day)s?", answer, re.IGNORECASE)
             if term_match:
-                extracted['term_length'] = f"{term_match.group(1)} {term_match.group(2)}s"
-        
+                extracted["term_length"] = f"{term_match.group(1)} {term_match.group(2)}s"
+
         # Extract advances
-        if any(kw in query_lower for kw in ['advance', 'upfront', 'signing bonus']):
-            advance_match = re.search(r'\$[\d,]+(?:\.\d{2})?|\d+(?:,\d{3})*(?:\.\d{2})?\s*(?:dollars?|USD)?', answer)
+        if any(kw in query_lower for kw in ["advance", "upfront", "signing bonus"]):
+            advance_match = re.search(r"\$[\d,]+(?:\.\d{2})?|\d+(?:,\d{3})*(?:\.\d{2})?\s*(?:dollars?|USD)?", answer)
             if advance_match:
-                extracted['advances'] = advance_match.group(0)
-        
+                extracted["advances"] = advance_match.group(0)
+
         return extracted
-    
+
     def _detect_royalty_type(self, query_lower: str) -> str:
         """
         Detect the type of royalty being discussed from the query.
-        
+
         Args:
             query_lower: Lowercase query string
-            
+
         Returns:
             Royalty type string (streaming, publishing, etc.)
         """
         royalty_types = {
-            'streaming': ['streaming', 'stream', 'spotify', 'apple music', 'dsp'],
-            'publishing': ['publishing', 'publish', 'songwriter', 'composition'],
-            'mechanical': ['mechanical', 'mechanicals'],
-            'sync': ['sync', 'synchronization', 'synch'],
-            'master': ['master', 'masters', 'recording'],
-            'performance': ['performance', 'performing', 'pro', 'ascap', 'bmi'],
+            "streaming": ["streaming", "stream", "spotify", "apple music", "dsp"],
+            "publishing": ["publishing", "publish", "songwriter", "composition"],
+            "mechanical": ["mechanical", "mechanicals"],
+            "sync": ["sync", "synchronization", "synch"],
+            "master": ["master", "masters", "recording"],
+            "performance": ["performance", "performing", "pro", "ascap", "bmi"],
         }
-        
+
         for royalty_type, keywords in royalty_types.items():
             if any(kw in query_lower for kw in keywords):
                 return royalty_type
-        
-        return 'general'  # Default for unspecified royalty types
-    
-    def _extract_suggestion_from_answer(self, answer: str) -> Tuple[str, Optional[str]]:
+
+        return "general"  # Default for unspecified royalty types
+
+    def _extract_suggestion_from_answer(self, answer: str) -> tuple[str, str | None]:
         """
         Extract and separate a follow-up suggestion from the answer.
-        
+
         Args:
             answer: The full LLM answer
-            
+
         Returns:
             Tuple of (clean_answer, suggestion) where suggestion may be None
         """
         # Pattern to match "Would you like me to..." suggestions at the end
-        suggestion_pattern = r'\n*(?:Would you like (?:me to|to)?|Shall I|Should I|Do you want me to)\s*([^?]+\??)\s*$'
+        suggestion_pattern = r"\n*(?:Would you like (?:me to|to)?|Shall I|Should I|Do you want me to)\s*([^?]+\??)\s*$"
         match = re.search(suggestion_pattern, answer, re.IGNORECASE)
-        
+
         if match:
             suggestion = match.group(0).strip()
-            clean_answer = answer[:match.start()].strip()
+            clean_answer = answer[: match.start()].strip()
             return clean_answer, suggestion
-        
+
         return answer, None
-    
+
     def _is_conversational_query(self, query: str) -> bool:
         """
         Check if the query is a conversational message (greeting, thanks, etc.)
         that doesn't require document search.
-        
+
         Args:
             query: User's message
-            
+
         Returns:
             True if it's a conversational query
         """
         query_lower = query.lower().strip()
         # Remove punctuation for matching
-        query_clean = ''.join(c for c in query_lower if c.isalnum() or c.isspace())
-        
+        query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace())
+
         # Check for exact or partial matches
         for pattern in self.CONVERSATIONAL_PATTERNS:
             if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
@@ -1044,27 +1144,30 @@ class ContractChatbot:
             # Also check if the entire query is just the pattern with punctuation
             if pattern in query_clean and len(query_clean) < len(pattern) + 10:
                 return True
-        
+
         return False
-    
-    def _handle_conversational_query(self, query: str, session_id: Optional[str] = None) -> Dict:
+
+    def _handle_conversational_query(self, query: str, session_id: str | None = None) -> dict:
         """
         Handle conversational queries with a friendly response.
-        
+
         Args:
             query: User's conversational message
             session_id: Session ID for memory
-            
+
         Returns:
             Dict with response
         """
         query_lower = query.lower().strip()
-        
+
         # Track if we should show quick action buttons
         show_quick_actions = False
-        
+
         # Generate appropriate response based on query type
-        if any(g in query_lower for g in ["hello", "hi", "hey", "greetings", "howdy", "good morning", "good afternoon", "good evening"]):
+        if any(
+            g in query_lower
+            for g in ["hello", "hi", "hey", "greetings", "howdy", "good morning", "good afternoon", "good evening"]
+        ):
             response = "Hello! I'm Zoe, your contract analysis assistant. How can I help you today?"
             show_quick_actions = True
         elif any(g in query_lower for g in ["how are you", "how's it going", "hows it going", "what's up", "whats up"]):
@@ -1080,11 +1183,11 @@ class ContractChatbot:
         else:
             response = "I'm here to help! What would you like to know about your contracts?"
             show_quick_actions = True
-        
+
         # Store in memory
         self._add_to_memory(session_id, "user", query)
         self._add_to_memory(session_id, "assistant", response)
-        
+
         return {
             "query": query,
             "answer": response,
@@ -1092,25 +1195,25 @@ class ContractChatbot:
             "sources": [],
             "search_results_count": 0,
             "session_id": session_id,
-            "show_quick_actions": show_quick_actions
+            "show_quick_actions": show_quick_actions,
         }
-    
-    def _classify_query(self, query: str, artist_data: Optional[Dict] = None) -> str:
+
+    def _classify_query(self, query: str, artist_data: dict | None = None) -> str:
         """
         Use LLM to classify whether a query is about artist info or contracts.
-        
+
         Args:
             query: User's question
             artist_data: Optional artist data to help with context (e.g. artist name)
-            
+
         Returns:
             "artist" if query is about artist profile/info
             "contract" if query is about contracts/agreements
         """
         # Add artist context if available to help disambiguate
         artist_context = ""
-        if artist_data and artist_data.get('name'):
-            artist_name = artist_data.get('name')
+        if artist_data and artist_data.get("name"):
+            artist_name = artist_data.get("name")
             artist_context = f"\nIMPORTANT CONTEXT: The current artist is '{artist_name}'. If the user asks about '{artist_name}', classify it as ARTIST."
 
         system_prompt = f"""You are a query classifier. Determine if the user's question is about:
@@ -1126,21 +1229,18 @@ Respond with ONLY one word: either "artist" or "contract"."""
         try:
             response = openai_client.chat.completions.create(
                 model=self.llm_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": query}
-                ],
-                max_completion_tokens=10
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": query}],
+                max_completion_tokens=10,
             )
-            
+
             classification = response.choices[0].message.content.strip().lower()
-            
+
             # Ensure we get a valid response
             if "artist" in classification:
                 return "artist"
             else:
                 return "contract"
-                
+
         except Exception as e:
             logger.error(f"Error classifying query: {e}")
             # Default to contract if classification fails
@@ -1175,7 +1275,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
             return len(value) > 0
         return True
 
-    def _has_contract_context(self, context: Optional[Dict]) -> bool:
+    def _has_contract_context(self, context: dict | None) -> bool:
         """Check whether there is meaningful prior contract context in the conversation."""
         if not context:
             return False
@@ -1186,7 +1286,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
                 return True
         return False
 
-    def _build_source_selection_response(self, query: str, session_id: Optional[str] = None) -> Dict:
+    def _build_source_selection_response(self, query: str, session_id: str | None = None) -> dict:
         """Ask user whether to use artist profile or contract/context as answer source."""
         response = (
             "I can answer this in two ways: using the artist profile from Supabase, "
@@ -1211,18 +1311,18 @@ Respond with ONLY one word: either "artist" or "contract"."""
                     "id": "artist_profile",
                     "label": "Use artist profile",
                     "query": query,
-                    "source_preference": "artist_profile"
+                    "source_preference": "artist_profile",
                 },
                 {
                     "id": "contract_context",
                     "label": "Use contract/context",
                     "query": query,
-                    "source_preference": "contract_context"
-                }
-            ]
+                    "source_preference": "contract_context",
+                },
+            ],
         }
 
-    def _build_artist_source_selection_response(self, query: str, session_id: Optional[str] = None) -> Dict:
+    def _build_artist_source_selection_response(self, query: str, session_id: str | None = None) -> dict:
         """Ask user whether to use artist profile or continue conversation (use history)."""
         response = (
             "I can answer this using the artist profile, or I can continue based on our "
@@ -1247,22 +1347,20 @@ Respond with ONLY one word: either "artist" or "contract"."""
                     "id": "artist_profile",
                     "label": "Artist Profile",
                     "query": query,
-                    "source_preference": "artist_profile"
+                    "source_preference": "artist_profile",
                 },
                 {
                     "id": "conversation_history",
                     "label": "Conversation",
                     "query": query,
-                    "source_preference": "conversation_history"
-                }
-            ]
+                    "source_preference": "conversation_history",
+                },
+            ],
         }
 
-    def _resolve_query_route(self,
-                             query: str,
-                             artist_data: Optional[Dict],
-                             context: Optional[Dict],
-                             source_preference: Optional[str] = None) -> str:
+    def _resolve_query_route(
+        self, query: str, artist_data: dict | None, context: dict | None, source_preference: str | None = None
+    ) -> str:
         """
         Resolve whether query should route to artist or contract handling.
 
@@ -1292,7 +1390,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
 
         return "contract"
 
-    def _extract_json_object(self, text: str) -> Optional[Dict[str, Any]]:
+    def _extract_json_object(self, text: str) -> dict[str, Any] | None:
         """Extract the first JSON object found in text."""
         if not text:
             return None
@@ -1302,7 +1400,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
         except Exception:
             pass
 
-        match = re.search(r'\{[\s\S]*\}', text)
+        match = re.search(r"\{[\s\S]*\}", text)
         if not match:
             return None
 
@@ -1311,12 +1409,14 @@ Respond with ONLY one word: either "artist" or "contract"."""
         except Exception:
             return None
 
-    def _build_routing_context_summary(self,
-                                       context: Optional[Dict],
-                                       artist_data: Optional[Dict],
-                                       project_id: Optional[str],
-                                       contract_id: Optional[str],
-                                       source_preference: Optional[str]) -> str:
+    def _build_routing_context_summary(
+        self,
+        context: dict | None,
+        artist_data: dict | None,
+        project_id: str | None,
+        contract_id: str | None,
+        source_preference: str | None,
+    ) -> str:
         """Build compact context summary for routing decisions."""
         context = context or {}
         artists_discussed = context.get("artists_discussed", [])
@@ -1345,17 +1445,19 @@ Respond with ONLY one word: either "artist" or "contract"."""
             "artists_discussed": artist_names,
             "contracts_discussed_count": len(contracts_discussed),
             "contracts_discussed": contract_names,
-            "has_contract_context": self._has_contract_context(context)
+            "has_contract_context": self._has_contract_context(context),
         }
         return json.dumps(summary, ensure_ascii=False)
 
-    def _build_default_route_decision(self,
-                                      query: str,
-                                      artist_data: Optional[Dict],
-                                      context: Optional[Dict],
-                                      source_preference: Optional[str],
-                                      project_id: Optional[str],
-                                      contract_id: Optional[str]) -> RouteDecision:
+    def _build_default_route_decision(
+        self,
+        query: str,
+        artist_data: dict | None,
+        context: dict | None,
+        source_preference: str | None,
+        project_id: str | None,
+        contract_id: str | None,
+    ) -> RouteDecision:
         """Fallback route decision when LLM routing is unavailable."""
         route = self._resolve_query_route(query, artist_data, context, source_preference)
 
@@ -1375,20 +1477,18 @@ Respond with ONLY one word: either "artist" or "contract"."""
             reason = "fallback_context_no_project"
 
         return RouteDecision(
-            route=route,
-            answer_mode=answer_mode,
-            confidence=0.35,
-            reason=reason,
-            retrieval_reason=retrieval_reason
+            route=route, answer_mode=answer_mode, confidence=0.35, reason=reason, retrieval_reason=retrieval_reason
         )
 
-    def _llm_route_decision(self,
-                            query: str,
-                            artist_data: Optional[Dict],
-                            context: Optional[Dict],
-                            source_preference: Optional[str] = None,
-                            project_id: Optional[str] = None,
-                            contract_id: Optional[str] = None) -> RouteDecision:
+    def _llm_route_decision(
+        self,
+        query: str,
+        artist_data: dict | None,
+        context: dict | None,
+        source_preference: str | None = None,
+        project_id: str | None = None,
+        contract_id: str | None = None,
+    ) -> RouteDecision:
         """
         Use LLM to decide route and whether to answer from context or retrieve.
         """
@@ -1398,7 +1498,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
                 answer_mode="context" if context else "retrieve",
                 confidence=1.0,
                 reason="source_preference_contract",
-                retrieval_reason="general_retrieval"
+                retrieval_reason="general_retrieval",
             )
 
         routing_context = self._build_routing_context_summary(
@@ -1406,7 +1506,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
             artist_data=artist_data,
             project_id=project_id,
             contract_id=contract_id,
-            source_preference=source_preference
+            source_preference=source_preference,
         )
 
         system_prompt = """You are a routing planner for a music contract assistant.
@@ -1431,11 +1531,8 @@ Rules:
         try:
             response = openai_client.chat.completions.create(
                 model=self.llm_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_completion_tokens=250
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                max_completion_tokens=250,
             )
 
             content = (response.choices[0].message.content or "").strip()
@@ -1460,7 +1557,7 @@ Rules:
                 answer_mode=answer_mode,
                 confidence=confidence,
                 reason=reason,
-                retrieval_reason=retrieval_reason
+                retrieval_reason=retrieval_reason,
             )
             logger.info(
                 f"[Routing] LLM decision route={decision.route}, mode={decision.answer_mode}, "
@@ -1475,7 +1572,7 @@ Rules:
                 context=context,
                 source_preference=source_preference,
                 project_id=project_id,
-                contract_id=contract_id
+                contract_id=contract_id,
             )
             logger.info(
                 f"[Routing] Fallback decision route={fallback.route}, mode={fallback.answer_mode}, "
@@ -1483,10 +1580,9 @@ Rules:
             )
             return fallback
 
-    def _should_answer_from_context(self,
-                                    decision: RouteDecision,
-                                    context: Optional[Dict],
-                                    contract_id: Optional[str]) -> bool:
+    def _should_answer_from_context(
+        self, decision: RouteDecision, context: dict | None, contract_id: str | None
+    ) -> bool:
         """Apply policy guardrails for using context responses."""
         if not context:
             return False
@@ -1501,25 +1597,25 @@ Rules:
             )
             return False
         return True
-    
-    def _handle_artist_query(self, query: str, artist_data: Dict, session_id: Optional[str] = None) -> Dict:
+
+    def _handle_artist_query(self, query: str, artist_data: dict, session_id: str | None = None) -> dict:
         """
         Handle artist-related queries using artist data.
-        
+
         Args:
             query: User's question about the artist
             artist_data: Artist information from database
             session_id: Session ID for memory
-            
+
         Returns:
             Dict with response
         """
         # Store user message in memory
         self._add_to_memory(session_id, "user", query)
-        
+
         # Format artist data as context for LLM
         artist_context = self._format_artist_context(artist_data)
-        
+
         # Generate answer using LLM
         system_prompt = """You are a helpful assistant providing concise, direct information about an artist.
 Answer the user's question based on the artist profile information provided.
@@ -1547,36 +1643,37 @@ Examples:
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"""Based on the following artist profile, answer this question:
+            {
+                "role": "user",
+                "content": f"""Based on the following artist profile, answer this question:
 
 {query}
 
 Artist Profile:
-{artist_context}"""}
+{artist_context}""",
+            },
         ]
-        
+
         try:
             response = openai_client.chat.completions.create(
-                model=self.llm_model,
-                messages=messages,
-                max_completion_tokens=500
+                model=self.llm_model, messages=messages, max_completion_tokens=500
             )
 
             raw_answer = response.choices[0].message.content
             answer = (raw_answer or "").strip()
             if not answer:
                 answer = self._build_artist_fallback_answer(artist_data, query)
-            
+
         except Exception as e:
             logger.error(f"Error generating artist answer: {e}")
             answer = self._build_artist_fallback_answer(artist_data, query)
-        
+
         # Store assistant response in memory
         self._add_to_memory(session_id, "assistant", answer)
-        
+
         # Extract structured artist data for frontend tracking
         extracted_artist_data = self._extract_artist_data(artist_data)
-        
+
         return {
             "query": query,
             "answer": answer,
@@ -1586,10 +1683,10 @@ Artist Profile:
             "session_id": session_id,
             "answered_from": "artist_data",
             "extracted_data": extracted_artist_data,
-            "show_quick_actions": False
+            "show_quick_actions": False,
         }
 
-    def _build_artist_fallback_answer(self, artist_data: Dict, query: str) -> str:
+    def _build_artist_fallback_answer(self, artist_data: dict, query: str) -> str:
         """Build a deterministic artist answer when LLM output is empty or fails."""
         extracted = self._extract_artist_data(artist_data)
         artist_name = artist_data.get("name", "the artist")
@@ -1631,31 +1728,31 @@ Artist Profile:
             return f"Here’s what I have for {artist_name}: " + " | ".join(summary_parts)
 
         return f"I found the artist record for {artist_name}, but profile details are currently empty."
-    
-    def _extract_artist_data(self, artist_data: Dict) -> Dict:
+
+    def _extract_artist_data(self, artist_data: dict) -> dict:
         """
         Extract structured artist data for frontend tracking.
-        
+
         Args:
             artist_data: Artist information from database
-            
+
         Returns:
             Dict with structured artist data for frontend
         """
         extracted = {}
-        
+
         # Extract bio
         if artist_data.get("bio"):
             extracted["bio"] = artist_data["bio"]
-        
+
         # Extract genres
         if artist_data.get("genres"):
             extracted["genres"] = artist_data["genres"]
-        
+
         # Extract email
         if artist_data.get("email"):
             extracted["email"] = artist_data["email"]
-        
+
         # Extract social media links
         social_media = {}
         if artist_data.get("social_instagram"):
@@ -1668,10 +1765,10 @@ Artist Profile:
             social_media["twitter"] = artist_data["social_twitter"]
         if artist_data.get("social_facebook"):
             social_media["facebook"] = artist_data["social_facebook"]
-        
+
         if social_media:
             extracted["social_media"] = social_media
-        
+
         # Extract streaming links
         streaming_links = {}
         if artist_data.get("dsp_spotify"):
@@ -1680,40 +1777,40 @@ Artist Profile:
             streaming_links["apple_music"] = artist_data["dsp_apple_music"]
         if artist_data.get("dsp_soundcloud"):
             streaming_links["soundcloud"] = artist_data["dsp_soundcloud"]
-        
+
         if streaming_links:
             extracted["streaming_links"] = streaming_links
-        
+
         return extracted
-    
-    def _format_artist_context(self, artist_data: Dict) -> str:
+
+    def _format_artist_context(self, artist_data: dict) -> str:
         """
         Format artist data as context string for LLM.
-        
+
         Args:
             artist_data: Artist information dictionary
-            
+
         Returns:
             Formatted string with artist details
         """
         parts = []
-        
+
         if artist_data.get("name"):
             parts.append(f"Name: {artist_data['name']}")
-        
+
         if artist_data.get("email"):
             parts.append(f"Email: {artist_data['email']}")
-        
+
         if artist_data.get("bio"):
             parts.append(f"Bio: {artist_data['bio']}")
-        
+
         if artist_data.get("genres"):
             genres = artist_data["genres"]
             if isinstance(genres, list):
                 parts.append(f"Genres: {', '.join(genres)}")
             else:
                 parts.append(f"Genres: {genres}")
-        
+
         # Social media links
         socials = []
         if artist_data.get("social_instagram"):
@@ -1724,7 +1821,7 @@ Artist Profile:
             socials.append(f"YouTube: {artist_data['social_youtube']}")
         if socials:
             parts.append("Social Media:\n  " + "\n  ".join(socials))
-        
+
         # DSP links
         dsps = []
         if artist_data.get("dsp_spotify"):
@@ -1735,7 +1832,7 @@ Artist Profile:
             dsps.append(f"SoundCloud: {artist_data['dsp_soundcloud']}")
         if dsps:
             parts.append("Streaming Platforms:\n  " + "\n  ".join(dsps))
-        
+
         # Additional links
         additional = []
         if artist_data.get("additional_epk"):
@@ -1746,18 +1843,20 @@ Artist Profile:
             additional.append(f"Linktree: {artist_data['additional_linktree']}")
         if additional:
             parts.append("Additional Links:\n  " + "\n  ".join(additional))
-        
+
         # Custom links
         if artist_data.get("custom_links"):
             custom = artist_data["custom_links"]
             if isinstance(custom, list) and custom:
-                custom_parts = [f"{link.get('label', 'Link')}: {link.get('url', '')}" for link in custom if link.get('url')]
+                custom_parts = [
+                    f"{link.get('label', 'Link')}: {link.get('url', '')}" for link in custom if link.get("url")
+                ]
                 if custom_parts:
                     parts.append("Other Links:\n  " + "\n  ".join(custom_parts))
-        
+
         return "\n\n".join(parts) if parts else "No artist information available."
-    
-    def _get_conversation_context(self, session_id: Optional[str], max_turns: int = 5) -> List[Dict]:
+
+    def _get_conversation_context(self, session_id: str | None, max_turns: int = 5) -> list[dict]:
         """
         Get conversation history for context, prepending rolling summary if available.
 
@@ -1776,20 +1875,17 @@ Artist Profile:
         # Prepend rolling summary if one exists (from previous summarization)
         summary = _conversation_summary.get_summary(session_id)
         if summary:
-            messages.append({
-                "role": "system",
-                "content": f"Summary of earlier conversation:\n{summary}"
-            })
+            messages.append({"role": "system", "content": f"Summary of earlier conversation:\n{summary}"})
 
         messages.extend(self.memory.get_messages_for_llm(session_id, limit=max_turns))
         return messages
-    
-    def _add_to_memory(self, session_id: Optional[str], role: str, content: str, metadata: Dict = None) -> None:
+
+    def _add_to_memory(self, session_id: str | None, role: str, content: str, metadata: dict = None) -> None:
         """Add a message to session memory."""
         if session_id:
             self.memory.add_message(session_id, role, content, metadata)
 
-    def _summarize_if_needed(self, session_id: Optional[str]) -> None:
+    def _summarize_if_needed(self, session_id: str | None) -> None:
         """
         Check if conversation history exceeds token limits and summarize if needed.
         Keeps the most recent 6 messages verbatim and compresses older messages
@@ -1819,9 +1915,7 @@ Artist Profile:
 
         # Build text from older messages for summarization
         existing_summary = _conversation_summary.get_summary(session_id)
-        messages_text = "\n".join(
-            f"{msg.role.upper()}: {msg.content}" for msg in older_messages
-        )
+        messages_text = "\n".join(f"{msg.role.upper()}: {msg.content}" for msg in older_messages)
 
         summary_input = ""
         if existing_summary:
@@ -1840,19 +1934,18 @@ Artist Profile:
                             "data points (royalty splits, payment terms, parties, etc.), decisions, "
                             "and important details. The summary will be used as context for future "
                             "questions, so accuracy is critical. Keep it under 2000 words."
-                        )
+                        ),
                     },
-                    {"role": "user", "content": summary_input}
+                    {"role": "user", "content": summary_input},
                 ],
-                max_completion_tokens=2000
+                max_completion_tokens=2000,
             )
 
             summary = (response.choices[0].message.content or "").strip()
             if summary:
                 _conversation_summary.update_summary(session_id, summary)
                 logger.info(
-                    f"[Summarization] Summarized {len(older_messages)} messages. "
-                    f"Summary length: {len(summary)} chars"
+                    f"[Summarization] Summarized {len(older_messages)} messages. Summary length: {len(summary)} chars"
                 )
 
         except Exception as e:
@@ -1864,18 +1957,18 @@ Artist Profile:
         Generate a targeted search query based on missing data reason.
         Maps reasons like 'missing_streaming_splits' to focused queries
         like 'streaming royalty splits percentages'.
-        
+
         Args:
             reason: The reason from _can_answer_from_context (e.g., 'missing_streaming_splits')
             original_query: The user's original question
-            
+
         Returns:
             Targeted search query optimized for retrieving the missing data
         """
         # Extract the data type from the reason
         if reason.startswith("missing_"):
             data_type = reason.replace("missing_", "")
-            
+
             # Map data types to targeted search queries
             targeted_queries = {
                 "streaming_splits": "streaming royalty splits percentages parties",
@@ -1888,121 +1981,167 @@ Artist Profile:
                 "parties": "contract parties signatories names",
                 "payment_terms": "payment terms net days accounting",
                 "term_length": "contract term duration length period years",
-                "advances": "advance payment upfront signing bonus amount"
+                "advances": "advance payment upfront signing bonus amount",
             }
-            
+
             # Return the targeted query if we have a mapping, otherwise use original
             targeted = targeted_queries.get(data_type)
             if targeted:
                 logger.info(f"[Targeted Retrieval] Generated targeted query for {data_type}: '{targeted}'")
                 return targeted
-        
+
         # If no mapping found, return original query
         logger.info(f"[Targeted Retrieval] No mapping for reason '{reason}', using original query")
         return original_query
-    
-    def _should_use_context(self, query: str, context: Optional[Dict]) -> Tuple[bool, str]:
+
+    def _should_use_context(self, query: str, context: dict | None) -> tuple[bool, str]:
         """
         Helper method to check if query should be answered from context.
         Centralizes the context check logic and logging for both smart_ask and multi_contract_ask.
-        
+
         Args:
             query: User's question
             context: Conversation context from frontend
-            
+
         Returns:
             Tuple of (should_use_context: bool, reason: str)
         """
         can_answer, reason = self._can_answer_from_context(query, context)
         logger.info(f"[Context] Can answer from context: {can_answer}, reason: {reason}")
-        
+
         # Log why we're falling through to document search
         if not can_answer and reason.startswith("missing_"):
             logger.info(f"[Context] Missing data in context ({reason}) - will use targeted retrieval")
-        
+
         return can_answer, reason
-    
-    def _can_answer_from_context(self, query: str, context: Optional[Dict]) -> Tuple[bool, str]:
+
+    def _can_answer_from_context(self, query: str, context: dict | None) -> tuple[bool, str]:
         """
         Determine if query can be answered from conversation context
         without searching documents. Returns tuple for better debugging.
-        
+
         Args:
             query: User's question
             context: Conversation context from frontend
-            
+
         Returns:
             Tuple of (can_answer: bool, reason: str)
         """
         if not context:
             logger.info("[Context] No context provided, cannot answer from context")
             return False, "no_context"
-        
-        contracts_discussed = context.get('contracts_discussed', [])
-        artists_discussed = context.get('artists_discussed', [])
-        logger.info(f"[Context] Checking if can answer from context. Contracts: {len(contracts_discussed)}, Artists: {len(artists_discussed)}")
-        
+
+        contracts_discussed = context.get("contracts_discussed", [])
+        artists_discussed = context.get("artists_discussed", [])
+        logger.info(
+            f"[Context] Checking if can answer from context. Contracts: {len(contracts_discussed)}, Artists: {len(artists_discussed)}"
+        )
+
         query_lower = query.lower()
-        
+
         # Check for artist comparisons
-        comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between', 'both']
-        artist_keywords = ['artist', 'bio', 'social', 'streaming', 'genre', 'music']
-        
+        comparison_keywords = ["compare", "difference", "versus", "vs", "between", "both"]
+        artist_keywords = ["artist", "bio", "social", "streaming", "genre", "music"]
+
         if any(kw in query_lower for kw in comparison_keywords):
             # Check if asking about artists
             if any(kw in query_lower for kw in artist_keywords) and len(artists_discussed) >= 2:
                 logger.info(f"[Context] Artist comparison detected with {len(artists_discussed)} artists")
                 return True, "artist_comparison"
-            
+
             # Check if we have 2+ contracts with ANY extracted data for general comparison
-            contracts_with_any_data = [c for c in contracts_discussed 
-                                       if c.get('data_extracted') and any(c.get('data_extracted', {}).values())]
+            contracts_with_any_data = [
+                c for c in contracts_discussed if c.get("data_extracted") and any(c.get("data_extracted", {}).values())
+            ]
             if len(contracts_with_any_data) >= 2:
-                logger.info(f"[Context] Contract comparison detected with {len(contracts_with_any_data)} contracts having data")
+                logger.info(
+                    f"[Context] Contract comparison detected with {len(contracts_with_any_data)} contracts having data"
+                )
                 return True, "contract_comparison"
-            
+
             # Check if asking about contracts (existing logic continues below)
 
         # Single-artist re-ask: asking about artist data when we have extracted data in context
-        artist_data_keywords = ['genre', 'genres', 'bio', 'biography', 'social', 'socials',
-                                'instagram', 'tiktok', 'spotify', 'streaming', 'email', 'contact',
-                                'website', 'epk', 'linktree', 'apple music', 'soundcloud',
-                                'youtube', 'twitter', 'facebook']
+        artist_data_keywords = [
+            "genre",
+            "genres",
+            "bio",
+            "biography",
+            "social",
+            "socials",
+            "instagram",
+            "tiktok",
+            "spotify",
+            "streaming",
+            "email",
+            "contact",
+            "website",
+            "epk",
+            "linktree",
+            "apple music",
+            "soundcloud",
+            "youtube",
+            "twitter",
+            "facebook",
+        ]
         if any(kw in query_lower for kw in artist_data_keywords) and len(artists_discussed) >= 1:
             for artist in artists_discussed:
-                if artist.get('data_extracted') and any(artist['data_extracted'].values()):
+                if artist.get("data_extracted") and any(artist["data_extracted"].values()):
                     logger.info(f"[Context] Artist data re-ask detected with extracted data for {artist.get('name')}")
                     return True, "artist_data_reask"
 
         # Summary/recap questions about the conversation - always use context
-        summary_keywords = ['summarize', 'summary', 'what did we discuss', 'recap', 
-                           'what have we talked about', 'what do we know', 'overview']
+        summary_keywords = [
+            "summarize",
+            "summary",
+            "what did we discuss",
+            "recap",
+            "what have we talked about",
+            "what do we know",
+            "overview",
+        ]
         if any(kw in query_lower for kw in summary_keywords):
             if len(contracts_discussed) > 0:
                 return True, "summary_request"
             return False, "no_contracts_for_summary"
-        
+
         # "Earlier you mentioned" or "you said" type follow-ups
-        followup_keywords = ['you said', 'you mentioned', 'earlier', 'previously', 
-                            'before you said', 'we discussed', 'you told me']
+        followup_keywords = [
+            "you said",
+            "you mentioned",
+            "earlier",
+            "previously",
+            "before you said",
+            "we discussed",
+            "you told me",
+        ]
         if any(kw in query_lower for kw in followup_keywords):
             if len(contracts_discussed) > 0:
                 return True, "followup_reference"
             return False, "no_contracts_for_followup"
-        
+
         # Check if asking about royalties - need to verify we have the SPECIFIC type
-        royalty_keywords = ['royalty', 'split', 'percentage', 'share', 'payout',
-                           'revenue', 'each person', 'each party', 'who gets']
+        royalty_keywords = [
+            "royalty",
+            "split",
+            "percentage",
+            "share",
+            "payout",
+            "revenue",
+            "each person",
+            "each party",
+            "who gets",
+        ]
         if any(kw in query_lower for kw in royalty_keywords):
             royalty_type = self._detect_royalty_type(query_lower)
             logger.info(f"[Context] Query is about royalty type: {royalty_type}")
-            
+
             # Check if we have this specific royalty type in context
             has_required_type = False
             for contract in contracts_discussed:
-                data = contract.get('data_extracted', {})
-                royalty_splits = data.get('royalty_splits', {})
-                
+                data = contract.get("data_extracted", {})
+                royalty_splits = data.get("royalty_splits", {})
+
                 if isinstance(royalty_splits, dict):
                     # New structure: {streaming: [...], publishing: [...]}
                     if royalty_splits.get(royalty_type):
@@ -2010,38 +2149,60 @@ Artist Profile:
                         logger.info(f"[Context] Found {royalty_type} splits in {contract.get('name')}")
                         break
                     # Also check 'general' as fallback
-                    if royalty_type == 'general' and any(royalty_splits.values()):
+                    if royalty_type == "general" and any(royalty_splits.values()):
                         has_required_type = True
                         break
                 elif isinstance(royalty_splits, list) and len(royalty_splits) > 0:
                     # Legacy structure: [{party, percentage}, ...]
                     # Can only use if asking for 'general' or unspecified royalties
-                    if royalty_type == 'general':
+                    if royalty_type == "general":
                         has_required_type = True
                         logger.info(f"[Context] Found legacy splits in {contract.get('name')}")
                         break
-            
+
             if has_required_type:
                 # Check for comparison or re-ask
-                comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between',
-                                       'which one', 'both', 'all', 'total', 'across']
-                reask_indicators = ['again', 'remind me', 'what was', 'what were', 'tell me again']
+                comparison_keywords = [
+                    "compare",
+                    "difference",
+                    "versus",
+                    "vs",
+                    "between",
+                    "which one",
+                    "both",
+                    "all",
+                    "total",
+                    "across",
+                ]
+                reask_indicators = ["again", "remind me", "what was", "what were", "tell me again"]
 
                 if any(kw in query_lower for kw in comparison_keywords):
                     # Need multiple contracts with this data type
-                    contracts_with_type = sum(1 for c in contracts_discussed
-                                              if self._contract_has_royalty_type(c, royalty_type))
+                    contracts_with_type = sum(
+                        1 for c in contracts_discussed if self._contract_has_royalty_type(c, royalty_type)
+                    )
                     if contracts_with_type >= 2:
                         return True, f"comparison_{royalty_type}"
                     return False, f"need_more_contracts_for_{royalty_type}_comparison"
 
                 # Check for aggregate/summary queries across multiple contracts
-                aggregate_keywords = ['summary', 'everyone', 'each person', 'each party',
-                                      'who gets', 'how much', 'payout', 'breakdown',
-                                      'combined', 'all parties', 'all contracts']
+                aggregate_keywords = [
+                    "summary",
+                    "everyone",
+                    "each person",
+                    "each party",
+                    "who gets",
+                    "how much",
+                    "payout",
+                    "breakdown",
+                    "combined",
+                    "all parties",
+                    "all contracts",
+                ]
                 if any(kw in query_lower for kw in aggregate_keywords):
-                    contracts_with_type = sum(1 for c in contracts_discussed
-                                              if self._contract_has_royalty_type(c, royalty_type))
+                    contracts_with_type = sum(
+                        1 for c in contracts_discussed if self._contract_has_royalty_type(c, royalty_type)
+                    )
                     if contracts_with_type >= 2:
                         logger.info(f"[Context] Aggregate split query detected with {contracts_with_type} contracts")
                         return True, f"aggregate_{royalty_type}"
@@ -2051,40 +2212,40 @@ Artist Profile:
 
             logger.info(f"[Context] Missing {royalty_type} splits - need document lookup")
             return False, f"missing_{royalty_type}_splits"
-        
+
         # Check for other data types
         other_data_checks = [
-            (['parties', 'who signed', 'signatories'], 'parties'),
-            (['payment', 'net', 'days'], 'payment_terms'),
-            (['term', 'duration', 'length', 'period'], 'term_length'),
-            (['advance', 'upfront', 'signing bonus'], 'advances'),
+            (["parties", "who signed", "signatories"], "parties"),
+            (["payment", "net", "days"], "payment_terms"),
+            (["term", "duration", "length", "period"], "term_length"),
+            (["advance", "upfront", "signing bonus"], "advances"),
         ]
-        
+
         for keywords, field_name in other_data_checks:
             if any(kw in query_lower for kw in keywords):
                 for contract in contracts_discussed:
-                    data = contract.get('data_extracted', {})
+                    data = contract.get("data_extracted", {})
                     if data.get(field_name):
                         # Check for re-ask
-                        reask_indicators = ['again', 'remind me', 'what was', 'what were']
+                        reask_indicators = ["again", "remind me", "what was", "what were"]
                         if any(ind in query_lower for ind in reask_indicators):
                             return True, f"reask_{field_name}"
                 return False, f"missing_{field_name}"
-        
+
         return False, "no_matching_pattern"
-    
-    def _contract_has_royalty_type(self, contract: Dict, royalty_type: str) -> bool:
+
+    def _contract_has_royalty_type(self, contract: dict, royalty_type: str) -> bool:
         """Check if a contract has extracted data for a specific royalty type."""
-        data = contract.get('data_extracted', {})
-        royalty_splits = data.get('royalty_splits', {})
-        
+        data = contract.get("data_extracted", {})
+        royalty_splits = data.get("royalty_splits", {})
+
         if isinstance(royalty_splits, dict):
             return bool(royalty_splits.get(royalty_type))
-        elif isinstance(royalty_splits, list) and royalty_type == 'general':
+        elif isinstance(royalty_splits, list) and royalty_type == "general":
             return len(royalty_splits) > 0
         return False
 
-    def _is_multi_contract_split_query(self, query: str, context: Optional[Dict]) -> bool:
+    def _is_multi_contract_split_query(self, query: str, context: dict | None) -> bool:
         """
         Detect if query is asking about royalty splits across multiple contracts.
         Returns True when: query mentions split/royalty keywords AND 2+ contracts
@@ -2095,56 +2256,76 @@ Artist Profile:
 
         query_lower = query.lower()
         split_keywords = [
-            'split', 'splits', 'royalty', 'royalties', 'payout', 'payouts',
-            'revenue', 'share', 'shares', 'percentage', 'percentages',
-            'who gets', 'each person', 'each party', 'how much does',
-            'breakdown', 'combined', 'everyone', 'all parties'
+            "split",
+            "splits",
+            "royalty",
+            "royalties",
+            "payout",
+            "payouts",
+            "revenue",
+            "share",
+            "shares",
+            "percentage",
+            "percentages",
+            "who gets",
+            "each person",
+            "each party",
+            "how much does",
+            "breakdown",
+            "combined",
+            "everyone",
+            "all parties",
         ]
         if not any(kw in query_lower for kw in split_keywords):
             return False
 
-        contracts_discussed = context.get('contracts_discussed', [])
+        contracts_discussed = context.get("contracts_discussed", [])
         contracts_with_splits = 0
         for contract in contracts_discussed:
-            data = contract.get('data_extracted', {})
-            royalty_splits = data.get('royalty_splits', {})
-            if isinstance(royalty_splits, dict) and any(royalty_splits.values()):
-                contracts_with_splits += 1
-            elif isinstance(royalty_splits, list) and len(royalty_splits) > 0:
+            data = contract.get("data_extracted", {})
+            royalty_splits = data.get("royalty_splits", {})
+            if (
+                isinstance(royalty_splits, dict)
+                and any(royalty_splits.values())
+                or isinstance(royalty_splits, list)
+                and len(royalty_splits) > 0
+            ):
                 contracts_with_splits += 1
 
         if contracts_with_splits >= 2:
-            logger.info(f"[Aggregation] Multi-contract split query detected: {contracts_with_splits} contracts with splits")
+            logger.info(
+                f"[Aggregation] Multi-contract split query detected: {contracts_with_splits} contracts with splits"
+            )
             return True
         return False
 
-    def _extract_revenue_amount(self, query: str) -> Optional[float]:
+    def _extract_revenue_amount(self, query: str) -> float | None:
         """Extract a dollar/revenue amount from the query string."""
         query_lower = query.lower()
 
         # $10,000 or $10,000.00
-        match = re.search(r'\$\s*([\d,]+(?:\.\d{1,2})?)', query)
+        match = re.search(r"\$\s*([\d,]+(?:\.\d{1,2})?)", query)
         if match:
-            return float(match.group(1).replace(',', ''))
+            return float(match.group(1).replace(",", ""))
 
         # $10k / $10K / 10k dollars
-        match = re.search(r'\$?\s*(\d+(?:\.\d+)?)\s*[kK]\b', query)
+        match = re.search(r"\$?\s*(\d+(?:\.\d+)?)\s*[kK]\b", query)
         if match:
             return float(match.group(1)) * 1000
 
         # $10m / $10M
-        match = re.search(r'\$?\s*(\d+(?:\.\d+)?)\s*[mM]\b', query)
+        match = re.search(r"\$?\s*(\d+(?:\.\d+)?)\s*[mM]\b", query)
         if match:
             return float(match.group(1)) * 1_000_000
 
         # "10000 dollars" / "10,000 dollars" / "10000 in revenue"
-        match = re.search(r'([\d,]+(?:\.\d{1,2})?)\s*(?:dollars?|usd|in revenue|in earnings|in income)', query_lower)
+        match = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:dollars?|usd|in revenue|in earnings|in income)", query_lower)
         if match:
-            return float(match.group(1).replace(',', ''))
+            return float(match.group(1).replace(",", ""))
 
         return None
 
-    def _aggregate_splits_across_contracts(self, context: Dict, query: str) -> Dict:
+    def _aggregate_splits_across_contracts(self, context: dict, query: str) -> dict:
         """
         Aggregate royalty splits across multiple contracts by deduplicating per party.
         Each contract describes a portion of the SAME 100% pie — splits are NOT summed
@@ -2154,22 +2335,22 @@ Artist Profile:
             Dict with keys: parties, total_percentage, revenue_amount, payouts
         """
         royalty_type = self._detect_royalty_type(query.lower())
-        contracts_discussed = context.get('contracts_discussed', [])
+        contracts_discussed = context.get("contracts_discussed", [])
 
         # Collect per-party data: {normalized_name: {display_name, percentage, source_contracts}}
-        party_map: Dict[str, Dict] = {}
+        party_map: dict[str, dict] = {}
 
         for contract in contracts_discussed:
-            contract_name = contract.get('name', 'Unknown Contract')
-            data = contract.get('data_extracted', {})
-            royalty_splits = data.get('royalty_splits', {})
+            contract_name = contract.get("name", "Unknown Contract")
+            data = contract.get("data_extracted", {})
+            royalty_splits = data.get("royalty_splits", {})
 
             splits_list = []
             if isinstance(royalty_splits, dict):
                 # Try specific type first, then general
                 splits_list = royalty_splits.get(royalty_type, [])
-                if not splits_list and royalty_type != 'general':
-                    splits_list = royalty_splits.get('general', [])
+                if not splits_list and royalty_type != "general":
+                    splits_list = royalty_splits.get("general", [])
                 # If still empty, grab the first non-empty type
                 if not splits_list:
                     for _type, _splits in royalty_splits.items():
@@ -2182,8 +2363,8 @@ Artist Profile:
             for split in splits_list:
                 if not isinstance(split, dict):
                     continue
-                party_name = split.get('party', split.get('name', ''))
-                percentage = split.get('percentage', split.get('share', 0))
+                party_name = split.get("party", split.get("name", ""))
+                percentage = split.get("percentage", split.get("share", 0))
                 if not party_name:
                     continue
 
@@ -2195,65 +2376,67 @@ Artist Profile:
                 norm_name = normalize_name(party_name)
                 if norm_name in party_map:
                     # Take MAX percentage (should be equal across contracts, but defensive)
-                    if percentage > party_map[norm_name]['percentage']:
-                        party_map[norm_name]['percentage'] = percentage
-                    if contract_name not in party_map[norm_name]['source_contracts']:
-                        party_map[norm_name]['source_contracts'].append(contract_name)
+                    if percentage > party_map[norm_name]["percentage"]:
+                        party_map[norm_name]["percentage"] = percentage
+                    if contract_name not in party_map[norm_name]["source_contracts"]:
+                        party_map[norm_name]["source_contracts"].append(contract_name)
                 else:
                     party_map[norm_name] = {
-                        'display_name': party_name.strip(),
-                        'percentage': percentage,
-                        'source_contracts': [contract_name]
+                        "display_name": party_name.strip(),
+                        "percentage": percentage,
+                        "source_contracts": [contract_name],
                     }
 
         # Build result
         parties = []
         total_pct = 0.0
-        for _norm, info in sorted(party_map.items(), key=lambda x: x[1]['percentage'], reverse=True):
-            parties.append({
-                'name': info['display_name'],
-                'percentage': info['percentage'],
-                'source_contracts': info['source_contracts']
-            })
-            total_pct += info['percentage']
+        for _norm, info in sorted(party_map.items(), key=lambda x: x[1]["percentage"], reverse=True):
+            parties.append(
+                {
+                    "name": info["display_name"],
+                    "percentage": info["percentage"],
+                    "source_contracts": info["source_contracts"],
+                }
+            )
+            total_pct += info["percentage"]
 
         revenue_amount = self._extract_revenue_amount(query)
         payouts = None
         if revenue_amount and parties:
             payouts = []
             for p in parties:
-                payout = revenue_amount * (p['percentage'] / 100.0)
-                payouts.append({'name': p['name'], 'amount': payout})
+                payout = revenue_amount * (p["percentage"] / 100.0)
+                payouts.append({"name": p["name"], "amount": payout})
 
         result = {
-            'parties': parties,
-            'total_percentage': total_pct,
-            'royalty_type': royalty_type,
-            'num_contracts': len(contracts_discussed),
-            'revenue_amount': revenue_amount,
-            'payouts': payouts
+            "parties": parties,
+            "total_percentage": total_pct,
+            "royalty_type": royalty_type,
+            "num_contracts": len(contracts_discussed),
+            "revenue_amount": revenue_amount,
+            "payouts": payouts,
         }
         logger.info(f"[Aggregation] Result: {len(parties)} parties, total={total_pct}%, revenue={revenue_amount}")
         return result
 
-    def _format_aggregated_splits_for_llm(self, aggregation: Dict) -> str:
+    def _format_aggregated_splits_for_llm(self, aggregation: dict) -> str:
         """Format pre-computed aggregated splits as a text block for the LLM prompt."""
-        royalty_type = aggregation.get('royalty_type', 'general')
-        type_label = royalty_type.title() if royalty_type != 'general' else 'General'
-        num_contracts = aggregation.get('num_contracts', 0)
-        parties = aggregation.get('parties', [])
-        total_pct = aggregation.get('total_percentage', 0)
-        revenue = aggregation.get('revenue_amount')
-        payouts = aggregation.get('payouts')
+        royalty_type = aggregation.get("royalty_type", "general")
+        type_label = royalty_type.title() if royalty_type != "general" else "General"
+        num_contracts = aggregation.get("num_contracts", 0)
+        parties = aggregation.get("parties", [])
+        total_pct = aggregation.get("total_percentage", 0)
+        revenue = aggregation.get("revenue_amount")
+        payouts = aggregation.get("payouts")
 
         lines = [
             f"=== PRE-COMPUTED AGGREGATED ROYALTY SPLITS ({type_label}) ===",
             f"(Merged from {num_contracts} contracts — shares of the SAME 100% pie, NOT summed.)",
-            ""
+            "",
         ]
 
         for p in parties:
-            sources = ", ".join(p['source_contracts'])
+            sources = ", ".join(p["source_contracts"])
             lines.append(f"  {p['name']}: {p['percentage']:.1f}%  (appears in: {sources})")
 
         lines.append(f"\n  Total accounted for: {total_pct:.1f}%")
@@ -2266,7 +2449,7 @@ Artist Profile:
         lines.append("=== END AGGREGATED SPLITS ===")
         return "\n".join(lines)
 
-    def _try_answer_from_history(self, query: str, session_id: Optional[str], context: Optional[Dict] = None) -> Optional[Dict]:
+    def _try_answer_from_history(self, query: str, session_id: str | None, context: dict | None = None) -> dict | None:
         """
         Try to answer a question from conversation history alone.
         Returns None if history is empty or insufficient, allowing fallback to semantic search.
@@ -2316,9 +2499,7 @@ RULES:
 
         try:
             response = openai_client.chat.completions.create(
-                model=self.llm_model,
-                messages=messages,
-                max_completion_tokens=1000
+                model=self.llm_model, messages=messages, max_completion_tokens=1000
             )
 
             answer = (response.choices[0].message.content or "").strip()
@@ -2344,29 +2525,29 @@ RULES:
                 "search_results_count": 0,
                 "answered_from": "conversation_history",
                 "session_id": session_id,
-                "extracted_data": extracted_data if extracted_data else None
+                "extracted_data": extracted_data if extracted_data else None,
             }
 
         except Exception as e:
             logger.error(f"[History] Error checking conversation history: {e}")
             return None
 
-    def _answer_from_context(self, query: str, context: Dict, session_id: Optional[str] = None) -> Dict:
+    def _answer_from_context(self, query: str, context: dict, session_id: str | None = None) -> dict:
         """
         Answer question using structured context and conversation history.
         Used when the answer can be derived from previously extracted data.
         May suggest context-only follow-ups based on available data.
-        
+
         Args:
             query: User's question
             context: Conversation context containing discussed contracts and extracted data
             session_id: Session ID for memory
-            
+
         Returns:
             Dict with answer and metadata
         """
         logger.info(f"[Context] _answer_from_context called with query: {query}")
-        
+
         # Build context summary for LLM
         context_summary = self._format_context_for_llm(context)
         logger.info(f"[Context] Formatted context summary:\n{context_summary}")
@@ -2376,7 +2557,7 @@ RULES:
         royalty_rule_prompt = ""
         if self._is_multi_contract_split_query(query, context):
             aggregation = self._aggregate_splits_across_contracts(context, query)
-            if aggregation['parties']:
+            if aggregation["parties"]:
                 aggregated_splits_block = self._format_aggregated_splits_for_llm(aggregation)
                 context_summary = f"{aggregated_splits_block}\n\n{context_summary}"
                 logger.info(f"[Aggregation] Prepended aggregated splits to context:\n{aggregated_splits_block}")
@@ -2436,56 +2617,56 @@ RULES:
         # Add conversation history first, then the current query with context
         messages.extend(history)
         messages.append({"role": "user", "content": f"Context:\n{context_summary}\n\nQuestion: {query}"})
-        
+
         try:
             response = openai_client.chat.completions.create(
-                model=self.llm_model,
-                messages=messages,
-                max_completion_tokens=1000
+                model=self.llm_model, messages=messages, max_completion_tokens=1000
             )
-            
+
             answer = response.choices[0].message.content
-            
+
             # Handle None response
             if answer is None:
                 answer = "I couldn't generate a response. Please try rephrasing your question."
-            
+
         except Exception as e:
             logger.error(f"Error generating context-based answer: {e}")
             answer = "I encountered an error while processing your question. Please try again."
-        
+
         # Extract any suggestion from the answer for tracking
         clean_answer, suggestion = self._extract_suggestion_from_answer(answer)
-        
+
         # Store pending suggestion if one was made
         pending_suggestion = None
         if suggestion and session_id:
             context_hash = self._compute_context_hash(context)
             # Extract the action from "Would you like me to X?"
-            action_match = re.search(r'(?:Would you like (?:me to|to)?|Shall I|Should I)\s*(.+?)\??$', suggestion, re.IGNORECASE)
+            action_match = re.search(
+                r"(?:Would you like (?:me to|to)?|Shall I|Should I)\s*(.+?)\??$", suggestion, re.IGNORECASE
+            )
             if action_match:
                 pending_suggestion = action_match.group(1).strip()
                 self.memory.set_pending_suggestion(session_id, pending_suggestion, context_hash)
                 logger.info(f"[Context] Stored pending suggestion: {pending_suggestion}")
-        
+
         # Store in memory
         self._add_to_memory(session_id, "user", query)
         self._add_to_memory(session_id, "assistant", answer)
-        
+
         # Extract structured data from the answer
         extracted_data = self._extract_structured_data(answer, query)
-        
+
         # Determine the specific answered_from value
         query_lower = query.lower()
-        comparison_keywords = ['compare', 'difference', 'versus', 'vs', 'between', 'both']
-        artist_keywords = ['artist', 'bio', 'social', 'streaming', 'genre', 'music']
-        
+        comparison_keywords = ["compare", "difference", "versus", "vs", "between", "both"]
+        artist_keywords = ["artist", "bio", "social", "streaming", "genre", "music"]
+
         answered_from = "conversation_context"
         if any(kw in query_lower for kw in comparison_keywords) and any(kw in query_lower for kw in artist_keywords):
-            artists_discussed = context.get('artists_discussed', [])
+            artists_discussed = context.get("artists_discussed", [])
             if len(artists_discussed) >= 2:
                 answered_from = "artist_comparison"
-        
+
         return {
             "query": query,
             "answer": answer,
@@ -2495,99 +2676,99 @@ RULES:
             "answered_from": answered_from,
             "session_id": session_id,
             "extracted_data": extracted_data if extracted_data else None,
-            "pending_suggestion": pending_suggestion
+            "pending_suggestion": pending_suggestion,
         }
-    
-    def _get_available_data_types(self, context: Dict) -> Dict:
+
+    def _get_available_data_types(self, context: dict) -> dict:
         """
         Analyze what types of data are available in the context.
-        
+
         Args:
             context: Conversation context
-            
+
         Returns:
             Dict with available data types per contract
         """
         available = {
-            'contracts': [],
-            'has_royalty_splits': False,
-            'has_parties': False,
-            'has_payment_terms': False,
-            'has_term_length': False,
-            'has_advances': False,
-            'multiple_contracts': False,
-            'multiple_data_types': False
+            "contracts": [],
+            "has_royalty_splits": False,
+            "has_parties": False,
+            "has_payment_terms": False,
+            "has_term_length": False,
+            "has_advances": False,
+            "multiple_contracts": False,
+            "multiple_data_types": False,
         }
-        
-        contracts_discussed = context.get('contracts_discussed', [])
+
+        contracts_discussed = context.get("contracts_discussed", [])
         data_types_found = set()
-        
+
         for contract in contracts_discussed:
-            data = contract.get('data_extracted', {})
+            data = contract.get("data_extracted", {})
             if not data:
                 continue
-                
-            contract_info = {'name': contract.get('name', 'Unknown'), 'data_types': []}
-            
-            if data.get('royalty_splits'):
-                available['has_royalty_splits'] = True
-                data_types_found.add('royalty_splits')
-                contract_info['data_types'].append('royalty_splits')
-            if data.get('parties'):
-                available['has_parties'] = True
-                data_types_found.add('parties')
-                contract_info['data_types'].append('parties')
-            if data.get('payment_terms'):
-                available['has_payment_terms'] = True
-                data_types_found.add('payment_terms')
-                contract_info['data_types'].append('payment_terms')
-            if data.get('term_length'):
-                available['has_term_length'] = True
-                data_types_found.add('term_length')
-                contract_info['data_types'].append('term_length')
-            if data.get('advances'):
-                available['has_advances'] = True
-                data_types_found.add('advances')
-                contract_info['data_types'].append('advances')
-            
-            if contract_info['data_types']:
-                available['contracts'].append(contract_info)
-        
-        available['multiple_contracts'] = len(available['contracts']) >= 2
-        available['multiple_data_types'] = len(data_types_found) >= 2
-        
+
+            contract_info = {"name": contract.get("name", "Unknown"), "data_types": []}
+
+            if data.get("royalty_splits"):
+                available["has_royalty_splits"] = True
+                data_types_found.add("royalty_splits")
+                contract_info["data_types"].append("royalty_splits")
+            if data.get("parties"):
+                available["has_parties"] = True
+                data_types_found.add("parties")
+                contract_info["data_types"].append("parties")
+            if data.get("payment_terms"):
+                available["has_payment_terms"] = True
+                data_types_found.add("payment_terms")
+                contract_info["data_types"].append("payment_terms")
+            if data.get("term_length"):
+                available["has_term_length"] = True
+                data_types_found.add("term_length")
+                contract_info["data_types"].append("term_length")
+            if data.get("advances"):
+                available["has_advances"] = True
+                data_types_found.add("advances")
+                contract_info["data_types"].append("advances")
+
+            if contract_info["data_types"]:
+                available["contracts"].append(contract_info)
+
+        available["multiple_contracts"] = len(available["contracts"]) >= 2
+        available["multiple_data_types"] = len(data_types_found) >= 2
+
         return available
-    
-    def _build_suggestion_guidance(self, available_data: Dict) -> str:
+
+    def _build_suggestion_guidance(self, available_data: dict) -> str:
         """
         Build guidance for the LLM about what suggestions are valid.
-        
+
         Args:
             available_data: Dict from _get_available_data_types
-            
+
         Returns:
             String guidance for the system prompt
         """
         valid_suggestions = []
         invalid_note = ""
-        
-        if available_data['multiple_contracts']:
-            contract_names = [c['name'] for c in available_data['contracts']]
+
+        if available_data["multiple_contracts"]:
+            contract_names = [c["name"] for c in available_data["contracts"]]
             valid_suggestions.append(f"Compare data between contracts: {', '.join(contract_names)}")
-        
-        if available_data['multiple_data_types']:
-            if available_data['has_royalty_splits'] and available_data['has_payment_terms']:
+
+        if available_data["multiple_data_types"]:
+            if available_data["has_royalty_splits"] and available_data["has_payment_terms"]:
                 valid_suggestions.append("Compare royalty splits with payment terms")
-            if available_data['has_royalty_splits']:
+            if available_data["has_royalty_splits"]:
                 valid_suggestions.append("Calculate total percentages across categories")
                 valid_suggestions.append("Show all parties and their splits")
-        
+
         if not valid_suggestions:
             invalid_note = "\nNOTE: Limited context data available - avoid suggesting follow-ups."
-        
+
         if valid_suggestions:
             return f"""VALID context-only suggestions (data IS available):
-{chr(10).join('✅ ' + s for s in valid_suggestions)}
+{chr(10).join("✅ " + s for s in valid_suggestions)}
 
 INVALID suggestions (would require document lookup - DO NOT suggest these):
 ❌ Anything about data not listed in the context above
@@ -2596,54 +2777,54 @@ INVALID suggestions (would require document lookup - DO NOT suggest these):
 ❌ "See who else is in the contract" (unless parties is in context){invalid_note}"""
         else:
             return invalid_note
-    
-    def _format_context_for_llm(self, context: Dict) -> str:
+
+    def _format_context_for_llm(self, context: dict) -> str:
         """
         Format structured conversation context as readable text for LLM.
-        
+
         Args:
             context: Conversation context dictionary
-            
+
         Returns:
             Formatted string with context details
         """
         parts = []
-        
-        if context.get('artist'):
+
+        if context.get("artist"):
             parts.append(f"Current Artist: {context['artist'].get('name', 'Unknown')}")
-        
+
         # Format artists discussed for comparisons
-        if context.get('artists_discussed'):
+        if context.get("artists_discussed"):
             parts.append("\nArtists Discussed:")
-            for artist in context['artists_discussed']:
+            for artist in context["artists_discussed"]:
                 parts.append(f"\n🎤 {artist.get('name', 'Unknown Artist')}")
-                data_extracted = artist.get('data_extracted', {})
+                data_extracted = artist.get("data_extracted", {})
                 if data_extracted:
-                    if data_extracted.get('bio'):
+                    if data_extracted.get("bio"):
                         parts.append(f"  • Bio: {data_extracted['bio']}")
-                    if data_extracted.get('genres'):
-                        genres = data_extracted['genres']
+                    if data_extracted.get("genres"):
+                        genres = data_extracted["genres"]
                         if isinstance(genres, list):
                             parts.append(f"  • Genres: {', '.join(genres)}")
                         else:
                             parts.append(f"  • Genres: {genres}")
-                    if data_extracted.get('social_media'):
+                    if data_extracted.get("social_media"):
                         parts.append("  • Social Media:")
-                        for platform, url in data_extracted['social_media'].items():
+                        for platform, url in data_extracted["social_media"].items():
                             parts.append(f"    - {platform.title()}: {url}")
-                    if data_extracted.get('streaming_links'):
+                    if data_extracted.get("streaming_links"):
                         parts.append("  • Streaming Links:")
-                        for platform, url in data_extracted['streaming_links'].items():
+                        for platform, url in data_extracted["streaming_links"].items():
                             parts.append(f"    - {platform.title()}: {url}")
-        
-        if context.get('project'):
+
+        if context.get("project"):
             parts.append(f"Current Project: {context['project'].get('name', 'Unknown')}")
-        
-        if context.get('contracts_discussed'):
+
+        if context.get("contracts_discussed"):
             parts.append("\nContracts Discussed:")
-            for contract in context['contracts_discussed']:
+            for contract in context["contracts_discussed"]:
                 parts.append(f"\n📄 {contract.get('name', 'Unknown Contract')}")
-                data_extracted = contract.get('data_extracted', {})
+                data_extracted = contract.get("data_extracted", {})
                 if data_extracted:
                     for key, value in data_extracted.items():
                         if value:  # Only include non-empty values
@@ -2657,37 +2838,37 @@ INVALID suggestions (would require document lookup - DO NOT suggest these):
                                         parts.append(f"    - {item}")
                             else:
                                 parts.append(f"  • {key.replace('_', ' ').title()}: {value}")
-        
-        if context.get('context_switches'):
-            recent_switches = context['context_switches'][-3:]  # Last 3 switches
+
+        if context.get("context_switches"):
+            recent_switches = context["context_switches"][-3:]  # Last 3 switches
             if recent_switches:
                 parts.append("\nRecent Context Changes:")
                 for switch in recent_switches:
-                    from_val = switch.get('from_value') or switch.get('from', 'None')
+                    from_val = switch.get("from_value") or switch.get("from", "None")
                     parts.append(f"  • {switch['type'].title()}: {from_val} → {switch['to']}")
-        
+
         return "\n".join(parts) if parts else "No context available."
 
-    def _check_similarity_threshold(self, search_results: Dict) -> bool:
+    def _check_similarity_threshold(self, search_results: dict) -> bool:
         """
         Check if highest similarity score meets threshold
-        
+
         Args:
             search_results: Results from ContractSearch
-            
+
         Returns:
             True if threshold is met, False otherwise
         """
         if not search_results["matches"]:
             return False
-        
+
         highest_score = search_results["matches"][0]["score"]
         return highest_score >= MIN_SIMILARITY_THRESHOLD
-    
+
     def _create_system_prompt(self) -> str:
         """
         Create system prompt for LLM with grounding instructions
-        
+
         Returns:
             System prompt string
         """
@@ -2707,40 +2888,40 @@ Your answers should be:
 - Clear, concise, and to the point — no filler or embellishment
 - Formatted using minimal markdown (**bold** for key terms, bullet points for lists, ### headers only when multiple sections are needed)
 - Format URLs as markdown links: [Display Text](url)"""
-    
-    def _format_context(self, search_results: Dict) -> str:
+
+    def _format_context(self, search_results: dict) -> str:
         """
         Format search results as context for LLM.
         Uses the same format as oneclick_retrieval.py for consistency.
-        
+
         Args:
             search_results: Results from ContractSearch
-            
+
         Returns:
             Formatted context string
         """
         if not search_results["matches"]:
             return "No relevant contract contracts found."
-        
+
         # Format exactly like oneclick_retrieval.py
         context_parts = []
         for match in search_results["matches"]:
-            section = match.get('section_heading', 'N/A')
-            text = match.get('text', '')
+            section = match.get("section_heading", "N/A")
+            text = match.get("text", "")
             context_parts.append(f"[Section: {section}]\n{text}")
-        
+
         return "\n\n".join(context_parts)
-    
-    def _generate_answer(self, query: str, context: str, search_results: Dict, session_id: Optional[str] = None) -> Dict:
+
+    def _generate_answer(self, query: str, context: str, search_results: dict, session_id: str | None = None) -> dict:
         """
         Generate answer using LLM with conversation history for context.
-        
+
         Args:
             query: User's question
             context: Formatted context from search results
             search_results: Original search results
             session_id: Session ID for conversation history
-            
+
         Returns:
             Dict with answer and metadata
         """
@@ -2758,11 +2939,11 @@ Your answers should be:
                 "reason": "No sufficiently relevant information found (similarity threshold not met)",
                 "highest_score": highest,
                 "threshold": MIN_SIMILARITY_THRESHOLD,
-                "sources": []
+                "sources": [],
             }
-        
+
         # Standard system prompt with strict focus on the question asked
-        system_prompt = """You are a legal contract analyst specializing in music industry agreements. 
+        system_prompt = """You are a legal contract analyst specializing in music industry agreements.
 Your task is to answer questions about contract documents based on the provided context.
 
 CRITICAL RULES:
@@ -2794,10 +2975,12 @@ Your answers should be:
         conversation_history = self._get_conversation_context(session_id, max_turns=5)
         if conversation_history:
             # Add a context separator
-            messages.append({
-                "role": "system",
-                "content": "Previous conversation for context (use for understanding references and incorporating relevant prior information):"
-            })
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "Previous conversation for context (use for understanding references and incorporating relevant prior information):",
+                }
+            )
             messages.extend(conversation_history)
 
         # Add current query with contract context
@@ -2809,26 +2992,24 @@ Contract documents:
 {context}
 
 Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
-        
+
         messages.append({"role": "user", "content": user_prompt})
-        
+
         # Call LLM
         logger.info(f"\nGenerating answer using {self.llm_model}...")
         logger.info(f"Conversation history: {len(conversation_history)} messages included")
         logger.info(f"Context being sent to LLM (first 2000 chars):\n{context[:2000]}")
-        
+
         try:
             response = openai_client.chat.completions.create(
-                model=self.llm_model,
-                messages=messages,
-                max_completion_tokens=1000
+                model=self.llm_model, messages=messages, max_completion_tokens=1000
             )
 
             raw_answer = response.choices[0].message.content
             finish_reason = response.choices[0].finish_reason
             logger.info(f"LLM finish_reason: {finish_reason}")
             logger.info(f"LLM raw response (first 500 chars): {raw_answer[:500] if raw_answer else 'EMPTY'}")
-            if hasattr(response.choices[0].message, 'refusal') and response.choices[0].message.refusal:
+            if hasattr(response.choices[0].message, "refusal") and response.choices[0].message.refusal:
                 logger.warning(f"LLM refusal: {response.choices[0].message.refusal}")
 
             answer = (raw_answer or "").strip()
@@ -2838,12 +3019,10 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 logger.warning("[Retry] LLM returned empty — retrying without conversation history")
                 retry_messages = [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ]
                 retry_response = openai_client.chat.completions.create(
-                    model=self.llm_model,
-                    messages=retry_messages,
-                    max_completion_tokens=1000
+                    model=self.llm_model, messages=retry_messages, max_completion_tokens=1000
                 )
                 raw_answer = retry_response.choices[0].message.content
                 retry_finish = retry_response.choices[0].finish_reason
@@ -2864,7 +3043,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                     "score": match["score"],
                     "project_name": match["project_name"],
                     "section_heading": match.get("section_heading", ""),
-                    "section_category": match.get("section_category", "")
+                    "section_category": match.get("section_category", ""),
                 }
                 for match in search_results["matches"]
             ]
@@ -2877,16 +3056,16 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 "threshold": MIN_SIMILARITY_THRESHOLD,
                 "sources": sources,
                 "model": self.llm_model,
-                "extracted_data": extracted_data if extracted_data else None
+                "extracted_data": extracted_data if extracted_data else None,
             }
-            
+
         except Exception as e:
             logger.error(f"Error generating answer: {e}")
             return {
                 "answer": "I encountered an error while processing your question. Please try again.",
                 "confidence": "error",
                 "error": str(e),
-                "sources": []
+                "sources": [],
             }
 
     # ──────────────────────────────────────────────────────────────
@@ -2894,29 +3073,24 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
     # ──────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _sse_event(event_type: str, data: Dict) -> str:
+    def _sse_event(event_type: str, data: dict) -> str:
         """Format a Server-Sent Events string."""
         payload = {"type": event_type, **data}
         return f"data: {json.dumps(payload)}\n\n"
 
-    def _stream_llm_completion(self, messages: List[Dict], max_tokens: int = 1000, model_override: Optional[str] = None):
+    def _stream_llm_completion(self, messages: list[dict], max_tokens: int = 1000, model_override: str | None = None):
         """
         Generator that yields token strings from an OpenAI streaming call.
         """
         model = model_override or self.llm_model
         response = openai_client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_completion_tokens=max_tokens,
-            stream=True
+            model=model, messages=messages, max_completion_tokens=max_tokens, stream=True
         )
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
-    def _generate_answer_stream(self, query: str, context: str,
-                                 search_results: Dict,
-                                 session_id: Optional[str] = None):
+    def _generate_answer_stream(self, query: str, context: str, search_results: dict, session_id: str | None = None):
         """
         Generator version of _generate_answer. Yields SSE event strings.
         Streams LLM tokens in real-time, then yields post-processed metadata.
@@ -2924,12 +3098,15 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
         # Check similarity threshold
         if not self._check_similarity_threshold(search_results):
             highest = search_results["matches"][0]["score"] if search_results["matches"] else 0.0
-            yield self._sse_event("complete", {
-                "answer": self._no_result_message(contract_ids=["active"]),
-                "confidence": "low",
-                "sources": [],
-                "highest_score": highest
-            })
+            yield self._sse_event(
+                "complete",
+                {
+                    "answer": self._no_result_message(contract_ids=["active"]),
+                    "confidence": "low",
+                    "sources": [],
+                    "highest_score": highest,
+                },
+            )
             return
 
         # Build sources from search results (known before LLM call)
@@ -2939,18 +3116,21 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 "score": match["score"],
                 "project_name": match["project_name"],
                 "section_heading": match.get("section_heading", ""),
-                "section_category": match.get("section_category", "")
+                "section_category": match.get("section_category", ""),
             }
             for match in search_results["matches"]
         ]
         highest_score = search_results["matches"][0]["score"]
 
         # Yield sources before streaming starts
-        yield self._sse_event("sources", {
-            "sources": sources,
-            "highest_score": highest_score,
-            "search_results_count": search_results["total_results"]
-        })
+        yield self._sse_event(
+            "sources",
+            {
+                "sources": sources,
+                "highest_score": highest_score,
+                "search_results_count": search_results["total_results"],
+            },
+        )
 
         # Build prompt (same as _generate_answer)
         system_prompt = """You are a legal contract analyst specializing in music industry agreements.
@@ -2982,10 +3162,12 @@ Your answers should be:
 
         conversation_history = self._get_conversation_context(session_id, max_turns=5)
         if conversation_history:
-            messages.append({
-                "role": "system",
-                "content": "Previous conversation for context (use for understanding references and incorporating relevant prior information):"
-            })
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "Previous conversation for context (use for understanding references and incorporating relevant prior information):",
+                }
+            )
             messages.extend(conversation_history)
 
         user_prompt = f"""Based on the following contract documents, answer this question:
@@ -3015,7 +3197,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
                 logger.warning("[Stream][Retry] LLM returned empty — retrying without history")
                 retry_messages = [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ]
                 full_answer = ""
                 for token in self._stream_llm_completion(retry_messages, 1000):
@@ -3031,18 +3213,20 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             extracted_data = self._extract_structured_data(answer, query)
             is_fallback = "I couldn't find that information" in answer or "I don't have the information" in answer
 
-            yield self._sse_event("data", {
-                "extracted_data": extracted_data if extracted_data else None,
-                "confidence": "low" if is_fallback else "high",
-                "highest_score": highest_score,
-                "model": self.llm_model
-            })
+            yield self._sse_event(
+                "data",
+                {
+                    "extracted_data": extracted_data if extracted_data else None,
+                    "confidence": "low" if is_fallback else "high",
+                    "highest_score": highest_score,
+                    "model": self.llm_model,
+                },
+            )
 
             # Store in memory
-            self._add_to_memory(session_id, "assistant", answer, {
-                "confidence": "low" if is_fallback else "high",
-                "sources": sources
-            })
+            self._add_to_memory(
+                session_id, "assistant", answer, {"confidence": "low" if is_fallback else "high", "sources": sources}
+            )
 
             yield self._sse_event("done", {"answered_from": "document"})
 
@@ -3050,8 +3234,7 @@ Remember: Answer ONLY what was asked. Do not suggest follow-up questions."""
             logger.error(f"[Stream] Error generating answer: {e}")
             yield self._sse_event("error", {"message": str(e)})
 
-    def _handle_artist_query_stream(self, query: str, artist_data: Dict,
-                                     session_id: Optional[str] = None):
+    def _handle_artist_query_stream(self, query: str, artist_data: dict, session_id: str | None = None):
         """
         Generator version of _handle_artist_query. Yields SSE event strings.
         """
@@ -3079,12 +3262,15 @@ FORMATTING:
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"""Based on the following artist profile, answer this question:
+            {
+                "role": "user",
+                "content": f"""Based on the following artist profile, answer this question:
 
 {query}
 
 Artist Profile:
-{artist_context}"""}
+{artist_context}""",
+            },
         ]
 
         try:
@@ -3106,15 +3292,17 @@ Artist Profile:
         self._add_to_memory(session_id, "assistant", answer)
         extracted_artist_data = self._extract_artist_data(artist_data)
 
-        yield self._sse_event("data", {
-            "extracted_data": extracted_artist_data if extracted_artist_data else None,
-            "confidence": "artist_data",
-            "answered_from": "artist_data"
-        })
+        yield self._sse_event(
+            "data",
+            {
+                "extracted_data": extracted_artist_data if extracted_artist_data else None,
+                "confidence": "artist_data",
+                "answered_from": "artist_data",
+            },
+        )
         yield self._sse_event("done", {"answered_from": "artist_data"})
 
-    def _answer_from_context_stream(self, query: str, context: Dict,
-                                     session_id: Optional[str] = None):
+    def _answer_from_context_stream(self, query: str, context: dict, session_id: str | None = None):
         """
         Generator version of _answer_from_context. Yields SSE event strings.
         """
@@ -3125,7 +3313,7 @@ Artist Profile:
         royalty_rule_prompt = ""
         if self._is_multi_contract_split_query(query, context):
             aggregation = self._aggregate_splits_across_contracts(context, query)
-            if aggregation['parties']:
+            if aggregation["parties"]:
                 aggregated_splits_block = self._format_aggregated_splits_for_llm(aggregation)
                 context_summary = f"{aggregated_splits_block}\n\n{context_summary}"
                 royalty_rule_prompt = """
@@ -3203,7 +3391,9 @@ RULES:
         pending_suggestion = None
         if suggestion and session_id:
             context_hash = self._compute_context_hash(context)
-            action_match = re.search(r'(?:Would you like (?:me to|to)?|Shall I|Should I)\s*(.+?)\??$', suggestion, re.IGNORECASE)
+            action_match = re.search(
+                r"(?:Would you like (?:me to|to)?|Shall I|Should I)\s*(.+?)\??$", suggestion, re.IGNORECASE
+            )
             if action_match:
                 pending_suggestion = action_match.group(1).strip()
                 self.memory.set_pending_suggestion(session_id, pending_suggestion, context_hash)
@@ -3211,25 +3401,25 @@ RULES:
         self._add_to_memory(session_id, "user", query)
         self._add_to_memory(session_id, "assistant", answer)
 
-        yield self._sse_event("data", {
-            "confidence": "context",
-            "answered_from": "context",
-            "pending_suggestion": pending_suggestion
-        })
+        yield self._sse_event(
+            "data", {"confidence": "context", "answered_from": "context", "pending_suggestion": pending_suggestion}
+        )
         yield self._sse_event("done", {"answered_from": "context"})
 
-    def ask_stream(self,
-                   query: str,
-                   user_id: str,
-                   project_id: Optional[str] = None,
-                   contract_ids: Optional[List[str]] = None,
-                   top_k: Optional[int] = None,
-                   session_id: Optional[str] = None,
-                   artist_data: Optional[Dict] = None,
-                   context: Optional[Dict] = None,
-                   source_preference: Optional[str] = None,
-                   contract_markdowns: Optional[Dict[str, str]] = None,
-                   contract_names: Optional[Dict[str, str]] = None):
+    def ask_stream(
+        self,
+        query: str,
+        user_id: str,
+        project_id: str | None = None,
+        contract_ids: list[str] | None = None,
+        top_k: int | None = None,
+        session_id: str | None = None,
+        artist_data: dict | None = None,
+        context: dict | None = None,
+        source_preference: str | None = None,
+        contract_markdowns: dict[str, str] | None = None,
+        contract_names: dict[str, str] | None = None,
+    ):
         """
         Unified streaming entry point for Zoe chatbot.
         Generator that yields SSE event strings.
@@ -3254,10 +3444,12 @@ RULES:
         # Detect if contract selection changed since last query
         current_ids = sorted(contract_ids) if contract_ids else None
         last_ids = self.memory.get_last_contract_ids(session_id) if session_id else None
-        contracts_changed = (last_ids is not None and current_ids != last_ids)
+        contracts_changed = last_ids is not None and current_ids != last_ids
 
         if contracts_changed:
-            logger.info(f"[Stream] Contract selection changed: {last_ids} -> {current_ids}, skipping Tier 2 history and context")
+            logger.info(
+                f"[Stream] Contract selection changed: {last_ids} -> {current_ids}, skipping Tier 2 history and context"
+            )
 
         # Update stored contract_ids for next comparison
         if session_id:
@@ -3271,18 +3463,21 @@ RULES:
             pending = self.memory.get_pending_suggestion(session_id)
             if pending:
                 current_hash = self._compute_context_hash(context)
-                if pending.get('context_hash') != current_hash:
+                if pending.get("context_hash") != current_hash:
                     self.memory.clear_pending_suggestion(session_id)
-                    yield self._sse_event("complete", {
-                        "answer": "It looks like the conversation context was reset. Please refresh the page to start a new session, or ask your question again.",
-                        "confidence": "context_cleared",
-                        "sources": [],
-                        "context_cleared": True,
-                        "session_id": session_id
-                    })
+                    yield self._sse_event(
+                        "complete",
+                        {
+                            "answer": "It looks like the conversation context was reset. Please refresh the page to start a new session, or ask your question again.",
+                            "confidence": "context_cleared",
+                            "sources": [],
+                            "context_cleared": True,
+                            "session_id": session_id,
+                        },
+                    )
                     return
 
-                suggestion = pending.get('suggestion', '')
+                suggestion = pending.get("suggestion", "")
                 self.memory.clear_pending_suggestion(session_id)
                 yield from self._answer_from_context_stream(suggestion, context, session_id)
                 return
@@ -3309,11 +3504,13 @@ RULES:
 
         # ── Routing decision (for search query refinement only) ──
         contract_id = contract_ids[0] if contract_ids and len(contract_ids) == 1 else None
-        route_decision = self._llm_route_decision(
-            query=query, artist_data=artist_data, context=context,
+        _route_decision = self._llm_route_decision(
+            query=query,
+            artist_data=artist_data,
+            context=context,
             source_preference=source_preference,
             project_id=project_id,
-            contract_id=contract_id
+            contract_id=contract_id,
         )
 
         # ── Need a project for contract search ──
@@ -3321,11 +3518,18 @@ RULES:
             self._add_to_memory(session_id, "user", query)
             response = "To answer questions about contracts, I need you to select a project first. Please choose a project from the sidebar."
             self._add_to_memory(session_id, "assistant", response)
-            yield self._sse_event("complete", {
-                "query": query, "answer": response, "confidence": "needs_project",
-                "sources": [], "search_results_count": 0, "session_id": session_id,
-                "show_quick_actions": True
-            })
+            yield self._sse_event(
+                "complete",
+                {
+                    "query": query,
+                    "answer": response,
+                    "confidence": "needs_project",
+                    "sources": [],
+                    "search_results_count": 0,
+                    "session_id": session_id,
+                    "show_quick_actions": True,
+                },
+            )
             return
 
         # ── Tier 3: Full-document context OR vector search + streaming LLM generation ──
@@ -3335,10 +3539,17 @@ RULES:
         if not contract_markdowns:
             no_md_msg = "I couldn't load the contract text. Please try re-uploading the contract."
             self._add_to_memory(session_id, "assistant", no_md_msg)
-            yield self._sse_event("complete", {
-                "query": query, "answer": no_md_msg, "confidence": "low",
-                "sources": [], "search_results_count": 0, "session_id": session_id,
-            })
+            yield self._sse_event(
+                "complete",
+                {
+                    "query": query,
+                    "answer": no_md_msg,
+                    "confidence": "low",
+                    "sources": [],
+                    "search_results_count": 0,
+                    "session_id": session_id,
+                },
+            )
             return
 
         # ── Guard: combined size exceeds context limit ──
@@ -3350,18 +3561,29 @@ RULES:
             )
             logger.info(f"[Stream] Contract text too large ({total_chars} chars >= 370k limit)")
             self._add_to_memory(session_id, "assistant", limit_msg)
-            yield self._sse_event("complete", {
-                "query": query, "answer": limit_msg, "confidence": "low",
-                "sources": [], "search_results_count": 0, "session_id": session_id,
-            })
+            yield self._sse_event(
+                "complete",
+                {
+                    "query": query,
+                    "answer": limit_msg,
+                    "confidence": "low",
+                    "sources": [],
+                    "search_results_count": 0,
+                    "session_id": session_id,
+                },
+            )
             return
 
-        logger.info(f"[Stream] Using full document context ({total_chars} chars, {len(contract_markdowns)} contract(s))")
+        logger.info(
+            f"[Stream] Using full document context ({total_chars} chars, {len(contract_markdowns)} contract(s))"
+        )
 
         # Use larger model for multi-contract comparisons (2+ contracts)
         multi_contract_model = DEFAULT_LLM_MODEL_LARGE if (contract_ids and len(contract_ids) >= 2) else None
         if multi_contract_model:
-            logger.info(f"[Stream] Multi-contract detected ({len(contract_ids)} contracts) — using {multi_contract_model}")
+            logger.info(
+                f"[Stream] Multi-contract detected ({len(contract_ids)} contracts) — using {multi_contract_model}"
+            )
 
         # Linearize tables for clearer LLM comprehension
         processed_markdowns = {}
@@ -3384,11 +3606,13 @@ RULES:
         full_doc_context = full_doc_context.strip()
 
         # Stream answer using full document
-        yield from self._generate_answer_stream_full_doc(query, full_doc_context, session_id, model_override=multi_contract_model)
+        yield from self._generate_answer_stream_full_doc(
+            query, full_doc_context, session_id, model_override=multi_contract_model
+        )
 
-    def _generate_answer_stream_full_doc(self, query: str, full_doc_context: str,
-                                          session_id: Optional[str] = None,
-                                          model_override: Optional[str] = None):
+    def _generate_answer_stream_full_doc(
+        self, query: str, full_doc_context: str, session_id: str | None = None, model_override: str | None = None
+    ):
         """
         Stream LLM answer using the full contract document as context.
         No similarity threshold check needed since we have the complete document.
@@ -3400,11 +3624,7 @@ RULES:
         4. user: current query
         """
         # Yield empty sources (no chunk-based search was done)
-        yield self._sse_event("sources", {
-            "sources": [],
-            "highest_score": 1.0,
-            "search_results_count": 0
-        })
+        yield self._sse_event("sources", {"sources": [], "highest_score": 1.0, "search_results_count": 0})
 
         # --- Message 1: Static system prompt (cacheable prefix start) ---
         system_prompt = """You are a legal contract analyst specializing in music industry agreements.
@@ -3449,10 +3669,9 @@ Your answers should be:
         messages = [{"role": "system", "content": system_prompt}]
 
         # --- Message 2: Contract documents (cacheable — identical for same contracts) ---
-        messages.append({
-            "role": "system",
-            "content": f"Complete contract document(s) for reference:\n\n{full_doc_context}"
-        })
+        messages.append(
+            {"role": "system", "content": f"Complete contract document(s) for reference:\n\n{full_doc_context}"}
+        )
 
         # --- Messages 3+: Conversation history (varies per turn) ---
         conversation_history = self._get_conversation_context(session_id, max_turns=5)
@@ -3460,10 +3679,12 @@ Your answers should be:
             messages.extend(conversation_history)
 
         # --- Final message: Current query ---
-        messages.append({
-            "role": "user",
-            "content": f"{query}\n\nRemember: Answer ONLY what was asked. Do not suggest follow-up questions."
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": f"{query}\n\nRemember: Answer ONLY what was asked. Do not suggest follow-up questions.",
+            }
+        )
 
         effective_model = model_override or self.llm_model
         logger.info(f"\n[Stream][FullDoc] Generating answer using {effective_model}...")
@@ -3477,20 +3698,25 @@ Your answers should be:
             answer = full_answer.strip()
 
             if not answer:
-                answer = "I couldn't generate an answer from the contract document. Please try rephrasing your question."
+                answer = (
+                    "I couldn't generate an answer from the contract document. Please try rephrasing your question."
+                )
                 yield self._sse_event("token", {"content": answer})
 
             # Post-processing
             extracted_data = self._extract_structured_data(answer, query)
             is_fallback = "I couldn't find that information" in answer or "I don't have the information" in answer
 
-            yield self._sse_event("data", {
-                "extracted_data": extracted_data if extracted_data else None,
-                "confidence": "low" if is_fallback else "high",
-                "highest_score": 1.0,
-                "model": effective_model,
-                "answered_from": "full_document"
-            })
+            yield self._sse_event(
+                "data",
+                {
+                    "extracted_data": extracted_data if extracted_data else None,
+                    "confidence": "low" if is_fallback else "high",
+                    "highest_score": 1.0,
+                    "model": effective_model,
+                    "answered_from": "full_document",
+                },
+            )
 
             # Store in memory
             self._add_to_memory(session_id, "assistant", answer)
@@ -3501,10 +3727,7 @@ Your answers should be:
                 context_hash = None
                 self.memory.set_pending_suggestion(session_id, suggestion, context_hash)
 
-            yield self._sse_event("done", {
-                "session_id": session_id,
-                "pending_suggestion": suggestion
-            })
+            yield self._sse_event("done", {"session_id": session_id, "pending_suggestion": suggestion})
 
         except Exception as e:
             logger.error(f"[Stream][FullDoc] Error: {e}")
@@ -3513,24 +3736,19 @@ Your answers should be:
     def clear_session(self, session_id: str) -> None:
         """Clear conversation history for a session."""
         self.memory.clear_session(session_id)
-    
-    def get_session_history(self, session_id: str) -> List[Dict]:
+
+    def get_session_history(self, session_id: str) -> list[dict]:
         """
         Get conversation history for a session.
-        
+
         Args:
             session_id: Session identifier
-            
+
         Returns:
             List of message dictionaries
         """
         messages = self.memory.get_messages(session_id)
         return [
-            {
-                "role": msg.role,
-                "content": msg.content,
-                "timestamp": msg.timestamp.isoformat(),
-                "metadata": msg.metadata
-            }
+            {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp.isoformat(), "metadata": msg.metadata}
             for msg in messages
         ]

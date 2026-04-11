@@ -1,16 +1,17 @@
 import io
-from reportlab.lib.pagesizes import letter
+
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.platypus import (
-    SimpleDocTemplate,
+    HRFlowable,
     Paragraph,
+    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
-    HRFlowable,
 )
 
 
@@ -83,15 +84,13 @@ def generate_split_sheet_pdf(
     # --- Header ---
     elements.append(Paragraph("SPLIT SHEET AGREEMENT", title_style))
     elements.append(Paragraph("Music Work Royalty Split Agreement", subtitle_style))
-    elements.append(
-        HRFlowable(width="100%", thickness=2, color=brand, spaceAfter=20)
-    )
+    elements.append(HRFlowable(width="100%", thickness=2, color=brand, spaceAfter=20))
 
     # --- Section 1: Parties ---
     elements.append(Paragraph("Section 1: Parties to This Agreement", section_heading_style))
     elements.append(
         Paragraph(
-            f"This Split Sheet Agreement (the \"Agreement\") is entered into as of {date}, "
+            f'This Split Sheet Agreement (the "Agreement") is entered into as of {date}, '
             f"by and between the following parties:",
             body_style,
         )
@@ -103,7 +102,7 @@ def generate_split_sheet_pdf(
         role = c.get("role", "")
         publisher = c.get("publisher_or_label", "") or ""
         ipi = c.get("ipi_number", "") or ""
-        party_line = f"<b>{name}</b> (hereinafter referred to as \"{role}\")"
+        party_line = f'<b>{name}</b> (hereinafter referred to as "{role}")'
         if publisher:
             party_line += f", affiliated with {publisher}"
         if ipi:
@@ -117,7 +116,7 @@ def generate_split_sheet_pdf(
     elements.append(Paragraph("Section 2: Musical Work", section_heading_style))
     elements.append(
         Paragraph(
-            f"The parties agree that this Agreement pertains to the following musical work:",
+            "The parties agree that this Agreement pertains to the following musical work:",
             body_style,
         )
     )
@@ -130,14 +129,16 @@ def generate_split_sheet_pdf(
     ]
     work_table = Table(work_details, colWidths=[1.5 * inch, 5 * inch])
     work_table.setStyle(
-        TableStyle([
-            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-            ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
-            ("FONTSIZE", (0, 0), (-1, -1), 10),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ])
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ]
+        )
     )
     elements.append(work_table)
     elements.append(Spacer(1, 12))
@@ -152,7 +153,7 @@ def generate_split_sheet_pdf(
             Paragraph(
                 f"<b>{royalty_type_label} Royalties:</b> The parties agree to the following "
                 f"{royalty_type_key.lower()} royalty percentage splits for the work titled "
-                f"\"{work_title}\":",
+                f'"{work_title}":',
                 body_style,
             )
         )
@@ -165,8 +166,7 @@ def generate_split_sheet_pdf(
             pct = c.get(pct_key, 0) or 0
             elements.append(
                 Paragraph(
-                    f"• {name} (\"{role}\") shall receive <b>{pct:.2f}%</b> of all "
-                    f"{royalty_type_key.lower()} royalties.",
+                    f'• {name} ("{role}") shall receive <b>{pct:.2f}%</b> of all {royalty_type_key.lower()} royalties.',
                     body_style,
                 )
             )
@@ -178,11 +178,13 @@ def generate_split_sheet_pdf(
 
         for c in contributors:
             pct = c.get(pct_key, 0) or 0
-            table_data.append([
-                c.get("name", ""),
-                c.get("role", ""),
-                f"{pct:.2f}%",
-            ])
+            table_data.append(
+                [
+                    c.get("name", ""),
+                    c.get("role", ""),
+                    f"{pct:.2f}%",
+                ]
+            )
 
         total_pct = sum((c.get(pct_key, 0) or 0) for c in contributors)
         table_data.append(["", "TOTAL", f"{total_pct:.2f}%"])
@@ -243,20 +245,20 @@ def generate_split_sheet_pdf(
         ]
         sig_table = Table(sig_data, colWidths=[3.5 * inch, 3.5 * inch])
         sig_table.setStyle(
-            TableStyle([
-                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ])
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 10),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
         )
         elements.append(sig_table)
         elements.append(Spacer(1, 16))
 
     # --- Disclaimer ---
-    elements.append(
-        HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cccccc"), spaceAfter=8)
-    )
+    elements.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cccccc"), spaceAfter=8))
     elements.append(
         Paragraph(
             "This split sheet agreement documents the agreed-upon royalty ownership percentages "

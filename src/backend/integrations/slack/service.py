@@ -43,9 +43,7 @@ async def send_notification(token: str, channel_id: str, text: str, blocks: list
         return response.json()
 
 
-async def notify_for_event(
-    supabase: Client, user_id: str, event_name: str, event_data: dict
-):
+async def notify_for_event(supabase: Client, user_id: str, event_name: str, event_data: dict):
     """Check if user has Slack notifications enabled for this event, and send if so."""
     from integrations.oauth import get_valid_token
 

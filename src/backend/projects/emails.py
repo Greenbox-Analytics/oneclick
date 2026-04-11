@@ -1,5 +1,6 @@
 import html
 import os
+
 import resend
 
 
@@ -46,12 +47,14 @@ def send_project_invite_email(
     """
 
     try:
-        response = resend.Emails.send({
-            "from": from_address,
-            "to": [recipient_email],
-            "subject": f"{safe_inviter} invited you to \"{safe_project}\" on Msanii",
-            "html": html_body,
-        })
+        response = resend.Emails.send(
+            {
+                "from": from_address,
+                "to": [recipient_email],
+                "subject": f'{safe_inviter} invited you to "{safe_project}" on Msanii',
+                "html": html_body,
+            }
+        )
         return response
     except Exception as e:
         print(f"Warning: Failed to send project invite email: {e}")

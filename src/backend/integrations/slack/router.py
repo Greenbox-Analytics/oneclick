@@ -1,11 +1,11 @@
 """FastAPI router for Slack integration."""
 
+import sys
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from typing import Optional
-import sys
-from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BACKEND_DIR) not in sys.path:
@@ -13,8 +13,12 @@ if str(BACKEND_DIR) not in sys.path:
 
 from auth import get_current_user_id
 from integrations.oauth import (
-    build_auth_url, verify_oauth_state, exchange_code_for_tokens,
-    store_connection, get_valid_token, FRONTEND_URL,
+    FRONTEND_URL,
+    build_auth_url,
+    exchange_code_for_tokens,
+    get_valid_token,
+    store_connection,
+    verify_oauth_state,
 )
 
 router = APIRouter()
@@ -22,13 +26,14 @@ router = APIRouter()
 
 def _get_supabase():
     from main import get_supabase_client
+
     return get_supabase_client()
 
 
 class NotificationSettingsUpdate(BaseModel):
     event_type: str
     enabled: bool
-    channel_id: Optional[str] = None
+    channel_id: str | None = None
 
 
 @router.get("/auth")
@@ -60,13 +65,9 @@ async def oauth_callback(code: str, state: str):
 @router.delete("/disconnect")
 async def disconnect(user_id: str = Depends(get_current_user_id)):
     """Disconnect Slack integration."""
-    _get_supabase().table("integration_connections").delete().eq(
-        "user_id", user_id
-    ).eq("provider", "slack").execute()
+    _get_supabase().table("integration_connections").delete().eq("user_id", user_id).eq("provider", "slack").execute()
     # Also clean up notification settings
-    _get_supabase().table("notification_settings").delete().eq(
-        "user_id", user_id
-    ).eq("provider", "slack").execute()
+    _get_supabase().table("notification_settings").delete().eq("user_id", user_id).eq("provider", "slack").execute()
     return {"success": True}
 
 
@@ -78,6 +79,7 @@ async def list_channels(user_id: str = Depends(get_current_user_id)):
         raise HTTPException(status_code=401, detail="Slack not connected")
 
     from integrations.slack.service import get_channels
+
     channels = await get_channels(token)
     return {"channels": channels}
 

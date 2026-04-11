@@ -1,16 +1,21 @@
 """Proof-of-ownership PDF with approval status per stakeholder."""
 
-import io
 import hashlib
-from datetime import datetime, timezone
+import io
+from datetime import UTC, datetime
 
-from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    HRFlowable,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
 )
 
 BRAND = colors.HexColor("#1a3a2a")
@@ -22,20 +27,36 @@ AMBER = colors.HexColor("#d97706")
 def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
-        buffer, pagesize=letter,
-        topMargin=0.75 * inch, bottomMargin=0.75 * inch,
-        leftMargin=0.75 * inch, rightMargin=0.75 * inch,
+        buffer,
+        pagesize=letter,
+        topMargin=0.75 * inch,
+        bottomMargin=0.75 * inch,
+        leftMargin=0.75 * inch,
+        rightMargin=0.75 * inch,
     )
 
     styles = getSampleStyleSheet()
     elements = []
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    title_style = ParagraphStyle("Title", parent=styles["Title"], fontSize=24, spaceAfter=4, textColor=BRAND, alignment=TA_CENTER)
-    subtitle_style = ParagraphStyle("Sub", parent=styles["Normal"], fontSize=11, textColor=colors.HexColor("#555"), alignment=TA_CENTER, spaceAfter=20)
-    section_style = ParagraphStyle("Section", parent=styles["Heading2"], fontSize=14, textColor=BRAND, spaceBefore=16, spaceAfter=8)
+    title_style = ParagraphStyle(
+        "Title", parent=styles["Title"], fontSize=24, spaceAfter=4, textColor=BRAND, alignment=TA_CENTER
+    )
+    subtitle_style = ParagraphStyle(
+        "Sub",
+        parent=styles["Normal"],
+        fontSize=11,
+        textColor=colors.HexColor("#555"),
+        alignment=TA_CENTER,
+        spaceAfter=20,
+    )
+    section_style = ParagraphStyle(
+        "Section", parent=styles["Heading2"], fontSize=14, textColor=BRAND, spaceBefore=16, spaceAfter=8
+    )
     body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=10, leading=14)
-    small_style = ParagraphStyle("Small", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#888"), leading=11)
+    small_style = ParagraphStyle(
+        "Small", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#888"), leading=11
+    )
 
     collaborators = work_data.get("collaborators", [])
     stake_approval = {}
@@ -53,7 +74,9 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
 
     # Status banner
     work_status = (work_data.get("status") or "draft").replace("_", " ").title()
-    status_color = {"Registered": GREEN, "Disputed": RED, "Pending Approval": AMBER}.get(work_status, colors.HexColor("#666"))
+    status_color = {"Registered": GREEN, "Disputed": RED, "Pending Approval": AMBER}.get(
+        work_status, colors.HexColor("#666")
+    )
     elements.append(Paragraph(f"<b>Registry Status: <font color='{status_color}'>{work_status}</font></b>", body_style))
     elements.append(Spacer(1, 8))
 
@@ -68,11 +91,15 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
         ["Release Date:", str(work_data.get("release_date") or "—")],
     ]
     dt = Table(details, colWidths=[1.5 * inch, 5 * inch])
-    dt.setStyle(TableStyle([
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
+    dt.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
     elements.append(dt)
     elements.append(Spacer(1, 12))
 
@@ -96,11 +123,15 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
                 approval = stake_approval[sid]["status"].title()
             elif hemail and hemail in email_approval:
                 approval = email_approval[hemail]["status"].title()
-            rows.append([
-                s.get("holder_name", ""), s.get("holder_role", ""),
-                f"{s.get('percentage', 0):.2f}%",
-                s.get("publisher_or_label") or "—", approval,
-            ])
+            rows.append(
+                [
+                    s.get("holder_name", ""),
+                    s.get("holder_role", ""),
+                    f"{s.get('percentage', 0):.2f}%",
+                    s.get("publisher_or_label") or "—",
+                    approval,
+                ]
+            )
         total = sum(s.get("percentage", 0) for s in stake_list)
         rows.append(["", "TOTAL", f"{total:.2f}%", "", ""])
 
@@ -146,19 +177,30 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
     else:
         rows = [["Type", "Licensee", "Territory", "Start", "End", "Status"]]
         for lic in licenses:
-            rows.append([
-                (lic.get("license_type") or "").replace("_", " ").title(),
-                lic.get("licensee_name", ""), lic.get("territory", ""),
-                str(lic.get("start_date", "—")), str(lic.get("end_date") or "Perpetual"),
-                (lic.get("status") or "active").title(),
-            ])
-        tbl = Table(rows, colWidths=[1.0*inch, 1.4*inch, 1.0*inch, 0.9*inch, 0.9*inch, 0.8*inch])
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), BRAND), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ccc")),
-            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ]))
+            rows.append(
+                [
+                    (lic.get("license_type") or "").replace("_", " ").title(),
+                    lic.get("licensee_name", ""),
+                    lic.get("territory", ""),
+                    str(lic.get("start_date", "—")),
+                    str(lic.get("end_date") or "Perpetual"),
+                    (lic.get("status") or "active").title(),
+                ]
+            )
+        tbl = Table(rows, colWidths=[1.0 * inch, 1.4 * inch, 1.0 * inch, 0.9 * inch, 0.9 * inch, 0.8 * inch])
+        tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), BRAND),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ccc")),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
         elements.append(tbl)
     elements.append(Spacer(1, 12))
 
@@ -173,7 +215,11 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
             parties_list = agr.get("parties") or []
             party_names = ", ".join(p.get("name", "") for p in parties_list) if parties_list else "—"
             elements.append(Paragraph(f"<b>{agr.get('title', '')}</b> — {agr_type}", body_style))
-            elements.append(Paragraph(f"Effective: {agr.get('effective_date', '—')} | Recorded: {agr.get('created_at', '—')}", small_style))
+            elements.append(
+                Paragraph(
+                    f"Effective: {agr.get('effective_date', '—')} | Recorded: {agr.get('created_at', '—')}", small_style
+                )
+            )
             elements.append(Paragraph(f"Parties: {party_names}", small_style))
             if agr.get("document_hash"):
                 elements.append(Paragraph(f"Hash: {agr['document_hash']}", small_style))
@@ -185,21 +231,31 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
     content_str = f"{work_data.get('id', '')}|{work_data.get('title', '')}|{generated_at}"
     doc_hash = hashlib.sha256(content_str.encode()).hexdigest()[:16]
 
-    elements.append(Paragraph(
-        "This certificate reflects the ownership and rights information as recorded in the "
-        "Msanii Rights & Ownership Registry. Stakeholder approval status indicates whether "
-        "each party has confirmed their stake. A 'Registered' status means all parties have agreed.",
-        ParagraphStyle("Disc", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#888"), leading=11),
-    ))
+    elements.append(
+        Paragraph(
+            "This certificate reflects the ownership and rights information as recorded in the "
+            "Msanii Rights & Ownership Registry. Stakeholder approval status indicates whether "
+            "each party has confirmed their stake. A 'Registered' status means all parties have agreed.",
+            ParagraphStyle("Disc", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#888"), leading=11),
+        )
+    )
     elements.append(Spacer(1, 4))
-    elements.append(Paragraph(
-        f"Generated: {generated_at} | Document ID: {doc_hash}",
-        ParagraphStyle("Foot", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#aaa"), alignment=TA_CENTER),
-    ))
-    elements.append(Paragraph(
-        "Msanii Rights & Ownership Registry",
-        ParagraphStyle("Brand", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#aaa"), alignment=TA_CENTER),
-    ))
+    elements.append(
+        Paragraph(
+            f"Generated: {generated_at} | Document ID: {doc_hash}",
+            ParagraphStyle(
+                "Foot", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#aaa"), alignment=TA_CENTER
+            ),
+        )
+    )
+    elements.append(
+        Paragraph(
+            "Msanii Rights & Ownership Registry",
+            ParagraphStyle(
+                "Brand", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#aaa"), alignment=TA_CENTER
+            ),
+        )
+    )
 
     doc.build(elements)
     buffer.seek(0)

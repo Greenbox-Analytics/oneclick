@@ -1,8 +1,9 @@
 import io
+
 from docx import Document
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt, RGBColor
 
 
 def generate_split_sheet_docx(
@@ -32,12 +33,8 @@ def generate_split_sheet_docx(
         shading_element = cell._element.makeelement(
             "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}shd", {}
         )
-        shading_element.set(
-            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}fill", fill_color
-        )
-        shading_element.set(
-            "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val", "clear"
-        )
+        shading_element.set("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}fill", fill_color)
+        shading_element.set("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val", "clear")
         tcPr = cell._element.get_or_add_tcPr()
         tcPr.append(shading_element)
 
@@ -64,7 +61,7 @@ def generate_split_sheet_docx(
     p = doc.add_paragraph()
     run = p.add_run(
         f'This Split Sheet Agreement (the "Agreement") is entered into as of {date}, '
-        f'by and between the following parties:'
+        f"by and between the following parties:"
     )
     run.font.size = Pt(10)
 
@@ -97,9 +94,7 @@ def generate_split_sheet_docx(
         run.font.color.rgb = brand_color
 
     p = doc.add_paragraph()
-    run = p.add_run(
-        "The parties agree that this Agreement pertains to the following musical work:"
-    )
+    run = p.add_run("The parties agree that this Agreement pertains to the following musical work:")
     run.font.size = Pt(10)
 
     doc.add_paragraph()
@@ -143,10 +138,7 @@ def generate_split_sheet_docx(
             role = c.get("role", "")
             pct = c.get(pct_key, 0) or 0
             p = doc.add_paragraph(style="List Bullet")
-            run = p.add_run(
-                f'{name} ("{role}") shall receive {pct:.2f}% of all '
-                f"{royalty_type_key.lower()} royalties."
-            )
+            run = p.add_run(f'{name} ("{role}") shall receive {pct:.2f}% of all {royalty_type_key.lower()} royalties.')
             run.font.size = Pt(10)
 
         doc.add_paragraph()

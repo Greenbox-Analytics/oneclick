@@ -1,13 +1,13 @@
-from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
-from pathlib import Path
 import sys
+from pathlib import Path
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_id
-
 from projects import service
 from projects.models import MemberAdd, MemberUpdate
 
@@ -16,6 +16,7 @@ router = APIRouter()
 
 def _get_supabase():
     from main import get_supabase_client
+
     return get_supabase_client()
 
 
@@ -26,11 +27,16 @@ async def list_members(project_id: str, user_id: str = Depends(get_current_user_
 
 
 def _send_invite_email_background(
-    db_url: str, db_key: str,
-    project_id: str, user_id: str, email: str, role: str,
+    db_url: str,
+    db_key: str,
+    project_id: str,
+    user_id: str,
+    email: str,
+    role: str,
 ):
     """Background task: fetch context and send invite email."""
     from supabase import create_client
+
     from projects.emails import send_project_invite_email
 
     try:
@@ -48,13 +54,14 @@ def _send_invite_email_background(
 
 
 @router.post("/{project_id}/members")
-async def add_member(project_id: str, body: MemberAdd, background_tasks: BackgroundTasks, user_id: str = Depends(get_current_user_id)):
+async def add_member(
+    project_id: str, body: MemberAdd, background_tasks: BackgroundTasks, user_id: str = Depends(get_current_user_id)
+):
     try:
-        result = await service.add_member(
-            _get_supabase(), user_id, project_id, body.email, body.role
-        )
+        result = await service.add_member(_get_supabase(), user_id, project_id, body.email, body.role)
         if result["type"] == "pending":
             import os
+
             background_tasks.add_task(
                 _send_invite_email_background,
                 db_url=os.getenv("VITE_SUPABASE_URL"),
@@ -72,11 +79,11 @@ async def add_member(project_id: str, body: MemberAdd, background_tasks: Backgro
 
 
 @router.put("/{project_id}/members/{member_id}")
-async def update_member(project_id: str, member_id: str, body: MemberUpdate, user_id: str = Depends(get_current_user_id)):
+async def update_member(
+    project_id: str, member_id: str, body: MemberUpdate, user_id: str = Depends(get_current_user_id)
+):
     try:
-        result = await service.update_member_role(
-            _get_supabase(), user_id, project_id, member_id, body.role
-        )
+        result = await service.update_member_role(_get_supabase(), user_id, project_id, member_id, body.role)
         return {"member": result}
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))

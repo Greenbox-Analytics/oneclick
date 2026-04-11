@@ -3,13 +3,7 @@ from supabase import Client
 
 async def get_members(db: Client, user_id: str, project_id: str):
     """List all members of a project."""
-    result = (
-        db.table("project_members")
-        .select("*")
-        .eq("project_id", project_id)
-        .order("created_at")
-        .execute()
-    )
+    result = db.table("project_members").select("*").eq("project_id", project_id).order("created_at").execute()
     return result.data or []
 
 
@@ -35,35 +29,33 @@ async def add_member(db: Client, user_id: str, project_id: str, email: str, role
         raise ValueError("Invalid role")
 
     # Check if user exists by looking up profiles
-    existing = (
-        db.table("profiles")
-        .select("id, email")
-        .ilike("email", email)
-        .maybe_single()
-        .execute()
-    )
+    existing = db.table("profiles").select("id, email").ilike("email", email).maybe_single().execute()
 
     if existing.data:
         result = (
             db.table("project_members")
-            .insert({
-                "project_id": project_id,
-                "user_id": existing.data["id"],
-                "role": role,
-                "invited_by": user_id,
-            })
+            .insert(
+                {
+                    "project_id": project_id,
+                    "user_id": existing.data["id"],
+                    "role": role,
+                    "invited_by": user_id,
+                }
+            )
             .execute()
         )
         return {"type": "added", "member": result.data[0] if result.data else None}
     else:
         result = (
             db.table("pending_project_invites")
-            .insert({
-                "project_id": project_id,
-                "email": email.lower(),
-                "role": role,
-                "invited_by": user_id,
-            })
+            .insert(
+                {
+                    "project_id": project_id,
+                    "email": email.lower(),
+                    "role": role,
+                    "invited_by": user_id,
+                }
+            )
             .execute()
         )
         return {"type": "pending", "invite": result.data[0] if result.data else None}
@@ -78,25 +70,14 @@ async def update_member_role(db: Client, user_id: str, project_id: str, member_i
         raise ValueError("Invalid role — cannot set to owner")
 
     result = (
-        db.table("project_members")
-        .update({"role": role})
-        .eq("id", member_id)
-        .eq("project_id", project_id)
-        .execute()
+        db.table("project_members").update({"role": role}).eq("id", member_id).eq("project_id", project_id).execute()
     )
     return result.data[0] if result.data else None
 
 
 async def remove_member(db: Client, user_id: str, project_id: str, member_id: str):
     """Remove a member. Admin+ can remove others; non-owners can remove themselves."""
-    target = (
-        db.table("project_members")
-        .select("*")
-        .eq("id", member_id)
-        .eq("project_id", project_id)
-        .single()
-        .execute()
-    )
+    target = db.table("project_members").select("*").eq("id", member_id).eq("project_id", project_id).single().execute()
     if not target.data:
         raise ValueError("Member not found")
 

@@ -3,17 +3,17 @@ Music Contract Parser - Unified full-document extraction
 Extracts structured data (parties, works, royalty shares) from contract markdown in a single LLM call.
 """
 
-import os
-from dataclasses import dataclass
-from typing import List, Optional
-from dotenv import load_dotenv
-from openai import OpenAI
-import time
 import json
 import logging
+import os
+import time
+from dataclasses import dataclass
+
+from dotenv import load_dotenv
+from openai import OpenAI
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -46,6 +46,7 @@ STREAMING_EQUIVALENT_TERMS = [
 # Data Models
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Party:
     name: str
@@ -63,35 +64,35 @@ class RoyaltyShare:
     party_name: str
     royalty_type: str
     percentage: float
-    terms: Optional[str] = None
+    terms: str | None = None
 
 
 @dataclass
 class ContractData:
-    parties: List[Party]
-    works: List[Work]
-    royalty_shares: List[RoyaltyShare]
-    contract_summary: Optional[str] = None
+    parties: list[Party]
+    works: list[Work]
+    royalty_shares: list[RoyaltyShare]
+    contract_summary: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Parser Class
 # ---------------------------------------------------------------------------
 
+
 class MusicContractParser:
     """Extract structured data from contracts using full document context"""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         self.api_key = api_key or OPENAI_API_KEY
         if not self.api_key or not self.api_key.startswith("sk-"):
             raise ValueError("Missing or invalid OpenAI API key.")
 
-        self.openai_client = OpenAI(
-            api_key=self.api_key,
-            base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None
-        )
+        self.openai_client = OpenAI(api_key=self.api_key, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None)
 
-    def parse_contract(self, full_text: str, path: str = None, user_id: str = None, contract_id: str = None, use_parallel: bool = True) -> ContractData:
+    def parse_contract(
+        self, full_text: str, path: str = None, user_id: str = None, contract_id: str = None, use_parallel: bool = True
+    ) -> ContractData:
         """
         Parse contract by extracting all data in a single LLM call.
 
@@ -121,6 +122,7 @@ class MusicContractParser:
 
         # Post-processing: simplify roles
         from oneclick.helpers import normalize_name, simplify_role
+
         for party in parties:
             party.role = simplify_role(party.role)
 
@@ -151,12 +153,7 @@ class MusicContractParser:
         logger.info(f"✅ Extraction complete in {total_time:.2f}s")
         logger.info(f"   → {len(parties)} parties, {len(works)} works, {len(royalty_shares)} shares")
 
-        return ContractData(
-            parties=parties,
-            works=works,
-            royalty_shares=royalty_shares,
-            contract_summary=""
-        )
+        return ContractData(parties=parties, works=works, royalty_shares=royalty_shares, contract_summary="")
 
     def _extract_all_unified(self, full_text: str) -> dict:
         """
@@ -230,9 +227,9 @@ Return ONLY valid JSON."""
             model=LLM_MODEL_LARGE,
             messages=[
                 {"role": "system", "content": "You are a music contract analyst. Always respond with valid JSON."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
 
         response_text = response.choices[0].message.content.strip()
@@ -243,6 +240,7 @@ Return ONLY valid JSON."""
 
         # Parse parties
         from oneclick.helpers import normalize_name, normalize_title
+
         parties = []
         seen_party_names = set()
         for item in data.get("parties", []):
@@ -256,7 +254,7 @@ Return ONLY valid JSON."""
 
         logger.info(f"👥 Extracted {len(parties)} parties")
         for i, party in enumerate(parties):
-            logger.info(f"   {i+1}. {party.name} ({party.role})")
+            logger.info(f"   {i + 1}. {party.name} ({party.role})")
 
         # Parse works
         works = []
@@ -272,7 +270,7 @@ Return ONLY valid JSON."""
 
         logger.info(f"🎵 Extracted {len(works)} works")
         for i, work in enumerate(works):
-            logger.info(f"   {i+1}. {work.title} ({work.work_type})")
+            logger.info(f"   {i + 1}. {work.title} ({work.work_type})")
 
         # Parse royalty shares
         shares = []
@@ -291,10 +289,9 @@ Return ONLY valid JSON."""
 
         logger.info(f"💰 Extracted {len(shares)} royalty shares")
         for i, share in enumerate(shares):
-            logger.info(f"   {i+1}. {share.party_name} | {share.royalty_type} | {share.percentage}%" + (f" | {share.terms}" if share.terms else ""))
+            logger.info(
+                f"   {i + 1}. {share.party_name} | {share.royalty_type} | {share.percentage}%"
+                + (f" | {share.terms}" if share.terms else "")
+            )
 
-        return {
-            "parties": parties,
-            "works": works,
-            "royalty_shares": shares
-        }
+        return {"parties": parties, "works": works, "royalty_shares": shares}

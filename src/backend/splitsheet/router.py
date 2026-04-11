@@ -1,9 +1,7 @@
-import io
 import re
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,8 +12,8 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_id
-from splitsheet.pdf_generator import generate_split_sheet_pdf
 from splitsheet.docx_generator import generate_split_sheet_docx
+from splitsheet.pdf_generator import generate_split_sheet_pdf
 
 router = APIRouter()
 
@@ -23,10 +21,10 @@ router = APIRouter()
 class ContributorInput(BaseModel):
     name: str
     role: str
-    publishing_percentage: Optional[float] = None
-    master_percentage: Optional[float] = None
-    publisher_or_label: Optional[str] = None
-    ipi_number: Optional[str] = None
+    publishing_percentage: float | None = None
+    master_percentage: float | None = None
+    publisher_or_label: str | None = None
+    ipi_number: str | None = None
 
 
 class SplitSheetRequest(BaseModel):
@@ -37,8 +35,8 @@ class SplitSheetRequest(BaseModel):
     format: str = "pdf"
     contributors: list[ContributorInput]
     save_to_artist: bool = False
-    artist_id: Optional[str] = None
-    project_id: Optional[str] = None
+    artist_id: str | None = None
+    project_id: str | None = None
 
 
 @router.post("/generate")
