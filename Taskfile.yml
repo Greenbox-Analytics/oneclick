@@ -1,0 +1,224 @@
+version: '3'
+
+vars:
+  GCP_PROJECT: msanii-484501
+  BACKEND_DIR: src/backend
+
+dotenv: ['.env']
+
+tasks:
+  install:
+    desc: Install all dependencies (Poetry + npm) and export requirements.txt
+    cmds:
+      - task: install:backend
+      - task: install:frontend
+
+  install:backend:
+    desc: Install Python backend dependencies via Poetry
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry install --no-interaction
+      - poetry export -f requirements.txt --output requirements.txt --without-hashes
+    sources:
+      - pyproject.toml
+      - poetry.lock
+    generates:
+      - requirements.txt
+
+  install:frontend:
+    desc: Install Node.js frontend dependencies
+    cmds:
+      - npm ci
+    sources:
+      - package-lock.json
+
+  setup:
+    desc: Install all dependencies and pull secrets from GSM
+    cmds:
+      - task: install
+      - task: setup:secrets
+
+  setup:secrets:
+    desc: Pull secrets from Google Secret Manager into .env
+    preconditions:
+      - sh: gcloud auth print-identity-token > /dev/null 2>&1
+        msg: |
+          Not authenticated with gcloud. Run:
+            gcloud auth login
+            gcloud config set project {{.GCP_PROJECT}}
+    vars:
+      SECRETS: >-
+        VITE_SUPABASE_URL
+        VITE_SUPABASE_SECRET_KEY
+        OPENAI_API_KEY
+        OPENAI_LLM_MODEL
+        OPENAI_LLM_MODEL_LARGE
+        DEV_ALLOWED_ORIGINS
+        PROD_ALLOWED_ORIGINS
+    cmds:
+      - |
+        echo "Pulling secrets from GSM (project: {{.GCP_PROJECT}})..."
+        > .env
+        for secret in {{.SECRETS}}; do
+          value=$(gcloud secrets versions access latest \
+            --secret="$secret" \
+            --project="{{.GCP_PROJECT}}" 2>/dev/null) && \
+          echo "${secret}=${value}" >> .env && \
+          echo "  ✓ ${secret}" || \
+          echo "  ✗ ${secret} (not found or no access)"
+        done
+        echo "Secrets written to .env"
+    status:
+      - test -f .env
+
+  test:
+    desc: Run all backend tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest -v {{.CLI_ARGS}}
+
+  test:health:
+    desc: Run health/smoke tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_health.py -v {{.CLI_ARGS}}
+
+  test:artists:
+    desc: Run artist endpoint tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_artists.py -v {{.CLI_ARGS}}
+
+  test:projects:
+    desc: Run project endpoint tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_projects.py -v {{.CLI_ARGS}}
+
+  test:registry:
+    desc: Run all registry tests (works, stakes, licenses, collaborators)
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_registry_*.py -v {{.CLI_ARGS}}
+
+  test:boards:
+    desc: Run kanban board tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_boards.py -v {{.CLI_ARGS}}
+
+  test:settings:
+    desc: Run workspace settings tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_settings.py -v {{.CLI_ARGS}}
+
+  test:members:
+    desc: Run project member tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_project_members.py -v {{.CLI_ARGS}}
+
+  test:splitsheet:
+    desc: Run split sheet generation tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_splitsheet.py -v {{.CLI_ARGS}}
+
+  test:files:
+    desc: Run file management tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_files.py -v {{.CLI_ARGS}}
+
+  test:notes:
+    desc: Run notes and folders tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_notes.py -v {{.CLI_ARGS}}
+
+  test:notifications:
+    desc: Run notification tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_notifications.py -v {{.CLI_ARGS}}
+
+  test:teamcard:
+    desc: Run team card tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_teamcard.py -v {{.CLI_ARGS}}
+
+  test:zoe:
+    desc: Run Zoe AI chatbot tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_zoe.py -v {{.CLI_ARGS}}
+
+  test:oneclick:
+    desc: Run OneClick royalty calculator tests
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run pytest tests/test_oneclick.py -v {{.CLI_ARGS}}
+
+  lint:
+    desc: Run all linters (ruff + ESLint)
+    cmds:
+      - task: lint:backend
+      - task: lint:frontend
+
+  lint:backend:
+    desc: Run ruff lint and format check on backend
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run ruff check .
+      - poetry run ruff format --check .
+
+  lint:frontend:
+    desc: Run ESLint on frontend
+    cmds:
+      - npm run lint
+
+  format:
+    desc: Auto-fix formatting (ruff + ESLint)
+    cmds:
+      - task: format:backend
+      - task: format:frontend
+
+  format:backend:
+    desc: Auto-fix Python formatting with ruff
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run ruff format .
+      - poetry run ruff check --fix .
+
+  format:frontend:
+    desc: Auto-fix JS/TS formatting with ESLint
+    cmds:
+      - npx eslint . --fix
+
+  ci:
+    desc: Run full CI pipeline locally (lint + test + build)
+    cmds:
+      - task: lint
+      - task: test
+      - npm run build
+    env:
+      VITE_SUPABASE_URL: '{{.VITE_SUPABASE_URL | default "https://placeholder.supabase.co"}}'
+      VITE_SUPABASE_ANON_KEY: '{{.VITE_SUPABASE_ANON_KEY | default "placeholder"}}'
+      VITE_BACKEND_API_URL: '{{.VITE_BACKEND_API_URL | default "https://placeholder.example.com"}}'
+
+  dev:
+    desc: Start both frontend and backend dev servers
+    deps: [dev:backend, dev:frontend]
+
+  dev:backend:
+    desc: Start FastAPI backend server
+    dir: "{{.BACKEND_DIR}}"
+    cmds:
+      - poetry run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  dev:frontend:
+    desc: Start Vite frontend dev server
+    cmds:
+      - npm run dev
