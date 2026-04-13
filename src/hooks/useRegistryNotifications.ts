@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useSlackUnreadCount } from "@/hooks/useSlackNotifications";
 
 export interface RegistryNotification {
   id: string;
@@ -32,7 +33,8 @@ export function useRegistryNotifications(unreadOnly = false) {
 
 export function useUnreadCount() {
   const { data } = useRegistryNotifications(true);
-  return data?.length || 0;
+  const slackUnread = useSlackUnreadCount();
+  return (data?.length || 0) + slackUnread;
 }
 
 export function useMarkNotificationRead() {

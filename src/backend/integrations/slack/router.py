@@ -130,12 +130,47 @@ async def get_settings(user_id: str = Depends(get_current_user_id)):
 
 @router.post("/webhook")
 async def handle_webhook(request: Request):
-    """Handle incoming Slack events (slash commands, interactivity)."""
+    """Handle incoming Slack events (app_mention)."""
     body = await request.json()
 
     # Slack URL verification challenge
     if body.get("type") == "url_verification":
         return {"challenge": body["challenge"]}
 
-    # TODO: Process Slack events (slash commands, interactive messages)
+    if body.get("type") == "event_callback":
+        event = body.get("event", {})
+        if event.get("type") == "app_mention":
+            await _process_app_mention(event)
+
     return {"ok": True}
+
+
+async def _process_app_mention(event: dict):
+    """Store an @mention as a notification for the project owner."""
+    channel_id = event.get("channel", "")
+    sender_id = event.get("user", "")
+    message_text = event.get("text", "")
+    slack_ts = event.get("ts", "")
+
+    supabase = _get_supabase()
+
+    # Find which project this channel is linked to
+    project = supabase.table("projects").select("id, user_id").eq("slack_channel_id", channel_id).execute()
+    if not project.data:
+        return
+
+    # Resolve sender name from Slack
+    sender_name = sender_id  # fallback
+
+    for proj in project.data:
+        supabase.table("slack_notifications").insert(
+            {
+                "user_id": proj["user_id"],
+                "project_id": proj["id"],
+                "channel_id": channel_id,
+                "sender_name": sender_name,
+                "sender_avatar_url": None,
+                "message_text": message_text,
+                "slack_ts": slack_ts,
+            }
+        ).execute()

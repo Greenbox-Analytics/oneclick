@@ -39,6 +39,7 @@ from integrations.google_drive.router import router as google_drive_router
 from integrations.monday.router import router as monday_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
+from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
 from registry.router import router as registry_router
 from settings.router import router as settings_router
@@ -54,6 +55,7 @@ app.include_router(settings_router, prefix="/settings", tags=["Workspace Setting
 app.include_router(splitsheet_router, prefix="/splitsheet", tags=["Split Sheet"])
 app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"])
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
+app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -643,6 +645,36 @@ async def upload_file(
                 )
             raise db_error
 
+        # Emit event for integrations (Slack notifications) — never break upload on failure
+        try:
+            from integrations import events
+
+            project_name = ""
+            try:
+                project_row = (
+                    get_supabase_client().table("projects").select("name").eq("id", project_id).single().execute()
+                )
+                pdata = project_row.data
+                if isinstance(pdata, dict):
+                    project_name = pdata.get("name", "")
+                elif isinstance(pdata, list) and pdata:
+                    project_name = pdata[0].get("name", "")
+            except Exception:
+                pass
+
+            await events.emit(
+                events.CONTRACT_UPLOADED,
+                {
+                    "user_id": user_id,
+                    "file_name": file.filename,
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "file_id": db_res.data[0]["id"] if db_res.data else "",
+                },
+            )
+        except Exception:
+            pass
+
         return {"status": "success", "file": db_res.data[0]}
 
     except HTTPException:
@@ -863,6 +895,36 @@ async def upload_contract(
             file_path=file_path,
         )
 
+        # Emit event for integrations (Slack notifications) — never break upload on failure
+        try:
+            from integrations import events
+
+            project_name = ""
+            try:
+                project_row = (
+                    get_supabase_client().table("projects").select("name").eq("id", project_id).single().execute()
+                )
+                pdata = project_row.data
+                if isinstance(pdata, dict):
+                    project_name = pdata.get("name", "")
+                elif isinstance(pdata, list) and pdata:
+                    project_name = pdata[0].get("name", "")
+            except Exception:
+                pass
+
+            await events.emit(
+                events.CONTRACT_UPLOADED,
+                {
+                    "user_id": user_id,
+                    "file_name": file.filename,
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "file_id": contract_id,
+                },
+            )
+        except Exception:
+            pass
+
         return ContractUploadResponse(
             status="success",
             contract_id=contract_id,
@@ -1003,6 +1065,41 @@ async def delete_contract(contract_id: str, user_id: str = Depends(get_current_u
 
         # 4. Delete from Database
         get_supabase_client().table("project_files").delete().eq("id", contract_id).execute()
+
+        # Emit event for integrations (Slack notifications) — never break delete on failure
+        try:
+            from integrations import events
+
+            project_name = ""
+            try:
+                project_row = (
+                    get_supabase_client()
+                    .table("projects")
+                    .select("name")
+                    .eq("id", contract["project_id"])
+                    .single()
+                    .execute()
+                )
+                pdata = project_row.data
+                if isinstance(pdata, dict):
+                    project_name = pdata.get("name", "")
+                elif isinstance(pdata, list) and pdata:
+                    project_name = pdata[0].get("name", "")
+            except Exception:
+                pass
+
+            await events.emit(
+                events.CONTRACT_DELETED,
+                {
+                    "user_id": user_id,
+                    "file_name": contract.get("file_name", ""),
+                    "project_id": contract.get("project_id", ""),
+                    "project_name": project_name,
+                    "file_id": contract_id,
+                },
+            )
+        except Exception:
+            pass
 
         return ContractDeleteResponse(
             status="success", contract_id=contract_id, message="Contract and all associated data deleted successfully"

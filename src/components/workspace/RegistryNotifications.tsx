@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Bell, CheckCheck, Shield, ExternalLink } from "lucide-react";
+import { SlackMentions } from "./SlackMentions";
 
 const TYPE_COLORS: Record<string, string> = {
   invitation: "bg-blue-100 text-blue-800",
@@ -49,7 +50,9 @@ export function RegistryNotifications() {
   }
 
   return (
-    <div>
+    <div className="space-y-4">
+      <SlackMentions />
+      <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <Shield className="w-5 h-5 text-primary" />
@@ -91,6 +94,7 @@ export function RegistryNotifications() {
             </div>
           </div>
         ))}
+      </div>
       </div>
     </div>
   );

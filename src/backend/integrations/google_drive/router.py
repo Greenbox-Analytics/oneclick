@@ -69,15 +69,19 @@ async def disconnect(user_id: str = Depends(get_current_user_id)):
 async def browse_files(
     user_id: str = Depends(get_current_user_id),
     folder_id: str = Query(default="root"),
+    search: str = Query(default=""),
 ):
-    """List files and folders in Google Drive."""
+    """List files and folders in Google Drive. Optional full-Drive search."""
     token = await get_valid_token(_get_supabase(), user_id, "google_drive")
     if not token:
         raise HTTPException(status_code=401, detail="Google Drive not connected")
 
-    from integrations.google_drive.service import list_drive_files
+    from integrations.google_drive.service import list_drive_files, search_drive_files
 
-    files = await list_drive_files(token, folder_id)
+    if search.strip():
+        files = await search_drive_files(token, search.strip())
+    else:
+        files = await list_drive_files(token, folder_id)
     return {"files": files}
 
 
@@ -90,7 +94,10 @@ async def import_file(body: DriveImportRequest, user_id: str = Depends(get_curre
 
     from integrations.google_drive.service import import_drive_file
 
-    result = await import_drive_file(token, _get_supabase(), user_id, body.model_dump())
+    try:
+        result = await import_drive_file(token, _get_supabase(), user_id, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return result
 
 

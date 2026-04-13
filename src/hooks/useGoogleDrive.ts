@@ -4,13 +4,14 @@ import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { toast } from "sonner";
 import type { DriveFile } from "@/types/integrations";
 
-export function useDriveBrowse(folderId: string = "root", enabled: boolean = true) {
+export function useDriveBrowse(folderId: string = "root", enabled: boolean = true, search: string = "") {
   const { user } = useAuth();
 
   return useQuery<DriveFile[]>({
-    queryKey: ["drive-files", user?.id, folderId],
+    queryKey: ["drive-files", user?.id, folderId, search],
     queryFn: async () => {
       const params = new URLSearchParams({ folder_id: folderId });
+      if (search.trim()) params.set("search", search.trim());
       const data = await apiFetch<{ files: DriveFile[] }>(
         `${API_URL}/integrations/google-drive/browse?${params}`
       );
@@ -35,11 +36,14 @@ export function useDriveImport() {
       );
     },
     onSuccess: () => {
-      toast.success("File imported from Google Drive");
       queryClient.invalidateQueries({ queryKey: ["project-files"] });
+      queryClient.invalidateQueries({ queryKey: ["project-files-tab"] });
     },
     onError: (error: Error) => {
-      toast.error(`Import failed: ${error.message}`);
+      // Don't toast here — let the caller handle per-file errors for multi-select
+      if (!error.message.includes("already been imported")) {
+        toast.error(`Import failed: ${error.message}`);
+      }
     },
   });
 }

@@ -49,12 +49,19 @@ tasks:
     vars:
       SECRETS: >-
         VITE_SUPABASE_URL
+        VITE_SUPABASE_ANON_KEY
         VITE_SUPABASE_SECRET_KEY
         OPENAI_API_KEY
         OPENAI_LLM_MODEL
         OPENAI_LLM_MODEL_LARGE
         DEV_ALLOWED_ORIGINS
         PROD_ALLOWED_ORIGINS
+        INTEGRATION_ENCRYPTION_KEY
+        INTEGRATION_OAUTH_STATE_SECRET
+        GOOGLE_DRIVE_CLIENT_ID
+        GOOGLE_DRIVE_CLIENT_SECRET
+        SLACK_CLIENT_ID
+        SLACK_CLIENT_SECRET
     cmds:
       - |
         echo "Pulling secrets from GSM (project: {{.GCP_PROJECT}})..."

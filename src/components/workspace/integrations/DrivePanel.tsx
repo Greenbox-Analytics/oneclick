@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -18,6 +19,7 @@ import {
   ChevronRight,
   Download,
   ArrowLeft,
+  Search,
 } from "lucide-react";
 import { useDriveBrowse, useDriveImport } from "@/hooks/useGoogleDrive";
 import { useProjectsList } from "@/hooks/useProjectsList";
@@ -48,9 +50,10 @@ export function DrivePanel({ onClose }: DrivePanelProps) {
     { id: "root", name: "My Drive" },
   ]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const currentFolder = folderStack[folderStack.length - 1];
-  const { data: files, isLoading } = useDriveBrowse(currentFolder.id);
+  const { data: files, isLoading } = useDriveBrowse(currentFolder.id, true, searchQuery);
   const importMutation = useDriveImport();
   const { projects } = useProjectsList();
 
@@ -107,6 +110,17 @@ export function DrivePanel({ onClose }: DrivePanelProps) {
         </div>
       </CardHeader>
       <CardContent>
+        {/* Search */}
+        <div className="relative mb-4">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search all of Drive..."
+            className="pl-9 h-9"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
         {/* Project selector for imports */}
         <div className="mb-4">
           <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
