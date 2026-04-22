@@ -9,23 +9,24 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const INDUSTRIES = [
-  "Music Production",
-  "Artist Management",
-  "Record Label",
-  "Music Publishing",
-  "Live Events & Touring",
-  "Music Distribution",
-  "Music Licensing",
-  "Audio Engineering",
-  "Entertainment Law",
-  "Independent Artist",
+const ROLES = [
+  "Artist",
+  "Producer",
+  "Songwriter",
+  "Manager",
+  "Label Executive",
+  "Publisher",
+  "Distributor",
+  "Tour / Live Event Organizer",
+  "Licensing Agent",
+  "Audio Engineer",
+  "Entertainment Lawyer",
   "Other",
 ] as const;
 
 interface StepPreferencesProps {
   preferredName: string;
-  industry: string;
+  role: string;
   company: string;
   onUpdate: (field: string, value: string) => void;
   onNext: () => void;
@@ -34,7 +35,7 @@ interface StepPreferencesProps {
 
 const StepPreferences = ({
   preferredName,
-  industry,
+  role,
   company,
   onUpdate,
   onNext,
@@ -64,18 +65,18 @@ const StepPreferences = ({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="onboard-industry">What industry are you in?</Label>
+          <Label htmlFor="onboard-role">What is your role?</Label>
           <Select
-            value={industry}
-            onValueChange={(value) => onUpdate("industry", value)}
+            value={role}
+            onValueChange={(value) => onUpdate("role", value)}
           >
-            <SelectTrigger id="onboard-industry">
-              <SelectValue placeholder="Select your industry" />
+            <SelectTrigger id="onboard-role">
+              <SelectValue placeholder="Select your role" />
             </SelectTrigger>
             <SelectContent>
-              {INDUSTRIES.map((ind) => (
-                <SelectItem key={ind} value={ind}>
-                  {ind}
+              {ROLES.map((roleOption) => (
+                <SelectItem key={roleOption} value={roleOption}>
+                  {roleOption}
                 </SelectItem>
               ))}
             </SelectContent>

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Music, AlertCircle, ArrowLeft, BookOpen } from "lucide-react";
+import { Music, AlertCircle, ArrowLeft, BookOpen, Info } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/contexts/AuthContext";
@@ -35,7 +35,7 @@ const OneClick = () => {
     
     hasFetchedRef.current = true;
     
-    apiFetch<any>(`${API_URL}/artists`)
+    apiFetch<Artist[]>(`${API_URL}/artists`)
       .then((data) => setArtists(data))
       .catch((err) => {
         console.error("Error fetching artists:", err);
@@ -98,6 +98,14 @@ const OneClick = () => {
           <h2 className="text-3xl font-bold text-foreground mb-2">OneClick</h2>
           <p className="text-muted-foreground">Calculate royalty splits across your artists</p>
         </div>
+
+        <Alert className="mb-6">
+          <Info className="w-4 h-4" />
+          <AlertTitle>Master royalties only</AlertTitle>
+          <AlertDescription>
+            OneClick currently analyzes master royalties only. Split sheets generated for publishing-only will not be recognized.
+          </AlertDescription>
+        </Alert>
 
         <div className="grid gap-6">
           <Card>

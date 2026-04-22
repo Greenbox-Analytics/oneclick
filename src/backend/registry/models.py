@@ -126,7 +126,7 @@ class TeamCardUpdate(BaseModel):
     phone: str | None = None
     website: str | None = None
     company: str | None = None
-    industry: str | None = None
+    role: str | None = None
     social_links: dict | None = None
     dsp_links: dict | None = None
     custom_links: list | None = None

@@ -57,7 +57,7 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501", "E402", "E741", "B008", "B904", "SIM102", "SIM103", "SIM105", "SIM108", "UP028", "UP038"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["auth", "pagination", "boards", "registry", "projects", "settings", "splitsheet", "oneclick", "zoe_chatbot", "integrations"]
+known-first-party = ["auth", "pagination", "boards", "credentials", "registry", "projects", "settings", "splitsheet", "oneclick", "zoe_chatbot", "integrations"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["SIM116"]  # Allow if-chains for test mock sequencing

@@ -191,22 +191,22 @@ export function TasksOverview() {
           ) : (
             <Button size="sm" onClick={() => setIsCreatingParent(true)}>
               <Plus className="h-4 w-4 mr-1" />
-              New Epic
+              New Campaign
             </Button>
           )}
         </div>
 
         {parents.length === 0 && ungrouped.length === 0 && !artistFilter && (
           <div className="text-center py-12 text-muted-foreground">
-            <p className="text-lg font-semibold mb-2">No epics yet</p>
-            <p>Create an epic to start organizing your work</p>
+            <p className="text-lg font-semibold mb-2">No campaigns yet</p>
+            <p>Create a campaign to start organizing your work</p>
           </div>
         )}
 
         {parents.length === 0 && artistFilter && (
           <div className="flex items-center gap-2 rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950/30 px-4 py-3 text-sm text-yellow-800 dark:text-yellow-200">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <p>No epics found for the selected artist. Try selecting a different artist or create a new epic.</p>
+            <p>No campaigns found for the selected artist. Try selecting a different artist or create a new campaign.</p>
           </div>
         )}
 
@@ -255,7 +255,7 @@ export function TasksOverview() {
           </DndContext>
         )}
 
-        {/* Active epic tasks list (excludes done epics) */}
+        {/* Active campaign tasks list (excludes done campaigns) */}
         {(() => {
           const activeParents = parents.filter(
             (p) => p.column_title?.toLowerCase() !== "done"
@@ -264,7 +264,7 @@ export function TasksOverview() {
             <>
               <Separator />
               <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-                Active Epic Tasks
+                Active Campaign Tasks
               </h4>
               <div className="space-y-3">
                 {activeParents.map((parent) => (

@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Select,
   SelectContent,
@@ -135,7 +136,7 @@ const SplitSheet = () => {
   useEffect(() => {
     if (!user?.id) return;
     setLoadingArtists(true);
-    apiFetch<any>(`${API_URL}/artists`)
+    apiFetch<Artist[]>(`${API_URL}/artists`)
       .then((data) => setArtists(data || []))
       .catch(() => setArtists([]))
       .finally(() => setLoadingArtists(false));
@@ -149,7 +150,7 @@ const SplitSheet = () => {
       return;
     }
     setLoadingProjects(true);
-    apiFetch<any>(`${API_URL}/projects/${selectedArtistId}`)
+    apiFetch<Project[]>(`${API_URL}/projects/${selectedArtistId}`)
       .then((data) => setProjects(data || []))
       .catch(() => setProjects([]))
       .finally(() => setLoadingProjects(false));
@@ -175,9 +176,14 @@ const SplitSheet = () => {
   const allNamesPresent =
     contributors.length > 0 && contributors.every((c) => c.name.trim() !== "");
   const allRolesPresent = contributors.every((c) => c.role !== "");
+  const allPctPresent = contributors.every(
+    (c) =>
+      (!needsPublishing || c.publishingPercentage.trim() !== "") &&
+      (!needsMaster || c.masterPercentage.trim() !== ""),
+  );
 
   const canProceedStep1 = workTitle.trim() !== "" && selectedArtistId !== "";
-  const canProceedStep2 = allNamesPresent && allRolesPresent && isValidTotal;
+  const canProceedStep2 = allNamesPresent && allRolesPresent && allPctPresent && isValidTotal;
   const canGenerate =
     canProceedStep1 &&
     canProceedStep2 &&
@@ -238,8 +244,9 @@ const SplitSheet = () => {
 
       const savedMsg = saveToArtist ? " and saved to artist profile" : "";
       toast.success(`Split sheet generated${savedMsg} successfully`);
-    } catch (err: any) {
-      toast.error(err.message || "Failed to generate split sheet");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to generate split sheet";
+      toast.error(message);
     } finally {
       setIsGenerating(false);
     }
@@ -478,6 +485,22 @@ const SplitSheet = () => {
         {/* ==================== Step 2: Ownership Splits ==================== */}
         {step === 1 && (
           <div className="space-y-5">
+            {splitType === "publishing" && (
+              <Alert>
+                <Info className="w-4 h-4" />
+                <AlertDescription>
+                  OneClick calculates master royalties only. Publishing-only split sheets can be generated here, but they won't be usable inside OneClick.
+                </AlertDescription>
+              </Alert>
+            )}
+            {splitType === "both" && (
+              <Alert>
+                <Info className="w-4 h-4" />
+                <AlertDescription>
+                  OneClick reads master splits only. The publishing splits below are recorded for your records but are not used in OneClick calculations.
+                </AlertDescription>
+              </Alert>
+            )}
             <Card>
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg flex items-center justify-between">
@@ -539,7 +562,8 @@ const SplitSheet = () => {
                           min="0"
                           max="100"
                           step="0.01"
-                          placeholder={splitType === "both" ? "Publishing %" : "Ownership %"}
+                          required
+                          placeholder={splitType === "both" ? "Publishing % *" : "Ownership % *"}
                           value={c.publishingPercentage}
                           onChange={(e) =>
                             updateContributor(c.id, "publishingPercentage", e.target.value)
@@ -552,7 +576,8 @@ const SplitSheet = () => {
                           min="0"
                           max="100"
                           step="0.01"
-                          placeholder={splitType === "both" ? "Master %" : "Ownership %"}
+                          required
+                          placeholder={splitType === "both" ? "Master % *" : "Ownership % *"}
                           value={c.masterPercentage}
                           onChange={(e) =>
                             updateContributor(c.id, "masterPercentage", e.target.value)
@@ -591,6 +616,8 @@ const SplitSheet = () => {
                   ? "All contributors need a name"
                   : !allRolesPresent
                   ? "All contributors need a role"
+                  : !allPctPresent
+                  ? "All contributors need a percentage in each active split field"
                   : !isPubValid
                   ? `Publishing splits must total 100% (currently ${pubTotal.toFixed(1)}%)`
                   : !isMasterValid

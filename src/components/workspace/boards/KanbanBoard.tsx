@@ -303,9 +303,9 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
       {/* Parent tasks section */}
       <Separator className="my-8" />
       <div className="mb-4">
-        <h3 className="text-lg font-semibold mb-1">Epics</h3>
+        <h3 className="text-lg font-semibold mb-1">Campaigns</h3>
         <p className="text-sm text-muted-foreground">
-          Group and organize subtasks under epics
+          Group and organize subtasks under campaigns
         </p>
       </div>
       <TasksOverview />

@@ -1835,8 +1835,8 @@ Artist Profile:
 
         # Additional links
         additional = []
-        if artist_data.get("additional_epk"):
-            additional.append(f"EPK: {artist_data['additional_epk']}")
+        if artist_data.get("additional_website"):
+            additional.append(f"Website: {artist_data['additional_website']}")
         if artist_data.get("additional_press_kit"):
             additional.append(f"Press Kit: {artist_data['additional_press_kit']}")
         if artist_data.get("additional_linktree"):

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Music, ArrowLeft, Loader2, Plus,
+  Music, ArrowLeft, Loader2,
   FileText, Volume2, Users, Settings, StickyNote, BookOpen, MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -19,7 +19,6 @@ import FilesTab from "@/components/project/FilesTab";
 import AudioTab from "@/components/project/AudioTab";
 import MembersTab from "@/components/project/MembersTab";
 import SettingsTab from "@/components/project/SettingsTab";
-import AddWorkDialog from "@/components/project/AddWorkDialog";
 import NotesView from "@/components/notes/NotesView";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useProjectSlackChannel } from "@/hooks/useProjectIntegrations";
@@ -47,8 +46,7 @@ const ProjectDetail = () => {
   const queryClient = useQueryClient();
   const userRole = useMyRole(projectId);
 
-  const [addWorkOpen, setAddWorkOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState("works");
+  const [activeTab, setActiveTab] = useState("files");
 
   const { connections } = useIntegrations();
   const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
@@ -196,11 +194,6 @@ const ProjectDetail = () => {
               >
                 <BookOpen className="w-4 h-4" />
               </Button>
-              {canEdit(userRole) && (
-                <Button data-walkthrough="project-add-work" size="sm" onClick={() => setAddWorkOpen(true)}>
-                  <Plus className="w-4 h-4 mr-2" /> Add Work
-                </Button>
-              )}
             </div>
           </div>
         </div>
@@ -210,7 +203,7 @@ const ProjectDetail = () => {
       <main className="container mx-auto px-4 py-6 max-w-5xl">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList data-walkthrough="project-tabs" className="mb-6">
-            <TabsTrigger value="works" className="gap-1.5">
+            <TabsTrigger value="works" className="gap-1.5" disabled>
               <Music className="w-4 h-4" /> Works
             </TabsTrigger>
             <TabsTrigger value="files" className="gap-1.5">
@@ -273,16 +266,6 @@ const ProjectDetail = () => {
           </TabsContent>
         </Tabs>
       </main>
-
-      {/* Add Work Dialog (accessible from header button) */}
-      {canEdit(userRole) && projectId && (
-        <AddWorkDialog
-          open={addWorkOpen}
-          onOpenChange={setAddWorkOpen}
-          projectId={projectId}
-          artistId={project.artist_id}
-        />
-      )}
 
       <ToolIntroModal
         config={TOOL_CONFIGS.project_detail}
