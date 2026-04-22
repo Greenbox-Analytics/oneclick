@@ -28,6 +28,7 @@ interface AudioTabProps {
   artistId: string;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
 
 const MAX_AUDIO_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
@@ -127,8 +128,8 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       );
       queryClient.invalidateQueries({ queryKey: ["work-audio-links-for-project", projectId] });
       toast.success("Audio linked to work");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to link audio");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to link audio");
     } finally {
       setLinkingInProgress(false);
       setLinkingAudioId(null);
@@ -226,7 +227,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
 
       queryClient.invalidateQueries({ queryKey: ["project-audio-tab", projectId] });
       toast.success(existing?.id ? "Audio linked (duplicate reused)" : "Audio uploaded and linked");
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Roll back any partial work to avoid orphans.
       if (insertedAudioId) {
         await sb.from("audio_files").delete().eq("id", insertedAudioId);
@@ -234,7 +235,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       if (uploadedPath) {
         await supabase.storage.from("audio-files").remove([uploadedPath]);
       }
-      toast.error(error.message || "Failed to upload audio");
+      toast.error(error instanceof Error ? error.message : "Failed to upload audio");
     } finally {
       setUploading(false);
       event.target.value = "";
@@ -264,8 +265,8 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       queryClient.invalidateQueries({ queryKey: ["project-audio-tab", projectId] });
       queryClient.invalidateQueries({ queryKey: ["work-audio-links-for-project", projectId] });
       toast.success("Audio deleted");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to delete audio");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete audio");
     } finally {
       setDeleteInFlight(false);
       setPendingDelete(null);
@@ -372,7 +373,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
                             <SelectValue placeholder="Select work..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {projectWorks.map((work: any) => (
+                            {projectWorks.map((work: { id: string; title: string }) => (
                               <SelectItem key={work.id} value={work.id}>
                                 {work.title}
                               </SelectItem>

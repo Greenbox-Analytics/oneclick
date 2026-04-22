@@ -78,8 +78,9 @@ export default function ShareViaEmailDialog({
         `Sent ${res.attachment_count} file${res.attachment_count === 1 ? "" : "s"} (${(res.total_bytes / (1024 * 1024)).toFixed(1)} MB)`
       );
       onClose();
-    } catch (err: any) {
-      toast.error(err.message || "Failed to send email");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to send email";
+      toast.error(message);
     } finally {
       setSending(false);
     }

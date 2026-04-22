@@ -131,11 +131,12 @@ const Profile = () => {
         title: "Success",
         description: "Profile updated successfully.",
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error updating profile:", error);
+      const message = error instanceof Error ? error.message : undefined;
       toast({
         title: "Error",
-        description: error.message || "Failed to update profile.",
+        description: message || "Failed to update profile.",
         variant: "destructive",
       });
     } finally {

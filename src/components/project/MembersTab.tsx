@@ -25,6 +25,14 @@ interface MembersTabProps {
   userRole: string | null;
 }
 
+interface WorkCollaborator {
+  id: string;
+  name: string | null;
+  email: string;
+  status: string;
+  works_registry?: { id: string; title: string } | null;
+}
+
 const ROLE_COLORS: Record<string, string> = {
   owner: "bg-purple-500/20 text-purple-400 border-purple-500/30",
   admin: "bg-blue-500/20 text-blue-400 border-blue-500/30",
@@ -70,12 +78,12 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     queryKey: ["project-work-collaborators", projectId, workIds],
     queryFn: async () => {
       if (workIds.length === 0) return [];
-      const { data, error } = await (supabase as any)
-        .from("registry_collaborators")
+      const { data, error } = await supabase
+        .from("registry_collaborators" as never)
         .select("*, works_registry(id, title)")
         .in("work_id", workIds);
       if (error) return [];
-      return data || [];
+      return (data as WorkCollaborator[] | null) || [];
     },
     enabled: workIds.length > 0,
   });
@@ -285,7 +293,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
             <LinkIcon className="w-4 h-4" /> Work-Only Collaborators
           </h3>
           <div className="grid gap-2">
-            {workCollaborators.map((collab: any) => {
+            {workCollaborators.map((collab: WorkCollaborator) => {
               const workTitle = collab.works_registry?.title || "Unknown Work";
               return (
                 <Card key={collab.id} className="p-3">

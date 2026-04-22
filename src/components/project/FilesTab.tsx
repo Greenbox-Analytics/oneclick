@@ -76,13 +76,13 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const { data: projectWorks } = useQuery({
     queryKey: ["project-works-for-linking", projectId],
     queryFn: async () => {
-      const { data, error } = await (supabase as any)
-        .from("works_registry")
+      const { data, error } = await supabase
+        .from("works_registry" as never)
         .select("id, title")
         .eq("project_id", projectId)
         .order("title");
       if (error) return [];
-      return data || [];
+      return (data as Array<{ id: string; title: string }> | null) || [];
     },
     enabled: !!projectId,
   });
@@ -94,12 +94,12 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
       if (!files || files.length === 0) return [];
       const fileIds = files.map((f) => f.id);
       // Query work_files join with works_registry to get work titles
-      const { data, error } = await (supabase as any)
-        .from("work_files")
+      const { data, error } = await supabase
+        .from("work_files" as never)
         .select("file_id, work_id, works_registry(id, title)")
         .in("file_id", fileIds);
       if (error) return [];
-      return data || [];
+      return (data as Array<{ file_id: string; work_id: string; works_registry: { id: string; title: string } | null }> | null) || [];
     },
     enabled: !!files && files.length > 0,
   });
@@ -184,8 +184,8 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
         setLinkingFileId(insertedData.id);
         setSelectedWorkIds([]);
       }
-    } catch (error: any) {
-      toast.error(error.message || "Failed to upload file");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to upload file");
     } finally {
       setUploadingCategory(null);
       event.target.value = "";
@@ -204,8 +204,8 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
       }
       queryClient.invalidateQueries({ queryKey: ["work-file-links-for-project", projectId] });
       toast.success("File linked to works");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to link file");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to link file");
     } finally {
       setLinkingInProgress(false);
       setLinkingFileId(null);
@@ -213,7 +213,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
     }
   };
 
-  const handleDownload = async (file: any) => {
+  const handleDownload = async (file: { file_path?: string | null; file_name?: string | null }) => {
     try {
       if (file.file_path) {
         const { data } = await supabase.storage
@@ -222,7 +222,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
         if (data?.signedUrl) {
           const a = document.createElement("a");
           a.href = data.signedUrl;
-          a.download = file.file_name;
+          a.download = file.file_name || "download";
           a.click();
           return;
         }
@@ -233,7 +233,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
     }
   };
 
-  const handleDelete = async (file: any) => {
+  const handleDelete = async (file: { id: string; file_path?: string | null }) => {
     try {
       if (file.file_path) {
         await supabase.storage.from("project-files").remove([file.file_path]);
@@ -464,7 +464,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
             <DialogTitle>Link this file to works?</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 max-h-60 overflow-y-auto">
-            {(projectWorks || []).map((work: any) => (
+            {(projectWorks || []).map((work: { id: string; title: string }) => (
               <label key={work.id} className="flex items-center gap-2 p-2 rounded hover:bg-muted/50 cursor-pointer">
                 <Checkbox
                   checked={selectedWorkIds.includes(work.id)}

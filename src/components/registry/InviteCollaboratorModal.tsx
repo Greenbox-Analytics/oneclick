@@ -42,8 +42,17 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
   const [publishingPct, setPublishingPct] = useState("");
   const [notes, setNotes] = useState("");
 
+  interface InvitePayload {
+    work_id: string;
+    email: string;
+    name: string;
+    role: string;
+    stakes: Array<{ stake_type: string; percentage: number }>;
+    notes?: string;
+  }
+
   const inviteWithStakes = useMutation({
-    mutationFn: async (body: any) =>
+    mutationFn: async (body: InvitePayload) =>
       apiFetch(`${API_URL}/registry/collaborators/invite-with-stakes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

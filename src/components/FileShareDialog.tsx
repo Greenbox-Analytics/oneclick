@@ -103,10 +103,10 @@ export const FileShareDialog = ({
         description: `Sent ${files.length} file${files.length > 1 ? "s" : ""} to ${recipientEmail}`,
       });
       onOpenChange(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Error",
-        description: err.message,
+        description: err instanceof Error ? err.message : "Failed to share files",
         variant: "destructive",
       });
     } finally {

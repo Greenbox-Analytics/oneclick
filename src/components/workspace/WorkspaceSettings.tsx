@@ -121,7 +121,7 @@ export function WorkspaceSettings() {
             <Label>Board Period</Label>
             <Select
               value={settings.board_period}
-              onValueChange={(value) => updateSettings({ board_period: value as any })}
+              onValueChange={(value) => updateSettings({ board_period: value as "weekly" | "biweekly" | "monthly" | "custom" })}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -164,7 +164,7 @@ export function WorkspaceSettings() {
             <Label>Default View</Label>
             <Select
               value={settings.calendar_view || "month"}
-              onValueChange={(value) => updateSettings({ calendar_view: value as any })}
+              onValueChange={(value) => updateSettings({ calendar_view: value as "day" | "week" | "month" | "year" })}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -244,7 +244,7 @@ export function WorkspaceSettings() {
                         <CommandItem
                           value={`system ${systemTimezone}`}
                           onSelect={() => {
-                            updateSettings({ timezone: undefined } as any);
+                            updateSettings({ timezone: undefined });
                             setTzOpen(false);
                           }}
                         >
@@ -260,7 +260,7 @@ export function WorkspaceSettings() {
                             key={tz}
                             value={tz}
                             onSelect={() => {
-                              updateSettings({ timezone: tz } as any);
+                              updateSettings({ timezone: tz });
                               setTzOpen(false);
                             }}
                           >
@@ -277,7 +277,7 @@ export function WorkspaceSettings() {
                             key={tz}
                             value={tz}
                             onSelect={() => {
-                              updateSettings({ timezone: tz } as any);
+                              updateSettings({ timezone: tz });
                               setTzOpen(false);
                             }}
                           >

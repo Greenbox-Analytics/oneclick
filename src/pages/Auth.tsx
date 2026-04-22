@@ -31,10 +31,11 @@ const Auth = () => {
         description: "You have been signed in.",
       });
       navigate("/dashboard");
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : undefined;
       toast({
         title: "Error",
-        description: error.message || "Failed to sign in. Please check your credentials.",
+        description: message || "Failed to sign in. Please check your credentials.",
         variant: "destructive",
       });
     } finally {
@@ -52,10 +53,11 @@ const Auth = () => {
         description: "Check your email to confirm your account.",
       });
       navigate("/auth/confirm-email", { state: { email: signUpEmail } });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : undefined;
       toast({
         title: "Error",
-        description: error.message || "Failed to create account.",
+        description: message || "Failed to create account.",
         variant: "destructive",
       });
     } finally {
@@ -67,10 +69,11 @@ const Auth = () => {
     setIsLoading(true);
     try {
       await signInWithGoogle();
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : undefined;
       toast({
         title: "Error",
-        description: error.message || "Failed to sign in with Google.",
+        description: message || "Failed to sign in with Google.",
         variant: "destructive",
       });
       setIsLoading(false);

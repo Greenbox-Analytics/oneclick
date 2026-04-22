@@ -14,7 +14,7 @@ export const ProtectedRoute = ({ children, skipOnboardingCheck = false }: Protec
 
   // Optimistic: if we just came from onboarding, trust the navigation state
   // instead of waiting for a fresh Supabase query (avoids redirect loop).
-  const fromOnboarding = (location.state as any)?.fromOnboarding === true;
+  const fromOnboarding = (location.state as { fromOnboarding?: boolean } | null)?.fromOnboarding === true;
 
   if (authLoading || (!skipOnboardingCheck && !fromOnboarding && onboardingLoading)) {
     return (

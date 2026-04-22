@@ -191,7 +191,7 @@ TeamCards are per-user contact cards. A user controls which fields are visible t
 | `GET` | `/registry/artists/{artist_id}/with-teamcard` | Fetch an artist record with TeamCard data merged in. 404 if artist not found. |
 | `GET` | `/registry/artists/with-teamcards` | Batch endpoint: return all of the user's artists with TeamCard overlays. Returns `{ artists: [...] }`. |
 
-**TeamCardUpdate fields:** all optional — `display_name`, `first_name`, `last_name`, `avatar_url`, `bio`, `phone`, `website`, `company`, `industry`, `social_links` (object), `dsp_links` (object), `custom_links` (array of `{ label, url }`), `visible_fields` (string array).
+**TeamCardUpdate fields:** all optional — `display_name`, `first_name`, `last_name`, `avatar_url`, `bio`, `phone`, `website`, `company`, `role`, `social_links` (object), `dsp_links` (object), `custom_links` (array of `{ label, url }`), `visible_fields` (string array).
 
 ---
 
@@ -390,7 +390,7 @@ All tables use UUID primary keys (`gen_random_uuid()`) and `created_at`/`updated
 | `registry_collaborators` | `id`, `work_id`, `stake_id`, `invited_by`, `collaborator_user_id`, `email`, `name`, `role`, `status`, `invite_token`, `expires_at`, `invited_at`, `responded_at` | Invitation and acceptance state per collaborator per work. `status`: `invited` → `accepted`/`declined`/`confirmed`/`revoked`. |
 | `work_files` | `id`, `work_id`, `file_id`, `created_at` | Join table linking `works_registry` to `project_files`. |
 | `work_audio_links` | `id`, `work_id`, `audio_file_id`, `created_at` | Join table linking `works_registry` to `audio_files`. |
-| `team_cards` | `id`, `user_id`, `display_name`, `first_name`, `last_name`, `email`, `avatar_url`, `bio`, `phone`, `website`, `company`, `industry`, `social_links` (jsonb), `dsp_links` (jsonb), `custom_links` (jsonb), `visible_fields` (text[]) | Per-user contact cards surfaced to collaborators. |
+| `team_cards` | `id`, `user_id`, `display_name`, `first_name`, `last_name`, `email`, `avatar_url`, `bio`, `phone`, `website`, `company`, `role`, `social_links` (jsonb), `dsp_links` (jsonb), `custom_links` (jsonb), `visible_fields` (text[]) | Per-user contact cards surfaced to collaborators. |
 | `registry_notes` | `id`, `user_id`, `artist_id`, `project_id`, `folder_id`, `title`, `content` (jsonb, BlockNote), `pinned` | Rich-text notes scoped to artist or project. |
 | `registry_folders` | `id`, `user_id`, `artist_id`, `project_id`, `parent_folder_id`, `name`, `sort_order` | Folder hierarchy for notes. |
 | `projects` | `id`, `artist_id`, `name`, `about_content` (jsonb, BlockNote) | Project records; `about_content` is managed via `/registry/projects/{id}/about`. |

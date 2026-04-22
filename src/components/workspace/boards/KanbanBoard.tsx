@@ -91,10 +91,10 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
   const [backlogChecked, setBacklogChecked] = useState(false);
   useEffect(() => {
     if (backlogChecked || isLoading || columns.length === 0) return;
-    const hasBacklog = columns.some((c: any) => c.title === "Backlog");
+    const hasBacklog = columns.some((c) => c.title === "Backlog");
     if (!hasBacklog) {
       // Bump existing column positions by 1
-      columns.forEach((col: any) => {
+      columns.forEach((col) => {
         updateColumn({ id: col.id, position: (col.position ?? 0) + 1 });
       });
       // Create Backlog at position 0

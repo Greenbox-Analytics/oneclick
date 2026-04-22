@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import type { AudioFolder, AudioFile, ProjectAudioLink } from "@/types/audio";
 
-// Supabase types.ts doesn't include audio tables yet, so we cast through `any`
-const sb = supabase as any;
+// Supabase types.ts doesn't include audio tables yet — escape the generated
+// generic via an untyped SupabaseClient so .from() accepts any string.
+const sb = supabase as unknown as SupabaseClient;
 
 export function useAudioData(artistIds: string[], projectIds: string[]) {
   const queryClient = useQueryClient();
@@ -176,8 +178,8 @@ export function useAudioData(artistIds: string[], projectIds: string[]) {
       .select("id, file_name")
       .eq("folder_id", folderId);
     if (existingFiles) {
-      const hasDuplicate = existingFiles.some(
-        (f: any) => f.file_name.trim().toLowerCase() === file.name.trim().toLowerCase()
+      const hasDuplicate = (existingFiles as Array<{ file_name: string }>).some(
+        (f) => f.file_name.trim().toLowerCase() === file.name.trim().toLowerCase()
       );
       if (hasDuplicate) {
         throw new Error(`DUPLICATE:An audio file named "${file.name}" already exists in this folder.`);

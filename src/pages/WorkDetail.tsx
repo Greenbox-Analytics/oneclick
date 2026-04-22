@@ -147,8 +147,8 @@ const WorkDetail = () => {
 
   // Display label for work type — use custom_work_type when work_type is "other"
   const workTypeLabel =
-    work.work_type === "other" && (work as any).custom_work_type
-      ? (work as any).custom_work_type
+    work.work_type === "other" && (work as { custom_work_type?: string }).custom_work_type
+      ? (work as { custom_work_type?: string }).custom_work_type
       : work.work_type.replace("_", " ").toUpperCase();
 
   return (

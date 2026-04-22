@@ -88,7 +88,7 @@ const Dashboard = () => {
 
   // Optimistic: if we just came from onboarding, start walkthrough immediately
   // without waiting for the Supabase query to resolve.
-  const fromOnboarding = (location.state as any)?.fromOnboarding === true;
+  const fromOnboarding = (location.state as { fromOnboarding?: boolean } | null)?.fromOnboarding === true;
 
   // Auto-start walkthrough for first-time users
   useEffect(() => {

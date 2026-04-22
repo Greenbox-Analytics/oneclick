@@ -121,7 +121,7 @@ const OneClickDocuments = () => {
 
   useEffect(() => {
     if (artistId) {
-      apiFetch<any>(`${API_URL}/projects/${artistId}`)
+      apiFetch<Project[]>(`${API_URL}/projects/${artistId}`)
         .then(data => setProjects(data))
         .catch(err => console.error("Error fetching projects:", err));
     }
@@ -165,7 +165,7 @@ const OneClickDocuments = () => {
     if (!artistId || !newProjectNameInput.trim()) return;
     setIsCreatingProject(true);
     try {
-        const newProject = await apiFetch<any>(`${API_URL}/projects`, {
+        const newProject = await apiFetch<Project>(`${API_URL}/projects`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ artist_id: artistId, name: newProjectNameInput, description: "Created via OneClick" })
@@ -360,9 +360,9 @@ const OneClickDocuments = () => {
             setError("Connection error. Please try again."); toast.error("Connection error during calculation"); setIsUploading(false);
         }
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Error:", error);
-        const errorMessage = error?.message || "An error occurred.";
+        const errorMessage = error instanceof Error ? error.message : "An error occurred.";
         setError(errorMessage);
         if (!String(errorMessage).toLowerCase().includes("duplicate file")) toast.error(errorMessage || "An error occurred during processing.");
         setShowProgressModal(false); setIsUploading(false);

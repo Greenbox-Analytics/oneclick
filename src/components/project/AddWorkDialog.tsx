@@ -40,11 +40,11 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
   const audioQuery = useQuery({
     queryKey: ["project-audio-for-dialog", projectId],
     queryFn: async () => {
-      const { data } = await (supabase as any)
-        .from("project_audio_links")
+      const { data } = await supabase
+        .from("project_audio_links" as never)
         .select("audio_file_id, audio_files(id, file_name)")
         .eq("project_id", projectId);
-      return data || [];
+      return (data as Array<{ audio_file_id: string; audio_files: { id: string; file_name: string } | null }> | null) || [];
     },
     enabled: open,
   });
@@ -65,7 +65,7 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
         ...(isrc.trim() ? { isrc: isrc.trim() } : {}),
       },
       {
-        onSuccess: async (data: any) => {
+        onSuccess: async (data: { id?: string } | undefined) => {
           // Link audio file if one was selected
           if (selectedAudioId && data?.id && user?.id) {
             try {
@@ -89,8 +89,8 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
   };
 
   const audioFiles = (audioQuery.data || [])
-    .map((link: any) => link.audio_files)
-    .filter(Boolean);
+    .map((link: { audio_files: { id: string; file_name: string } | null }) => link.audio_files)
+    .filter(Boolean) as Array<{ id: string; file_name: string }>;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -157,7 +157,7 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">(None)</SelectItem>
-                  {audioFiles.map((af: any) => (
+                  {audioFiles.map((af) => (
                     <SelectItem key={af.id} value={af.id}>
                       {af.file_name}
                     </SelectItem>
