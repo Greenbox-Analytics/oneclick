@@ -15,7 +15,7 @@ export interface TeamCard {
   phone: string | null;
   website: string | null;
   company: string | null;
-  industry: string | null;
+  role: string | null;
   social_links: Record<string, string>;
   dsp_links: Record<string, string>;
   custom_links: Array<{ label: string; url: string }>;

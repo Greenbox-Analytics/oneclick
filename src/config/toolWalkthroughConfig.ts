@@ -178,7 +178,7 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       icon: LayoutGrid,
       title: "Workspace",
       description:
-        "Your project management hub — manage tasks, create epics with subtasks, and efficiently organize your projects. Link tasks to artists and projects to keep everything connected.",
+        "Your project management hub — manage tasks, create campaigns with subtasks, and efficiently organize your projects. Link tasks to artists and projects to keep everything connected.",
     },
     steps: [
       {

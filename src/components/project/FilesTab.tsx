@@ -9,13 +9,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
-  Loader2, ChevronRight, Upload, FileText, Search, Download, Trash2, HardDrive,
+  Loader2, ChevronRight, Upload, FileText, Search, Download, Trash2, HardDrive, Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useDriveExport } from "@/hooks/useGoogleDrive";
 import { DriveImportDialog } from "./integrations/DriveImportDialog";
+import ShareViaEmailDialog from "./ShareViaEmailDialog";
 
 interface FilesTabProps {
   projectId: string;
@@ -46,6 +47,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const [driveImportOpen, setDriveImportOpen] = useState(false);
+  const [shareFile, setShareFile] = useState<{ id: string; file_name: string } | null>(null);
   const { connections } = useIntegrations();
   const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
   const driveExport = useDriveExport();
@@ -397,6 +399,17 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                             >
                               <Download className="w-3.5 h-3.5" />
                             </Button>
+                            {canEdit(userRole) && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 w-7 p-0 shrink-0"
+                                title="Share via email"
+                                onClick={() => setShareFile({ id: file.id, file_name: file.file_name })}
+                              >
+                                <Mail className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
                             <Button
                               size="sm"
                               variant="ghost"
@@ -434,6 +447,14 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
         open={driveImportOpen}
         onOpenChange={setDriveImportOpen}
         projectId={projectId}
+      />
+
+      <ShareViaEmailDialog
+        open={!!shareFile}
+        onClose={() => setShareFile(null)}
+        projectId={projectId}
+        fileIds={shareFile ? [shareFile.id] : []}
+        defaultSubject={shareFile ? `File: ${shareFile.file_name}` : ""}
       />
 
       {/* Work-linking dialog (Fix #4) */}

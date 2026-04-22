@@ -24,7 +24,7 @@ SAMPLE_TEAM_CARD = {
     "phone": "+1-555-1234",
     "website": "https://example.com",
     "company": "Acme Music",
-    "industry": "Music",
+    "role": "Producer",
     "social_links": {"twitter": "testartist"},
     "dsp_links": {},
     "custom_links": [],

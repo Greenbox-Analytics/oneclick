@@ -207,7 +207,7 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
             </p>
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" disabled={removeMember.isPending}>
                   <LogOut className="w-4 h-4 mr-2" /> Leave Project
                 </Button>
               </AlertDialogTrigger>
@@ -219,8 +219,14 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleLeave}>Leave</AlertDialogAction>
+                  <AlertDialogCancel disabled={removeMember.isPending}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={removeMember.isPending}
+                    onClick={(e) => { e.preventDefault(); handleLeave(); }}
+                  >
+                    {removeMember.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Leave
+                  </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
@@ -241,7 +247,7 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
           </p>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm">
+              <Button variant="destructive" size="sm" disabled={deleteProject.isPending}>
                 <Trash2 className="w-4 h-4 mr-2" /> Delete Project
               </Button>
             </AlertDialogTrigger>
@@ -253,9 +259,13 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogCancel disabled={deleteProject.isPending}>Cancel</AlertDialogCancel>
                 <AlertDialogAction
-                  onClick={() => deleteProject.mutate()}
+                  disabled={deleteProject.isPending}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    deleteProject.mutate();
+                  }}
                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                 >
                   {deleteProject.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}

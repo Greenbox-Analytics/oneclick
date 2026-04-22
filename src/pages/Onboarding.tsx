@@ -21,7 +21,7 @@ const Onboarding = () => {
     firstName: "",
     lastName: "",
     preferredName: "",
-    industry: "",
+    role: "",
     company: "",
   });
 
@@ -87,7 +87,7 @@ const Onboarding = () => {
       last_name: formData.lastName,
       given_name: formData.preferredName || null,
       full_name: fullName,
-      industry: formData.industry || null,
+      role: formData.role || null,
       company: formData.company || null,
       onboarding_completed: true,
       updated_at: new Date().toISOString(),
@@ -140,7 +140,7 @@ const Onboarding = () => {
         {currentStep === 2 && (
           <StepPreferences
             preferredName={formData.preferredName}
-            industry={formData.industry}
+            role={formData.role}
             company={formData.company}
             onUpdate={handleUpdate}
             onNext={() => setCurrentStep(3)}

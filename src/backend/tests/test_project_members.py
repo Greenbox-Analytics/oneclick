@@ -94,6 +94,24 @@ def _seq_side_effect(sequences: list):
     return _side_effect
 
 
+def _schema_side_effect(user_id: str | None):
+    """Stub ``db.schema('auth').from_('users')…`` used by ``_find_user_id_by_email``.
+
+    Returns a side_effect for ``mock_supabase.schema`` whose downstream
+    ``.from_('users').select(...).ilike(...).limit(...).execute()`` chain
+    yields ``[{'id': user_id}]`` when ``user_id`` is given, or ``[]`` to
+    simulate "no account found".
+    """
+    b = MockQueryBuilder()
+    b.execute.return_value = MagicMock(
+        data=[{"id": user_id}] if user_id else [],
+        count=1 if user_id else 0,
+    )
+    schema_mock = MagicMock()
+    schema_mock.from_.return_value = b
+    return lambda name: schema_mock
+
+
 # ===========================================================================
 # GET /projects/{project_id}/members
 # ===========================================================================
@@ -155,7 +173,7 @@ class TestAddMemberExistingUser:
     """POST /projects/{project_id}/members — target email maps to existing profile."""
 
     def test_adds_existing_user_directly(self, client, mock_supabase):
-        """Returns type=added when user exists in profiles table."""
+        """Returns type=added when auth.users has a matching account."""
         new_member_record = {
             "id": "memb-new-001",
             "project_id": PROJECT_ID,
@@ -164,13 +182,13 @@ class TestAddMemberExistingUser:
             "invited_by": TEST_USER_ID,
         }
 
-        # get_user_role uses maybe_single → data must be a dict
-        # profiles ilike uses maybe_single → dict
-        # project_members insert → result.data[0] → list
+        # _find_user_id_by_email queries db.schema('auth').from_('users')
+        mock_supabase.schema.side_effect = _schema_side_effect(OTHER_USER_ID)
+        # db.table() calls in order: get_user_role, duplicate-membership check, insert
         mock_supabase.table.side_effect = _seq_side_effect(
             [
                 {"role": "owner"},  # get_user_role (maybe_single)
-                EXISTING_PROFILE,  # profiles ilike (maybe_single) — dict
+                None,  # duplicate-membership check (maybe_single) — not a member
                 [new_member_record],  # project_members INSERT → data[0]
             ]
         )
@@ -195,10 +213,11 @@ class TestAddMemberExistingUser:
             "invited_by": TEST_USER_ID,
         }
 
+        mock_supabase.schema.side_effect = _schema_side_effect(OTHER_USER_ID)
         mock_supabase.table.side_effect = _seq_side_effect(
             [
                 {"role": "owner"},  # get_user_role (maybe_single)
-                EXISTING_PROFILE,  # profiles ilike (maybe_single)
+                None,  # duplicate-membership check (maybe_single) — not a member
                 [viewer_record],  # insert → data[0]
             ]
         )
@@ -287,14 +306,13 @@ class TestAddMemberPendingInvite:
     """POST /projects/{project_id}/members — target email has no existing account."""
 
     def test_creates_pending_invite_for_unknown_email(self, client, mock_supabase):
-        """Returns type=pending and invite record when email is not in profiles."""
-        # get_user_role → maybe_single dict
-        # profiles ilike maybe_single → None (user not found)
-        # pending_project_invites insert → data[0]
+        """Returns type=pending and invite record when email has no auth.users account."""
+        # _find_user_id_by_email returns None → skip existing-user branch
+        mock_supabase.schema.side_effect = _schema_side_effect(None)
+        # db.table() calls in order: get_user_role, pending_project_invites insert
         mock_supabase.table.side_effect = _seq_side_effect(
             [
                 {"role": "owner"},  # get_user_role (maybe_single)
-                None,  # profiles: not found (maybe_single → falsy)
                 [PENDING_INVITE],  # pending_project_invites INSERT → data[0]
             ]
         )
@@ -315,10 +333,10 @@ class TestAddMemberPendingInvite:
         """The pending invite stores the email in lowercase."""
         invite_lower = {**PENDING_INVITE, "email": "newuser@example.com"}
 
+        mock_supabase.schema.side_effect = _schema_side_effect(None)
         mock_supabase.table.side_effect = _seq_side_effect(
             [
                 {"role": "owner"},  # get_user_role (maybe_single)
-                None,  # profiles: not found
                 [invite_lower],  # pending_project_invites INSERT → data[0]
             ]
         )

@@ -36,7 +36,7 @@ def normalize_title(title: str) -> str:
     clean = re.sub(r"[^a-z0-9\s]", "", clean)
     clean = re.sub(r"\s+", " ", clean)
 
-    return clean
+    return clean.strip()
 
 
 def find_matching_song(song_title: str, song_totals: dict[str, float]) -> tuple[str | None, float]:

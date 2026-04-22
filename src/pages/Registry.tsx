@@ -704,4 +704,31 @@ const Registry = () => {
   );
 };
 
-export default Registry;
+// Void reference so the original implementation survives bundling and isn't flagged as unused
+// while Rights Registry is disabled. Restore `export default Registry` when re-enabling.
+void Registry;
+
+const RegistryComingSoon = () => {
+  const navigate = useNavigate();
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center px-4">
+      <Card className="max-w-md w-full border border-border">
+        <CardContent className="py-10 flex flex-col items-center text-center gap-4">
+          <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center">
+            <Shield className="w-7 h-7 text-primary" />
+          </div>
+          <h2 className="text-2xl font-bold text-foreground">Rights Registry</h2>
+          <p className="text-muted-foreground">
+            Coming Soon.. We're polishing this tool. Check back shortly.
+          </p>
+          <Button variant="outline" onClick={() => navigate("/tools")}>
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Tools
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default RegistryComingSoon;

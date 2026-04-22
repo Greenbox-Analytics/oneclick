@@ -15,6 +15,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useQuery } from "@tanstack/react-query";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import NotesView from "@/components/notes/NotesView";
+import CredentialsVault from "@/components/profile/CredentialsVault";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -61,7 +62,7 @@ const ArtistProfile = () => {
       soundcloud: "",
     },
     additional: {
-      epk: "",
+      website: "",
       pressKit: "",
       linktree: "",
     },
@@ -77,7 +78,9 @@ const ArtistProfile = () => {
     queryKey: ["artist-teamcard", id],
     queryFn: async () => {
       if (!user?.id || !id) return null;
-      return apiFetch<any>(`${API_URL}/registry/artists/${id}/with-teamcard`);
+      return apiFetch<{ teamcard?: { display_name?: string; bio?: string; avatar_url?: string }; verified?: boolean }>(
+        `${API_URL}/registry/artists/${id}/with-teamcard`,
+      );
     },
     enabled: !!user?.id && !!id,
   });
@@ -130,26 +133,26 @@ const ArtistProfile = () => {
             soundcloud: data.dsp_soundcloud || "",
           },
           additional: {
-            epk: data.additional_epk || "",
+            website: data.additional_website || "",
             pressKit: data.additional_press_kit || "",
             linktree: data.additional_linktree || "",
           },
           customLinks: Array.isArray(data.custom_links) 
-            ? data.custom_links.map((link: any) => ({
+            ? data.custom_links.map((link: { id?: string; label?: string; url?: string }) => ({
                 id: link.id || Date.now().toString(),
                 label: link.label || "",
                 url: link.url || ""
               }))
             : [],
           customSocialLinks: Array.isArray(data.custom_social_links)
-            ? data.custom_social_links.map((link: any) => ({
+            ? data.custom_social_links.map((link: { id?: string; label?: string; url?: string }) => ({
                 id: link.id || Date.now().toString(),
                 label: link.label || "",
                 url: link.url || ""
               }))
             : [],
           customDspLinks: Array.isArray(data.custom_dsp_links)
-            ? data.custom_dsp_links.map((link: any) => ({
+            ? data.custom_dsp_links.map((link: { id?: string; label?: string; url?: string }) => ({
                 id: link.id || Date.now().toString(),
                 label: link.label || "",
                 url: link.url || ""
@@ -206,7 +209,7 @@ const ArtistProfile = () => {
         dsp_spotify: formData.dsp.spotify,
         dsp_apple_music: formData.dsp.appleMusic,
         dsp_soundcloud: formData.dsp.soundcloud,
-        additional_epk: formData.additional.epk,
+        additional_website: formData.additional.website,
         additional_press_kit: formData.additional.pressKit,
         additional_linktree: formData.additional.linktree,
         custom_links: formData.customLinks,
@@ -268,7 +271,7 @@ const ArtistProfile = () => {
   const updateNestedField = (parent: string, field: string, value: string) => {
     setFormData(prev => ({
       ...prev,
-      [parent]: { ...prev[parent as keyof typeof prev] as any, [field]: value }
+      [parent]: { ...(prev[parent as keyof typeof prev] as Record<string, string>), [field]: value }
     }));
   };
 
@@ -893,19 +896,19 @@ const ArtistProfile = () => {
               <FieldContainer>
                 <div className="flex items-center gap-2 mb-2">
                   <LinkIcon className="w-4 h-4 text-purple-500" />
-                  <Label htmlFor="epk" className="text-sm font-semibold text-muted-foreground">Electronic Press Kit (EPK)</Label>
+                  <Label htmlFor="website" className="text-sm font-semibold text-muted-foreground">Artist Website</Label>
                 </div>
                 {isEditMode ? (
-                  <Input 
-                    id="epk"
-                    value={formData.additional.epk}
-                    onChange={(e) => updateNestedField('additional', 'epk', e.target.value)}
-                    placeholder="https://epk.example.com"
+                  <Input
+                    id="website"
+                    value={formData.additional.website}
+                    onChange={(e) => updateNestedField('additional', 'website', e.target.value)}
+                    placeholder="https://yourartistname.com"
                     className="bg-background border-2 focus:border-purple-500 transition-colors"
                   />
-                ) : formData.additional.epk ? (
-                  <a href={formData.additional.epk} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
-                    {formData.additional.epk}
+                ) : formData.additional.website ? (
+                  <a href={formData.additional.website} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline break-all">
+                    {formData.additional.website}
                   </a>
                 ) : (
                   <p className="text-sm text-muted-foreground/50 italic">Not set</p>
@@ -1032,6 +1035,9 @@ const ArtistProfile = () => {
               )}
             </CardContent>
           </Card>
+
+          {/* Credentials Vault -- per-artist platform logins, encrypted at rest */}
+          {id && <CredentialsVault artistId={id} isEditMode={isEditMode} />}
 
           {/* My Notes -- private to you */}
           <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">

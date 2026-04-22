@@ -84,7 +84,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
   // Note: profiles table has full_name, first_name, last_name, given_name — no email or avatar_url
   // Email is on team_cards table (if exists) or auth.users (not queryable from client)
   const memberUserIds = (members || []).map((m) => m.user_id);
-  const { data: memberProfiles } = useQuery({
+  const { data: memberProfiles, isLoading: profilesLoading } = useQuery({
     queryKey: ["member-profiles", memberUserIds],
     queryFn: async () => {
       if (memberUserIds.length === 0) return [];
@@ -99,7 +99,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
   });
 
   // Fetch emails from team_cards (has email column)
-  const { data: teamCards } = useQuery({
+  const { data: teamCards, isLoading: teamCardsLoading } = useQuery({
     queryKey: ["member-teamcards", memberUserIds],
     queryFn: async () => {
       if (memberUserIds.length === 0) return [];
@@ -112,6 +112,9 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     },
     enabled: memberUserIds.length > 0,
   });
+
+  const memberDetailsLoading =
+    memberUserIds.length > 0 && (profilesLoading || teamCardsLoading);
 
   const profileMap = new Map<string, { full_name: string | null; first_name: string | null; last_name: string | null; given_name: string | null }>();
   for (const p of memberProfiles || []) {
@@ -137,7 +140,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     );
   };
 
-  if (membersLoading) {
+  if (membersLoading || memberDetailsLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />

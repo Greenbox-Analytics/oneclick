@@ -34,6 +34,7 @@ app = FastAPI()
 
 # --- Mount Integration & Board Routers ---
 from boards.router import router as boards_router
+from credentials.router import router as credentials_router
 from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
 from integrations.monday.router import router as monday_router
@@ -41,6 +42,7 @@ from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
+from projects.share_email import router as projects_share_email_router
 from registry.router import router as registry_router
 from settings.router import router as settings_router
 from splitsheet.router import router as splitsheet_router
@@ -55,7 +57,9 @@ app.include_router(settings_router, prefix="/settings", tags=["Workspace Setting
 app.include_router(splitsheet_router, prefix="/splitsheet", tags=["Split Sheet"])
 app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"])
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
+app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
+app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
