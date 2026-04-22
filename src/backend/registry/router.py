@@ -1,29 +1,34 @@
 """FastAPI router for the Rights & Ownership Registry."""
 
 import re
-from fastapi import APIRouter, HTTPException, Query, Depends
-from fastapi.responses import StreamingResponse
-from typing import Optional
 import sys
 from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_id
-
-from registry import service
-from registry import work_links_service
+from registry import service, work_links_service
 from registry.models import (
-    WorkCreate, WorkUpdate,
-    StakeCreate, StakeUpdate,
-    LicenseCreate, LicenseUpdate,
     AgreementCreate,
-    CollaboratorInvite, CollaboratorInviteWithStakes,
-    TeamCardUpdate,
-    NoteCreate, NoteUpdate, FolderCreate, FolderUpdate,
+    CollaboratorInvite,
+    CollaboratorInviteWithStakes,
+    FolderCreate,
+    FolderUpdate,
+    LicenseCreate,
+    LicenseUpdate,
+    NoteCreate,
+    NoteUpdate,
     ProjectAboutUpdate,
+    StakeCreate,
+    StakeUpdate,
+    TeamCardUpdate,
+    WorkCreate,
+    WorkUpdate,
 )
 
 router = APIRouter()
@@ -31,6 +36,7 @@ router = APIRouter()
 
 def _get_supabase():
     from main import get_supabase_client
+
     return get_supabase_client()
 
 
@@ -38,11 +44,12 @@ def _get_supabase():
 # Works
 # ============================================================
 
+
 @router.get("/works")
 async def list_works(
     user_id: str = Depends(get_current_user_id),
-    artist_id: Optional[str] = Query(None),
-    page: Optional[int] = Query(None, ge=1),
+    artist_id: str | None = Query(None),
+    page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
 ):
     result = await service.get_works(_get_supabase(), user_id, artist_id, page, page_size)
@@ -54,7 +61,7 @@ async def list_works(
 @router.get("/works/my-collaborations")
 async def list_my_collaborations(
     user_id: str = Depends(get_current_user_id),
-    page: Optional[int] = Query(None, ge=1),
+    page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
 ):
     result = await service.get_works_as_collaborator(_get_supabase(), user_id, page, page_size)
@@ -123,6 +130,7 @@ async def submit_for_approval(work_id: str, user_id: str = Depends(get_current_u
     renotify = (result or {}).pop("_renotify_collabs", [])
     if renotify:
         from registry.emails import send_invitation_email
+
         profile = _get_supabase().table("profiles").select("full_name").eq("id", user_id).single().execute()
         inviter_name = (profile.data or {}).get("full_name") or "A Msanii user"
         work_title = (result or {}).get("title", "Untitled Work")
@@ -142,13 +150,15 @@ async def submit_for_approval(work_id: str, user_id: str = Depends(get_current_u
 @router.get("/works/{work_id}/export")
 async def export_proof_of_ownership(work_id: str, user_id: str = Depends(get_current_user_id)):
     from registry.pdf_generator import generate_proof_of_ownership_pdf
+
     data = await service.get_work_full(_get_supabase(), user_id, work_id)
     if not data:
         raise HTTPException(status_code=404, detail="Work not found")
     buffer = generate_proof_of_ownership_pdf(data)
     safe_title = re.sub(r"[^a-zA-Z0-9._-]", "_", data.get("title", "work"))
     return StreamingResponse(
-        buffer, media_type="application/pdf",
+        buffer,
+        media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="Proof_of_Ownership_{safe_title}.pdf"'},
     )
 
@@ -156,6 +166,7 @@ async def export_proof_of_ownership(work_id: str, user_id: str = Depends(get_cur
 # ============================================================
 # Ownership Stakes
 # ============================================================
+
 
 @router.get("/stakes")
 async def list_stakes(work_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
@@ -169,7 +180,9 @@ async def create_stake(body: StakeCreate, user_id: str = Depends(get_current_use
         _get_supabase(), user_id, body.work_id, body.stake_type, body.percentage
     )
     if not valid:
-        raise HTTPException(status_code=400, detail=f"Adding {body.percentage}% would exceed 100% for {body.stake_type}")
+        raise HTTPException(
+            status_code=400, detail=f"Adding {body.percentage}% would exceed 100% for {body.stake_type}"
+        )
     data = body.model_dump(exclude_none=True)
     stake = await service.create_stake(_get_supabase(), user_id, data)
     if not stake:
@@ -181,16 +194,24 @@ async def create_stake(body: StakeCreate, user_id: str = Depends(get_current_use
 async def update_stake(stake_id: str, body: StakeUpdate, user_id: str = Depends(get_current_user_id)):
     if body.percentage is not None:
         existing = (
-            _get_supabase().table("ownership_stakes")
-            .select("work_id, stake_type").eq("id", stake_id).eq("user_id", user_id)
-            .single().execute()
+            _get_supabase()
+            .table("ownership_stakes")
+            .select("work_id, stake_type")
+            .eq("id", stake_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
         )
         if not existing.data:
             raise HTTPException(status_code=404, detail="Stake not found")
         stake_type = body.stake_type or existing.data["stake_type"]
         valid = await service.validate_stake_percentage(
-            _get_supabase(), user_id, existing.data["work_id"],
-            stake_type, body.percentage, exclude_stake_id=stake_id,
+            _get_supabase(),
+            user_id,
+            existing.data["work_id"],
+            stake_type,
+            body.percentage,
+            exclude_stake_id=stake_id,
         )
         if not valid:
             raise HTTPException(status_code=400, detail=f"Exceeds 100% for {stake_type}")
@@ -210,6 +231,7 @@ async def delete_stake(stake_id: str, user_id: str = Depends(get_current_user_id
 # ============================================================
 # Licensing Rights
 # ============================================================
+
 
 @router.get("/licenses")
 async def list_licenses(work_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
@@ -251,6 +273,7 @@ async def delete_license(license_id: str, user_id: str = Depends(get_current_use
 # Agreements (immutable)
 # ============================================================
 
+
 @router.get("/agreements")
 async def list_agreements(work_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
     agreements = await service.get_agreements(_get_supabase(), user_id, work_id)
@@ -274,6 +297,7 @@ async def create_agreement(body: AgreementCreate, user_id: str = Depends(get_cur
 # Collaboration
 # ============================================================
 
+
 @router.get("/collaborators")
 async def list_collaborators(work_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
     """List collaborators. Only the work creator or an existing collaborator can view."""
@@ -282,7 +306,14 @@ async def list_collaborators(work_id: str = Query(...), user_id: str = Depends(g
     if not work.data:
         raise HTTPException(status_code=404, detail="Work not found")
     is_creator = work.data["user_id"] == user_id
-    is_collab = db.table("registry_collaborators").select("id").eq("work_id", work_id).eq("collaborator_user_id", user_id).neq("status", "revoked").execute()
+    is_collab = (
+        db.table("registry_collaborators")
+        .select("id")
+        .eq("work_id", work_id)
+        .eq("collaborator_user_id", user_id)
+        .neq("status", "revoked")
+        .execute()
+    )
     if not is_creator and not (is_collab.data):
         raise HTTPException(status_code=403, detail="Not authorized to view collaborators")
     collabs = await service.get_collaborators(db, work_id)
@@ -301,6 +332,7 @@ async def invite_collaborator(body: CollaboratorInvite, user_id: str = Depends(g
 
     # Always send email
     from registry.emails import send_invitation_email
+
     profile = _get_supabase().table("profiles").select("full_name").eq("id", user_id).single().execute()
     inviter_name = (profile.data or {}).get("full_name") or "A Msanii user"
     send_invitation_email(
@@ -352,6 +384,7 @@ async def resend_invitation(collaborator_id: str, user_id: str = Depends(get_cur
 
     # Re-send the email
     from registry.emails import send_invitation_email
+
     work = _get_supabase().table("works_registry").select("title").eq("id", collab["work_id"]).single().execute()
     work_title = (work.data or {}).get("title") or "Untitled Work"
     profile = _get_supabase().table("profiles").select("full_name").eq("id", user_id).single().execute()
@@ -370,6 +403,7 @@ async def resend_invitation(collaborator_id: str, user_id: str = Depends(get_cur
 # ============================================================
 # Work File Links
 # ============================================================
+
 
 @router.get("/works/{work_id}/files")
 async def list_work_files(work_id: str, user_id: str = Depends(get_current_user_id)):
@@ -392,6 +426,7 @@ async def unlink_file(work_id: str, link_id: str, user_id: str = Depends(get_cur
 # Work Audio Links
 # ============================================================
 
+
 @router.get("/works/{work_id}/audio")
 async def list_work_audio(work_id: str, user_id: str = Depends(get_current_user_id)):
     audio = await work_links_service.get_work_audio(_get_supabase(), work_id)
@@ -413,6 +448,7 @@ async def unlink_audio(work_id: str, link_id: str, user_id: str = Depends(get_cu
 # Enhanced Collaboration
 # ============================================================
 
+
 @router.post("/collaborators/invite-with-stakes")
 async def invite_with_stakes_endpoint(body: CollaboratorInviteWithStakes, user_id: str = Depends(get_current_user_id)):
     try:
@@ -420,11 +456,20 @@ async def invite_with_stakes_endpoint(body: CollaboratorInviteWithStakes, user_i
         # Send rich invite email
         try:
             from registry.emails import send_rich_invitation_email
+
             db = _get_supabase()
             work = db.table("works_registry").select("title, project_id").eq("id", body.work_id).single().execute()
-            project = db.table("projects").select("name").eq("id", work.data["project_id"]).single().execute() if work.data else None
+            project = (
+                db.table("projects").select("name").eq("id", work.data["project_id"]).single().execute()
+                if work.data
+                else None
+            )
             artist_id = db.table("works_registry").select("artist_id").eq("id", body.work_id).single().execute()
-            artist = db.table("artists").select("name").eq("id", artist_id.data["artist_id"]).single().execute() if artist_id.data else None
+            artist = (
+                db.table("artists").select("name").eq("id", artist_id.data["artist_id"]).single().execute()
+                if artist_id.data
+                else None
+            )
             inviter = db.table("profiles").select("full_name").eq("id", user_id).maybe_single().execute()
             send_rich_invitation_email(
                 recipient_email=body.email,
@@ -475,6 +520,7 @@ async def my_invites_endpoint(user_id: str = Depends(get_current_user_id)):
 # TeamCard
 # ============================================================
 
+
 @router.get("/teamcard")
 async def get_my_team_card(user_id: str = Depends(get_current_user_id)):
     card = await service.get_team_card(_get_supabase(), user_id)
@@ -497,10 +543,16 @@ async def get_collaborator_team_card(collaborator_user_id: str, user_id: str = D
     """Get a collaborator's visible TeamCard fields."""
     db = _get_supabase()
     # Verify collaboration relationship exists
-    shared = db.table("registry_collaborators").select("id").or_(
-        f"and(invited_by.eq.{user_id},collaborator_user_id.eq.{collaborator_user_id}),"
-        f"and(invited_by.eq.{collaborator_user_id},collaborator_user_id.eq.{user_id})"
-    ).neq("status", "revoked").execute()
+    shared = (
+        db.table("registry_collaborators")
+        .select("id")
+        .or_(
+            f"and(invited_by.eq.{user_id},collaborator_user_id.eq.{collaborator_user_id}),"
+            f"and(invited_by.eq.{collaborator_user_id},collaborator_user_id.eq.{user_id})"
+        )
+        .neq("status", "revoked")
+        .execute()
+    )
     if not shared.data:
         raise HTTPException(status_code=403, detail="No collaboration link with this user")
     card = await service.get_collaborator_team_card(db, collaborator_user_id)
@@ -512,6 +564,7 @@ async def get_collaborator_team_card(collaborator_user_id: str, user_id: str = D
 # ============================================================
 # Artist with TeamCard overlay (Option C merge)
 # ============================================================
+
 
 @router.get("/artists/{artist_id}/with-teamcard")
 async def get_artist_with_teamcard(artist_id: str, user_id: str = Depends(get_current_user_id)):
@@ -532,12 +585,13 @@ async def list_artists_with_teamcards(user_id: str = Depends(get_current_user_id
 # Notes
 # ============================================================
 
+
 @router.get("/notes")
 async def list_notes(
     user_id: str = Depends(get_current_user_id),
-    artist_id: Optional[str] = Query(None),
-    project_id: Optional[str] = Query(None),
-    folder_id: Optional[str] = Query(None),
+    artist_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    folder_id: str | None = Query(None),
 ):
     notes = await service.get_notes(_get_supabase(), user_id, artist_id, project_id, folder_id)
     return {"notes": notes}
@@ -578,8 +632,8 @@ async def delete_note(note_id: str, user_id: str = Depends(get_current_user_id))
 @router.get("/folders")
 async def list_folders(
     user_id: str = Depends(get_current_user_id),
-    artist_id: Optional[str] = Query(None),
-    project_id: Optional[str] = Query(None),
+    artist_id: str | None = Query(None),
+    project_id: str | None = Query(None),
 ):
     folders = await service.get_folders(_get_supabase(), user_id, artist_id, project_id)
     return {"folders": folders}
@@ -613,6 +667,7 @@ async def delete_folder(folder_id: str, user_id: str = Depends(get_current_user_
 # Project About
 # ============================================================
 
+
 @router.get("/projects/{project_id}/about")
 async def get_project_about(project_id: str, user_id: str = Depends(get_current_user_id)):
     """Get project about content."""
@@ -621,13 +676,22 @@ async def get_project_about(project_id: str, user_id: str = Depends(get_current_
     project = db.table("projects").select("artist_id").eq("id", project_id).single().execute()
     if not project.data:
         raise HTTPException(status_code=404, detail="Project not found")
-    artist = db.table("artists").select("user_id, linked_user_id").eq("id", project.data["artist_id"]).single().execute()
+    artist = (
+        db.table("artists").select("user_id, linked_user_id").eq("id", project.data["artist_id"]).single().execute()
+    )
     is_owner = artist.data and (artist.data["user_id"] == user_id or artist.data.get("linked_user_id") == user_id)
     is_collab = db.table("works_registry").select("id").eq("project_id", project_id).execute()
     collab_work_ids = [w["id"] for w in (is_collab.data or [])]
     has_collab_access = False
     if collab_work_ids:
-        check = db.table("registry_collaborators").select("id").in_("work_id", collab_work_ids).eq("collaborator_user_id", user_id).neq("status", "revoked").execute()
+        check = (
+            db.table("registry_collaborators")
+            .select("id")
+            .in_("work_id", collab_work_ids)
+            .eq("collaborator_user_id", user_id)
+            .neq("status", "revoked")
+            .execute()
+        )
         has_collab_access = bool(check.data)
     if not is_owner and not has_collab_access:
         raise HTTPException(status_code=403, detail="Not authorized to view this project")
@@ -646,6 +710,7 @@ async def update_project_about(project_id: str, body: ProjectAboutUpdate, user_i
 # ============================================================
 # Notifications
 # ============================================================
+
 
 @router.get("/notifications")
 async def list_notifications(user_id: str = Depends(get_current_user_id), unread_only: bool = Query(False)):

@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Check, Loader2, Unplug } from "lucide-react";
+import { Check, Loader2, Unplug, Settings } from "lucide-react";
 import type { IntegrationProvider, ConnectionStatus } from "@/types/integrations";
 
 interface IntegrationCardProps {
@@ -13,6 +13,7 @@ interface IntegrationCardProps {
   status: ConnectionStatus;
   onConnect: () => void;
   onDisconnect: () => void;
+  onConfigure?: () => void;
   isConnecting?: boolean;
 }
 
@@ -24,6 +25,7 @@ export function IntegrationCard({
   status,
   onConnect,
   onDisconnect,
+  onConfigure,
   isConnecting,
 }: IntegrationCardProps) {
   const isConnected = status === "active";
@@ -57,15 +59,23 @@ export function IntegrationCard({
       </CardHeader>
       <CardContent className="pt-0">
         {isConnected ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onDisconnect}
-            className="text-destructive hover:text-destructive"
-          >
-            <Unplug className="w-4 h-4 mr-2" />
-            Disconnect
-          </Button>
+          <div className="flex items-center gap-2">
+            {onConfigure && (
+              <Button variant="outline" size="sm" onClick={onConfigure}>
+                <Settings className="w-4 h-4 mr-2" />
+                Configure
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onDisconnect}
+              className="text-destructive hover:text-destructive"
+            >
+              <Unplug className="w-4 h-4 mr-2" />
+              Disconnect
+            </Button>
+          </div>
         ) : (
           <Button size="sm" onClick={onConnect} disabled={isConnecting}>
             {isConnecting ? (

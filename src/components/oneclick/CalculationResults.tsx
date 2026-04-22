@@ -1,13 +1,16 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Music, FileText, Users, DollarSign, Download, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Music, FileText, Users, DollarSign, Download, CheckCircle2, Loader2, RefreshCw, Share2, HardDrive, MessageSquare } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import ExcelJS from "exceljs";
 import { toPng } from "html-to-image";
 import { toast } from "sonner";
+import { useIntegrations } from "@/hooks/useIntegrations";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 interface RoyaltyPayment {
   song_title: string;
@@ -56,6 +59,33 @@ const CalculationResults = ({
   handleCalculateRoyalties,
 }: CalculationResultsProps) => {
   const chartContentRef = useRef<HTMLDivElement>(null);
+
+  const { connections } = useIntegrations();
+  const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
+  const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
+  const [sharing, setSharing] = useState(false);
+
+  const handleShare = async (target: "drive" | "slack") => {
+    if (!calculationResult) return;
+    setSharing(true);
+    try {
+      await apiFetch(`${API_URL}/oneclick/share`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target,
+          artist_name: "Artist",
+          payments: calculationResult.payments,
+          total_payments: calculationResult.total_payments,
+        }),
+      });
+      toast.success(target === "drive" ? "Results saved to Google Drive" : "Results shared to Slack");
+    } catch (err) {
+      toast.error(`Share failed: ${(err as Error).message}`);
+    } finally {
+      setSharing(false);
+    }
+  };
 
   const handleExportCSV = () => {
     if (!calculationResult) return;
@@ -238,6 +268,40 @@ const CalculationResults = ({
                     <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
                     Recalculate
                 </Button>
+                {(driveConnected || slackConnected) && (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" disabled={sharing}>
+                        <Share2 className="w-4 h-4 mr-2" />
+                        Share
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-48 p-1">
+                      {driveConnected && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="w-full justify-start"
+                          onClick={() => handleShare("drive")}
+                        >
+                          <HardDrive className="w-4 h-4 mr-2" />
+                          Save to Drive
+                        </Button>
+                      )}
+                      {slackConnected && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="w-full justify-start"
+                          onClick={() => handleShare("slack")}
+                        >
+                          <MessageSquare className="w-4 h-4 mr-2" />
+                          Send to Slack
+                        </Button>
+                      )}
+                    </PopoverContent>
+                  </Popover>
+                )}
             </div>
           </div>
 

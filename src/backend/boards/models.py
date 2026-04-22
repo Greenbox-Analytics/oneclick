@@ -1,68 +1,68 @@
 """Pydantic models for the Kanban board feature."""
 
-from pydantic import BaseModel
-from typing import Optional, List
 from datetime import date
+
+from pydantic import BaseModel
 
 
 class ColumnCreate(BaseModel):
     title: str
-    artist_id: Optional[str] = None
-    color: Optional[str] = None
-    position: Optional[int] = 0
+    artist_id: str | None = None
+    color: str | None = None
+    position: int | None = 0
 
 
 class ColumnUpdate(BaseModel):
-    title: Optional[str] = None
-    color: Optional[str] = None
-    position: Optional[int] = None
+    title: str | None = None
+    color: str | None = None
+    position: int | None = None
 
 
 class TaskCreate(BaseModel):
-    column_id: Optional[str] = None  # nullable for parent tasks
+    column_id: str | None = None  # nullable for parent tasks
     title: str
-    description: Optional[str] = None
-    priority: Optional[str] = None  # low, medium, high, urgent
-    start_date: Optional[date] = None
-    due_date: Optional[date] = None
-    color: Optional[str] = None
-    parent_task_id: Optional[str] = None
+    description: str | None = None
+    priority: str | None = None  # low, medium, high, urgent
+    start_date: date | None = None
+    due_date: date | None = None
+    color: str | None = None
+    parent_task_id: str | None = None
     is_parent: bool = False
-    artist_ids: Optional[List[str]] = []
-    project_ids: Optional[List[str]] = []
-    contract_ids: Optional[List[str]] = []
-    assignee_name: Optional[str] = None
-    labels: Optional[List[str]] = []
+    artist_ids: list[str] | None = []
+    project_ids: list[str] | None = []
+    contract_ids: list[str] | None = []
+    assignee_name: str | None = None
+    labels: list[str] | None = []
 
 
 class TaskUpdate(BaseModel):
-    column_id: Optional[str] = None
-    title: Optional[str] = None
-    description: Optional[str] = None
-    priority: Optional[str] = None
-    start_date: Optional[date] = None
-    due_date: Optional[date] = None
-    color: Optional[str] = None
-    parent_task_id: Optional[str] = None
-    is_parent: Optional[bool] = None
-    artist_ids: Optional[List[str]] = None
-    project_ids: Optional[List[str]] = None
-    contract_ids: Optional[List[str]] = None
-    assignee_name: Optional[str] = None
-    labels: Optional[List[str]] = None
-    position: Optional[int] = None
+    column_id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    priority: str | None = None
+    start_date: date | None = None
+    due_date: date | None = None
+    color: str | None = None
+    parent_task_id: str | None = None
+    is_parent: bool | None = None
+    artist_ids: list[str] | None = None
+    project_ids: list[str] | None = None
+    contract_ids: list[str] | None = None
+    assignee_name: str | None = None
+    labels: list[str] | None = None
+    position: int | None = None
 
 
 class ParentTaskCreate(BaseModel):
     title: str
-    description: Optional[str] = None
-    priority: Optional[str] = None
-    start_date: Optional[date] = None
-    due_date: Optional[date] = None
-    color: Optional[str] = None
-    artist_ids: Optional[List[str]] = []
-    project_ids: Optional[List[str]] = []
-    labels: Optional[List[str]] = []
+    description: str | None = None
+    priority: str | None = None
+    start_date: date | None = None
+    due_date: date | None = None
+    color: str | None = None
+    artist_ids: list[str] | None = []
+    project_ids: list[str] | None = []
+    labels: list[str] | None = []
 
 
 class TaskReorder(BaseModel):
@@ -72,7 +72,7 @@ class TaskReorder(BaseModel):
 
 
 class BatchReorder(BaseModel):
-    reorders: List[TaskReorder]
+    reorders: list[TaskReorder]
 
 
 class CommentCreate(BaseModel):

@@ -25,6 +25,14 @@ interface MembersTabProps {
   userRole: string | null;
 }
 
+interface WorkCollaborator {
+  id: string;
+  name: string | null;
+  email: string;
+  status: string;
+  works_registry?: { id: string; title: string } | null;
+}
+
 const ROLE_COLORS: Record<string, string> = {
   owner: "bg-purple-500/20 text-purple-400 border-purple-500/30",
   admin: "bg-blue-500/20 text-blue-400 border-blue-500/30",
@@ -70,12 +78,12 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     queryKey: ["project-work-collaborators", projectId, workIds],
     queryFn: async () => {
       if (workIds.length === 0) return [];
-      const { data, error } = await (supabase as any)
-        .from("registry_collaborators")
+      const { data, error } = await supabase
+        .from("registry_collaborators" as never)
         .select("*, works_registry(id, title)")
         .in("work_id", workIds);
       if (error) return [];
-      return data || [];
+      return (data as WorkCollaborator[] | null) || [];
     },
     enabled: workIds.length > 0,
   });
@@ -84,7 +92,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
   // Note: profiles table has full_name, first_name, last_name, given_name — no email or avatar_url
   // Email is on team_cards table (if exists) or auth.users (not queryable from client)
   const memberUserIds = (members || []).map((m) => m.user_id);
-  const { data: memberProfiles } = useQuery({
+  const { data: memberProfiles, isLoading: profilesLoading } = useQuery({
     queryKey: ["member-profiles", memberUserIds],
     queryFn: async () => {
       if (memberUserIds.length === 0) return [];
@@ -99,7 +107,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
   });
 
   // Fetch emails from team_cards (has email column)
-  const { data: teamCards } = useQuery({
+  const { data: teamCards, isLoading: teamCardsLoading } = useQuery({
     queryKey: ["member-teamcards", memberUserIds],
     queryFn: async () => {
       if (memberUserIds.length === 0) return [];
@@ -112,6 +120,9 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     },
     enabled: memberUserIds.length > 0,
   });
+
+  const memberDetailsLoading =
+    memberUserIds.length > 0 && (profilesLoading || teamCardsLoading);
 
   const profileMap = new Map<string, { full_name: string | null; first_name: string | null; last_name: string | null; given_name: string | null }>();
   for (const p of memberProfiles || []) {
@@ -137,7 +148,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
     );
   };
 
-  if (membersLoading) {
+  if (membersLoading || memberDetailsLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -282,7 +293,7 @@ export default function MembersTab({ projectId, userRole }: MembersTabProps) {
             <LinkIcon className="w-4 h-4" /> Work-Only Collaborators
           </h3>
           <div className="grid gap-2">
-            {workCollaborators.map((collab: any) => {
+            {workCollaborators.map((collab: WorkCollaborator) => {
               const workTitle = collab.works_registry?.title || "Unknown Work";
               return (
                 <Card key={collab.id} className="p-3">

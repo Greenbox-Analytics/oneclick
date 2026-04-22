@@ -1,15 +1,15 @@
 """FastAPI router for workspace settings."""
 
-from fastapi import APIRouter, Query, Depends
 import sys
 from pathlib import Path
+
+from fastapi import APIRouter, Depends
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_id
-
 from settings import service
 from settings.models import WorkspaceSettingsUpdate
 
@@ -18,6 +18,7 @@ router = APIRouter()
 
 def _get_supabase():
     from main import get_supabase_client
+
     return get_supabase_client()
 
 

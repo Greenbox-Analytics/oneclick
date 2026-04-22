@@ -1,7 +1,8 @@
 """Monday.com business logic - board listing and task sync via GraphQL API."""
 
-import httpx
 import hashlib
+
+import httpx
 from supabase import Client
 
 MONDAY_API = "https://api.monday.com/v2"
@@ -84,6 +85,7 @@ async def get_board_items(token: str, board_id: str) -> list:
 async def create_monday_item(token: str, board_id: str, item_name: str, column_values: dict = None) -> dict:
     """Create an item on a Monday.com board."""
     import json
+
     col_values_str = json.dumps(column_values) if column_values else "{}"
     query = """
     mutation($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
@@ -94,25 +96,22 @@ async def create_monday_item(token: str, board_id: str, item_name: str, column_v
         }
     }
     """
-    result = await _graphql(token, query, {
-        "boardId": board_id,
-        "itemName": item_name,
-        "columnValues": col_values_str,
-    })
+    result = await _graphql(
+        token,
+        query,
+        {
+            "boardId": board_id,
+            "itemName": item_name,
+            "columnValues": col_values_str,
+        },
+    )
     return result.get("data", {}).get("create_item", {})
 
 
-async def sync_tasks_with_monday(
-    token: str, supabase: Client, user_id: str, board_id: str
-) -> dict:
+async def sync_tasks_with_monday(token: str, supabase: Client, user_id: str, board_id: str) -> dict:
     """Bidirectional sync of board tasks with Monday.com."""
     # Get local tasks
-    local_tasks = (
-        supabase.table("board_tasks")
-        .select("*")
-        .eq("user_id", user_id)
-        .execute()
-    ).data or []
+    local_tasks = (supabase.table("board_tasks").select("*").eq("user_id", user_id).execute()).data or []
 
     # Get Monday items
     monday_items = await get_board_items(token, board_id)
@@ -126,13 +125,15 @@ async def sync_tasks_with_monday(
             if not task.get("external_id"):
                 item = await create_monday_item(token, board_id, task["title"])
                 if item.get("id"):
-                    supabase.table("board_tasks").update({
-                        "external_id": str(item["id"]),
-                        "external_provider": "monday",
-                        "external_url": item.get("url", ""),
-                        "sync_hash": _task_hash(task),
-                        "last_synced_at": "now()",
-                    }).eq("id", task["id"]).execute()
+                    supabase.table("board_tasks").update(
+                        {
+                            "external_id": str(item["id"]),
+                            "external_provider": "monday",
+                            "external_url": item.get("url", ""),
+                            "sync_hash": _task_hash(task),
+                            "last_synced_at": "now()",
+                        }
+                    ).eq("id", task["id"]).execute()
                     pushed += 1
 
     # Pull Monday items not in local tasks
@@ -152,14 +153,16 @@ async def sync_tasks_with_monday(
             pulled += 1
 
     # Log sync
-    supabase.table("sync_log").insert({
-        "user_id": user_id,
-        "provider": "monday",
-        "direction": "bidirectional",
-        "entity_type": "task",
-        "status": "success",
-        "metadata": {"pushed": pushed, "pulled": pulled},
-    }).execute()
+    supabase.table("sync_log").insert(
+        {
+            "user_id": user_id,
+            "provider": "monday",
+            "direction": "bidirectional",
+            "entity_type": "task",
+            "status": "success",
+            "metadata": {"pushed": pushed, "pulled": pulled},
+        }
+    ).execute()
 
     return {"pushed": pushed, "pulled": pulled}
 

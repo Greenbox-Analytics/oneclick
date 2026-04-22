@@ -2,6 +2,7 @@
 
 import html
 import os
+
 import resend
 
 
@@ -64,12 +65,14 @@ def send_invitation_email(
     """
 
     try:
-        response = resend.Emails.send({
-            "from": from_address,
-            "to": [recipient_email],
-            "subject": f"{safe_inviter} needs you to confirm your stake on \"{safe_title}\"",
-            "html": html_body,
-        })
+        response = resend.Emails.send(
+            {
+                "from": from_address,
+                "to": [recipient_email],
+                "subject": f'{safe_inviter} needs you to confirm your stake on "{safe_title}"',
+                "html": html_body,
+            }
+        )
         return response
     except Exception as e:
         print(f"Warning: Failed to send invitation email: {e}")
@@ -106,9 +109,9 @@ def send_rich_invitation_email(
     safe_role = html.escape(role)
 
     stakes_html = ""
-    for s in (stakes or []):
-        stake_type = html.escape(s.stake_type if hasattr(s, 'stake_type') else s.get('stake_type', ''))
-        pct = s.percentage if hasattr(s, 'percentage') else s.get('percentage', 0)
+    for s in stakes or []:
+        stake_type = html.escape(s.stake_type if hasattr(s, "stake_type") else s.get("stake_type", ""))
+        pct = s.percentage if hasattr(s, "percentage") else s.get("percentage", 0)
         stakes_html += f'<div style="margin: 4px 0;"><strong>{stake_type.title()}:</strong> {pct}%</div>'
 
     notes_html = ""
@@ -150,12 +153,14 @@ def send_rich_invitation_email(
     """
 
     try:
-        response = resend.Emails.send({
-            "from": from_address,
-            "to": [recipient_email],
-            "subject": f"{safe_inviter} needs you to confirm your stake on \"{safe_title}\"",
-            "html": html_body,
-        })
+        response = resend.Emails.send(
+            {
+                "from": from_address,
+                "to": [recipient_email],
+                "subject": f'{safe_inviter} needs you to confirm your stake on "{safe_title}"',
+                "html": html_body,
+            }
+        )
         return response
     except Exception as e:
         print(f"Warning: Failed to send invitation email: {e}")

@@ -9,10 +9,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
-  Loader2, ChevronRight, Upload, FileText, Search, Download, ExternalLink,
+  Loader2, ChevronRight, Upload, FileText, Search, Download, Trash2, HardDrive, Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useIntegrations } from "@/hooks/useIntegrations";
+import { useDriveExport } from "@/hooks/useGoogleDrive";
+import { DriveImportDialog } from "./integrations/DriveImportDialog";
+import ShareViaEmailDialog from "./ShareViaEmailDialog";
 
 interface FilesTabProps {
   projectId: string;
@@ -42,6 +46,12 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   });
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  const [driveImportOpen, setDriveImportOpen] = useState(false);
+  const [shareFile, setShareFile] = useState<{ id: string; file_name: string } | null>(null);
+  const { connections } = useIntegrations();
+  const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
+  const driveExport = useDriveExport();
+
   // Work-linking dialog state (Fix #4)
   const [linkingFileId, setLinkingFileId] = useState<string | null>(null);
   const [selectedWorkIds, setSelectedWorkIds] = useState<string[]>([]);
@@ -66,13 +76,13 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const { data: projectWorks } = useQuery({
     queryKey: ["project-works-for-linking", projectId],
     queryFn: async () => {
-      const { data, error } = await (supabase as any)
-        .from("works_registry")
+      const { data, error } = await supabase
+        .from("works_registry" as never)
         .select("id, title")
         .eq("project_id", projectId)
         .order("title");
       if (error) return [];
-      return data || [];
+      return (data as Array<{ id: string; title: string }> | null) || [];
     },
     enabled: !!projectId,
   });
@@ -84,12 +94,12 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
       if (!files || files.length === 0) return [];
       const fileIds = files.map((f) => f.id);
       // Query work_files join with works_registry to get work titles
-      const { data, error } = await (supabase as any)
-        .from("work_files")
+      const { data, error } = await supabase
+        .from("work_files" as never)
         .select("file_id, work_id, works_registry(id, title)")
         .in("file_id", fileIds);
       if (error) return [];
-      return data || [];
+      return (data as Array<{ file_id: string; work_id: string; works_registry: { id: string; title: string } | null }> | null) || [];
     },
     enabled: !!files && files.length > 0,
   });
@@ -174,8 +184,8 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
         setLinkingFileId(insertedData.id);
         setSelectedWorkIds([]);
       }
-    } catch (error: any) {
-      toast.error(error.message || "Failed to upload file");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to upload file");
     } finally {
       setUploadingCategory(null);
       event.target.value = "";
@@ -194,8 +204,8 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
       }
       queryClient.invalidateQueries({ queryKey: ["work-file-links-for-project", projectId] });
       toast.success("File linked to works");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to link file");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to link file");
     } finally {
       setLinkingInProgress(false);
       setLinkingFileId(null);
@@ -203,15 +213,36 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
     }
   };
 
-  const handleDownload = async (file: any) => {
+  const handleDownload = async (file: { file_path?: string | null; file_name?: string | null }) => {
     try {
-      // Use the file_url directly if available
-      if (file.file_url) {
-        window.open(file.file_url, "_blank");
-        return;
+      if (file.file_path) {
+        const { data } = await supabase.storage
+          .from("project-files")
+          .createSignedUrl(file.file_path, 60);
+        if (data?.signedUrl) {
+          const a = document.createElement("a");
+          a.href = data.signedUrl;
+          a.download = file.file_name || "download";
+          a.click();
+          return;
+        }
       }
+      toast.error("File not available for download");
     } catch {
       toast.error("Failed to download file");
+    }
+  };
+
+  const handleDelete = async (file: { id: string; file_path?: string | null }) => {
+    try {
+      if (file.file_path) {
+        await supabase.storage.from("project-files").remove([file.file_path]);
+      }
+      await supabase.from("project_files").delete().eq("id", file.id);
+      queryClient.invalidateQueries({ queryKey: ["project-files-tab", projectId] });
+      toast.success("File deleted");
+    } catch {
+      toast.error("Failed to delete file");
     }
   };
 
@@ -258,128 +289,173 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
             className="pl-9"
           />
         </div>
+        {driveConnected && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDriveImportOpen(true)}
+          >
+            <HardDrive className="w-4 h-4 mr-2" />
+            Import from Drive
+          </Button>
+        )}
       </div>
 
-      {allFiles.length === 0 && !search ? (
-        <div className="flex flex-col items-center justify-center py-12 text-center">
-          <FileText className="w-10 h-10 text-muted-foreground/40 mb-3" />
-          <p className="text-sm text-muted-foreground">No files yet</p>
-          <p className="text-xs text-muted-foreground/60 mt-1">Upload contracts, split sheets, and other documents to keep everything organized</p>
-        </div>
-      ) : (
-        <div className="space-y-8">
-          {FOLDER_CATEGORIES.map((cat) => {
-            const catFiles = filesByCategory.get(cat.key) || [];
-            return (
-              <Collapsible
-                key={cat.key}
-                open={openSections[cat.key]}
-                onOpenChange={(open) =>
-                  setOpenSections((prev) => ({ ...prev, [cat.key]: open }))
-                }
-              >
-                <Card className={`overflow-hidden border-l-[3px] ${cat.accent}`}>
-                  <div className="flex items-center justify-between w-full p-3 hover:bg-muted/30 transition-colors">
-                    <CollapsibleTrigger className="flex items-center gap-2.5 flex-1">
-                      <ChevronRight
-                        className={`w-4 h-4 text-muted-foreground transition-transform ${
-                          openSections[cat.key] ? "rotate-90" : ""
-                        }`}
-                      />
-                      <FileText className={`w-4 h-4 ${cat.iconColor}`} />
-                      <span className="text-sm font-semibold text-foreground">{cat.label}</span>
-                      <span className="text-xs text-muted-foreground/70 tabular-nums">({catFiles.length})</span>
-                    </CollapsibleTrigger>
-                    {canEdit(userRole) && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 text-xs"
-                        disabled={uploadingCategory === cat.key}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          fileInputRefs.current[cat.key]?.click();
-                        }}
-                      >
-                        {uploadingCategory === cat.key ? (
-                          <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                        ) : (
-                          <Upload className="w-3 h-3 mr-1" />
-                        )}
-                        Upload
-                      </Button>
-                    )}
-                    <input
-                      ref={(el) => { fileInputRefs.current[cat.key] = el; }}
-                      type="file"
-                      className="hidden"
-                      onChange={(e) => handleUpload(cat.key, e)}
+      <div className="space-y-8">
+        {FOLDER_CATEGORIES.map((cat) => {
+          const catFiles = filesByCategory.get(cat.key) || [];
+          return (
+            <Collapsible
+              key={cat.key}
+              open={openSections[cat.key]}
+              onOpenChange={(open) =>
+                setOpenSections((prev) => ({ ...prev, [cat.key]: open }))
+              }
+            >
+              <Card className={`overflow-hidden border-l-[3px] ${cat.accent}`}>
+                <div className="flex items-center justify-between w-full p-3 hover:bg-muted/30 transition-colors">
+                  <CollapsibleTrigger className="flex items-center gap-2.5 flex-1">
+                    <ChevronRight
+                      className={`w-4 h-4 text-muted-foreground transition-transform ${
+                        openSections[cat.key] ? "rotate-90" : ""
+                      }`}
                     />
-                  </div>
-                  <CollapsibleContent>
-                    {catFiles.length === 0 ? (
-                      <p className="px-3 pb-3 text-xs text-muted-foreground">No files in this folder.</p>
-                    ) : (
-                      <div className="border-t border-border/50">
-                        {catFiles.map((file) => {
-                          const linkedWorks = fileWorksMap.get(file.id);
-                          return (
-                            <div
-                              key={file.id}
-                              className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 border-b border-border/30 last:border-b-0 transition-colors"
-                            >
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm text-foreground truncate">{file.file_name}</p>
-                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                  <span>{new Date(file.created_at).toLocaleDateString()}</span>
-                                  {file.file_size && (
-                                    <span>{(file.file_size / 1024).toFixed(0)} KB</span>
-                                  )}
-                                  {linkedWorks && linkedWorks.length > 0 && (
-                                    <span>
-                                      Relevant works:{" "}
-                                      {linkedWorks.map((w, i) => (
-                                        <span key={w.workId}>
-                                          {i > 0 && ", "}
-                                          <a
-                                            href={`/tools/registry/${w.workId}`}
-                                            className="text-primary hover:underline cursor-pointer"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                            }}
-                                          >
-                                            {w.title}
-                                          </a>
-                                        </span>
-                                      ))}
-                                    </span>
-                                  )}
-                                </div>
+                    <FileText className={`w-4 h-4 ${cat.iconColor}`} />
+                    <span className="text-sm font-semibold text-foreground">{cat.label}</span>
+                    <span className="text-xs text-muted-foreground/70 tabular-nums">({catFiles.length})</span>
+                  </CollapsibleTrigger>
+                  {canEdit(userRole) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      disabled={uploadingCategory === cat.key}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fileInputRefs.current[cat.key]?.click();
+                      }}
+                    >
+                      {uploadingCategory === cat.key ? (
+                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                      ) : (
+                        <Upload className="w-3 h-3 mr-1" />
+                      )}
+                      Upload
+                    </Button>
+                  )}
+                  <input
+                    ref={(el) => { fileInputRefs.current[cat.key] = el; }}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => handleUpload(cat.key, e)}
+                  />
+                </div>
+                <CollapsibleContent>
+                  {catFiles.length === 0 ? (
+                    <p className="px-3 pb-3 text-xs text-muted-foreground">No files in this folder.</p>
+                  ) : (
+                    <div className="border-t border-border/50">
+                      {catFiles.map((file) => {
+                        const linkedWorks = fileWorksMap.get(file.id);
+                        return (
+                          <div
+                            key={file.id}
+                            className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 border-b border-border/30 last:border-b-0 transition-colors"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-foreground truncate">{file.file_name}</p>
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <span>{new Date(file.created_at).toLocaleDateString()}</span>
+                                {file.file_size && (
+                                  <span>{(file.file_size / 1024).toFixed(0)} KB</span>
+                                )}
+                                {linkedWorks && linkedWorks.length > 0 && (
+                                  <span>
+                                    Relevant works:{" "}
+                                    {linkedWorks.map((w, i) => (
+                                      <span key={w.workId}>
+                                        {i > 0 && ", "}
+                                        <a
+                                          href={`/tools/registry/${w.workId}`}
+                                          className="text-primary hover:underline cursor-pointer"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                          }}
+                                        >
+                                          {w.title}
+                                        </a>
+                                      </span>
+                                    ))}
+                                  </span>
+                                )}
                               </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0 shrink-0"
+                              title="Download"
+                              onClick={() => handleDownload(file)}
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </Button>
+                            {canEdit(userRole) && (
                               <Button
                                 size="sm"
                                 variant="ghost"
                                 className="h-7 w-7 p-0 shrink-0"
-                                onClick={() => handleDownload(file)}
+                                title="Share via email"
+                                onClick={() => setShareFile({ id: file.id, file_name: file.file_name })}
                               >
-                                {file.file_url ? (
-                                  <ExternalLink className="w-3.5 h-3.5" />
-                                ) : (
-                                  <Download className="w-3.5 h-3.5" />
-                                )}
+                                <Mail className="w-3.5 h-3.5" />
                               </Button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </CollapsibleContent>
-                </Card>
-              </Collapsible>
-            );
-          })}
-        </div>
-      )}
+                            )}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0 shrink-0 text-destructive hover:text-destructive"
+                              title="Delete"
+                              onClick={() => handleDelete(file)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                            {driveConnected && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                title="Export to Google Drive"
+                                disabled={driveExport.isPending}
+                                onClick={() => driveExport.mutate({ project_file_id: file.id })}
+                              >
+                                <HardDrive className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
+          );
+        })}
+      </div>
+
+      <DriveImportDialog
+        open={driveImportOpen}
+        onOpenChange={setDriveImportOpen}
+        projectId={projectId}
+      />
+
+      <ShareViaEmailDialog
+        open={!!shareFile}
+        onClose={() => setShareFile(null)}
+        projectId={projectId}
+        fileIds={shareFile ? [shareFile.id] : []}
+        defaultSubject={shareFile ? `File: ${shareFile.file_name}` : ""}
+      />
 
       {/* Work-linking dialog (Fix #4) */}
       <Dialog open={!!linkingFileId} onOpenChange={(open) => { if (!open) { setLinkingFileId(null); setSelectedWorkIds([]); } }}>
@@ -388,7 +464,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
             <DialogTitle>Link this file to works?</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 max-h-60 overflow-y-auto">
-            {(projectWorks || []).map((work: any) => (
+            {(projectWorks || []).map((work: { id: string; title: string }) => (
               <label key={work.id} className="flex items-center gap-2 p-2 rounded hover:bg-muted/50 cursor-pointer">
                 <Checkbox
                   checked={selectedWorkIds.includes(work.id)}

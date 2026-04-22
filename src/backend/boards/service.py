@@ -1,15 +1,16 @@
 """Business logic for the Kanban board feature."""
 
-from typing import Optional, List
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
+
 from supabase import Client
+
 from integrations import events
 from pagination import paginate_query
 
-
 # --- Junction table helpers ---
 
-def _set_junction(supabase: Client, table: str, task_id: str, fk_column: str, ids: List[str]):
+
+def _set_junction(supabase: Client, table: str, task_id: str, fk_column: str, ids: list[str]):
     """Replace all junction rows for a task. Delete existing, insert new."""
     supabase.table(table).delete().eq("task_id", task_id).execute()
     if ids:
@@ -17,13 +18,13 @@ def _set_junction(supabase: Client, table: str, task_id: str, fk_column: str, id
         supabase.table(table).insert(rows).execute()
 
 
-def _get_junction_ids(supabase: Client, table: str, fk_column: str, task_ids: List[str]) -> dict:
+def _get_junction_ids(supabase: Client, table: str, fk_column: str, task_ids: list[str]) -> dict:
     """Batch-fetch junction rows for multiple tasks. Returns {task_id: [fk_ids]}."""
     if not task_ids:
         return {}
     result = supabase.table(table).select(f"task_id, {fk_column}").in_("task_id", task_ids).execute()
     mapping = {}
-    for row in (result.data or []):
+    for row in result.data or []:
         tid = row["task_id"]
         if tid not in mapping:
             mapping[tid] = []
@@ -60,10 +61,7 @@ def _enrich_tasks(supabase: Client, tasks: list) -> list:
         task["artist_ids"] = artist_map.get(tid, [])
         task["project_ids"] = project_map.get(tid, [])
         task["contract_ids"] = contract_map.get(tid, [])
-        task["artists"] = [
-            {"id": aid, "name": artist_names.get(aid, "Unknown")}
-            for aid in task["artist_ids"]
-        ]
+        task["artists"] = [{"id": aid, "name": artist_names.get(aid, "Unknown")} for aid in task["artist_ids"]]
         if task.get("parent_task_id"):
             task["parent_title"] = parent_titles.get(task["parent_task_id"], "")
 
@@ -72,7 +70,8 @@ def _enrich_tasks(supabase: Client, tasks: list) -> list:
 
 # --- Columns ---
 
-async def get_columns(supabase: Client, user_id: str, artist_id: Optional[str] = None) -> list:
+
+async def get_columns(supabase: Client, user_id: str, artist_id: str | None = None) -> list:
     """Get board columns for a user, optionally filtered by artist."""
     query = supabase.table("board_columns").select("*").eq("user_id", user_id).order("position")
     if artist_id:
@@ -91,32 +90,22 @@ async def create_column(supabase: Client, user_id: str, data: dict) -> dict:
 async def update_column(supabase: Client, user_id: str, column_id: str, data: dict) -> dict:
     """Update a board column."""
     clean = {k: v for k, v in data.items() if v is not None}
-    result = (
-        supabase.table("board_columns")
-        .update(clean)
-        .eq("id", column_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = supabase.table("board_columns").update(clean).eq("id", column_id).eq("user_id", user_id).execute()
     return result.data[0] if result.data else {}
 
 
 async def delete_column(supabase: Client, user_id: str, column_id: str) -> bool:
     """Delete a board column and all its tasks."""
-    result = (
-        supabase.table("board_columns")
-        .delete()
-        .eq("id", column_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = supabase.table("board_columns").delete().eq("id", column_id).eq("user_id", user_id).execute()
     return bool(result.data)
 
 
 # --- Tasks (board tasks only — excludes parent tasks) ---
 
-async def get_tasks(supabase: Client, user_id: str, column_id: Optional[str] = None,
-                    page: int = None, page_size: int = 50):
+
+async def get_tasks(
+    supabase: Client, user_id: str, column_id: str | None = None, page: int = None, page_size: int = 50
+):
     """Get board tasks (non-parent) with junction data, optionally filtered by column."""
     query = (
         supabase.table("board_tasks")
@@ -150,12 +139,7 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
     # Auto-assign subtasks to the first board column so they appear on the main board
     if data.get("parent_task_id") and not data.get("column_id"):
         first_col = (
-            supabase.table("board_columns")
-            .select("id")
-            .eq("user_id", user_id)
-            .order("position")
-            .limit(1)
-            .execute()
+            supabase.table("board_columns").select("id").eq("user_id", user_id).order("position").limit(1).execute()
         )
         if first_col.data:
             data["column_id"] = first_col.data[0]["id"]
@@ -193,17 +177,11 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
 
     # Handle completed_at based on column change
     if "column_id" in data and data["column_id"] is not None:
-        col_result = (
-            supabase.table("board_columns")
-            .select("title")
-            .eq("id", data["column_id"])
-            .single()
-            .execute()
-        )
+        col_result = supabase.table("board_columns").select("title").eq("id", data["column_id"]).single().execute()
         if col_result.data:
             col_title = col_result.data.get("title", "").lower()
             if col_title == "done":
-                data["completed_at"] = datetime.now(timezone.utc).isoformat()
+                data["completed_at"] = datetime.now(UTC).isoformat()
             else:
                 data["completed_at"] = None
 
@@ -215,23 +193,10 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
         elif v is not None:
             clean[k] = v
     if clean:
-        result = (
-            supabase.table("board_tasks")
-            .update(clean)
-            .eq("id", task_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
+        result = supabase.table("board_tasks").update(clean).eq("id", task_id).eq("user_id", user_id).execute()
         task = result.data[0] if result.data else {}
     else:
-        result = (
-            supabase.table("board_tasks")
-            .select("*")
-            .eq("id", task_id)
-            .eq("user_id", user_id)
-            .single()
-            .execute()
-        )
+        result = supabase.table("board_tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
         task = result.data or {}
 
     if task:
@@ -249,26 +214,13 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
 
 async def delete_task(supabase: Client, user_id: str, task_id: str) -> bool:
     """Delete a task (junction rows cascade). Children get parent_task_id set to NULL."""
-    result = (
-        supabase.table("board_tasks")
-        .delete()
-        .eq("id", task_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = supabase.table("board_tasks").delete().eq("id", task_id).eq("user_id", user_id).execute()
     return bool(result.data)
 
 
 async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
     """Get a single task with full related data including children and parent."""
-    result = (
-        supabase.table("board_tasks")
-        .select("*")
-        .eq("id", task_id)
-        .eq("user_id", user_id)
-        .single()
-        .execute()
-    )
+    result = supabase.table("board_tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
     task = result.data
     if not task:
         return {}
@@ -299,11 +251,7 @@ async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
         contracts = r.data or []
 
     comments_result = (
-        supabase.table("board_task_comments")
-        .select("*")
-        .eq("task_id", task_id)
-        .order("created_at")
-        .execute()
+        supabase.table("board_task_comments").select("*").eq("task_id", task_id).order("created_at").execute()
     )
 
     # Fetch children if this is a parent task
@@ -323,11 +271,7 @@ async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
     parent = None
     if task.get("parent_task_id"):
         parent_result = (
-            supabase.table("board_tasks")
-            .select("id, title")
-            .eq("id", task["parent_task_id"])
-            .single()
-            .execute()
+            supabase.table("board_tasks").select("id, title").eq("id", task["parent_task_id"]).single().execute()
         )
         parent = parent_result.data
 
@@ -376,6 +320,7 @@ async def get_tasks_by_date_range(supabase: Client, user_id: str, start: str, en
 
 
 # --- Period-based Tasks ---
+
 
 async def get_tasks_by_period(
     supabase: Client, user_id: str, period_start: str, period_end: str, is_current: bool = True
@@ -430,6 +375,7 @@ async def get_tasks_by_period(
 
 # --- Parent Tasks ---
 
+
 async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict:
     """Create a parent task (no column_id, is_parent=True)."""
     artist_ids = data.pop("artist_ids", [])
@@ -456,7 +402,7 @@ async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict
 
 
 async def get_all_parents_with_children(
-    supabase: Client, user_id: str, search: Optional[str] = None, artist_id: Optional[str] = None
+    supabase: Client, user_id: str, search: str | None = None, artist_id: str | None = None
 ) -> list:
     """Get all parent tasks with nested children for the overview tab."""
     # Fetch parent tasks
@@ -526,7 +472,8 @@ async def get_all_parents_with_children(
     # Apply filters
     if artist_id:
         result = [
-            p for p in result
+            p
+            for p in result
             if artist_id in p.get("artist_ids", [])
             or any(artist_id in c.get("artist_ids", []) for c in p.get("children", []))
         ]
@@ -540,10 +487,7 @@ async def get_all_parents_with_children(
             if search_lower in p.get("title", "").lower():
                 filtered.append(p)
             else:
-                matching_children = [
-                    c for c in p.get("children", [])
-                    if search_lower in c.get("title", "").lower()
-                ]
+                matching_children = [c for c in p.get("children", []) if search_lower in c.get("title", "").lower()]
                 if matching_children:
                     p["children"] = matching_children
                     p["child_count"] = len(matching_children)
@@ -556,41 +500,45 @@ async def get_all_parents_with_children(
 
 # --- Comments ---
 
+
 async def create_comment(supabase: Client, user_id: str, task_id: str, content: str) -> dict:
     """Add a comment to a task."""
-    result = supabase.table("board_task_comments").insert({
-        "task_id": task_id,
-        "user_id": user_id,
-        "content": content,
-    }).execute()
+    result = (
+        supabase.table("board_task_comments")
+        .insert(
+            {
+                "task_id": task_id,
+                "user_id": user_id,
+                "content": content,
+            }
+        )
+        .execute()
+    )
     return result.data[0] if result.data else {}
 
 
 async def delete_comment(supabase: Client, user_id: str, comment_id: str) -> bool:
     """Delete a comment (only the author can delete)."""
-    result = (
-        supabase.table("board_task_comments")
-        .delete()
-        .eq("id", comment_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = supabase.table("board_task_comments").delete().eq("id", comment_id).eq("user_id", user_id).execute()
     return bool(result.data)
 
 
 # --- Reorder + Defaults ---
 
-async def batch_reorder(supabase: Client, user_id: str, reorders: List[dict]) -> bool:
+
+async def batch_reorder(supabase: Client, user_id: str, reorders: list[dict]) -> bool:
     """Batch reorder tasks (used for drag-and-drop)."""
     for reorder in reorders:
-        supabase.table("board_tasks").update({
-            "column_id": reorder["target_column_id"],
-            "position": reorder["position"],
-        }).eq("id", reorder["task_id"]).eq("user_id", user_id).execute()
+        supabase.table("board_tasks").update(
+            {
+                "column_id": reorder["target_column_id"],
+                "position": reorder["position"],
+            }
+        ).eq("id", reorder["task_id"]).eq("user_id", user_id).execute()
     return True
 
 
-async def create_default_columns(supabase: Client, user_id: str, artist_id: Optional[str] = None) -> list:
+async def create_default_columns(supabase: Client, user_id: str, artist_id: str | None = None) -> list:
     """Create default Kanban columns for a new board."""
     defaults = [
         {"title": "Backlog", "position": 0, "color": "#8b5cf6"},

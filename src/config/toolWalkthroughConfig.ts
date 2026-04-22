@@ -178,7 +178,7 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       icon: LayoutGrid,
       title: "Workspace",
       description:
-        "Your project management hub — manage tasks, create epics with subtasks, and efficiently organize your projects. Link tasks to artists and projects to keep everything connected.",
+        "Your project management hub — manage tasks, create campaigns with subtasks, and efficiently organize your projects. Link tasks to artists and projects to keep everything connected.",
     },
     steps: [
       {
@@ -213,7 +213,7 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="workspace-integrations"]',
         title: "Integrations",
         description:
-          "Connect Google Drive, Slack, Notion, and Monday.com to bring your tools together.",
+          "Connect Google Drive and Slack to sync files and receive notifications. Import contracts, royalty statements, and split sheets from Drive directly into your projects — each category only accepts the right file types (e.g., PDFs for contracts, Excel/CSV for royalty statements). Configure Slack to get notified when tasks are created, contracts uploaded, or royalties calculated.",
         placement: "bottom",
       },
     ],
@@ -322,7 +322,7 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="project-tabs"]',
         title: "Project Tabs",
         description:
-          "Works: tracks and compositions linked to this project. Files: contracts, split sheets, and documents. Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration.",
+          "Works: tracks and compositions linked to this project. Files: contracts, split sheets, and documents — upload directly or import from Google Drive (each category accepts specific file types like PDFs for contracts, Excel/CSV for royalty statements). Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration and Slack channel linking.",
         placement: "bottom",
       },
       {

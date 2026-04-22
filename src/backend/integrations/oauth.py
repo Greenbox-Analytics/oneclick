@@ -5,12 +5,12 @@ Handles token encryption/decryption, refresh, and OAuth state JWT generation.
 
 import os
 import time
-from typing import Optional
-from cryptography.fernet import Fernet
-import jwt
-import httpx
-from supabase import Client
+from datetime import UTC
 
+import httpx
+import jwt
+from cryptography.fernet import Fernet
+from supabase import Client
 
 # Encryption key for storing OAuth tokens at rest (AES-256 via Fernet)
 ENCRYPTION_KEY = os.getenv("INTEGRATION_ENCRYPTION_KEY")
@@ -149,9 +149,8 @@ async def exchange_code_for_tokens(provider: str, code: str) -> dict:
     if provider == "notion":
         # Notion uses Basic auth for token exchange
         import base64
-        credentials = base64.b64encode(
-            f"{config['client_id']()}:{config['client_secret']()}".encode()
-        ).decode()
+
+        credentials = base64.b64encode(f"{config['client_id']()}:{config['client_secret']()}".encode()).decode()
         headers["Authorization"] = f"Basic {credentials}"
         payload = {"code": code, "grant_type": "authorization_code", "redirect_uri": get_oauth_redirect_url(provider)}
 
@@ -189,7 +188,7 @@ async def refresh_access_token(provider: str, refresh_token: str) -> dict:
         return response.json()
 
 
-async def get_valid_token(supabase_client: Client, user_id: str, provider: str) -> Optional[str]:
+async def get_valid_token(supabase_client: Client, user_id: str, provider: str) -> str | None:
     """
     Get a valid access token for a user+provider, refreshing if expired.
     Returns None if no connection exists or refresh fails.
@@ -212,16 +211,17 @@ async def get_valid_token(supabase_client: Client, user_id: str, provider: str) 
 
     # Check if token is expired (with 5 minute buffer)
     if connection.get("token_expires_at"):
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         expires_at = datetime.fromisoformat(connection["token_expires_at"].replace("Z", "+00:00"))
         if expires_at.timestamp() - time.time() < 300:
             # Token expired or expiring soon, try refresh
             refresh_encrypted = connection.get("refresh_token_encrypted")
             if not refresh_encrypted:
                 # Mark as expired
-                supabase_client.table("integration_connections").update(
-                    {"status": "expired"}
-                ).eq("id", connection["id"]).execute()
+                supabase_client.table("integration_connections").update({"status": "expired"}).eq(
+                    "id", connection["id"]
+                ).execute()
                 return None
 
             try:
@@ -235,20 +235,21 @@ async def get_valid_token(supabase_client: Client, user_id: str, provider: str) 
                     }
                     if new_tokens.get("expires_in"):
                         from datetime import timedelta
-                        new_expiry = datetime.now(timezone.utc) + timedelta(seconds=new_tokens["expires_in"])
+
+                        new_expiry = datetime.now(UTC) + timedelta(seconds=new_tokens["expires_in"])
                         update_data["token_expires_at"] = new_expiry.isoformat()
                     if new_tokens.get("refresh_token"):
                         update_data["refresh_token_encrypted"] = encrypt_token(new_tokens["refresh_token"])
 
-                    supabase_client.table("integration_connections").update(
-                        update_data
-                    ).eq("id", connection["id"]).execute()
+                    supabase_client.table("integration_connections").update(update_data).eq(
+                        "id", connection["id"]
+                    ).execute()
 
                     return new_tokens["access_token"]
             except Exception:
-                supabase_client.table("integration_connections").update(
-                    {"status": "expired"}
-                ).eq("id", connection["id"]).execute()
+                supabase_client.table("integration_connections").update({"status": "expired"}).eq(
+                    "id", connection["id"]
+                ).execute()
                 return None
 
     return access_token
@@ -261,7 +262,7 @@ async def store_connection(
     tokens: dict,
 ) -> dict:
     """Store or update an OAuth connection in the database."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta
 
     data = {
         "user_id": user_id,
@@ -274,7 +275,7 @@ async def store_connection(
         data["refresh_token_encrypted"] = encrypt_token(tokens["refresh_token"])
 
     if tokens.get("expires_in"):
-        expiry = datetime.now(timezone.utc) + timedelta(seconds=tokens["expires_in"])
+        expiry = datetime.now(UTC) + timedelta(seconds=tokens["expires_in"])
         data["token_expires_at"] = expiry.isoformat()
 
     # Provider-specific metadata
@@ -299,16 +300,9 @@ async def store_connection(
 
     if existing.data:
         result = (
-            supabase_client.table("integration_connections")
-            .update(data)
-            .eq("id", existing.data[0]["id"])
-            .execute()
+            supabase_client.table("integration_connections").update(data).eq("id", existing.data[0]["id"]).execute()
         )
     else:
-        result = (
-            supabase_client.table("integration_connections")
-            .insert(data)
-            .execute()
-        )
+        result = supabase_client.table("integration_connections").insert(data).execute()
 
     return result.data[0] if result.data else {}

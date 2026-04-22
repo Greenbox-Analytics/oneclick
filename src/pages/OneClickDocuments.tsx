@@ -14,8 +14,6 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
-import { useWorks } from "@/hooks/useRegistry";
-import { type WorkFileLink } from "@/hooks/useWorkFiles";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
@@ -62,10 +60,6 @@ const OneClickDocuments = () => {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [newProjectNameInput, setNewProjectNameInput] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
-  const { data: artistWorks = [], isLoading: isLoadingWorks } = useWorks(artistId);
-  const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
-  const [workFiles, setWorkFiles] = useState<WorkFileLink[]>([]);
-  const [loadingWorkFiles, setLoadingWorkFiles] = useState(false);
   const autoSaveTriggeredRef = useRef<string | null>(null);
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
   const walkthrough = useToolWalkthrough(TOOL_CONFIGS.oneclick, {
@@ -127,7 +121,7 @@ const OneClickDocuments = () => {
 
   useEffect(() => {
     if (artistId) {
-      apiFetch<any>(`${API_URL}/projects/${artistId}`)
+      apiFetch<Project[]>(`${API_URL}/projects/${artistId}`)
         .then(data => setProjects(data))
         .catch(err => console.error("Error fetching projects:", err));
     }
@@ -167,26 +161,11 @@ const OneClickDocuments = () => {
     }
   }, [selectedRoyaltyStatementProject]);
 
-  useEffect(() => {
-    if (!selectedWorkId || !user) { setWorkFiles([]); return; }
-    setLoadingWorkFiles(true);
-    apiFetch<any>(`${API_URL}/registry/works/${selectedWorkId}/files`)
-      .then((data) => {
-        setWorkFiles(data.files || []);
-        setLoadingWorkFiles(false);
-      })
-      .catch((err) => {
-        console.error("Error fetching work files:", err);
-        setWorkFiles([]);
-        setLoadingWorkFiles(false);
-      });
-  }, [selectedWorkId, user]);
-
   const handleCreateProject = async () => {
     if (!artistId || !newProjectNameInput.trim()) return;
     setIsCreatingProject(true);
     try {
-        const newProject = await apiFetch<any>(`${API_URL}/projects`, {
+        const newProject = await apiFetch<Project>(`${API_URL}/projects`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ artist_id: artistId, name: newProjectNameInput, description: "Created via OneClick" })
@@ -381,9 +360,9 @@ const OneClickDocuments = () => {
             setError("Connection error. Please try again."); toast.error("Connection error during calculation"); setIsUploading(false);
         }
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Error:", error);
-        const errorMessage = error?.message || "An error occurred.";
+        const errorMessage = error instanceof Error ? error.message : "An error occurred.";
         setError(errorMessage);
         if (!String(errorMessage).toLowerCase().includes("duplicate file")) toast.error(errorMessage || "An error occurred during processing.");
         setShowProgressModal(false); setIsUploading(false);
@@ -515,13 +494,6 @@ const OneClickDocuments = () => {
             existingContracts={existingContracts}
             selectedExistingContracts={selectedExistingContracts}
             setSelectedExistingContracts={setSelectedExistingContracts}
-            isLoadingWorks={isLoadingWorks}
-            artistWorks={artistWorks}
-            selectedWorkId={selectedWorkId}
-            setSelectedWorkId={setSelectedWorkId}
-            workFiles={workFiles}
-            setWorkFiles={setWorkFiles}
-            loadingWorkFiles={loadingWorkFiles}
             fetchProjectFilesForValidation={fetchProjectFilesForValidation}
           />
 

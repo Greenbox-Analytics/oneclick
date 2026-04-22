@@ -111,8 +111,8 @@ export const AudioSection = ({
       await onCreateFolder(artistId, newFolderName);
       setNewFolderName("");
       setCreatingFolder(false);
-    } catch (err: any) {
-      const msg = err?.message || "";
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
       if (msg.startsWith("DUPLICATE:")) {
         toast({ title: "Duplicate folder name", description: msg.replace("DUPLICATE:", ""), className: "bg-white text-black border border-border" });
       }
@@ -152,8 +152,8 @@ export const AudioSection = ({
     setUploading(folderId);
     try {
       await onUploadFile(folderId, artistId, file);
-    } catch (err: any) {
-      const msg = err?.message || "";
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
       if (msg.startsWith("DUPLICATE:")) {
         toast({ title: "Duplicate file name", description: msg.replace("DUPLICATE:", ""), className: "bg-white text-black border border-border" });
       }

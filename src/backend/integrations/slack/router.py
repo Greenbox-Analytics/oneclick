@@ -1,11 +1,11 @@
 """FastAPI router for Slack integration."""
 
+import sys
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from typing import Optional
-import sys
-from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BACKEND_DIR) not in sys.path:
@@ -13,8 +13,12 @@ if str(BACKEND_DIR) not in sys.path:
 
 from auth import get_current_user_id
 from integrations.oauth import (
-    build_auth_url, verify_oauth_state, exchange_code_for_tokens,
-    store_connection, get_valid_token, FRONTEND_URL,
+    FRONTEND_URL,
+    build_auth_url,
+    exchange_code_for_tokens,
+    get_valid_token,
+    store_connection,
+    verify_oauth_state,
 )
 
 router = APIRouter()
@@ -22,13 +26,14 @@ router = APIRouter()
 
 def _get_supabase():
     from main import get_supabase_client
+
     return get_supabase_client()
 
 
 class NotificationSettingsUpdate(BaseModel):
     event_type: str
     enabled: bool
-    channel_id: Optional[str] = None
+    channel_id: str | None = None
 
 
 @router.get("/auth")
@@ -60,13 +65,9 @@ async def oauth_callback(code: str, state: str):
 @router.delete("/disconnect")
 async def disconnect(user_id: str = Depends(get_current_user_id)):
     """Disconnect Slack integration."""
-    _get_supabase().table("integration_connections").delete().eq(
-        "user_id", user_id
-    ).eq("provider", "slack").execute()
+    _get_supabase().table("integration_connections").delete().eq("user_id", user_id).eq("provider", "slack").execute()
     # Also clean up notification settings
-    _get_supabase().table("notification_settings").delete().eq(
-        "user_id", user_id
-    ).eq("provider", "slack").execute()
+    _get_supabase().table("notification_settings").delete().eq("user_id", user_id).eq("provider", "slack").execute()
     return {"success": True}
 
 
@@ -78,6 +79,7 @@ async def list_channels(user_id: str = Depends(get_current_user_id)):
         raise HTTPException(status_code=401, detail="Slack not connected")
 
     from integrations.slack.service import get_channels
+
     channels = await get_channels(token)
     return {"channels": channels}
 
@@ -128,12 +130,47 @@ async def get_settings(user_id: str = Depends(get_current_user_id)):
 
 @router.post("/webhook")
 async def handle_webhook(request: Request):
-    """Handle incoming Slack events (slash commands, interactivity)."""
+    """Handle incoming Slack events (app_mention)."""
     body = await request.json()
 
     # Slack URL verification challenge
     if body.get("type") == "url_verification":
         return {"challenge": body["challenge"]}
 
-    # TODO: Process Slack events (slash commands, interactive messages)
+    if body.get("type") == "event_callback":
+        event = body.get("event", {})
+        if event.get("type") == "app_mention":
+            await _process_app_mention(event)
+
     return {"ok": True}
+
+
+async def _process_app_mention(event: dict):
+    """Store an @mention as a notification for the project owner."""
+    channel_id = event.get("channel", "")
+    sender_id = event.get("user", "")
+    message_text = event.get("text", "")
+    slack_ts = event.get("ts", "")
+
+    supabase = _get_supabase()
+
+    # Find which project this channel is linked to
+    project = supabase.table("projects").select("id, user_id").eq("slack_channel_id", channel_id).execute()
+    if not project.data:
+        return
+
+    # Resolve sender name from Slack
+    sender_name = sender_id  # fallback
+
+    for proj in project.data:
+        supabase.table("slack_notifications").insert(
+            {
+                "user_id": proj["user_id"],
+                "project_id": proj["id"],
+                "channel_id": channel_id,
+                "sender_name": sender_name,
+                "sender_avatar_url": None,
+                "message_text": message_text,
+                "slack_ts": slack_ts,
+            }
+        ).execute()

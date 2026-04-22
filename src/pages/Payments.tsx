@@ -225,7 +225,7 @@ const Payments = () => {
                 </TableHeader>
                 <TableBody>
                   {filteredPayments.map((payment) => {
-                    const meta = payment.metadata as Record<string, any> | null;
+                    const meta = payment.metadata as Record<string, unknown> | null;
                     return (
                       <TableRow key={payment.id}>
                         <TableCell className="text-sm">
@@ -235,9 +235,9 @@ const Payments = () => {
                         <TableCell>{formatCurrency(Number(payment.amount), payment.currency)}</TableCell>
                         <TableCell>{getStatusBadge(payment.status)}</TableCell>
                         <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">
-                          {meta?.songs
+                          {Array.isArray(meta?.songs)
                             ? (meta.songs as string[]).join(", ")
-                            : meta?.song_title || "—"}
+                            : (meta?.song_title as string | undefined) || "—"}
                         </TableCell>
                       </TableRow>
                     );

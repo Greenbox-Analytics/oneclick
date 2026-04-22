@@ -6,10 +6,21 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Music, Upload, Volume2, Link as LinkIcon } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Loader2, Music, Upload, Volume2, Link as LinkIcon, Trash2, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import type { AudioFile, ProjectAudioLink } from "@/types/audio";
+import ShareViaEmailDialog from "./ShareViaEmailDialog";
 
 interface AudioTabProps {
   projectId: string;
@@ -17,7 +28,10 @@ interface AudioTabProps {
   artistId: string;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
+
+const MAX_AUDIO_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
 const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
 
@@ -28,6 +42,14 @@ function formatFileSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+async function computeSha256(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export default function AudioTab({ projectId, userRole, artistId }: AudioTabProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -35,8 +57,10 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
   const [uploading, setUploading] = useState(false);
   const [linkingAudioId, setLinkingAudioId] = useState<string | null>(null);
   const [linkingInProgress, setLinkingInProgress] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<AudioFile | null>(null);
+  const [deleteInFlight, setDeleteInFlight] = useState(false);
+  const [shareAudio, setShareAudio] = useState<AudioFile | null>(null);
 
-  // Fetch audio files linked to this project via project_audio_links
   const { data: audioLinks, isLoading: linksLoading, isError: linksError } = useQuery<
     (ProjectAudioLink & { audio_files: AudioFile })[]
   >({
@@ -52,7 +76,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     enabled: !!projectId,
   });
 
-  // Fetch works for this project (for linking)
   const { data: projectWorks } = useQuery({
     queryKey: ["project-works-for-audio-linking", projectId],
     queryFn: async () => {
@@ -67,7 +90,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     enabled: !!projectId,
   });
 
-  // Fetch work_audio links for these audio files to show relevant works
   const audioFileIds = (audioLinks || [])
     .map((l) => l.audio_files?.id)
     .filter(Boolean);
@@ -86,7 +108,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     enabled: audioFileIds.length > 0,
   });
 
-  // Build audio file -> works map
   const audioWorksMap = new Map<string, { workId: string; title: string }[]>();
   if (workAudioLinks) {
     for (const link of workAudioLinks) {
@@ -107,8 +128,8 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       );
       queryClient.invalidateQueries({ queryKey: ["work-audio-links-for-project", projectId] });
       toast.success("Audio linked to work");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to link audio");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to link audio");
     } finally {
       setLinkingInProgress(false);
       setLinkingAudioId(null);
@@ -119,10 +140,25 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     const file = event.target.files?.[0];
     if (!file) return;
 
+    if (!file.type.startsWith("audio/")) {
+      toast.error("Only audio files are supported");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > MAX_AUDIO_SIZE_BYTES) {
+      toast.error(`File too large. Max ${Math.floor(MAX_AUDIO_SIZE_BYTES / (1024 * 1024))} MB.`);
+      event.target.value = "";
+      return;
+    }
+
     setUploading(true);
+    let uploadedPath: string | null = null;
+    let insertedAudioId: string | null = null;
     try {
-      // First, ensure the artist has an audio folder (create one if needed)
-      let { data: folders } = await sb
+      const contentHash = await computeSha256(file);
+
+      const { data: folders } = await sb
         .from("audio_folders")
         .select("id")
         .eq("artist_id", artistId)
@@ -142,47 +178,98 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
         folderId = newFolder.id;
       }
 
-      // Upload to storage
-      const filePath = `${artistId}/${folderId}/${Date.now()}_${file.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from("audio-files")
-        .upload(filePath, file);
-      if (uploadError) throw uploadError;
-
-      const { data: urlData } = supabase.storage.from("audio-files").getPublicUrl(filePath);
-
-      // Insert audio file record
-      const { data: audioFile, error: dbError } = await sb
+      // Dedup: reuse an existing audio_files row with the same hash in the folder.
+      const { data: existing } = await sb
         .from("audio_files")
-        .insert({
-          folder_id: folderId,
-          file_name: file.name,
-          file_url: urlData.publicUrl,
-          file_path: filePath,
-          file_size: file.size,
-          file_type: file.type,
-        })
         .select("id")
-        .single();
+        .eq("folder_id", folderId)
+        .eq("content_hash", contentHash)
+        .maybeSingle();
 
-      if (dbError) {
-        await supabase.storage.from("audio-files").remove([filePath]);
-        throw dbError;
+      let audioFileId: string;
+      if (existing?.id) {
+        audioFileId = existing.id;
+      } else {
+        const filePath = `${artistId}/${folderId}/${Date.now()}_${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from("audio-files")
+          .upload(filePath, file);
+        if (uploadError) throw uploadError;
+        uploadedPath = filePath;
+
+        const { data: urlData } = supabase.storage.from("audio-files").getPublicUrl(filePath);
+
+        const { data: audioFile, error: dbError } = await sb
+          .from("audio_files")
+          .insert({
+            folder_id: folderId,
+            file_name: file.name,
+            file_url: urlData.publicUrl,
+            file_path: filePath,
+            file_size: file.size,
+            file_type: file.type,
+            content_hash: contentHash,
+          })
+          .select("id")
+          .single();
+        if (dbError) throw dbError;
+        audioFileId = audioFile.id;
+        insertedAudioId = audioFile.id;
       }
 
-      // Link to this project
       const { error: linkError } = await sb
         .from("project_audio_links")
-        .insert({ audio_file_id: audioFile.id, project_id: projectId });
+        .upsert(
+          { audio_file_id: audioFileId, project_id: projectId },
+          { onConflict: "audio_file_id,project_id" }
+        );
       if (linkError) throw linkError;
 
       queryClient.invalidateQueries({ queryKey: ["project-audio-tab", projectId] });
-      toast.success("Audio uploaded and linked");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to upload audio");
+      toast.success(existing?.id ? "Audio linked (duplicate reused)" : "Audio uploaded and linked");
+    } catch (error: unknown) {
+      // Roll back any partial work to avoid orphans.
+      if (insertedAudioId) {
+        await sb.from("audio_files").delete().eq("id", insertedAudioId);
+      }
+      if (uploadedPath) {
+        await supabase.storage.from("audio-files").remove([uploadedPath]);
+      }
+      toast.error(error instanceof Error ? error.message : "Failed to upload audio");
     } finally {
       setUploading(false);
       event.target.value = "";
+    }
+  };
+
+  const handleOpen = async (audio: AudioFile) => {
+    const { data, error } = await supabase.storage
+      .from("audio-files")
+      .createSignedUrl(audio.file_path, 60 * 60);
+    if (error || !data?.signedUrl) {
+      toast.error(error?.message || "Failed to generate audio URL");
+      return;
+    }
+    window.open(data.signedUrl, "_blank");
+  };
+
+  const handleDelete = async (audio: AudioFile) => {
+    setDeleteInFlight(true);
+    try {
+      await sb.from("project_audio_links").delete().eq("audio_file_id", audio.id);
+      await sb.from("work_audio").delete().eq("audio_file_id", audio.id);
+      const { error: rowErr } = await sb.from("audio_files").delete().eq("id", audio.id);
+      if (rowErr) throw rowErr;
+      await supabase.storage.from("audio-files").remove([audio.file_path]);
+
+      queryClient.invalidateQueries({ queryKey: ["project-audio-tab", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["work-audio-links-for-project", projectId] });
+      toast.success("Audio deleted");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete audio");
+    } finally {
+      setDeleteInFlight(false);
+      setPendingDelete(null);
     }
   };
 
@@ -210,9 +297,22 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
 
   return (
     <div className="space-y-4">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="audio/*"
+        className="hidden"
+        onChange={handleUpload}
+      />
+
       {canEdit(userRole) && (
         <div className="flex justify-end">
-          <Button size="sm" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
             {uploading ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (
@@ -220,13 +320,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
             )}
             Upload Audio
           </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            onChange={handleUpload}
-          />
         </div>
       )}
 
@@ -235,16 +328,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
           <Volume2 className="w-10 h-10 text-muted-foreground/40 mb-3" />
           <p className="text-sm text-muted-foreground">No audio files yet</p>
           <p className="text-xs text-muted-foreground/60 mt-1">Upload audio files to link them to works in this project</p>
-          {canEdit(userRole) && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-4"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Upload className="w-4 h-4 mr-2" /> Upload Audio
-            </Button>
-          )}
         </div>
       ) : (
         <div className="grid gap-2">
@@ -280,7 +363,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {/* Link to work action for unlinked audio files */}
                     {hasNoWorkLinks && canEdit(userRole) && projectWorks && projectWorks.length > 0 && (
                       isLinkingThis ? (
                         <Select
@@ -291,7 +373,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
                             <SelectValue placeholder="Select work..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {projectWorks.map((work: any) => (
+                            {projectWorks.map((work: { id: string; title: string }) => (
                               <SelectItem key={work.id} value={work.id}>
                                 {work.title}
                               </SelectItem>
@@ -303,6 +385,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
                           size="sm"
                           variant="outline"
                           className="h-7 px-2 text-xs"
+                          disabled={linkingInProgress}
                           onClick={() => setLinkingAudioId(audio.id)}
                         >
                           <LinkIcon className="w-3 h-3 mr-1" />
@@ -310,14 +393,34 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
                         </Button>
                       )
                     )}
-                    {audio.file_url && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs shrink-0"
+                      onClick={() => handleOpen(audio)}
+                    >
+                      Open
+                    </Button>
+                    {canEdit(userRole) && (
                       <Button
                         size="sm"
                         variant="ghost"
                         className="h-7 px-2 text-xs shrink-0"
-                        onClick={() => window.open(audio.file_url, "_blank")}
+                        onClick={() => setShareAudio(audio)}
+                        title="Share via email"
                       >
-                        Open
+                        <Mail className="w-3 h-3" />
+                      </Button>
+                    )}
+                    {canEdit(userRole) && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs shrink-0 text-destructive hover:text-destructive"
+                        onClick={() => setPendingDelete(audio)}
+                        title="Delete audio"
+                      >
+                        <Trash2 className="w-3 h-3" />
                       </Button>
                     )}
                   </div>
@@ -327,6 +430,38 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
           })}
         </div>
       )}
+
+      <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this audio file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes &ldquo;{pendingDelete?.file_name}&rdquo; and any work links pointing to it. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteInFlight}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteInFlight}
+              onClick={(e) => {
+                e.preventDefault();
+                if (pendingDelete) handleDelete(pendingDelete);
+              }}
+            >
+              {deleteInFlight ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <ShareViaEmailDialog
+        open={!!shareAudio}
+        onClose={() => setShareAudio(null)}
+        projectId={projectId}
+        audioFileIds={shareAudio ? [shareAudio.id] : []}
+        defaultSubject={shareAudio ? `Audio: ${shareAudio.file_name}` : ""}
+      />
     </div>
   );
 }

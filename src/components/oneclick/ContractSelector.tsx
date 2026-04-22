@@ -6,8 +6,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, FileText, X, FileSignature, Folder, Loader2, Search, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { type Work } from "@/hooks/useRegistry";
-import { type WorkFileLink } from "@/hooks/useWorkFiles";
 
 interface Project {
   id: string;
@@ -40,13 +38,6 @@ interface ContractSelectorProps {
   existingContracts: ArtistFile[];
   selectedExistingContracts: string[];
   setSelectedExistingContracts: React.Dispatch<React.SetStateAction<string[]>>;
-  isLoadingWorks: boolean;
-  artistWorks: Work[];
-  selectedWorkId: string | null;
-  setSelectedWorkId: (value: string | null) => void;
-  workFiles: WorkFileLink[];
-  setWorkFiles: (value: WorkFileLink[]) => void;
-  loadingWorkFiles: boolean;
   fetchProjectFilesForValidation: (projectId: string) => Promise<ArtistFile[]>;
 }
 
@@ -81,13 +72,6 @@ const ContractSelector = ({
   existingContracts,
   selectedExistingContracts,
   setSelectedExistingContracts,
-  isLoadingWorks,
-  artistWorks,
-  selectedWorkId,
-  setSelectedWorkId,
-  workFiles,
-  setWorkFiles,
-  loadingWorkFiles,
   fetchProjectFilesForValidation,
 }: ContractSelectorProps) => {
   const handleContractFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -154,10 +138,9 @@ const ContractSelector = ({
       </CardHeader>
       <CardContent className="space-y-4">
         <Tabs value={contractTabValue} onValueChange={setContractTabValue} className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="upload">Upload New</TabsTrigger>
             <TabsTrigger value="existing">Select Existing</TabsTrigger>
-            <TabsTrigger value="works">From Works</TabsTrigger>
           </TabsList>
 
           <TabsContent value="upload" className="space-y-4 mt-4">
@@ -311,79 +294,6 @@ const ContractSelector = ({
             )}
           </TabsContent>
 
-          <TabsContent value="works" className="space-y-4 mt-4">
-            {isLoadingWorks ? (
-              <div className="text-center py-8">
-                <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
-                <p className="text-sm text-muted-foreground">Loading works...</p>
-              </div>
-            ) : artistWorks.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-4">No registered works found for this artist.</p>
-            ) : !selectedWorkId ? (
-              <div className="space-y-4">
-                <p className="text-sm font-medium text-foreground">Select a Work:</p>
-                <div className="grid gap-3 max-h-[300px] overflow-y-auto">
-                  {artistWorks.map((work: Work) => (
-                    <div
-                      key={work.id}
-                      className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer"
-                      onClick={() => setSelectedWorkId(work.id)}
-                    >
-                      <FileText className="w-5 h-5 text-primary" />
-                      <div>
-                        <p className="font-medium text-foreground">{work.title}</p>
-                        <p className="text-xs text-muted-foreground">{work.work_type}{work.release_date ? ` \u00b7 ${new Date(work.release_date).toLocaleDateString()}` : ''}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm font-medium text-foreground">
-                    Files in {artistWorks.find((w: Work) => w.id === selectedWorkId)?.title}:
-                  </p>
-                  <Button variant="ghost" size="sm" onClick={() => { setSelectedWorkId(null); setWorkFiles([]); }} className="text-xs h-8">
-                    Change Work
-                  </Button>
-                </div>
-                {loadingWorkFiles ? (
-                  <div className="text-center py-8">
-                    <Loader2 className="inline-block animate-spin h-8 w-8 text-primary mb-2" />
-                    <p className="text-sm text-muted-foreground">Loading files...</p>
-                  </div>
-                ) : workFiles.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-4">No files linked to this work.</p>
-                ) : (
-                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                    {workFiles.map((link: WorkFileLink) => {
-                      const file = link.project_files;
-                      if (!file) return null;
-                      return (
-                        <div key={link.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-secondary/50 transition-colors">
-                          <div className="flex items-center gap-3 flex-1">
-                            <Checkbox
-                              id={`work-file-${file.id}`}
-                              checked={selectedExistingContracts.includes(file.id)}
-                              onCheckedChange={() => handleToggleExistingContract(file.id)}
-                            />
-                            <label htmlFor={`work-file-${file.id}`} className="flex items-center gap-2 flex-1 cursor-pointer">
-                              <FileText className="w-4 h-4 text-primary" />
-                              <div>
-                                <p className="text-sm font-medium text-foreground">{file.file_name}</p>
-                                <p className="text-xs text-muted-foreground">{file.folder_category}</p>
-                              </div>
-                            </label>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </TabsContent>
         </Tabs>
       </CardContent>
     </Card>

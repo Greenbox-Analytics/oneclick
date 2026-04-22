@@ -40,8 +40,11 @@ export function usePortfolioData(filters: PortfolioFilters) {
     queryKey: ["portfolio-artists", user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
-      const data = await apiFetch<any>(`${API_URL}/artists`);
-      return (Array.isArray(data) ? data : data.artists || data.data || []).map(
+      const data = await apiFetch<unknown>(`${API_URL}/artists`);
+      const rows = Array.isArray(data)
+        ? data
+        : ((data as { artists?: unknown[]; data?: unknown[] })?.artists || (data as { data?: unknown[] })?.data || []);
+      return rows.map(
         (a: Record<string, unknown>) => ({
           id: a.id as string,
           name: a.name as string,

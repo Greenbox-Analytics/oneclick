@@ -18,7 +18,7 @@ const ALL_FIELDS = [
   { key: "phone", label: "Phone", locked: false },
   { key: "website", label: "Website", locked: false },
   { key: "company", label: "Company", locked: false },
-  { key: "industry", label: "Industry", locked: false },
+  { key: "role", label: "Role", locked: false },
   { key: "social_links", label: "Social Links", locked: false },
   { key: "dsp_links", label: "Streaming Platforms", locked: false },
   { key: "custom_links", label: "Custom Links", locked: false },
@@ -128,7 +128,7 @@ export default function TeamCardSettings() {
               )}
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                 {card.company && (card.visible_fields || []).includes("company") && <span>{card.company}</span>}
-                {card.industry && (card.visible_fields || []).includes("industry") && <span>· {card.industry}</span>}
+                {card.role && (card.visible_fields || []).includes("role") && <span>· {card.role}</span>}
                 {card.website && (card.visible_fields || []).includes("website") && <span>· {card.website}</span>}
               </div>
             </div>

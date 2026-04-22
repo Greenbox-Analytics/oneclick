@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Poetry
+        run: |
+          pip install poetry
+          poetry config virtualenvs.in-project true
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: src/backend/.venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('src/backend/poetry.lock') }}
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Ruff lint
+        run: poetry run ruff check .
+      - name: Ruff format check
+        run: poetry run ruff format --check .
+      - name: Run tests
+        run: poetry run pytest -v --tb=short
+        env:
+          VITE_SUPABASE_URL: "https://fake.supabase.co"
+          VITE_SUPABASE_SECRET_KEY: "fake-key-for-ci"
+          OPENAI_API_KEY: "fake-key-for-ci"
+          RESEND_API_KEY: "fake-key-for-ci"
+
+  frontend:
+    name: Frontend (TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: ESLint
+        run: npm run lint
+      - name: TypeScript build check
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: "https://fake.supabase.co"
+          VITE_SUPABASE_ANON_KEY: "fake-key-for-ci"
+          VITE_BACKEND_API_URL: "https://fake-backend.example.com"

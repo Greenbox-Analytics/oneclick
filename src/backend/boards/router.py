@@ -1,9 +1,9 @@
 """FastAPI router for the Kanban board feature."""
 
-from fastapi import APIRouter, HTTPException, Query, Depends
-from typing import Optional
 import sys
 from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 # Ensure backend dir is in path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -11,12 +11,15 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_id
-
 from boards import service
 from boards.models import (
-    ColumnCreate, ColumnUpdate,
-    TaskCreate, TaskUpdate, BatchReorder,
-    CommentCreate, ParentTaskCreate,
+    BatchReorder,
+    ColumnCreate,
+    ColumnUpdate,
+    CommentCreate,
+    ParentTaskCreate,
+    TaskCreate,
+    TaskUpdate,
 )
 
 router = APIRouter()
@@ -24,15 +27,17 @@ router = APIRouter()
 
 def _get_supabase():
     from main import get_supabase_client
+
     return get_supabase_client()
 
 
 # --- Columns ---
 
+
 @router.get("/columns")
 async def list_columns(
     user_id: str = Depends(get_current_user_id),
-    artist_id: Optional[str] = Query(None),
+    artist_id: str | None = Query(None),
 ):
     """Get all board columns for a user."""
     columns = await service.get_columns(_get_supabase(), user_id, artist_id)
@@ -71,7 +76,7 @@ async def delete_column(column_id: str, user_id: str = Depends(get_current_user_
 @router.post("/columns/defaults")
 async def create_defaults(
     user_id: str = Depends(get_current_user_id),
-    artist_id: Optional[str] = Query(None),
+    artist_id: str | None = Query(None),
 ):
     """Create default columns (To Do, In Progress, Review, Done)."""
     columns = await service.create_default_columns(_get_supabase(), user_id, artist_id)
@@ -80,16 +85,15 @@ async def create_defaults(
 
 # --- Parent Tasks (must come before /tasks/{task_id} routes) ---
 
+
 @router.get("/parents")
 async def list_parents(
     user_id: str = Depends(get_current_user_id),
-    search: Optional[str] = Query(None),
-    artist_id: Optional[str] = Query(None),
+    search: str | None = Query(None),
+    artist_id: str | None = Query(None),
 ):
     """Get all parent tasks with nested children for the overview tab."""
-    result = await service.get_all_parents_with_children(
-        _get_supabase(), user_id, search, artist_id
-    )
+    result = await service.get_all_parents_with_children(_get_supabase(), user_id, search, artist_id)
     return result
 
 
@@ -109,6 +113,7 @@ async def create_parent(body: ParentTaskCreate, user_id: str = Depends(get_curre
 
 # --- Calendar (must come before /tasks/{task_id} routes) ---
 
+
 @router.get("/calendar")
 async def calendar_tasks(
     user_id: str = Depends(get_current_user_id),
@@ -122,6 +127,7 @@ async def calendar_tasks(
 
 # --- Period-based Tasks (must come before /tasks/{task_id} routes) ---
 
+
 @router.get("/tasks/period")
 async def period_tasks(
     user_id: str = Depends(get_current_user_id),
@@ -130,13 +136,12 @@ async def period_tasks(
     is_current: bool = Query(True, description="Whether this is the current period"),
 ):
     """Get tasks within a period for date-based board views."""
-    tasks = await service.get_tasks_by_period(
-        _get_supabase(), user_id, period_start, period_end, is_current
-    )
+    tasks = await service.get_tasks_by_period(_get_supabase(), user_id, period_start, period_end, is_current)
     return {"tasks": tasks}
 
 
 # --- Reorder (must come before /tasks/{task_id} routes) ---
+
 
 @router.put("/tasks/reorder")
 async def reorder_tasks(body: BatchReorder, user_id: str = Depends(get_current_user_id)):
@@ -148,11 +153,12 @@ async def reorder_tasks(body: BatchReorder, user_id: str = Depends(get_current_u
 
 # --- Tasks ---
 
+
 @router.get("/tasks")
 async def list_tasks(
     user_id: str = Depends(get_current_user_id),
-    column_id: Optional[str] = Query(None),
-    page: Optional[int] = Query(None, ge=1),
+    column_id: str | None = Query(None),
+    page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
 ):
     """Get all tasks for a user, optionally filtered by column."""
@@ -209,6 +215,7 @@ async def delete_task(task_id: str, user_id: str = Depends(get_current_user_id))
 
 
 # --- Comments ---
+
 
 @router.post("/tasks/{task_id}/comments")
 async def add_comment(task_id: str, body: CommentCreate, user_id: str = Depends(get_current_user_id)):

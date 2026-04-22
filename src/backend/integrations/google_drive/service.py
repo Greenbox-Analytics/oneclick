@@ -1,9 +1,7 @@
 """Google Drive business logic - file browsing, import, export, and sync."""
 
 import httpx
-from typing import Optional
 from supabase import Client
-
 
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
@@ -26,6 +24,24 @@ async def list_drive_files(token: str, folder_id: str = "root") -> list:
         return response.json().get("files", [])
 
 
+async def search_drive_files(token: str, query: str) -> list:
+    """Search files across all of Google Drive by name."""
+    escaped = query.replace("'", "\\'")
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{DRIVE_API}/files",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "q": f"name contains '{escaped}' and trashed = false",
+                "fields": "files(id, name, mimeType, modifiedTime, size, iconLink, webViewLink)",
+                "orderBy": "modifiedTime desc",
+                "pageSize": 50,
+            },
+        )
+        response.raise_for_status()
+        return response.json().get("files", [])
+
+
 async def download_drive_file(token: str, file_id: str) -> bytes:
     """Download a file from Google Drive."""
     async with httpx.AsyncClient() as client:
@@ -38,10 +54,19 @@ async def download_drive_file(token: str, file_id: str) -> bytes:
         return response.content
 
 
-async def import_drive_file(
-    token: str, supabase: Client, user_id: str, data: dict
-) -> dict:
+async def import_drive_file(token: str, supabase: Client, user_id: str, data: dict) -> dict:
     """Import a file from Drive into a Supabase project."""
+    # Check if this Drive file is already imported into this project
+    existing = (
+        supabase.table("drive_sync_mappings")
+        .select("id")
+        .eq("project_id", data["project_id"])
+        .eq("drive_file_id", data["drive_file_id"])
+        .execute()
+    )
+    if existing.data:
+        raise ValueError("This file has already been imported into this project.")
+
     # Get file metadata
     async with httpx.AsyncClient() as client:
         meta_response = await client.get(
@@ -57,37 +82,41 @@ async def import_drive_file(
 
     # Store in Supabase storage
     file_name = metadata["name"]
-    storage_path = f"{user_id}/{data['project_id']}/{file_name}"
+    import time
+
+    timestamp = int(time.time())
+    storage_path = f"{user_id}/{data['project_id']}/{timestamp}_{file_name}"
     supabase.storage.from_("project-files").upload(storage_path, content)
 
     # Create project_files record
+    file_url = supabase.storage.from_("project-files").get_public_url(storage_path)
     file_record = {
-        "user_id": user_id,
         "project_id": data["project_id"],
         "file_name": file_name,
-        "file_type": data.get("file_type", "contract"),
+        "folder_category": data.get("file_type", "contract"),
         "file_path": storage_path,
-        "file_size": metadata.get("size"),
-        "mime_type": metadata.get("mimeType"),
+        "file_url": file_url,
+        "file_size": int(metadata["size"]) if metadata.get("size") else None,
+        "file_type": metadata.get("mimeType", "application/octet-stream"),
     }
     result = supabase.table("project_files").insert(file_record).execute()
 
     # Create sync mapping
     if result.data:
-        supabase.table("drive_sync_mappings").insert({
-            "user_id": user_id,
-            "project_file_id": result.data[0]["id"],
-            "project_id": data["project_id"],
-            "drive_file_id": data["drive_file_id"],
-            "sync_direction": "from_drive",
-        }).execute()
+        supabase.table("drive_sync_mappings").insert(
+            {
+                "user_id": user_id,
+                "project_file_id": result.data[0]["id"],
+                "project_id": data["project_id"],
+                "drive_file_id": data["drive_file_id"],
+                "sync_direction": "from_drive",
+            }
+        ).execute()
 
     return {"file": result.data[0] if result.data else {}, "source": "google_drive"}
 
 
-async def export_to_drive(
-    token: str, supabase: Client, user_id: str, data: dict
-) -> dict:
+async def export_to_drive(token: str, supabase: Client, user_id: str, data: dict) -> dict:
     """Export a project file to Google Drive."""
     # Get file from Supabase
     file_record = (
@@ -114,6 +143,7 @@ async def export_to_drive(
     async with httpx.AsyncClient() as client:
         # Multipart upload
         import json
+
         response = await client.post(
             f"{DRIVE_UPLOAD_API}/files?uploadType=multipart",
             headers={"Authorization": f"Bearer {token}"},
@@ -126,12 +156,35 @@ async def export_to_drive(
         drive_file = response.json()
 
     # Create sync mapping
-    supabase.table("drive_sync_mappings").insert({
-        "user_id": user_id,
-        "project_file_id": data["project_file_id"],
-        "project_id": file_data["project_id"],
-        "drive_file_id": drive_file["id"],
-        "sync_direction": "to_drive",
-    }).execute()
+    supabase.table("drive_sync_mappings").insert(
+        {
+            "user_id": user_id,
+            "project_file_id": data["project_file_id"],
+            "project_id": file_data["project_id"],
+            "drive_file_id": drive_file["id"],
+            "sync_direction": "to_drive",
+        }
+    ).execute()
 
     return {"drive_file": drive_file, "source": "export"}
+
+
+async def export_pdf_to_drive(token: str, pdf_content: bytes, filename: str, folder_id: str | None = None) -> dict:
+    """Upload a PDF to Google Drive."""
+    import json
+
+    metadata = {"name": filename, "mimeType": "application/pdf"}
+    if folder_id:
+        metadata["parents"] = [folder_id]
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{DRIVE_UPLOAD_API}/files?uploadType=multipart",
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "metadata": ("metadata", json.dumps(metadata), "application/json"),
+                "file": (filename, pdf_content, "application/pdf"),
+            },
+        )
+        response.raise_for_status()
+        return response.json()

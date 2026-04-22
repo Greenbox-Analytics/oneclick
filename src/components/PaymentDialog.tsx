@@ -83,10 +83,10 @@ export const PaymentDialog = ({
         setNote("");
         onPaymentComplete();
       }, 1500);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({
         title: "Error",
-        description: err.message,
+        description: err instanceof Error ? err.message : "Failed to record payment",
         variant: "destructive",
       });
     } finally {

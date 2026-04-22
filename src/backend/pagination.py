@@ -1,12 +1,14 @@
 """Shared pagination utilities for list endpoints."""
 
+from typing import Any
+
 from pydantic import BaseModel
-from typing import Any, List, Optional, Union
 
 
 class PaginatedResponse(BaseModel):
     """Standard paginated response envelope."""
-    data: List[Any]
+
+    data: list[Any]
     total: int
     page: int
     page_size: int
@@ -14,9 +16,9 @@ class PaginatedResponse(BaseModel):
 
 def paginate_query(
     query,
-    page: Optional[int],
+    page: int | None,
     page_size: int = 50,
-) -> Union[PaginatedResponse, list]:
+) -> PaginatedResponse | list:
     """
     Apply pagination to a Supabase query builder.
 

@@ -24,6 +24,8 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useRemoveProjectMember, useProjectMembers } from "@/hooks/useProjectMembers";
+import { useIntegrations } from "@/hooks/useIntegrations";
+import { ProjectSlackSettings } from "./integrations/ProjectSlackSettings";
 
 interface SettingsTabProps {
   projectId: string;
@@ -69,16 +71,36 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
   // Delete project mutation
   const deleteProject = useMutation({
     mutationFn: async () => {
-      // Delete project files from storage first
+      // 1. Delete files from storage (best-effort — storage doesn't have RLS)
       const { data: files } = await supabase
         .from("project_files")
-        .select("id")
+        .select("id, file_path")
         .eq("project_id", projectId);
 
       if (files && files.length > 0) {
-        await supabase.from("project_files").delete().eq("project_id", projectId);
+        const paths = files.map((f) => f.file_path).filter(Boolean);
+        if (paths.length > 0) {
+          try {
+            await supabase.storage.from("project-files").remove(paths);
+          } catch {
+            // Storage cleanup is best-effort
+          }
+        }
+        // 2. Delete file records
+        const { error: filesError } = await supabase
+          .from("project_files")
+          .delete()
+          .eq("project_id", projectId);
+        if (filesError) {
+          console.error("Failed to delete project files:", filesError);
+        }
       }
 
+      // 3. Delete related records that may block cascade
+      await supabase.from("drive_sync_mappings").delete().eq("project_id", projectId);
+      await supabase.from("project_notification_settings").delete().eq("project_id", projectId);
+
+      // 4. Delete the project (cascades to project_members, pending_invites, etc.)
       const { error } = await supabase.from("projects").delete().eq("id", projectId);
       if (error) throw error;
     },
@@ -114,6 +136,8 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
   };
 
   const isOwner = userRole === "owner";
+  const { connections } = useIntegrations();
+  const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -161,6 +185,13 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
         )}
       </Card>
 
+      {slackConnected && (
+        <>
+          <Separator />
+          <ProjectSlackSettings projectId={projectId} />
+        </>
+      )}
+
       <Separator />
 
       {/* Leave Project (non-owners only) */}
@@ -176,7 +207,7 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
             </p>
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" disabled={removeMember.isPending}>
                   <LogOut className="w-4 h-4 mr-2" /> Leave Project
                 </Button>
               </AlertDialogTrigger>
@@ -188,8 +219,14 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleLeave}>Leave</AlertDialogAction>
+                  <AlertDialogCancel disabled={removeMember.isPending}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={removeMember.isPending}
+                    onClick={(e) => { e.preventDefault(); handleLeave(); }}
+                  >
+                    {removeMember.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    Leave
+                  </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
@@ -210,7 +247,7 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
           </p>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm">
+              <Button variant="destructive" size="sm" disabled={deleteProject.isPending}>
                 <Trash2 className="w-4 h-4 mr-2" /> Delete Project
               </Button>
             </AlertDialogTrigger>
@@ -222,9 +259,13 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogCancel disabled={deleteProject.isPending}>Cancel</AlertDialogCancel>
                 <AlertDialogAction
-                  onClick={() => deleteProject.mutate()}
+                  disabled={deleteProject.isPending}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    deleteProject.mutate();
+                  }}
                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                 >
                   {deleteProject.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}

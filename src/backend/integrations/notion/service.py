@@ -1,7 +1,8 @@
 """Notion business logic - database listing and task sync."""
 
-import httpx
 import hashlib
+
+import httpx
 from supabase import Client
 
 NOTION_API = "https://api.notion.com/v1"
@@ -36,17 +37,10 @@ async def get_databases(token: str) -> list:
         ]
 
 
-async def sync_tasks_with_notion(
-    token: str, supabase: Client, user_id: str, database_id: str
-) -> dict:
+async def sync_tasks_with_notion(token: str, supabase: Client, user_id: str, database_id: str) -> dict:
     """Bidirectional sync of board tasks with a Notion database."""
     # Get local tasks
-    local_tasks = (
-        supabase.table("board_tasks")
-        .select("*")
-        .eq("user_id", user_id)
-        .execute()
-    ).data or []
+    local_tasks = (supabase.table("board_tasks").select("*").eq("user_id", user_id).execute()).data or []
 
     # Get Notion pages
     notion_pages = await _get_notion_pages(token, database_id)
@@ -55,19 +49,23 @@ async def sync_tasks_with_notion(
     pulled = 0
 
     # Push local tasks that don't exist in Notion
-    local_by_external = {t["external_id"]: t for t in local_tasks if t.get("external_id") and t.get("external_provider") == "notion"}
+    _local_by_external = {
+        t["external_id"]: t for t in local_tasks if t.get("external_id") and t.get("external_provider") == "notion"
+    }
     local_without_external = [t for t in local_tasks if not t.get("external_id")]
 
     for task in local_without_external:
         page = await _create_notion_page(token, database_id, task)
         if page:
-            supabase.table("board_tasks").update({
-                "external_id": page["id"],
-                "external_provider": "notion",
-                "external_url": page.get("url", ""),
-                "sync_hash": _task_hash(task),
-                "last_synced_at": "now()",
-            }).eq("id", task["id"]).execute()
+            supabase.table("board_tasks").update(
+                {
+                    "external_id": page["id"],
+                    "external_provider": "notion",
+                    "external_url": page.get("url", ""),
+                    "sync_hash": _task_hash(task),
+                    "last_synced_at": "now()",
+                }
+            ).eq("id", task["id"]).execute()
             pushed += 1
 
     # Pull Notion pages that don't exist locally
@@ -80,14 +78,16 @@ async def sync_tasks_with_notion(
                 pulled += 1
 
     # Log sync
-    supabase.table("sync_log").insert({
-        "user_id": user_id,
-        "provider": "notion",
-        "direction": "bidirectional",
-        "entity_type": "task",
-        "status": "success",
-        "metadata": {"pushed": pushed, "pulled": pulled},
-    }).execute()
+    supabase.table("sync_log").insert(
+        {
+            "user_id": user_id,
+            "provider": "notion",
+            "direction": "bidirectional",
+            "entity_type": "task",
+            "status": "success",
+            "metadata": {"pushed": pushed, "pulled": pulled},
+        }
+    ).execute()
 
     return {"pushed": pushed, "pulled": pulled}
 

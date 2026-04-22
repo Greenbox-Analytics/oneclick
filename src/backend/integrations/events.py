@@ -6,15 +6,16 @@ that integrations can subscribe to for push notifications and sync.
 
 import asyncio
 import logging
-from typing import Callable, Dict, List, Any
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # Type for event handlers: async functions that take event_name and payload
-EventHandler = Callable[[str, Dict[str, Any]], Any]
+EventHandler = Callable[[str, dict[str, Any]], Any]
 
 # Registry of handlers per event type
-_handlers: Dict[str, List[EventHandler]] = {}
+_handlers: dict[str, list[EventHandler]] = {}
 
 
 def on(event_name: str, handler: EventHandler):
@@ -31,7 +32,7 @@ def off(event_name: str, handler: EventHandler):
         _handlers[event_name] = [h for h in _handlers[event_name] if h != handler]
 
 
-async def emit(event_name: str, payload: Dict[str, Any]):
+async def emit(event_name: str, payload: dict[str, Any]):
     """
     Emit an event to all registered handlers.
     Handlers run concurrently. Failures in one handler don't affect others.
@@ -49,7 +50,7 @@ async def emit(event_name: str, payload: Dict[str, Any]):
     await asyncio.gather(*tasks)
 
 
-async def _safe_call(handler: EventHandler, event_name: str, payload: Dict[str, Any]):
+async def _safe_call(handler: EventHandler, event_name: str, payload: dict[str, Any]):
     """Call a handler, catching and logging any exceptions."""
     try:
         result = handler(event_name, payload)

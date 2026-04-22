@@ -1,17 +1,13 @@
 """Business logic for workspace settings."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from supabase import Client
 
 
 async def get_settings(supabase: Client, user_id: str) -> dict:
     """Get workspace settings for a user, creating defaults if none exist."""
-    result = (
-        supabase.table("workspace_settings")
-        .select("*")
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = supabase.table("workspace_settings").select("*").eq("user_id", user_id).execute()
     if result.data:
         return result.data[0]
 
@@ -27,13 +23,8 @@ async def update_settings(supabase: Client, user_id: str, data: dict) -> dict:
     if not clean:
         return await get_settings(supabase, user_id)
 
-    clean["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = (
-        supabase.table("workspace_settings")
-        .update(clean)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    clean["updated_at"] = datetime.now(UTC).isoformat()
+    result = supabase.table("workspace_settings").update(clean).eq("user_id", user_id).execute()
     if result.data:
         return result.data[0]
 

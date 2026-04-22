@@ -1,5 +1,6 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Music, ArrowLeft, LayoutGrid, HardDrive, Bell, CalendarDays, Settings, BookOpen } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ const Workspace = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [now, setNow] = useState(new Date());
   const { settings } = useWorkspaceSettings();
+  const queryClient = useQueryClient();
   const unreadNotifications = useUnreadCount();
 
   useEffect(() => {
@@ -67,6 +69,7 @@ const Workspace = () => {
         monday: "Monday.com",
       };
       toast.success(`${providerNames[connected] || connected} connected successfully!`);
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
       setSearchParams({});
     }
   }, [searchParams, setSearchParams]);

@@ -1,27 +1,26 @@
 """Service layer for the Rights & Ownership Registry with collaboration, TeamCards, notes, and verification."""
 
 import hashlib
-from supabase import Client
-from pagination import paginate_query, PaginatedResponse
+from datetime import UTC
 
+from supabase import Client
+
+from pagination import PaginatedResponse, paginate_query
 
 # ============================================================
 # Works
 # ============================================================
 
-async def get_works(db: Client, user_id: str, artist_id: str = None,
-                    page: int = None, page_size: int = 50):
-    query = db.table("works_registry")\
-        .select("*", count="exact")\
-        .eq("user_id", user_id)
+
+async def get_works(db: Client, user_id: str, artist_id: str = None, page: int = None, page_size: int = 50):
+    query = db.table("works_registry").select("*", count="exact").eq("user_id", user_id)
     if artist_id:
         query = query.eq("artist_id", artist_id)
     query = query.order("created_at", desc=True)
     return paginate_query(query, page, page_size)
 
 
-async def get_works_as_collaborator(db: Client, user_id: str,
-                                    page: int = None, page_size: int = 50):
+async def get_works_as_collaborator(db: Client, user_id: str, page: int = None, page_size: int = 50):
     """Get ALL works where user is a collaborator (not the creator) — any status."""
     collab_rows = (
         db.table("registry_collaborators")
@@ -46,24 +45,12 @@ async def get_works_as_collaborator(db: Client, user_id: str,
 
 
 async def get_works_by_project(db: Client, user_id: str, project_id: str):
-    result = (
-        db.table("works_registry")
-        .select("*")
-        .eq("project_id", project_id)
-        .order("created_at")
-        .execute()
-    )
+    result = db.table("works_registry").select("*").eq("project_id", project_id).order("created_at").execute()
     return result.data
 
 
 async def get_work(db: Client, user_id: str, work_id: str):
-    result = (
-        db.table("works_registry")
-        .select("*")
-        .eq("id", work_id)
-        .single()
-        .execute()
-    )
+    result = db.table("works_registry").select("*").eq("id", work_id).single().execute()
     return result.data
 
 
@@ -81,13 +68,7 @@ async def update_work(db: Client, user_id: str, work_id: str, data: dict):
     work = db.table("works_registry").select("status").eq("id", work_id).eq("user_id", user_id).single().execute()
     if not work.data:
         return None
-    result = (
-        db.table("works_registry")
-        .update(data)
-        .eq("id", work_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = db.table("works_registry").update(data).eq("id", work_id).eq("user_id", user_id).execute()
     return result.data[0] if result.data else None
 
 
@@ -102,7 +83,7 @@ async def delete_work(db: Client, user_id: str, work_id: str):
     )
     work = db.table("works_registry").select("title").eq("id", work_id).single().execute()
     work_title = (work.data or {}).get("title", "Untitled")
-    for c in (collabs.data or []):
+    for c in collabs.data or []:
         if c.get("collaborator_user_id"):
             await create_notification(
                 db,
@@ -120,6 +101,7 @@ async def delete_work(db: Client, user_id: str, work_id: str):
 # Ownership Stakes
 # ============================================================
 
+
 async def get_stakes(db: Client, user_id: str, work_id: str):
     result = (
         db.table("ownership_stakes")
@@ -133,8 +115,12 @@ async def get_stakes(db: Client, user_id: str, work_id: str):
 
 
 async def validate_stake_percentage(
-    db: Client, user_id: str, work_id: str, stake_type: str,
-    new_percentage: float, exclude_stake_id: str = None,
+    db: Client,
+    user_id: str,
+    work_id: str,
+    stake_type: str,
+    new_percentage: float,
+    exclude_stake_id: str = None,
 ):
     existing = (
         db.table("ownership_stakes")
@@ -144,10 +130,7 @@ async def validate_stake_percentage(
         .eq("stake_type", stake_type)
         .execute()
     )
-    total = sum(
-        row["percentage"] for row in (existing.data or [])
-        if row["id"] != exclude_stake_id
-    )
+    total = sum(row["percentage"] for row in (existing.data or []) if row["id"] != exclude_stake_id)
     return (total + new_percentage) <= 100.0
 
 
@@ -158,13 +141,7 @@ async def create_stake(db: Client, user_id: str, data: dict):
 
 
 async def update_stake(db: Client, user_id: str, stake_id: str, data: dict):
-    result = (
-        db.table("ownership_stakes")
-        .update(data)
-        .eq("id", stake_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = db.table("ownership_stakes").update(data).eq("id", stake_id).eq("user_id", user_id).execute()
     return result.data[0] if result.data else None
 
 
@@ -176,14 +153,9 @@ async def delete_stake(db: Client, user_id: str, stake_id: str):
 # Licensing Rights
 # ============================================================
 
+
 async def get_licenses(db: Client, user_id: str, work_id: str):
-    result = (
-        db.table("licensing_rights")
-        .select("*")
-        .eq("work_id", work_id)
-        .order("start_date", desc=True)
-        .execute()
-    )
+    result = db.table("licensing_rights").select("*").eq("work_id", work_id).order("start_date", desc=True).execute()
     return result.data
 
 
@@ -194,10 +166,7 @@ async def create_license(db: Client, user_id: str, data: dict):
 
 
 async def update_license(db: Client, user_id: str, license_id: str, data: dict):
-    result = (
-        db.table("licensing_rights").update(data)
-        .eq("id", license_id).eq("user_id", user_id).execute()
-    )
+    result = db.table("licensing_rights").update(data).eq("id", license_id).eq("user_id", user_id).execute()
     return result.data[0] if result.data else None
 
 
@@ -209,13 +178,10 @@ async def delete_license(db: Client, user_id: str, license_id: str):
 # Agreements
 # ============================================================
 
+
 async def get_agreements(db: Client, user_id: str, work_id: str):
     result = (
-        db.table("registry_agreements")
-        .select("*")
-        .eq("work_id", work_id)
-        .order("effective_date", desc=True)
-        .execute()
+        db.table("registry_agreements").select("*").eq("work_id", work_id).order("effective_date", desc=True).execute()
     )
     return result.data
 
@@ -229,6 +195,7 @@ async def create_agreement(db: Client, user_id: str, data: dict):
 # ============================================================
 # Collaboration
 # ============================================================
+
 
 async def get_collaborators(db: Client, work_id: str):
     result = (
@@ -284,24 +251,19 @@ async def invite_collaborator(db: Client, invited_by: str, data: dict, work_titl
 
 async def is_invite_expired(collab: dict) -> bool:
     """Check if an invitation has passed its 48h expiry."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     expires_at = collab.get("expires_at")
     if not expires_at:
         return False
     if isinstance(expires_at, str):
         expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-    return datetime.now(timezone.utc) > expires_at
+    return datetime.now(UTC) > expires_at
 
 
 async def claim_invitation(db: Client, invite_token: str, user_id: str):
     """Link a logged-in user to their invitation by token. Returns (collab, error)."""
-    result = (
-        db.table("registry_collaborators")
-        .select("*")
-        .eq("invite_token", invite_token)
-        .single()
-        .execute()
-    )
+    result = db.table("registry_collaborators").select("*").eq("invite_token", invite_token).single().execute()
     if not result.data:
         return None, "not_found"
 
@@ -313,10 +275,7 @@ async def claim_invitation(db: Client, invite_token: str, user_id: str):
         return None, "expired"
 
     updated = (
-        db.table("registry_collaborators")
-        .update({"collaborator_user_id": user_id})
-        .eq("id", collab["id"])
-        .execute()
+        db.table("registry_collaborators").update({"collaborator_user_id": user_id}).eq("id", collab["id"]).execute()
     )
     claimed = updated.data[0] if updated.data else collab
 
@@ -342,7 +301,8 @@ async def claim_invitation(db: Client, invite_token: str, user_id: str):
 async def confirm_stake(db: Client, collaborator_id: str, user_id: str):
     """Collaborator confirms their stake, as long as the work is still
     in pending_approval status."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     # Verify the work is still pending (allow changing decisions)
     collab_check = (
         db.table("registry_collaborators")
@@ -354,22 +314,18 @@ async def confirm_stake(db: Client, collaborator_id: str, user_id: str):
     )
     if not collab_check.data:
         return None
-    work = (
-        db.table("works_registry")
-        .select("status")
-        .eq("id", collab_check.data["work_id"])
-        .single()
-        .execute()
-    )
+    work = db.table("works_registry").select("status").eq("id", collab_check.data["work_id"]).single().execute()
     if work.data and work.data["status"] == "registered":
         return None  # Can't change after fully registered
 
     result = (
         db.table("registry_collaborators")
-        .update({
-            "status": "confirmed",
-            "responded_at": datetime.now(timezone.utc).isoformat(),
-        })
+        .update(
+            {
+                "status": "confirmed",
+                "responded_at": datetime.now(UTC).isoformat(),
+            }
+        )
         .eq("id", collaborator_id)
         .eq("collaborator_user_id", user_id)
         .execute()
@@ -410,7 +366,8 @@ async def check_and_update_work_status(db: Client, work_id: str):
 async def resend_invitation(db: Client, user_id: str, collaborator_id: str):
     """Resend an expired or pending invitation — generates new token, resets expiry."""
     import uuid
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta
+
     # Verify the caller is the inviter
     collab = (
         db.table("registry_collaborators")
@@ -428,11 +385,13 @@ async def resend_invitation(db: Client, user_id: str, collaborator_id: str):
     new_token = str(uuid.uuid4())
     updated = (
         db.table("registry_collaborators")
-        .update({
-            "invite_token": new_token,
-            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
-            "status": "invited",
-        })
+        .update(
+            {
+                "invite_token": new_token,
+                "expires_at": (datetime.now(UTC) + timedelta(hours=48)).isoformat(),
+                "status": "invited",
+            }
+        )
         .eq("id", collaborator_id)
         .execute()
     )
@@ -468,33 +427,20 @@ async def revoke_collaborator(db: Client, user_id: str, collaborator_id: str):
 
 
 async def submit_for_approval(db: Client, user_id: str, work_id: str):
-    work = (
-        db.table("works_registry")
-        .select("status")
-        .eq("id", work_id)
-        .eq("user_id", user_id)
-        .single()
-        .execute()
-    )
+    work = db.table("works_registry").select("status").eq("id", work_id).eq("user_id", user_id).single().execute()
     if not work.data:
         return None, "Work not found"
     if work.data["status"] not in ("draft",):
         return None, f"Cannot submit: work is already {work.data['status']}"
 
-    collabs = (
-        db.table("registry_collaborators")
-        .select("id")
-        .eq("work_id", work_id)
-        .neq("status", "revoked")
-        .execute()
-    )
+    collabs = db.table("registry_collaborators").select("id").eq("work_id", work_id).neq("status", "revoked").execute()
     if not collabs.data:
         return None, "No collaborators invited — add at least one before submitting"
 
     # Only reset collaborators that aren't already confirmed
-    db.table("registry_collaborators").update(
-        {"status": "invited", "responded_at": None}
-    ).eq("work_id", work_id).in_("status", ["declined"]).execute()
+    db.table("registry_collaborators").update({"status": "invited", "responded_at": None}).eq("work_id", work_id).in_(
+        "status", ["declined"]
+    ).execute()
 
     result = (
         db.table("works_registry")
@@ -517,7 +463,7 @@ async def submit_for_approval(db: Client, user_id: str, work_id: str):
         )
         inviter_profile = db.table("profiles").select("full_name").eq("id", user_id).single().execute()
         inviter_name = (inviter_profile.data or {}).get("full_name") or "The project owner"
-        for c in (all_collabs.data or []):
+        for c in all_collabs.data or []:
             if c.get("collaborator_user_id"):
                 await create_notification(
                     db,
@@ -537,44 +483,56 @@ async def submit_for_approval(db: Client, user_id: str, work_id: str):
 async def invite_with_stakes(db: Client, user_id: str, data):
     """Create collaborator + ownership stakes atomically."""
     import secrets
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     work = db.table("works_registry").select("*").eq("id", data.work_id).single().execute()
     if not work.data or work.data["user_id"] != user_id:
         raise PermissionError("Not the work owner")
 
     token = secrets.token_urlsafe(32)
-    expires = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
-    collab = db.table("registry_collaborators").insert({
-        "work_id": data.work_id,
-        "invited_by": user_id,
-        "email": data.email,
-        "name": data.name,
-        "role": data.role,
-        "status": "invited",
-        "invite_token": token,
-        "expires_at": expires,
-    }).execute()
+    expires = (datetime.now(UTC) + timedelta(hours=48)).isoformat()
+    collab = (
+        db.table("registry_collaborators")
+        .insert(
+            {
+                "work_id": data.work_id,
+                "invited_by": user_id,
+                "email": data.email,
+                "name": data.name,
+                "role": data.role,
+                "status": "invited",
+                "invite_token": token,
+                "expires_at": expires,
+            }
+        )
+        .execute()
+    )
     collab_row = collab.data[0] if collab.data else None
 
     created_stakes = []
     for stake in data.stakes:
-        s = db.table("ownership_stakes").insert({
-            "work_id": data.work_id,
-            "user_id": user_id,
-            "stake_type": stake.stake_type,
-            "holder_name": data.name,
-            "holder_role": data.role,
-            "percentage": stake.percentage,
-            "holder_email": data.email,
-        }).execute()
+        s = (
+            db.table("ownership_stakes")
+            .insert(
+                {
+                    "work_id": data.work_id,
+                    "user_id": user_id,
+                    "stake_type": stake.stake_type,
+                    "holder_name": data.name,
+                    "holder_role": data.role,
+                    "percentage": stake.percentage,
+                    "holder_email": data.email,
+                }
+            )
+            .execute()
+        )
         if s.data:
             created_stakes.append(s.data[0])
 
     if created_stakes and collab_row:
-        db.table("registry_collaborators").update({
-            "stake_id": created_stakes[0]["id"]
-        }).eq("id", collab_row["id"]).execute()
+        db.table("registry_collaborators").update({"stake_id": created_stakes[0]["id"]}).eq(
+            "id", collab_row["id"]
+        ).execute()
 
     # If work is registered, revert to draft (ownership changed)
     if work.data["status"] == "registered":
@@ -585,7 +543,8 @@ async def invite_with_stakes(db: Client, user_id: str, data):
 
 async def decline_invitation(db: Client, user_id: str, collaborator_id: str):
     """Decline an invitation. Validates email match."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     collab = db.table("registry_collaborators").select("*").eq("id", collaborator_id).single().execute()
     if not collab.data:
         raise ValueError("Collaborator not found")
@@ -595,11 +554,13 @@ async def decline_invitation(db: Client, user_id: str, collaborator_id: str):
     if not user_email or user_email.lower() != collab.data["email"].lower():
         raise PermissionError("Email does not match invitation")
 
-    db.table("registry_collaborators").update({
-        "status": "declined",
-        "collaborator_user_id": user_id,
-        "responded_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", collaborator_id).execute()
+    db.table("registry_collaborators").update(
+        {
+            "status": "declined",
+            "collaborator_user_id": user_id,
+            "responded_at": datetime.now(UTC).isoformat(),
+        }
+    ).eq("id", collaborator_id).execute()
 
     # Notify work owner
     work = db.table("works_registry").select("user_id, title").eq("id", collab.data["work_id"]).single().execute()
@@ -619,7 +580,8 @@ async def decline_invitation(db: Client, user_id: str, collaborator_id: str):
 
 async def accept_from_dashboard(db: Client, user_id: str, collaborator_id: str):
     """Claim + confirm atomically from the registry dashboard."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     collab = db.table("registry_collaborators").select("*").eq("id", collaborator_id).single().execute()
     if not collab.data:
         raise ValueError("Collaborator not found")
@@ -629,11 +591,13 @@ async def accept_from_dashboard(db: Client, user_id: str, collaborator_id: str):
     if not user_email or user_email.lower() != collab.data["email"].lower():
         raise PermissionError("Email does not match invitation")
 
-    db.table("registry_collaborators").update({
-        "collaborator_user_id": user_id,
-        "status": "confirmed",
-        "responded_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", collaborator_id).execute()
+    db.table("registry_collaborators").update(
+        {
+            "collaborator_user_id": user_id,
+            "status": "confirmed",
+            "responded_at": datetime.now(UTC).isoformat(),
+        }
+    ).eq("id", collaborator_id).execute()
 
     await _check_auto_register(db, collab.data["work_id"])
 
@@ -692,6 +656,7 @@ async def _check_auto_register(db: Client, work_id: str):
 # Full Work Data
 # ============================================================
 
+
 async def get_work_full(db: Client, user_id: str, work_id: str):
     work = await get_work(db, user_id, work_id)
     if not work:
@@ -713,18 +678,15 @@ async def get_work_full(db: Client, user_id: str, work_id: str):
 # Verification — Option C merge logic
 # ============================================================
 
+
 async def auto_verify_artist(db: Client, manager_user_id: str, email: str, collaborator_user_id: str):
     """When a collaborator is linked, find any artist entries the manager created with
     that email and set linked_user_id + verified. This powers Option C merge."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     # Primary match: artist email matches invite email
     artists = (
-        db.table("artists")
-        .select("id, linked_user_id")
-        .eq("user_id", manager_user_id)
-        .eq("email", email)
-        .execute()
+        db.table("artists").select("id, linked_user_id").eq("user_id", manager_user_id).eq("email", email).execute()
     )
 
     # Fallback: try the collaborator's actual auth email
@@ -739,13 +701,15 @@ async def auto_verify_artist(db: Client, manager_user_id: str, email: str, colla
                 .eq("email", auth_email)
                 .execute()
             )
-    for artist in (artists.data or []):
+    for artist in artists.data or []:
         if not artist.get("linked_user_id"):
-            db.table("artists").update({
-                "linked_user_id": collaborator_user_id,
-                "verified": True,
-                "verified_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", artist["id"]).execute()
+            db.table("artists").update(
+                {
+                    "linked_user_id": collaborator_user_id,
+                    "verified": True,
+                    "verified_at": datetime.now(UTC).isoformat(),
+                }
+            ).eq("id", artist["id"]).execute()
 
             # Notify the collaborator about verification
             await create_notification(
@@ -771,7 +735,7 @@ async def get_artists_with_teamcards(db: Client, user_id: str):
     tc_map = {}
     if linked_ids:
         tc_result = db.table("team_cards").select("*").in_("user_id", linked_ids).execute()
-        for tc in (tc_result.data or []):
+        for tc in tc_result.data or []:
             visible = tc.get("visible_fields") or []
             filtered = {"user_id": tc["user_id"]}
             for field in visible:
@@ -798,13 +762,7 @@ async def get_artist_with_teamcard(db: Client, artist_id: str):
     result = {**a, "teamcard": None}
 
     if a.get("linked_user_id") and a.get("verified"):
-        tc = (
-            db.table("team_cards")
-            .select("*")
-            .eq("user_id", a["linked_user_id"])
-            .single()
-            .execute()
-        )
+        tc = db.table("team_cards").select("*").eq("user_id", a["linked_user_id"]).single().execute()
         if tc.data:
             card = tc.data
             visible = card.get("visible_fields") or []
@@ -821,6 +779,7 @@ async def get_artist_with_teamcard(db: Client, artist_id: str):
 # TeamCard
 # ============================================================
 
+
 async def get_team_card(db: Client, user_id: str):
     result = db.table("team_cards").select("*").eq("user_id", user_id).single().execute()
     return result.data
@@ -833,12 +792,7 @@ async def update_team_card(db: Client, user_id: str, data: dict):
     for field in ("display_name", "first_name", "last_name"):
         if field in data and not data[field]:
             data.pop(field)
-    result = (
-        db.table("team_cards")
-        .update(data)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = db.table("team_cards").update(data).eq("user_id", user_id).execute()
     return result.data[0] if result.data else None
 
 
@@ -859,6 +813,7 @@ async def get_collaborator_team_card(db: Client, collaborator_user_id: str):
 # ============================================================
 # Notes
 # ============================================================
+
 
 async def get_notes(db: Client, user_id: str, artist_id: str = None, project_id: str = None, folder_id: str = None):
     """List notes. For artist-scoped notes, filters by user_id (private notes).
@@ -893,13 +848,7 @@ async def create_note(db: Client, user_id: str, data: dict):
 
 
 async def update_note(db: Client, user_id: str, note_id: str, data: dict):
-    result = (
-        db.table("notes")
-        .update(data)
-        .eq("id", note_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = db.table("notes").update(data).eq("id", note_id).eq("user_id", user_id).execute()
     return result.data[0] if result.data else None
 
 
@@ -927,13 +876,7 @@ async def create_folder(db: Client, user_id: str, data: dict):
 
 
 async def update_folder(db: Client, user_id: str, folder_id: str, data: dict):
-    result = (
-        db.table("note_folders")
-        .update(data)
-        .eq("id", folder_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
+    result = db.table("note_folders").update(data).eq("id", folder_id).eq("user_id", user_id).execute()
     return result.data[0] if result.data else None
 
 
@@ -945,6 +888,7 @@ async def delete_folder(db: Client, user_id: str, folder_id: str):
 # Project About
 # ============================================================
 
+
 async def get_project_about(db: Client, project_id: str):
     result = db.table("projects").select("about_content").eq("id", project_id).single().execute()
     return (result.data or {}).get("about_content", [])
@@ -953,31 +897,14 @@ async def get_project_about(db: Client, project_id: str):
 async def update_project_about(db: Client, user_id: str, project_id: str, about_content: list):
     """Update project about content. Verifies the caller owns the project via artist ownership."""
     # Verify ownership: project -> artist -> user_id
-    project = (
-        db.table("projects")
-        .select("id, artist_id")
-        .eq("id", project_id)
-        .single()
-        .execute()
-    )
+    project = db.table("projects").select("id, artist_id").eq("id", project_id).single().execute()
     if not project.data:
         return None
-    artist = (
-        db.table("artists")
-        .select("user_id")
-        .eq("id", project.data["artist_id"])
-        .single()
-        .execute()
-    )
+    artist = db.table("artists").select("user_id").eq("id", project.data["artist_id"]).single().execute()
     if not artist.data or artist.data["user_id"] != user_id:
         return None  # Not the owner
 
-    result = (
-        db.table("projects")
-        .update({"about_content": about_content})
-        .eq("id", project_id)
-        .execute()
-    )
+    result = db.table("projects").update({"about_content": about_content}).eq("id", project_id).execute()
     return result.data[0] if result.data else None
 
 
@@ -985,19 +912,26 @@ async def update_project_about(db: Client, user_id: str, project_id: str, about_
 # Notifications
 # ============================================================
 
+
 async def create_notification(
-    db: Client, user_id: str, work_id: str,
-    notification_type: str, title: str, message: str,
+    db: Client,
+    user_id: str,
+    work_id: str,
+    notification_type: str,
+    title: str,
+    message: str,
     metadata: dict = None,
 ):
-    db.table("registry_notifications").insert({
-        "user_id": user_id,
-        "work_id": work_id,
-        "type": notification_type,
-        "title": title,
-        "message": message,
-        "metadata": metadata or {},
-    }).execute()
+    db.table("registry_notifications").insert(
+        {
+            "user_id": user_id,
+            "work_id": work_id,
+            "type": notification_type,
+            "title": title,
+            "message": message,
+            "metadata": metadata or {},
+        }
+    ).execute()
 
 
 async def get_notifications(db: Client, user_id: str, unread_only: bool = False):
@@ -1019,6 +953,7 @@ async def mark_all_notifications_read(db: Client, user_id: str):
 # ============================================================
 # Utility
 # ============================================================
+
 
 def compute_document_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()

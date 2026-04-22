@@ -30,10 +30,12 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const artistId of artistIds) {
-          let data: any;
-          try { data = await apiFetch<any>(`${API_URL}/artists/${artistId}/projects`); }
+          let data: unknown;
+          try { data = await apiFetch<unknown>(`${API_URL}/artists/${artistId}/projects`); }
           catch { continue; }
-          const projects = Array.isArray(data) ? data : data.projects || data.data || [];
+          const projects = (Array.isArray(data)
+            ? data
+            : ((data as { projects?: unknown[]; data?: unknown[] })?.projects || (data as { data?: unknown[] })?.data || [])) as Array<{ id: string; name: string }>;
           for (const p of projects) {
             if (!seen.has(p.id)) {
               seen.add(p.id);
@@ -45,8 +47,10 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
       }
 
       // No artist selected — fetch all user projects
-      const data = await apiFetch<any>(`${API_URL}/projects`);
-      const projects = Array.isArray(data) ? data : data.projects || data.data || [];
+      const data = await apiFetch<unknown>(`${API_URL}/projects`);
+      const projects = Array.isArray(data)
+        ? data
+        : ((data as { projects?: unknown[]; data?: unknown[] })?.projects || (data as { data?: unknown[] })?.data || []);
       return projects.map((p: Record<string, unknown>) => ({
         id: p.id as string,
         name: p.name as string,
@@ -66,10 +70,12 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const projId of projectIds) {
-          let data: any;
-          try { data = await apiFetch<any>(`${API_URL}/projects/${projId}/contracts`); }
+          let data: unknown;
+          try { data = await apiFetch<unknown>(`${API_URL}/projects/${projId}/contracts`); }
           catch { continue; }
-          const files = Array.isArray(data) ? data : data.contracts || data.data || [];
+          const files = (Array.isArray(data)
+            ? data
+            : ((data as { contracts?: unknown[]; data?: unknown[] })?.contracts || (data as { data?: unknown[] })?.data || [])) as Array<{ id: string; file_name: string }>;
           for (const f of files) {
             if (!seen.has(f.id)) {
               seen.add(f.id);
@@ -87,10 +93,12 @@ export function useProjectsList(artistIds?: string[], projectIds?: string[]) {
         const seen = new Set<string>();
 
         for (const proj of projects) {
-          let data: any;
-          try { data = await apiFetch<any>(`${API_URL}/projects/${proj.id}/contracts`); }
+          let data: unknown;
+          try { data = await apiFetch<unknown>(`${API_URL}/projects/${proj.id}/contracts`); }
           catch { continue; }
-          const files = Array.isArray(data) ? data : data.contracts || data.data || [];
+          const files = (Array.isArray(data)
+            ? data
+            : ((data as { contracts?: unknown[]; data?: unknown[] })?.contracts || (data as { data?: unknown[] })?.data || [])) as Array<{ id: string; file_name: string }>;
           for (const f of files) {
             if (!seen.has(f.id)) {
               seen.add(f.id);

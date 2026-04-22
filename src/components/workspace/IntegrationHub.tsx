@@ -1,12 +1,14 @@
+import { useState } from "react";
 import { IntegrationCard } from "./IntegrationCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
+import { SlackPanel } from "./integrations/SlackPanel";
 import type { IntegrationProvider, ConnectionStatus } from "@/types/integrations";
 
 const INTEGRATIONS = [
   {
     provider: "google_drive" as IntegrationProvider,
     name: "Google Drive",
-    description: "Sync contracts and royalty statements with Google Drive",
+    description: "Import contracts and royalty statements from Drive into your projects",
     icon: <img src="/drive.webp" alt="Google Drive" className="w-6 h-6 object-contain" />,
     color: "#4285F4",
   },
@@ -35,11 +37,15 @@ const INTEGRATIONS = [
 
 export function IntegrationHub() {
   const { connections, connect, disconnect, isConnecting } = useIntegrations();
+  const [slackPanelOpen, setSlackPanelOpen] = useState(false);
 
   const getStatus = (provider: IntegrationProvider): ConnectionStatus => {
     const conn = connections.find((c) => c.provider === provider);
     return conn?.status || "disconnected";
   };
+
+  const isConnected = (provider: IntegrationProvider) =>
+    getStatus(provider) === "active";
 
   return (
     <div className="space-y-4">
@@ -56,11 +62,23 @@ export function IntegrationHub() {
             {...integration}
             status={getStatus(integration.provider)}
             onConnect={() => connect(integration.provider)}
-            onDisconnect={() => disconnect(integration.provider)}
+            onDisconnect={() => {
+              disconnect(integration.provider);
+              if (integration.provider === "slack") setSlackPanelOpen(false);
+            }}
+            onConfigure={
+              integration.provider === "slack" && isConnected("slack")
+                ? () => setSlackPanelOpen(!slackPanelOpen)
+                : undefined
+            }
             isConnecting={isConnecting}
           />
         ))}
       </div>
+
+      {slackPanelOpen && (
+        <SlackPanel onClose={() => setSlackPanelOpen(false)} />
+      )}
     </div>
   );
 }

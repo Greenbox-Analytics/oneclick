@@ -21,6 +21,8 @@ export interface PendingInvite {
   invited_by: string;
   created_at: string;
   expires_at: string;
+  last_email_error: string | null;
+  last_email_attempt_at: string | null;
 }
 
 export function useProjectMembers(projectId?: string) {
@@ -49,14 +51,30 @@ export function useAddProjectMember() {
   const { user } = useAuth();
   return useMutation({
     mutationFn: async ({ projectId, email, role }: { projectId: string; email: string; role: string }) =>
-      apiFetch(`${API_URL}/projects/${projectId}/members`, {
+      apiFetch<{ type: "added" | "pending" }>(`${API_URL}/projects/${projectId}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, role }),
       }),
-    onSuccess: (_, { projectId }) => {
+    onSuccess: (data, { projectId }) => {
       queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
-      toast.success("Member added");
+      queryClient.invalidateQueries({ queryKey: ["project-pending-invites", projectId] });
+      toast.success(data?.type === "pending" ? "Invite email queued" : "Member added");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+}
+
+export function useResendPendingInvite() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ projectId, inviteId }: { projectId: string; inviteId: string }) =>
+      apiFetch(`${API_URL}/projects/${projectId}/pending-invites/${inviteId}/resend`, {
+        method: "POST",
+      }),
+    onSuccess: (_, { projectId }) => {
+      queryClient.invalidateQueries({ queryKey: ["project-pending-invites", projectId] });
+      toast.success("Invite email resent");
     },
     onError: (error: Error) => toast.error(error.message),
   });

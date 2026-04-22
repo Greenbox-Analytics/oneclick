@@ -7,11 +7,11 @@ import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
 
 // Hoisted to module scope (rendering-hoist-jsx, rerender-no-inline-components)
-const TOOL_CARDS: { route: string; label: string; icon: LucideIcon; desc: string }[] = [
+const TOOL_CARDS: { route: string; label: string; icon: LucideIcon; desc: string; comingSoon?: boolean }[] = [
   { route: "/tools/oneclick", label: "OneClick", icon: Calculator, desc: "Calculate royalty splits and manage contracts for your artists in one click." },
   { route: "/tools/zoe", label: "Zoe", icon: Bot, desc: "Ask questions about your contracts and get AI-powered answers with source citations." },
   { route: "/tools/split-sheet", label: "Split Sheet", icon: FileText, desc: "Generate professional split sheet agreements to document royalty ownership for your music." },
-  { route: "/tools/registry", label: "Rights Registry", icon: Shield, desc: "Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents." },
+  { route: "/tools/registry", label: "Rights Registry", icon: Shield, desc: "Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents.", comingSoon: true },
 ];
 
 const Tools = () => {
@@ -75,25 +75,42 @@ const Tools = () => {
           {TOOL_CARDS.map((tool) => (
             <Card
               key={tool.route}
-              className="hover:border-primary/40 transition-all cursor-pointer group border border-border"
-              onClick={() => handleNavigate(tool.route, tool.label)}
+              className={
+                tool.comingSoon
+                  ? "opacity-60 cursor-not-allowed border border-border"
+                  : "hover:border-primary/40 transition-all cursor-pointer group border border-border"
+              }
+              onClick={tool.comingSoon ? undefined : () => handleNavigate(tool.route, tool.label)}
+              aria-disabled={tool.comingSoon || undefined}
             >
               <CardHeader>
-                <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center mb-3 group-hover:bg-primary/15 group-hover:scale-105 transition-all">
+                <div className={
+                  tool.comingSoon
+                    ? "w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center mb-3"
+                    : "w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center mb-3 group-hover:bg-primary/15 group-hover:scale-105 transition-all"
+                }>
                   <tool.icon className="w-5 h-5 text-primary" />
                 </div>
                 <CardTitle className="flex items-center gap-2 text-lg">
                   {tool.label}
-                  <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all translate-x-[-8px] group-hover:translate-x-0 text-primary" />
+                  {!tool.comingSoon && (
+                    <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-all translate-x-[-8px] group-hover:translate-x-0 text-primary" />
+                  )}
                 </CardTitle>
                 <CardDescription className="leading-relaxed">
                   {tool.desc}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <span className="text-sm font-medium text-primary/80 group-hover:text-primary transition-colors">
-                  Launch Tool →
-                </span>
+                {tool.comingSoon ? (
+                  <span className="text-sm font-medium text-muted-foreground">
+                    Coming Soon..
+                  </span>
+                ) : (
+                  <span className="text-sm font-medium text-primary/80 group-hover:text-primary transition-colors">
+                    Launch Tool →
+                  </span>
+                )}
               </CardContent>
             </Card>
           ))}
