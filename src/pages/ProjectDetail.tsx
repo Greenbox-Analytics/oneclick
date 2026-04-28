@@ -203,7 +203,7 @@ const ProjectDetail = () => {
       <main className="container mx-auto px-4 py-6 max-w-5xl">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList data-walkthrough="project-tabs" className="mb-6">
-            <TabsTrigger value="works" className="gap-1.5" disabled>
+            <TabsTrigger value="works" className="gap-1.5">
               <Music className="w-4 h-4" /> Works
             </TabsTrigger>
             <TabsTrigger value="files" className="gap-1.5">
