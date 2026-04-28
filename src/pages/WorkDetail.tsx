@@ -138,8 +138,8 @@ const WorkDetail = () => {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Work not found</p>
-        <Button variant="outline" onClick={() => navigate("/tools/registry")}>
-          <ArrowLeft className="w-4 h-4 mr-2" /> Back to Registry
+        <Button variant="outline" onClick={() => navigate(-1)}>
+          <ArrowLeft className="w-4 h-4 mr-2" /> Back
         </Button>
       </div>
     );
@@ -173,8 +173,8 @@ const WorkDetail = () => {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="outline" onClick={() => navigate("/tools/registry")}>
-              <ArrowLeft className="w-4 h-4 mr-2" /> Back to Registry
+            <Button variant="outline" onClick={() => navigate(`/projects/${work.project_id}`)}>
+              <ArrowLeft className="w-4 h-4 mr-2" /> Back to Project
             </Button>
           </div>
         </div>
