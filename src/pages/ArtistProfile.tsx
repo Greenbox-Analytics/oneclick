@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, MessageCircle, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, BookOpen, Plus, StickyNote } from "lucide-react";
+import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, BookOpen, Plus, StickyNote } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery } from "@tanstack/react-query";
@@ -34,16 +34,45 @@ const FieldContainer = ({ children, className = "" }: { children: React.ReactNod
   </div>
 );
 
+interface CardEditActionsProps {
+  editing: boolean;
+  onEdit: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+}
+
+const CardEditActions = ({ editing, onEdit, onSave, onCancel }: CardEditActionsProps) => (
+  editing ? (
+    <div className="flex gap-2 shrink-0">
+      <Button variant="ghost" size="sm" onClick={onCancel}>
+        <X className="w-4 h-4 mr-1" /> Cancel
+      </Button>
+      <Button size="sm" onClick={onSave}>
+        <Save className="w-4 h-4 mr-1" /> Save
+      </Button>
+    </div>
+  ) : (
+    <Button variant="outline" size="sm" onClick={onEdit} className="shrink-0">
+      <Edit className="w-4 h-4 mr-1" /> Edit
+    </Button>
+  )
+);
+
 const ArtistProfile = () => {
   const navigate = useNavigate();
   const { id } = useParams();
   const { toast } = useToast();
   const { user } = useAuth();
   const [hasContract, setHasContract] = useState(false);
-  const [isEditMode, setIsEditMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [projects, setProjects] = useState<Tables<'projects'>[]>([]);
+
+  // Per-card edit modes
+  const [editingDetails, setEditingDetails] = useState(false);
+  const [editingSocial, setEditingSocial] = useState(false);
+  const [editingStreaming, setEditingStreaming] = useState(false);
+  const [editingLinks, setEditingLinks] = useState(false);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -70,7 +99,7 @@ const ArtistProfile = () => {
     customSocialLinks: [] as { id: string; label: string; url: string }[],
     customDspLinks: [] as { id: string; label: string; url: string }[],
   });
-  
+
   const [originalData, setOriginalData] = useState(formData);
 
   // Fetch TeamCard overlay for verified artists
@@ -97,7 +126,7 @@ const ArtistProfile = () => {
   useEffect(() => {
     const fetchArtist = async () => {
       if (!id) return;
-      
+
       setIsLoading(true);
       const { data, error } = await supabase
         .from('artists')
@@ -137,7 +166,7 @@ const ArtistProfile = () => {
             pressKit: data.additional_press_kit || "",
             linktree: data.additional_linktree || "",
           },
-          customLinks: Array.isArray(data.custom_links) 
+          customLinks: Array.isArray(data.custom_links)
             ? data.custom_links.map((link: { id?: string; label?: string; url?: string }) => ({
                 id: link.id || Date.now().toString(),
                 label: link.label || "",
@@ -192,9 +221,10 @@ const ArtistProfile = () => {
     setHasContract(true);
   };
 
-  const handleSave = async () => {
+  // Per-card save / cancel handlers — each updates only its own slice of artist data,
+  // so unsaved edits in other cards aren't clobbered.
+  const saveDetails = async () => {
     if (!id) return;
-
     const { error } = await supabase
       .from('artists')
       .update({
@@ -202,42 +232,139 @@ const ArtistProfile = () => {
         email: formData.email,
         bio: formData.bio,
         genres: formData.genres,
-        avatar_url: formData.avatar,
+      })
+      .eq('id', id);
+
+    if (error) {
+      toast({ title: "Error", description: "Failed to save artist details", variant: "destructive" });
+      return;
+    }
+
+    toast({ title: "Success", description: "Artist details updated" });
+    setOriginalData(prev => ({
+      ...prev,
+      name: formData.name,
+      email: formData.email,
+      bio: formData.bio,
+      genres: formData.genres,
+    }));
+    setEditingDetails(false);
+  };
+
+  const cancelDetails = () => {
+    setFormData(prev => ({
+      ...prev,
+      name: originalData.name,
+      email: originalData.email,
+      bio: originalData.bio,
+      genres: originalData.genres,
+    }));
+    setEditingDetails(false);
+  };
+
+  const saveSocial = async () => {
+    if (!id) return;
+    const { error } = await supabase
+      .from('artists')
+      .update({
         social_instagram: formData.social.instagram,
         social_tiktok: formData.social.tiktok,
         social_youtube: formData.social.youtube,
+        custom_social_links: formData.customSocialLinks,
+      })
+      .eq('id', id);
+
+    if (error) {
+      toast({ title: "Error", description: "Failed to save social media", variant: "destructive" });
+      return;
+    }
+
+    toast({ title: "Success", description: "Social media updated" });
+    setOriginalData(prev => ({
+      ...prev,
+      social: formData.social,
+      customSocialLinks: formData.customSocialLinks,
+    }));
+    setEditingSocial(false);
+  };
+
+  const cancelSocial = () => {
+    setFormData(prev => ({
+      ...prev,
+      social: originalData.social,
+      customSocialLinks: originalData.customSocialLinks,
+    }));
+    setEditingSocial(false);
+  };
+
+  const saveStreaming = async () => {
+    if (!id) return;
+    const { error } = await supabase
+      .from('artists')
+      .update({
         dsp_spotify: formData.dsp.spotify,
         dsp_apple_music: formData.dsp.appleMusic,
         dsp_soundcloud: formData.dsp.soundcloud,
-        additional_website: formData.additional.website,
-        additional_press_kit: formData.additional.pressKit,
-        additional_linktree: formData.additional.linktree,
-        custom_links: formData.customLinks,
-        custom_social_links: formData.customSocialLinks,
         custom_dsp_links: formData.customDspLinks,
       })
       .eq('id', id);
 
     if (error) {
-      toast({
-        title: "Error",
-        description: "Failed to save artist data",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Failed to save streaming platforms", variant: "destructive" });
       return;
     }
 
-    toast({
-      title: "Success",
-      description: "Artist profile updated successfully",
-    });
-    setIsEditMode(false);
-    setOriginalData(formData);
+    toast({ title: "Success", description: "Streaming platforms updated" });
+    setOriginalData(prev => ({
+      ...prev,
+      dsp: formData.dsp,
+      customDspLinks: formData.customDspLinks,
+    }));
+    setEditingStreaming(false);
   };
 
-  const handleCancel = () => {
-    setFormData(originalData);
-    setIsEditMode(false);
+  const cancelStreaming = () => {
+    setFormData(prev => ({
+      ...prev,
+      dsp: originalData.dsp,
+      customDspLinks: originalData.customDspLinks,
+    }));
+    setEditingStreaming(false);
+  };
+
+  const saveLinks = async () => {
+    if (!id) return;
+    const { error } = await supabase
+      .from('artists')
+      .update({
+        additional_website: formData.additional.website,
+        additional_press_kit: formData.additional.pressKit,
+        additional_linktree: formData.additional.linktree,
+        custom_links: formData.customLinks,
+      })
+      .eq('id', id);
+
+    if (error) {
+      toast({ title: "Error", description: "Failed to save links", variant: "destructive" });
+      return;
+    }
+
+    toast({ title: "Success", description: "Additional links updated" });
+    setOriginalData(prev => ({
+      ...prev,
+      additional: formData.additional,
+      customLinks: formData.customLinks,
+    }));
+    setEditingLinks(false);
+  };
+
+  const cancelLinks = () => {
+    setFormData(prev => ({
+      ...prev,
+      additional: originalData.additional,
+      customLinks: originalData.customLinks,
+    }));
+    setEditingLinks(false);
   };
 
   const handleDeleteArtist = async () => {
@@ -406,30 +533,15 @@ const ArtistProfile = () => {
             <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")} title="Back to Dashboard">
               <ArrowLeft className="w-4 h-4" />
             </Button>
-            {isEditMode && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                onClick={() => setShowDeleteDialog(true)}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete
-              </Button>
-            )}
             <Button
-              variant={isEditMode ? "outline" : "default"}
+              variant="outline"
               size="sm"
-              onClick={() => isEditMode ? handleCancel() : setIsEditMode(true)}
+              className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
+              onClick={() => setShowDeleteDialog(true)}
             >
-              {isEditMode ? <><X className="w-4 h-4 mr-2" />Cancel</> : <><Edit className="w-4 h-4 mr-2" />Edit</>}
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete
             </Button>
-            {isEditMode && (
-              <Button size="sm" onClick={handleSave}>
-                <Save className="w-4 h-4 mr-2" />
-                Save
-              </Button>
-            )}
           </div>
         </div>
       </header>
@@ -446,11 +558,9 @@ const ArtistProfile = () => {
                     {displayName.charAt(0)}
                   </AvatarFallback>
                 </Avatar>
-                {isEditMode && (
-                  <button className="absolute inset-0 bg-background/90 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:scale-105">
-                    <Camera className="w-7 h-7 text-primary" />
-                  </button>
-                )}
+                <button className="absolute inset-0 bg-background/90 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:scale-105">
+                  <Camera className="w-7 h-7 text-primary" />
+                </button>
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-3">
@@ -477,18 +587,28 @@ const ArtistProfile = () => {
           <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
             <div className="h-0.5 bg-primary/40" />
             <CardHeader className="bg-gradient-to-r from-primary/5 to-transparent">
-              <div className="flex items-center gap-2">
-                <Users className="w-5 h-5 text-primary" />
-                <CardTitle>Artist Details</CardTitle>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Users className="w-5 h-5 text-primary" />
+                    <CardTitle>Artist Details</CardTitle>
+                  </div>
+                  <CardDescription>Artist information and biography</CardDescription>
+                </div>
+                <CardEditActions
+                  editing={editingDetails}
+                  onEdit={() => setEditingDetails(true)}
+                  onSave={saveDetails}
+                  onCancel={cancelDetails}
+                />
               </div>
-              <CardDescription>Artist information and biography</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 pt-6">
               <FieldContainer>
                 <Label htmlFor="name" className="text-sm font-semibold text-muted-foreground mb-2 block">Artist Name</Label>
-                {isEditMode ? (
-                  <Input 
-                    id="name" 
+                {editingDetails ? (
+                  <Input
+                    id="name"
                     value={formData.name}
                     onChange={(e) => updateField('name', e.target.value)}
                     className="bg-background border-2 focus:border-primary transition-colors"
@@ -502,9 +622,9 @@ const ArtistProfile = () => {
 
               <FieldContainer>
                 <Label htmlFor="email" className="text-sm font-semibold text-muted-foreground mb-2 block">Email Address</Label>
-                {isEditMode ? (
-                  <Input 
-                    id="email" 
+                {editingDetails ? (
+                  <Input
+                    id="email"
                     type="email"
                     value={formData.email}
                     onChange={(e) => updateField('email', e.target.value)}
@@ -519,8 +639,8 @@ const ArtistProfile = () => {
 
               <FieldContainer>
                 <Label htmlFor="bio" className="text-sm font-semibold text-muted-foreground mb-2 block">Biography</Label>
-                {isEditMode ? (
-                  <Textarea 
+                {editingDetails ? (
+                  <Textarea
                     id="bio"
                     value={formData.bio}
                     onChange={(e) => updateField('bio', e.target.value)}
@@ -536,13 +656,13 @@ const ArtistProfile = () => {
 
               <FieldContainer>
                 <Label className="text-sm font-semibold text-muted-foreground mb-3 block">Genres</Label>
-                {isEditMode ? (
+                {editingDetails ? (
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-2 min-h-[2rem]">
                       {formData.genres.map(genre => (
-                        <Badge 
-                          key={genre} 
-                          variant="secondary" 
+                        <Badge
+                          key={genre}
+                          variant="secondary"
                           className="cursor-pointer hover:bg-destructive hover:text-destructive-foreground transition-colors px-3 py-1"
                           onClick={() => removeGenre(genre)}
                         >
@@ -550,7 +670,7 @@ const ArtistProfile = () => {
                         </Badge>
                       ))}
                     </div>
-                    <Input 
+                    <Input
                       placeholder="Type a genre and press Enter to add"
                       className="bg-background border-2 focus:border-primary transition-colors"
                       onKeyDown={(e) => {
@@ -580,9 +700,17 @@ const ArtistProfile = () => {
           <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
             <div className="h-0.5 bg-pink-500/40" />
             <CardHeader className="bg-gradient-to-r from-pink-500/5 to-transparent">
-              <div className="flex items-center gap-2">
-                <Instagram className="w-5 h-5 text-pink-500" />
-                <CardTitle>Social Media</CardTitle>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Instagram className="w-5 h-5 text-pink-500" />
+                  <CardTitle>Social Media</CardTitle>
+                </div>
+                <CardEditActions
+                  editing={editingSocial}
+                  onEdit={() => setEditingSocial(true)}
+                  onSave={saveSocial}
+                  onCancel={cancelSocial}
+                />
               </div>
             </CardHeader>
             <CardContent className="space-y-4 pt-6">
@@ -591,8 +719,8 @@ const ArtistProfile = () => {
                   <Instagram className="w-4 h-4 text-pink-500" />
                   <Label htmlFor="instagram" className="text-sm font-semibold text-muted-foreground">Instagram</Label>
                 </div>
-                {isEditMode ? (
-                  <Input 
+                {editingSocial ? (
+                  <Input
                     id="instagram"
                     value={formData.social.instagram}
                     onChange={(e) => updateNestedField('social', 'instagram', e.target.value)}
@@ -613,8 +741,8 @@ const ArtistProfile = () => {
                   <Music2 className="w-4 h-4 text-blue-500" />
                   <Label htmlFor="tiktok" className="text-sm font-semibold text-muted-foreground">TikTok</Label>
                 </div>
-                {isEditMode ? (
-                  <Input 
+                {editingSocial ? (
+                  <Input
                     id="tiktok"
                     value={formData.social.tiktok}
                     onChange={(e) => updateNestedField('social', 'tiktok', e.target.value)}
@@ -635,8 +763,8 @@ const ArtistProfile = () => {
                   <Youtube className="w-4 h-4 text-red-500" />
                   <Label htmlFor="youtube" className="text-sm font-semibold text-muted-foreground">YouTube</Label>
                 </div>
-                {isEditMode ? (
-                  <Input 
+                {editingSocial ? (
+                  <Input
                     id="youtube"
                     value={formData.social.youtube}
                     onChange={(e) => updateNestedField('social', 'youtube', e.target.value)}
@@ -653,14 +781,14 @@ const ArtistProfile = () => {
               </FieldContainer>
 
               {/* Custom Social Links Section */}
-              {(formData.customSocialLinks.length > 0 || isEditMode) && (
+              {(formData.customSocialLinks.length > 0 || editingSocial) && (
                 <div className="pt-4 border-t border-border">
                   <div className="flex items-center justify-between mb-4">
                     <Label className="text-sm font-semibold text-muted-foreground">Custom Social Links</Label>
-                    {isEditMode && (
-                      <Button 
-                        type="button" 
-                        variant="outline" 
+                    {editingSocial && (
+                      <Button
+                        type="button"
+                        variant="outline"
                         size="sm"
                         onClick={addCustomSocialLink}
                         className="text-xs"
@@ -670,14 +798,14 @@ const ArtistProfile = () => {
                       </Button>
                     )}
                   </div>
-                  
+
                   <div className="space-y-3">
                     {formData.customSocialLinks.map((link) => (
                       <FieldContainer key={link.id} className="relative">
-                        {isEditMode ? (
+                        {editingSocial ? (
                           <div className="space-y-3">
                             <div className="flex items-center gap-2">
-                              <Input 
+                              <Input
                                 value={link.label}
                                 onChange={(e) => updateCustomSocialLink(link.id, 'label', e.target.value)}
                                 placeholder="Platform Name (e.g., Twitter, Threads)"
@@ -693,7 +821,7 @@ const ArtistProfile = () => {
                                 <X className="w-4 h-4" />
                               </Button>
                             </div>
-                            <Input 
+                            <Input
                               value={link.url}
                               onChange={(e) => updateCustomSocialLink(link.id, 'url', e.target.value)}
                               placeholder="https://example.com/username"
@@ -718,7 +846,7 @@ const ArtistProfile = () => {
                       </FieldContainer>
                     ))}
 
-                    {formData.customSocialLinks.length === 0 && isEditMode && (
+                    {formData.customSocialLinks.length === 0 && editingSocial && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom social links added. Click "Add Link" to create one.
                       </p>
@@ -733,9 +861,17 @@ const ArtistProfile = () => {
           <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
             <div className="h-0.5 bg-green-500/40" />
             <CardHeader className="bg-gradient-to-r from-green-500/5 to-transparent">
-              <div className="flex items-center gap-2">
-                <Mic2 className="w-5 h-5 text-green-500" />
-                <CardTitle>Streaming Platforms</CardTitle>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Mic2 className="w-5 h-5 text-green-500" />
+                  <CardTitle>Streaming Platforms</CardTitle>
+                </div>
+                <CardEditActions
+                  editing={editingStreaming}
+                  onEdit={() => setEditingStreaming(true)}
+                  onSave={saveStreaming}
+                  onCancel={cancelStreaming}
+                />
               </div>
             </CardHeader>
             <CardContent className="space-y-4 pt-6">
@@ -744,8 +880,8 @@ const ArtistProfile = () => {
                   <img src="/spotify.svg" alt="Spotify" className="w-4 h-4" />
                   <Label htmlFor="spotify" className="text-sm font-semibold text-muted-foreground">Spotify</Label>
                 </div>
-                {isEditMode ? (
-                  <Input 
+                {editingStreaming ? (
+                  <Input
                     id="spotify"
                     value={formData.dsp.spotify}
                     onChange={(e) => updateNestedField('dsp', 'spotify', e.target.value)}
@@ -766,8 +902,8 @@ const ArtistProfile = () => {
                   <img src="/apple_music.png" alt="Apple Music" className="w-4 h-4" />
                   <Label htmlFor="appleMusic" className="text-sm font-semibold text-muted-foreground">Apple Music</Label>
                 </div>
-                {isEditMode ? (
-                  <Input 
+                {editingStreaming ? (
+                  <Input
                     id="appleMusic"
                     value={formData.dsp.appleMusic}
                     onChange={(e) => updateNestedField('dsp', 'appleMusic', e.target.value)}
@@ -788,8 +924,8 @@ const ArtistProfile = () => {
                   <img src="/soundcloud.png" alt="SoundCloud" className="w-4 h-4" />
                   <Label htmlFor="soundcloud" className="text-sm font-semibold text-muted-foreground">SoundCloud</Label>
                 </div>
-                {isEditMode ? (
-                  <Input 
+                {editingStreaming ? (
+                  <Input
                     id="soundcloud"
                     value={formData.dsp.soundcloud}
                     onChange={(e) => updateNestedField('dsp', 'soundcloud', e.target.value)}
@@ -806,14 +942,14 @@ const ArtistProfile = () => {
               </FieldContainer>
 
               {/* Custom DSP Links Section */}
-              {(formData.customDspLinks.length > 0 || isEditMode) && (
+              {(formData.customDspLinks.length > 0 || editingStreaming) && (
                 <div className="pt-4 border-t border-border">
                   <div className="flex items-center justify-between mb-4">
                     <Label className="text-sm font-semibold text-muted-foreground">Custom DSP Links</Label>
-                    {isEditMode && (
-                      <Button 
-                        type="button" 
-                        variant="outline" 
+                    {editingStreaming && (
+                      <Button
+                        type="button"
+                        variant="outline"
                         size="sm"
                         onClick={addCustomDspLink}
                         className="text-xs"
@@ -823,14 +959,14 @@ const ArtistProfile = () => {
                       </Button>
                     )}
                   </div>
-                  
+
                   <div className="space-y-3">
                     {formData.customDspLinks.map((link) => (
                       <FieldContainer key={link.id} className="relative">
-                        {isEditMode ? (
+                        {editingStreaming ? (
                           <div className="space-y-3">
                             <div className="flex items-center gap-2">
-                              <Input 
+                              <Input
                                 value={link.label}
                                 onChange={(e) => updateCustomDspLink(link.id, 'label', e.target.value)}
                                 placeholder="Platform Name (e.g., Tidal, Deezer)"
@@ -846,7 +982,7 @@ const ArtistProfile = () => {
                                 <X className="w-4 h-4" />
                               </Button>
                             </div>
-                            <Input 
+                            <Input
                               value={link.url}
                               onChange={(e) => updateCustomDspLink(link.id, 'url', e.target.value)}
                               placeholder="https://example.com/artist/..."
@@ -871,7 +1007,7 @@ const ArtistProfile = () => {
                       </FieldContainer>
                     ))}
 
-                    {formData.customDspLinks.length === 0 && isEditMode && (
+                    {formData.customDspLinks.length === 0 && editingStreaming && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom DSP links added. Click "Add Link" to create one.
                       </p>
@@ -886,11 +1022,21 @@ const ArtistProfile = () => {
           <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">
             <div className="h-0.5 bg-purple-500/40" />
             <CardHeader className="bg-gradient-to-r from-purple-500/5 to-transparent">
-              <div className="flex items-center gap-2">
-                <LinkIcon className="w-5 h-5 text-purple-500" />
-                <CardTitle>Additional Links</CardTitle>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <LinkIcon className="w-5 h-5 text-purple-500" />
+                    <CardTitle>Additional Links</CardTitle>
+                  </div>
+                  <CardDescription>Any other important links pertaining to the artist</CardDescription>
+                </div>
+                <CardEditActions
+                  editing={editingLinks}
+                  onEdit={() => setEditingLinks(true)}
+                  onSave={saveLinks}
+                  onCancel={cancelLinks}
+                />
               </div>
-              <CardDescription>Any other important links pertaining to the artist</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 pt-6">
               <FieldContainer>
@@ -898,7 +1044,7 @@ const ArtistProfile = () => {
                   <LinkIcon className="w-4 h-4 text-purple-500" />
                   <Label htmlFor="website" className="text-sm font-semibold text-muted-foreground">Artist Website</Label>
                 </div>
-                {isEditMode ? (
+                {editingLinks ? (
                   <Input
                     id="website"
                     value={formData.additional.website}
@@ -920,8 +1066,8 @@ const ArtistProfile = () => {
                   <LinkIcon className="w-4 h-4 text-blue-500" />
                   <Label htmlFor="pressKit" className="text-sm font-semibold text-muted-foreground">Press Kit</Label>
                 </div>
-                {isEditMode ? (
-                  <Input 
+                {editingLinks ? (
+                  <Input
                     id="pressKit"
                     value={formData.additional.pressKit}
                     onChange={(e) => updateNestedField('additional', 'pressKit', e.target.value)}
@@ -942,8 +1088,8 @@ const ArtistProfile = () => {
                   <LinkIcon className="w-4 h-4 text-green-500" />
                   <Label htmlFor="linktree" className="text-sm font-semibold text-muted-foreground">Linktree</Label>
                 </div>
-                {isEditMode ? (
-                  <Input 
+                {editingLinks ? (
+                  <Input
                     id="linktree"
                     value={formData.additional.linktree}
                     onChange={(e) => updateNestedField('additional', 'linktree', e.target.value)}
@@ -960,14 +1106,14 @@ const ArtistProfile = () => {
               </FieldContainer>
 
               {/* Custom Links Section */}
-              {(formData.customLinks.length > 0 || isEditMode) && (
+              {(formData.customLinks.length > 0 || editingLinks) && (
                 <div className="pt-4 border-t border-border">
                   <div className="flex items-center justify-between mb-4">
                     <Label className="text-sm font-semibold text-muted-foreground">Custom Links</Label>
-                    {isEditMode && (
-                      <Button 
-                        type="button" 
-                        variant="outline" 
+                    {editingLinks && (
+                      <Button
+                        type="button"
+                        variant="outline"
                         size="sm"
                         onClick={addCustomLink}
                         className="text-xs"
@@ -977,14 +1123,14 @@ const ArtistProfile = () => {
                       </Button>
                     )}
                   </div>
-                  
+
                   <div className="space-y-3">
                     {formData.customLinks.map((link) => (
                       <FieldContainer key={link.id} className="relative">
-                        {isEditMode ? (
+                        {editingLinks ? (
                           <div className="space-y-3">
                             <div className="flex items-center gap-2">
-                              <Input 
+                              <Input
                                 value={link.label}
                                 onChange={(e) => updateCustomLink(link.id, 'label', e.target.value)}
                                 placeholder="Link Label (e.g., Website, Merch)"
@@ -1000,7 +1146,7 @@ const ArtistProfile = () => {
                                 <X className="w-4 h-4" />
                               </Button>
                             </div>
-                            <Input 
+                            <Input
                               value={link.url}
                               onChange={(e) => updateCustomLink(link.id, 'url', e.target.value)}
                               placeholder="https://example.com"
@@ -1025,7 +1171,7 @@ const ArtistProfile = () => {
                       </FieldContainer>
                     ))}
 
-                    {formData.customLinks.length === 0 && isEditMode && (
+                    {formData.customLinks.length === 0 && editingLinks && (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         No custom links added. Click "Add Link" to create one.
                       </p>
@@ -1037,7 +1183,7 @@ const ArtistProfile = () => {
           </Card>
 
           {/* Credentials Vault -- per-artist platform logins, encrypted at rest */}
-          {id && <CredentialsVault artistId={id} isEditMode={isEditMode} />}
+          {id && <CredentialsVault artistId={id} />}
 
           {/* My Notes -- private to you */}
           <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">

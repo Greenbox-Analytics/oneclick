@@ -21,7 +21,6 @@ import PasswordRevealDialog from "./PasswordRevealDialog";
 
 interface Props {
   artistId: string;
-  isEditMode: boolean;
 }
 
 const REVEAL_TIMEOUT_MS = 30_000;
@@ -42,7 +41,7 @@ const EMPTY_DRAFT: DraftCredential = {
   notes: "",
 };
 
-export default function CredentialsVault({ artistId, isEditMode }: Props) {
+export default function CredentialsVault({ artistId }: Props) {
   const { data: credentials = [], isLoading } = useArtistCredentials(artistId);
   const createMutation = useCreateCredential(artistId);
   const updateMutation = useUpdateCredential(artistId);
@@ -132,9 +131,7 @@ export default function CredentialsVault({ artistId, isEditMode }: Props) {
 
           {!isLoading && sorted.length === 0 && !draft && (
             <p className="text-sm text-muted-foreground text-center py-4">
-              {isEditMode
-                ? 'No credentials saved yet. Click "Add Credential" to create one.'
-                : "No credentials saved yet."}
+              No credentials saved yet. Click "Add Credential" to create one.
             </p>
           )}
 
@@ -142,7 +139,6 @@ export default function CredentialsVault({ artistId, isEditMode }: Props) {
             <CredentialRow
               key={cred.id}
               credential={cred}
-              isEditMode={isEditMode}
               revealedPassword={revealed[cred.id]}
               onRequestReveal={() => setRevealDialogFor(cred.id)}
               onHide={() => handleHide(cred.id)}
@@ -219,7 +215,7 @@ export default function CredentialsVault({ artistId, isEditMode }: Props) {
             </div>
           )}
 
-          {isEditMode && !draft && (
+          {!draft && (
             <Button variant="outline" size="sm" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
               <Plus className="w-4 h-4 mr-1" />
               Add Credential
@@ -245,7 +241,6 @@ export default function CredentialsVault({ artistId, isEditMode }: Props) {
 
 interface RowProps {
   credential: ArtistCredential;
-  isEditMode: boolean;
   revealedPassword: string | undefined;
   onRequestReveal: () => void;
   onHide: () => void;
@@ -255,7 +250,6 @@ interface RowProps {
 
 function CredentialRow({
   credential,
-  isEditMode,
   revealedPassword,
   onRequestReveal,
   onHide,
@@ -326,22 +320,20 @@ function CredentialRow({
               <p className="font-semibold text-foreground">{credential.platform_name}</p>
               <p className="text-sm text-muted-foreground">{credential.login_identifier}</p>
             </div>
-            {isEditMode && (
-              <div className="flex gap-1">
-                <Button variant="ghost" size="icon" onClick={() => setEditing(true)} title="Edit">
-                  <Edit className="w-4 h-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={onDelete}
-                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                  title="Delete"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-            )}
+            <div className="flex gap-1">
+              <Button variant="ghost" size="icon" onClick={() => setEditing(true)} title="Edit">
+                <Edit className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onDelete}
+                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                title="Delete"
+              >
+                <Trash2 className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
