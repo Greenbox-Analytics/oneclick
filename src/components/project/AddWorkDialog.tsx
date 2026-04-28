@@ -151,12 +151,15 @@ export default function AddWorkDialog({ open, onOpenChange, projectId, artistId 
           {audioFiles.length > 0 && (
             <div className="space-y-2">
               <Label>Link Audio File</Label>
-              <Select value={selectedAudioId} onValueChange={setSelectedAudioId}>
+              <Select
+                value={selectedAudioId || "__none__"}
+                onValueChange={(v) => setSelectedAudioId(v === "__none__" ? "" : v)}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="(None)" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">(None)</SelectItem>
+                  <SelectItem value="__none__">(None)</SelectItem>
                   {audioFiles.map((af) => (
                     <SelectItem key={af.id} value={af.id}>
                       {af.file_name}
