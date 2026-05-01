@@ -28,7 +28,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Music,
   ArrowLeft,
   Folder,
   Search,
@@ -44,6 +43,7 @@ import {
   ChevronRight,
   BookOpen,
 } from "lucide-react";
+import { PageHeader } from "@/components/layout/PageHeader";
 
 const ROLE_COLORS: Record<string, string> = {
   owner: "bg-purple-500/20 text-purple-400 border-purple-500/30",
@@ -293,19 +293,10 @@ const Portfolio = () => {
   return (
     <div className="min-h-screen bg-background">
       {/* === HEADER === */}
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/dashboard")}
-          >
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-          </div>
-
-          <div className="flex items-center gap-2">
+      <PageHeader
+        showBack={false}
+        actions={
+          <>
             <Button
               variant="ghost"
               size="icon"
@@ -344,9 +335,9 @@ const Portfolio = () => {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8">
         {/* === PAGE TITLE === */}

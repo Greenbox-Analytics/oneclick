@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { Plus, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   DndContext,
@@ -106,6 +108,37 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const [newColumnTitle, setNewColumnTitle] = useState("");
+  const isMobile = useIsMobile();
+  const [mobileSelectedColumnId, setMobileSelectedColumnId] = useState<string | null>(null);
+
+  // Initialize / re-sync the selected mobile column when columns load or change
+  useEffect(() => {
+    if (!isMobile) return;
+    if (columns.length === 0) {
+      setMobileSelectedColumnId(null);
+      return;
+    }
+    const sorted = [...columns].sort((a, b) => a.position - b.position);
+    if (!mobileSelectedColumnId || !sorted.find((c) => c.id === mobileSelectedColumnId)) {
+      setMobileSelectedColumnId(sorted[0].id);
+    }
+  }, [isMobile, columns, mobileSelectedColumnId]);
+
+  const handleMoveTask = useCallback(
+    (taskId: string, targetColumnId: string) => {
+      const targetTasks = tasks
+        .filter((t) => t.column_id === targetColumnId && t.id !== taskId)
+        .sort((a, b) => a.position - b.position);
+      reorderTasks([
+        {
+          task_id: taskId,
+          target_column_id: targetColumnId,
+          position: targetTasks.length,
+        },
+      ]);
+    },
+    [tasks, reorderTasks],
+  );
 
   // DnD sensors — add activation distance to avoid triggering on clicks
   const sensors = useSensors(
@@ -227,78 +260,166 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
         )}
       </div>
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCorners}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext items={tasks.map((t) => t.id)} strategy={rectSortingStrategy}>
-        <div className="flex gap-4 overflow-x-auto pb-4 min-h-[400px]">
-          {columns
-            .sort((a, b) => a.position - b.position)
-            .map((column) => (
-              <KanbanColumn
-                key={column.id}
-                column={column}
-                tasks={tasks}
-                parentTasks={parents}
-                onDeleteTask={deleteTask}
-                onDeleteColumn={deleteColumn}
-                onUpdateColumn={updateColumn}
-                onTaskClick={handleTaskClick}
-                onCreateTaskSidebar={handleCreateTaskSidebar}
-                timezone={settings?.timezone}
-              />
-            ))}
+      {isMobile ? (
+        // Mobile: single-column with picker, no drag-and-drop
+        <div className="space-y-4">
+          {(() => {
+            const sorted = [...columns].sort((a, b) => a.position - b.position);
+            const selected =
+              sorted.find((c) => c.id === mobileSelectedColumnId) ?? sorted[0];
+            const moveOptions = sorted
+              .filter((c) => c.id !== selected?.id)
+              .map((c) => ({ id: c.id, title: c.title }));
 
-          {/* Add column */}
-          <div className="w-72 shrink-0">
-            {isAddingColumn ? (
-              <div className="bg-muted/50 rounded-lg p-3 space-y-2">
-                <Input
-                  placeholder="Column title..."
-                  value={newColumnTitle}
-                  onChange={(e) => setNewColumnTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleAddColumn();
-                    if (e.key === "Escape") setIsAddingColumn(false);
-                  }}
-                  autoFocus
-                />
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={handleAddColumn} className="flex-1">
-                    Add
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setIsAddingColumn(false)}>
-                    Cancel
+            return (
+              <>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={selected?.id ?? ""}
+                    onValueChange={(v) => setMobileSelectedColumnId(v)}
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Select column" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sorted.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.title}
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            ({tasks.filter((t) => t.column_id === c.id).length})
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setIsAddingColumn(true)}
+                    title="Add column"
+                  >
+                    <Plus className="w-4 h-4" />
                   </Button>
                 </div>
-              </div>
-            ) : (
-              <Button
-                variant="outline"
-                className="w-full justify-start border-dashed h-12"
-                onClick={() => setIsAddingColumn(true)}
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Add column
-              </Button>
-            )}
-          </div>
+
+                {isAddingColumn && (
+                  <div className="bg-muted/50 rounded-lg p-3 space-y-2">
+                    <Input
+                      placeholder="Column title..."
+                      value={newColumnTitle}
+                      onChange={(e) => setNewColumnTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleAddColumn();
+                        if (e.key === "Escape") setIsAddingColumn(false);
+                      }}
+                      autoFocus
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={handleAddColumn} className="flex-1">
+                        Add
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setIsAddingColumn(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {selected && (
+                  <KanbanColumn
+                    key={selected.id}
+                    column={selected}
+                    tasks={tasks}
+                    parentTasks={parents}
+                    onDeleteTask={deleteTask}
+                    onDeleteColumn={deleteColumn}
+                    onUpdateColumn={updateColumn}
+                    onTaskClick={handleTaskClick}
+                    onCreateTaskSidebar={handleCreateTaskSidebar}
+                    timezone={settings?.timezone}
+                    variant="mobile"
+                    moveOptions={moveOptions}
+                    onMoveTask={handleMoveTask}
+                  />
+                )}
+              </>
+            );
+          })()}
         </div>
-        </SortableContext>
-        <DragOverlay dropAnimation={null}>
-          {activeTaskId ? (() => {
-            const t = tasks.find((t) => t.id === activeTaskId);
-            return t ? (
-              <div className="w-72 shadow-xl">
-                <KanbanCard task={t} onDelete={() => {}} onClick={() => {}} timezone={settings?.timezone} />
-              </div>
-            ) : null;
-          })() : null}
-        </DragOverlay>
-      </DndContext>
+      ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext items={tasks.map((t) => t.id)} strategy={rectSortingStrategy}>
+          <div className="flex gap-4 overflow-x-auto pb-4 min-h-[400px]">
+            {columns
+              .sort((a, b) => a.position - b.position)
+              .map((column) => (
+                <KanbanColumn
+                  key={column.id}
+                  column={column}
+                  tasks={tasks}
+                  parentTasks={parents}
+                  onDeleteTask={deleteTask}
+                  onDeleteColumn={deleteColumn}
+                  onUpdateColumn={updateColumn}
+                  onTaskClick={handleTaskClick}
+                  onCreateTaskSidebar={handleCreateTaskSidebar}
+                  timezone={settings?.timezone}
+                />
+              ))}
+
+            {/* Add column */}
+            <div className="w-72 shrink-0">
+              {isAddingColumn ? (
+                <div className="bg-muted/50 rounded-lg p-3 space-y-2">
+                  <Input
+                    placeholder="Column title..."
+                    value={newColumnTitle}
+                    onChange={(e) => setNewColumnTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleAddColumn();
+                      if (e.key === "Escape") setIsAddingColumn(false);
+                    }}
+                    autoFocus
+                  />
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={handleAddColumn} className="flex-1">
+                      Add
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setIsAddingColumn(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  variant="outline"
+                  className="w-full justify-start border-dashed h-12"
+                  onClick={() => setIsAddingColumn(true)}
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add column
+                </Button>
+              )}
+            </div>
+          </div>
+          </SortableContext>
+          <DragOverlay dropAnimation={null}>
+            {activeTaskId ? (() => {
+              const t = tasks.find((t) => t.id === activeTaskId);
+              return t ? (
+                <div className="w-72 shadow-xl">
+                  <KanbanCard task={t} onDelete={() => {}} onClick={() => {}} timezone={settings?.timezone} />
+                </div>
+              ) : null;
+            })() : null}
+          </DragOverlay>
+        </DndContext>
+      )}
 
       {/* Parent tasks section */}
       <Separator className="my-8" />

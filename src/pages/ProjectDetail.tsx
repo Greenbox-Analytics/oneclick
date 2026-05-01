@@ -28,6 +28,9 @@ import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
+import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useIsMobile } from "@/hooks/use-mobile";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 const ROLE_COLORS: Record<string, string> = {
@@ -47,6 +50,7 @@ const ProjectDetail = () => {
   const userRole = useMyRole(projectId);
 
   const [activeTab, setActiveTab] = useState("files");
+  const isMobile = useIsMobile();
 
   const { connections } = useIntegrations();
   const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
@@ -128,10 +132,13 @@ const ProjectDetail = () => {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
+              <div className="md:hidden">
+                <MobileNavSheet />
+              </div>
               <Button
                 variant="ghost"
                 size="sm"
-                className="shrink-0 text-muted-foreground hover:text-foreground"
+                className="shrink-0 text-muted-foreground hover:text-foreground hidden md:inline-flex"
                 onClick={() => navigate("/portfolio")}
               >
                 <ArrowLeft className="w-4 h-4 mr-1" /> Portfolio
@@ -202,26 +209,42 @@ const ProjectDetail = () => {
       {/* Main content with tabs */}
       <main className="container mx-auto px-4 py-6 max-w-5xl">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList data-walkthrough="project-tabs" className="mb-6">
-            <TabsTrigger value="works" className="gap-1.5">
-              <Music className="w-4 h-4" /> Works
-            </TabsTrigger>
-            <TabsTrigger value="files" className="gap-1.5">
-              <FileText className="w-4 h-4" /> Files
-            </TabsTrigger>
-            <TabsTrigger value="audio" className="gap-1.5">
-              <Volume2 className="w-4 h-4" /> Audio
-            </TabsTrigger>
-            <TabsTrigger data-walkthrough="project-members" value="members" className="gap-1.5">
-              <Users className="w-4 h-4" /> Members
-            </TabsTrigger>
-            <TabsTrigger value="notes" className="gap-1.5">
-              <StickyNote className="w-4 h-4" /> Notes
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="gap-1.5">
-              <Settings className="w-4 h-4" /> Settings
-            </TabsTrigger>
-          </TabsList>
+          {isMobile ? (
+            <Select value={activeTab} onValueChange={setActiveTab}>
+              <SelectTrigger className="mb-6 w-full" data-walkthrough="project-tabs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="works"><span className="inline-flex items-center gap-2"><Music className="w-4 h-4" /> Works</span></SelectItem>
+                <SelectItem value="files"><span className="inline-flex items-center gap-2"><FileText className="w-4 h-4" /> Files</span></SelectItem>
+                <SelectItem value="audio"><span className="inline-flex items-center gap-2"><Volume2 className="w-4 h-4" /> Audio</span></SelectItem>
+                <SelectItem value="members"><span className="inline-flex items-center gap-2"><Users className="w-4 h-4" /> Members</span></SelectItem>
+                <SelectItem value="notes"><span className="inline-flex items-center gap-2"><StickyNote className="w-4 h-4" /> Notes</span></SelectItem>
+                <SelectItem value="settings"><span className="inline-flex items-center gap-2"><Settings className="w-4 h-4" /> Settings</span></SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            <TabsList data-walkthrough="project-tabs" className="mb-6">
+              <TabsTrigger value="works" className="gap-1.5">
+                <Music className="w-4 h-4" /> Works
+              </TabsTrigger>
+              <TabsTrigger value="files" className="gap-1.5">
+                <FileText className="w-4 h-4" /> Files
+              </TabsTrigger>
+              <TabsTrigger value="audio" className="gap-1.5">
+                <Volume2 className="w-4 h-4" /> Audio
+              </TabsTrigger>
+              <TabsTrigger data-walkthrough="project-members" value="members" className="gap-1.5">
+                <Users className="w-4 h-4" /> Members
+              </TabsTrigger>
+              <TabsTrigger value="notes" className="gap-1.5">
+                <StickyNote className="w-4 h-4" /> Notes
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="gap-1.5">
+                <Settings className="w-4 h-4" /> Settings
+              </TabsTrigger>
+            </TabsList>
+          )}
 
           <TabsContent value="works">
             {projectId && (

@@ -2,12 +2,17 @@ import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Calendar, MoreHorizontal, Trash2, ExternalLink, Users, CornerDownRight, AlertCircle } from "lucide-react";
+import { Calendar, MoreHorizontal, Trash2, ExternalLink, Users, CornerDownRight, AlertCircle, ArrowRightLeft } from "lucide-react";
 import { parseDateString, getTodayString } from "@/lib/dateUtils";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSortable } from "@dnd-kit/sortable";
@@ -15,11 +20,19 @@ import { CSS } from "@dnd-kit/utilities";
 import { getLabelColor } from "./labelColors";
 import type { BoardTask } from "@/types/integrations";
 
+interface MoveOption {
+  id: string;
+  title: string;
+}
+
 interface KanbanCardProps {
   task: BoardTask;
   onDelete: (taskId: string) => void;
   onClick: (taskId: string) => void;
   timezone?: string;
+  disableDrag?: boolean;
+  moveOptions?: MoveOption[];
+  onMove?: (taskId: string, targetColumnId: string) => void;
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -29,7 +42,7 @@ const PRIORITY_COLORS: Record<string, string> = {
   urgent: "bg-red-100 text-red-700",
 };
 
-export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onClick, timezone }: KanbanCardProps) {
+export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onClick, timezone, disableDrag, moveOptions, onMove }: KanbanCardProps) {
   const {
     attributes,
     listeners,
@@ -37,7 +50,7 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id, data: { type: "task", task } });
+  } = useSortable({ id: task.id, data: { type: "task", task }, disabled: !!disableDrag });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -46,6 +59,9 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
     borderLeftColor: task.color || "transparent",
     borderLeftWidth: task.color ? 3 : 1,
   };
+
+  const dragProps = disableDrag ? {} : { ...attributes, ...listeners };
+  const cursorClass = disableDrag ? "cursor-pointer" : "cursor-grab active:cursor-grabbing";
 
   const today = getTodayString(timezone);
   const isDueToday = task.due_date === today;
@@ -69,10 +85,9 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
     <Card
       ref={setNodeRef}
       style={style}
-      className="cursor-grab active:cursor-grabbing hover:shadow-sm transition-shadow"
+      className={`${cursorClass} hover:shadow-sm transition-shadow`}
       onClick={() => onClick(task.id)}
-      {...attributes}
-      {...listeners}
+      {...dragProps}
     >
       <CardContent className="p-3 space-y-2">
         <div className="flex items-start justify-between gap-2">
@@ -110,6 +125,33 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {moveOptions && moveOptions.length > 0 && onMove && (
+                <>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <ArrowRightLeft className="h-4 w-4 mr-2" />
+                      Move to...
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuLabel className="text-xs text-muted-foreground">
+                        Column
+                      </DropdownMenuLabel>
+                      {moveOptions.map((opt) => (
+                        <DropdownMenuItem
+                          key={opt.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onMove(task.id, opt.id);
+                          }}
+                        >
+                          {opt.title}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSeparator />
+                </>
+              )}
               {task.external_url && (
                 <DropdownMenuItem
                   onClick={(e) => {

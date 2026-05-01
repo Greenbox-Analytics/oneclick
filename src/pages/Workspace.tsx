@@ -1,9 +1,12 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Music, ArrowLeft, LayoutGrid, HardDrive, Bell, CalendarDays, Settings, BookOpen } from "lucide-react";
+import { LayoutGrid, HardDrive, Bell, CalendarDays, Settings, BookOpen } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuth } from "@/contexts/AuthContext";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 import { IntegrationHub } from "@/components/workspace/IntegrationHub";
@@ -28,6 +31,7 @@ const Workspace = () => {
   const { settings } = useWorkspaceSettings();
   const queryClient = useQueryClient();
   const unreadNotifications = useUnreadCount();
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -99,29 +103,9 @@ const Workspace = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => navigate(-1)}
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Back
-            </Button>
-            <div className="w-px h-6 bg-border" />
-            <div
-              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => navigate("/dashboard")}
-            >
-              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-                <Music className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        actions={
+          <>
             <Button
               variant="ghost"
               size="icon"
@@ -132,9 +116,9 @@ const Workspace = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
@@ -148,33 +132,73 @@ const Workspace = () => {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="mb-6" data-walkthrough="workspace-tabs">
-            <TabsTrigger value="integrations" className="gap-2">
-              <HardDrive className="w-4 h-4" />
-              Integrations
-            </TabsTrigger>
-            <TabsTrigger value="boards" className="gap-2">
-              <LayoutGrid className="w-4 h-4" />
-              Project Boards
-            </TabsTrigger>
-            <TabsTrigger value="calendar" className="gap-2">
-              <CalendarDays className="w-4 h-4" />
-              Calendar
-            </TabsTrigger>
-            <TabsTrigger value="notifications" className="gap-2">
-              <Bell className="w-4 h-4" />
-              Notifications
-              {unreadNotifications > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-destructive text-destructive-foreground rounded-full">
-                  {unreadNotifications}
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="gap-2">
-              <Settings className="w-4 h-4" />
-              Settings
-            </TabsTrigger>
-          </TabsList>
+          {isMobile ? (
+            <Select value={activeTab} onValueChange={setActiveTab}>
+              <SelectTrigger className="mb-6 w-full" data-walkthrough="workspace-tabs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="integrations">
+                  <span className="inline-flex items-center gap-2">
+                    <HardDrive className="w-4 h-4" /> Integrations
+                  </span>
+                </SelectItem>
+                <SelectItem value="boards">
+                  <span className="inline-flex items-center gap-2">
+                    <LayoutGrid className="w-4 h-4" /> Project Boards
+                  </span>
+                </SelectItem>
+                <SelectItem value="calendar">
+                  <span className="inline-flex items-center gap-2">
+                    <CalendarDays className="w-4 h-4" /> Calendar
+                  </span>
+                </SelectItem>
+                <SelectItem value="notifications">
+                  <span className="inline-flex items-center gap-2">
+                    <Bell className="w-4 h-4" /> Notifications
+                    {unreadNotifications > 0 && (
+                      <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-destructive text-destructive-foreground rounded-full">
+                        {unreadNotifications}
+                      </span>
+                    )}
+                  </span>
+                </SelectItem>
+                <SelectItem value="settings">
+                  <span className="inline-flex items-center gap-2">
+                    <Settings className="w-4 h-4" /> Settings
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            <TabsList className="mb-6" data-walkthrough="workspace-tabs">
+              <TabsTrigger value="integrations" className="gap-2">
+                <HardDrive className="w-4 h-4" />
+                Integrations
+              </TabsTrigger>
+              <TabsTrigger value="boards" className="gap-2">
+                <LayoutGrid className="w-4 h-4" />
+                Project Boards
+              </TabsTrigger>
+              <TabsTrigger value="calendar" className="gap-2">
+                <CalendarDays className="w-4 h-4" />
+                Calendar
+              </TabsTrigger>
+              <TabsTrigger value="notifications" className="gap-2">
+                <Bell className="w-4 h-4" />
+                Notifications
+                {unreadNotifications > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-destructive text-destructive-foreground rounded-full">
+                    {unreadNotifications}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="gap-2">
+                <Settings className="w-4 h-4" />
+                Settings
+              </TabsTrigger>
+            </TabsList>
+          )}
 
           <TabsContent value="integrations" data-walkthrough="workspace-integrations">
             <IntegrationHub />

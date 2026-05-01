@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Music, AlertCircle, ArrowLeft, BookOpen, Info } from "lucide-react";
+import { AlertCircle, ArrowLeft, BookOpen, Info } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -67,15 +68,10 @@ const OneClick = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/dashboard")}>
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        showBack={false}
+        actions={
+          <>
             <Button
               variant="ghost"
               size="icon"
@@ -85,13 +81,13 @@ const OneClick = () => {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="outline" onClick={() => navigate("/tools")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back to Tools
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         <div className="mb-8">

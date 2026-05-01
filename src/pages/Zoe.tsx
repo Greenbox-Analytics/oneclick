@@ -1,8 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Music, PanelLeftClose, PanelLeft, RefreshCw, BookOpen } from "lucide-react";
+import { ArrowLeft, Music, PanelLeftClose, PanelLeft, RefreshCw, BookOpen, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { ZoeChatMessages } from "@/components/zoe/ZoeChatMessages";
 import { ZoeInputBar } from "@/components/zoe/ZoeInputBar";
 import { ZoeDocumentPanel } from "@/components/zoe/ZoeDocumentPanel";
@@ -25,6 +28,8 @@ import { useZoeData } from "@/hooks/useZoeData";
 
 const Zoe = () => {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
+  const [mobileDocsOpen, setMobileDocsOpen] = useState(false);
 
   const {
     artists,
@@ -108,11 +113,14 @@ const Zoe = () => {
       <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 flex-shrink-0 z-10">
         <div className="px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            <div className="md:hidden">
+              <MobileNavSheet />
+            </div>
             <Button
               variant="ghost"
               size="icon"
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="h-9 w-9"
+              className="h-9 w-9 hidden md:inline-flex"
             >
               {sidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeft className="h-5 w-5" />}
             </Button>
@@ -143,6 +151,15 @@ const Zoe = () => {
                 )}
               </Badge>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2 md:hidden"
+              onClick={() => setMobileDocsOpen(true)}
+            >
+              <FileText className="w-4 h-4" />
+              Docs
+            </Button>
             {messages.length > 0 && (
               <Button data-walkthrough="zoe-newchat" variant="outline" onClick={handleNewConversation} size="sm" className="gap-2">
                 <RefreshCw className="w-4 h-4" />
@@ -159,9 +176,9 @@ const Zoe = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" onClick={() => navigate("/tools")} size="sm" className="gap-2">
+            <Button variant="outline" onClick={() => navigate("/tools")} size="sm" className="gap-2 hidden md:inline-flex">
               <ArrowLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">Back to Tools</span>
+              <span>Back to Tools</span>
             </Button>
           </div>
         </div>
@@ -169,48 +186,50 @@ const Zoe = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
-        <ZoeDocumentPanel
-          sidebarRef={sidebarRef}
-          sidebarOpen={sidebarOpen}
-          sidebarWidth={sidebarWidth}
-          isResizing={isResizing}
-          onMouseDown={handleMouseDown}
-          artists={artists}
-          selectedArtist={selectedArtist}
-          onArtistChange={(v) => { setSelectedArtist(v); setSelectedProject(''); setSelectedContracts([]); }}
-          projects={projects}
-          selectedProject={selectedProject}
-          onProjectChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }}
-          contracts={contracts}
-          selectedContracts={selectedContracts}
-          onSelectedContractsChange={setSelectedContracts}
-          contractsOpen={contractsOpen}
-          onContractsOpenChange={setContractsOpen}
-          sharedWorks={sharedWorks}
-          isLoadingSharedWorks={isLoadingSharedWorks}
-          sharedWorksOpen={sharedWorksOpen}
-          onSharedWorksOpenChange={setSharedWorksOpen}
-          selectedSharedWork={selectedSharedWork}
-          onSelectedSharedWorkChange={setSelectedSharedWork}
-          sharedWorkFiles={sharedWorkFiles}
-          loadingWorkFiles={loadingWorkFiles}
-          onSharedWorkFilesReset={() => setSharedWorkFiles([])}
-          uploadModalOpen={uploadModalOpen}
-          onUploadModalOpenChange={setUploadModalOpen}
-          onUploadComplete={handleUploadComplete}
-          isCreateProjectOpen={isCreateProjectOpen}
-          onCreateProjectOpenChange={setIsCreateProjectOpen}
-          newProjectNameInput={newProjectNameInput}
-          onNewProjectNameInputChange={setNewProjectNameInput}
-          isCreatingProject={isCreatingProject}
-          onCreateProject={handleCreateProject}
-          deleteDialogOpen={deleteDialogOpen}
-          onDeleteDialogOpenChange={setDeleteDialogOpen}
-          contractToDelete={contractToDelete}
-          deleting={deleting}
-          onDeleteClick={handleDeleteClick}
-          onDeleteConfirm={handleDeleteConfirm}
-        />
+        {!isMobile && (
+          <ZoeDocumentPanel
+            sidebarRef={sidebarRef}
+            sidebarOpen={sidebarOpen}
+            sidebarWidth={sidebarWidth}
+            isResizing={isResizing}
+            onMouseDown={handleMouseDown}
+            artists={artists}
+            selectedArtist={selectedArtist}
+            onArtistChange={(v) => { setSelectedArtist(v); setSelectedProject(''); setSelectedContracts([]); }}
+            projects={projects}
+            selectedProject={selectedProject}
+            onProjectChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }}
+            contracts={contracts}
+            selectedContracts={selectedContracts}
+            onSelectedContractsChange={setSelectedContracts}
+            contractsOpen={contractsOpen}
+            onContractsOpenChange={setContractsOpen}
+            sharedWorks={sharedWorks}
+            isLoadingSharedWorks={isLoadingSharedWorks}
+            sharedWorksOpen={sharedWorksOpen}
+            onSharedWorksOpenChange={setSharedWorksOpen}
+            selectedSharedWork={selectedSharedWork}
+            onSelectedSharedWorkChange={setSelectedSharedWork}
+            sharedWorkFiles={sharedWorkFiles}
+            loadingWorkFiles={loadingWorkFiles}
+            onSharedWorkFilesReset={() => setSharedWorkFiles([])}
+            uploadModalOpen={uploadModalOpen}
+            onUploadModalOpenChange={setUploadModalOpen}
+            onUploadComplete={handleUploadComplete}
+            isCreateProjectOpen={isCreateProjectOpen}
+            onCreateProjectOpenChange={setIsCreateProjectOpen}
+            newProjectNameInput={newProjectNameInput}
+            onNewProjectNameInputChange={setNewProjectNameInput}
+            isCreatingProject={isCreatingProject}
+            onCreateProject={handleCreateProject}
+            deleteDialogOpen={deleteDialogOpen}
+            onDeleteDialogOpenChange={setDeleteDialogOpen}
+            contractToDelete={contractToDelete}
+            deleting={deleting}
+            onDeleteClick={handleDeleteClick}
+            onDeleteConfirm={handleDeleteConfirm}
+          />
+        )}
 
         {/* Chat Area */}
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -247,6 +266,62 @@ const Zoe = () => {
           </div>
         </main>
       </div>
+
+      {/* Mobile: Documents panel as a Sheet */}
+      {isMobile && (
+      <Sheet open={mobileDocsOpen} onOpenChange={setMobileDocsOpen}>
+        <SheetContent side="left" className="w-[90vw] max-w-md p-0 flex flex-col">
+          <SheetHeader className="px-4 py-3 border-b border-border text-left">
+            <SheetTitle>Documents</SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-hidden">
+            <ZoeDocumentPanel
+              variant="sheet"
+              sidebarRef={sidebarRef}
+              sidebarOpen
+              sidebarWidth={0}
+              isResizing={false}
+              onMouseDown={() => {}}
+              artists={artists}
+              selectedArtist={selectedArtist}
+              onArtistChange={(v) => { setSelectedArtist(v); setSelectedProject(''); setSelectedContracts([]); }}
+              projects={projects}
+              selectedProject={selectedProject}
+              onProjectChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }}
+              contracts={contracts}
+              selectedContracts={selectedContracts}
+              onSelectedContractsChange={setSelectedContracts}
+              contractsOpen={contractsOpen}
+              onContractsOpenChange={setContractsOpen}
+              sharedWorks={sharedWorks}
+              isLoadingSharedWorks={isLoadingSharedWorks}
+              sharedWorksOpen={sharedWorksOpen}
+              onSharedWorksOpenChange={setSharedWorksOpen}
+              selectedSharedWork={selectedSharedWork}
+              onSelectedSharedWorkChange={setSelectedSharedWork}
+              sharedWorkFiles={sharedWorkFiles}
+              loadingWorkFiles={loadingWorkFiles}
+              onSharedWorkFilesReset={() => setSharedWorkFiles([])}
+              uploadModalOpen={uploadModalOpen}
+              onUploadModalOpenChange={setUploadModalOpen}
+              onUploadComplete={handleUploadComplete}
+              isCreateProjectOpen={isCreateProjectOpen}
+              onCreateProjectOpenChange={setIsCreateProjectOpen}
+              newProjectNameInput={newProjectNameInput}
+              onNewProjectNameInputChange={setNewProjectNameInput}
+              isCreatingProject={isCreatingProject}
+              onCreateProject={handleCreateProject}
+              deleteDialogOpen={deleteDialogOpen}
+              onDeleteDialogOpenChange={setDeleteDialogOpen}
+              contractToDelete={contractToDelete}
+              deleting={deleting}
+              onDeleteClick={handleDeleteClick}
+              onDeleteConfirm={handleDeleteConfirm}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+      )}
 
       <AlertDialog open={showReloadDialog} onOpenChange={setShowReloadDialog}>
         <AlertDialogContent>

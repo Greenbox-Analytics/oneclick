@@ -1,10 +1,11 @@
 import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, ArrowRight, ArrowLeft, Bot, FileText, Shield, BookOpen } from "lucide-react";
+import { Calculator, ArrowRight, ArrowLeft, Bot, FileText, Shield, BookOpen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
+import { PageHeader } from "@/components/layout/PageHeader";
 
 // Hoisted to module scope (rendering-hoist-jsx, rerender-no-inline-components)
 const TOOL_CARDS: { route: string; label: string; icon: LucideIcon; desc: string; comingSoon?: boolean }[] = [
@@ -24,29 +25,9 @@ const Tools = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => navigate(-1)}
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Back
-            </Button>
-            <div className="w-px h-6 bg-border" />
-            <div
-              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => navigate("/dashboard")}
-            >
-              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-                <Music className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        actions={
+          <>
             <Button
               variant="ghost"
               size="icon"
@@ -56,13 +37,13 @@ const Tools = () => {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="outline" onClick={() => navigate("/dashboard")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/dashboard")}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back to Dashboard
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
         <div className="mb-8">

@@ -26,7 +26,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import {
-  Music, ArrowLeft, Loader2, Shield, Pencil, Trash2,
+  ArrowLeft, Loader2, Shield, Pencil, Trash2,
   Users, Scale, FileCheck, CheckCircle, XCircle, UserPlus,
   FileText, Headphones, BookOpen,
 } from "lucide-react";
@@ -37,6 +37,7 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
+import { PageHeader } from "@/components/layout/PageHeader";
 
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-500/15 text-gray-400",
@@ -153,16 +154,10 @@ const WorkDetail = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/dashboard")}>
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        showBack={false}
+        actions={
+          <>
             <ToolHelpButton onClick={() => walkthrough.replay()} />
             <Button
               variant="ghost"
@@ -173,12 +168,12 @@ const WorkDetail = () => {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="outline" onClick={() => navigate(`/projects/${work.project_id}`)}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate(`/projects/${work.project_id}`)}>
               <ArrowLeft className="w-4 h-4 mr-2" /> Back to Project
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8 max-w-5xl">
         {/* Collaborator action banner */}

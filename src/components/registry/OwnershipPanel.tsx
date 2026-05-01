@@ -146,7 +146,7 @@ function StakeSection({
                     <Input type="number" min="0.01" max="100" step="0.01" value={pct}
                       onChange={(e) => setPct(e.target.value)} placeholder="e.g. 50.00" />
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="text-sm font-medium">Email</label>
                       <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
