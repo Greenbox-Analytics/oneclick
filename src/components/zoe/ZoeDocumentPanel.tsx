@@ -73,6 +73,7 @@ interface ZoeDocumentPanelProps {
   deleting: boolean;
   onDeleteClick: (contract: Contract) => void;
   onDeleteConfirm: () => void;
+  variant?: "aside" | "sheet";
 }
 
 export function ZoeDocumentPanel({
@@ -116,32 +117,47 @@ export function ZoeDocumentPanel({
   deleting,
   onDeleteClick,
   onDeleteConfirm,
+  variant = "aside",
 }: ZoeDocumentPanelProps) {
+  const isSheetVariant = variant === "sheet";
+  const Wrapper = isSheetVariant
+    ? ({ children }: { children: React.ReactNode }) => (
+        <div data-walkthrough="zoe-sidebar" className="h-full flex flex-col">
+          {children}
+        </div>
+      )
+    : ({ children }: { children: React.ReactNode }) => (
+        <aside
+          ref={sidebarRef}
+          data-walkthrough="zoe-sidebar"
+          className={cn(
+            "border-r border-border bg-muted/30 flex-shrink-0 overflow-hidden relative hidden md:block",
+            !isResizing && "transition-all duration-300 ease-in-out",
+            !sidebarOpen && "!w-0"
+          )}
+          style={{ width: sidebarOpen ? sidebarWidth : 0 }}
+        >
+          <div className="h-full flex flex-col" style={{ width: sidebarWidth }}>
+            {/* Resize Handle */}
+            <div
+              className={cn(
+                "absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 z-10 group",
+                isResizing && "bg-primary/30"
+              )}
+              onMouseDown={onMouseDown}
+            >
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <GripVertical className="w-3 h-3 text-muted-foreground" />
+              </div>
+            </div>
+            {children}
+          </div>
+        </aside>
+      );
+
   return (
     <>
-    <aside
-      ref={sidebarRef}
-      data-walkthrough="zoe-sidebar"
-      className={cn(
-        "border-r border-border bg-muted/30 flex-shrink-0 overflow-hidden relative",
-        !isResizing && "transition-all duration-300 ease-in-out",
-        !sidebarOpen && "!w-0"
-      )}
-      style={{ width: sidebarOpen ? sidebarWidth : 0 }}
-    >
-      <div className="h-full flex flex-col" style={{ width: sidebarWidth }}>
-        {/* Resize Handle */}
-        <div
-          className={cn(
-            "absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/30 z-10 group",
-            isResizing && "bg-primary/30"
-          )}
-          onMouseDown={onMouseDown}
-        >
-          <div className="absolute right-0 top-1/2 -translate-y-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-            <GripVertical className="w-3 h-3 text-muted-foreground" />
-          </div>
-        </div>
+    <Wrapper>
         <ScrollArea className="flex-1">
           <div className="p-4 space-y-6">
             {/* Artist Selection */}
@@ -454,8 +470,7 @@ export function ZoeDocumentPanel({
         <p className="text-[11px] text-center text-muted-foreground px-4 py-2 border-t border-border">
           Select documents to ask Zoe about them
         </p>
-      </div>
-    </aside>
+    </Wrapper>
 
     {selectedProject && (
       <ContractUploadModal

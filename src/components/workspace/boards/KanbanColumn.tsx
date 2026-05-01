@@ -22,6 +22,9 @@ interface KanbanColumnProps {
   onTaskClick: (taskId: string) => void;
   onCreateTaskSidebar: (columnId: string) => void;
   timezone?: string;
+  variant?: "desktop" | "mobile";
+  moveOptions?: { id: string; title: string }[];
+  onMoveTask?: (taskId: string, targetColumnId: string) => void;
 }
 
 export function KanbanColumn({
@@ -34,7 +37,11 @@ export function KanbanColumn({
   onTaskClick,
   onCreateTaskSidebar,
   timezone,
+  variant = "desktop",
+  moveOptions,
+  onMoveTask,
 }: KanbanColumnProps) {
+  const isMobileVariant = variant === "mobile";
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState(column.title);
 
@@ -46,10 +53,13 @@ export function KanbanColumn({
     setIsRenaming(false);
   };
 
-  const { setNodeRef, isOver } = useDroppable({
+  const droppable = useDroppable({
     id: `column-${column.id}`,
     data: { type: "column", columnId: column.id },
+    disabled: isMobileVariant,
   });
+  const setNodeRef = isMobileVariant ? undefined : droppable.setNodeRef;
+  const isOver = isMobileVariant ? false : droppable.isOver;
 
   const columnTasks = tasks
     .filter((t) => t.column_id === column.id)
@@ -57,7 +67,7 @@ export function KanbanColumn({
 
   return (
     <div
-      className={`flex flex-col w-72 shrink-0 bg-muted/50 rounded-lg transition-all duration-200 ${
+      className={`flex flex-col ${isMobileVariant ? "w-full" : "w-72 shrink-0"} bg-muted/50 rounded-lg transition-all duration-200 ${
         isOver ? "ring-2 shadow-lg" : ""
       }`}
       style={isOver && column.color ? {
@@ -138,6 +148,9 @@ export function KanbanColumn({
             onDelete={onDeleteTask}
             onClick={onTaskClick}
             timezone={timezone}
+            disableDrag={isMobileVariant}
+            moveOptions={isMobileVariant ? moveOptions : undefined}
+            onMove={isMobileVariant ? onMoveTask : undefined}
           />
         ))}
       </div>

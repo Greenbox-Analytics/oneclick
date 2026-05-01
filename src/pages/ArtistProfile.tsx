@@ -9,8 +9,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Music, ArrowLeft, Camera, Edit, Save, X, Instagram, Youtube, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, BookOpen, Plus, StickyNote } from "lucide-react";
+import { Camera, Edit, Save, X, Instagram, Youtube, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, BookOpen, Plus, StickyNote } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery } from "@tanstack/react-query";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
@@ -498,29 +499,9 @@ const ArtistProfile = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-secondary/10">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => navigate(-1)}
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Back
-            </Button>
-            <div className="w-px h-6 bg-border" />
-            <div
-              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => navigate("/dashboard")}
-            >
-              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center p-1.5">
-                <Music className="w-full h-full text-primary-foreground" />
-              </div>
-              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-            </div>
-          </div>
-          <div className="flex gap-2 items-center">
+      <PageHeader
+        actions={
+          <>
             <Button
               variant="ghost"
               size="icon"
@@ -530,9 +511,6 @@ const ArtistProfile = () => {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")} title="Back to Dashboard">
-              <ArrowLeft className="w-4 h-4" />
-            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -540,19 +518,19 @@ const ArtistProfile = () => {
               onClick={() => setShowDeleteDialog(true)}
             >
               <Trash2 className="w-4 h-4 mr-2" />
-              Delete
+              <span className="hidden sm:inline">Delete</span>
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8 max-w-5xl">
         {/* Profile Header */}
         <Card className="mb-6 border border-border shadow-sm">
           <CardContent className="pt-6">
-            <div className="flex items-start gap-6">
+            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6 text-center sm:text-left">
               <div className="relative group">
-                <Avatar className="w-28 h-28 ring-2 ring-primary/20">
+                <Avatar className="w-24 h-24 sm:w-28 sm:h-28 ring-2 ring-primary/20">
                   <AvatarImage src={displayAvatar} alt={displayName} />
                   <AvatarFallback className="bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-3xl">
                     {displayName.charAt(0)}
@@ -562,16 +540,16 @@ const ArtistProfile = () => {
                   <Camera className="w-7 h-7 text-primary" />
                 </button>
               </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-3">
-                  <h2 className="text-2xl font-bold text-foreground">{displayName}</h2>
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 sm:gap-3 mb-3">
+                  <h2 className="text-xl sm:text-2xl font-bold text-foreground">{displayName}</h2>
                   {isVerified && (
                     <Badge className="bg-green-100 text-green-800 flex items-center gap-1">
                       <CheckCircle className="w-3 h-3" /> Verified
                     </Badge>
                   )}
                 </div>
-                <div className="flex flex-wrap gap-2 mb-3">
+                <div className="flex flex-wrap justify-center sm:justify-start gap-2 mb-3">
                   {formData.genres.map(genre => (
                     <Badge key={genre} variant="secondary" className="px-3 py-1 text-sm">{genre}</Badge>
                   ))}

@@ -257,13 +257,13 @@ const CalculationResults = ({
 
       {calculationResult && (
         <div className="mt-8 space-y-6">
-          <div className="flex items-start justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
             <div>
               <h2 className="text-2xl font-bold text-foreground">Royalty Calculation Results</h2>
               <p className="text-muted-foreground">{calculationResult.message}</p>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
                 <Button variant="outline" onClick={() => handleCalculateRoyalties(true)} disabled={isUploading}>
                     <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
                     Recalculate
@@ -398,26 +398,58 @@ const CalculationResults = ({
                   </div>
               </CardHeader>
               <CardContent>
-                  <Table>
-                      <TableHeader>
-                          <TableRow>
-                              <TableHead>Song</TableHead><TableHead>Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Total Revenue</TableHead><TableHead>Share %</TableHead><TableHead>Amount</TableHead>
-                          </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                          {calculationResult.payments.map((row, i) => (
-                              <TableRow key={i}>
-                                  <TableCell>{row.song_title}</TableCell>
-                                  <TableCell>{row.party_name}</TableCell>
-                                  <TableCell className="capitalize">{row.role}</TableCell>
-                                  <TableCell className="capitalize">{row.royalty_type}</TableCell>
-                                  <TableCell>{formatCurrency(row.total_royalty)}</TableCell>
-                                  <TableCell>{row.percentage}%</TableCell>
-                                  <TableCell>{formatCurrency(row.amount_to_pay)}</TableCell>
-                              </TableRow>
-                          ))}
-                      </TableBody>
-                  </Table>
+                  {/* Desktop: table */}
+                  <div className="hidden sm:block overflow-x-auto">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Song</TableHead><TableHead>Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Total Revenue</TableHead><TableHead>Share %</TableHead><TableHead>Amount</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {calculationResult.payments.map((row, i) => (
+                                <TableRow key={i}>
+                                    <TableCell>{row.song_title}</TableCell>
+                                    <TableCell>{row.party_name}</TableCell>
+                                    <TableCell className="capitalize">{row.role}</TableCell>
+                                    <TableCell className="capitalize">{row.royalty_type}</TableCell>
+                                    <TableCell>{formatCurrency(row.total_royalty)}</TableCell>
+                                    <TableCell>{row.percentage}%</TableCell>
+                                    <TableCell>{formatCurrency(row.amount_to_pay)}</TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                  </div>
+                  {/* Mobile: stacked cards */}
+                  <div className="sm:hidden space-y-3">
+                    {calculationResult.payments.map((row, i) => (
+                      <div key={i} className="rounded-lg border border-border p-3 space-y-2 bg-card">
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">{row.song_title}</p>
+                          <p className="text-xs text-muted-foreground">{row.party_name} • <span className="capitalize">{row.role}</span></p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <p className="text-muted-foreground">Royalty type</p>
+                            <p className="font-medium capitalize">{row.royalty_type}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">Share</p>
+                            <p className="font-medium">{row.percentage}%</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">Total revenue</p>
+                            <p className="font-medium">{formatCurrency(row.total_royalty)}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground">Amount</p>
+                            <p className="font-semibold text-foreground">{formatCurrency(row.amount_to_pay)}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
               </CardContent>
           </Card>
         </div>

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Music, ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
+import { ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -404,15 +405,10 @@ const OneClickDocuments = () => {
   if (isLoadingArtist) {
     return (
       <div className="min-h-screen bg-background">
-        <header className="border-b border-border bg-card">
-          <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/dashboard")}>
-              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-                <Music className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-            </div>
-            <div className="flex items-center gap-2">
+        <PageHeader
+          showBack={false}
+          actions={
+            <>
               <Button
                 variant="ghost"
                 size="icon"
@@ -422,13 +418,13 @@ const OneClickDocuments = () => {
               >
                 <BookOpen className="w-4 h-4" />
               </Button>
-              <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
+              <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools/oneclick")}>
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Back to Artist Selection
               </Button>
-            </div>
-          </div>
-        </header>
+            </>
+          }
+        />
         <main className="container mx-auto px-4 py-8 max-w-4xl">
           <div className="flex flex-col items-center justify-center min-h-[60vh]">
             <Loader2 className="animate-spin h-16 w-16 text-primary mb-4" />
@@ -441,15 +437,10 @@ const OneClickDocuments = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/dashboard")}>
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        showBack={false}
+        actions={
+          <>
             <Button
               variant="ghost"
               size="icon"
@@ -460,13 +451,13 @@ const OneClickDocuments = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" onClick={() => navigate("/tools/oneclick")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools/oneclick")}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back to Artist Selection
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         <div className="mb-8">
