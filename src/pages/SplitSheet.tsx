@@ -20,7 +20,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Music,
   ArrowLeft,
   ArrowRight,
   Plus,
@@ -36,6 +35,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/layout/PageHeader";
 
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
@@ -280,29 +280,9 @@ const SplitSheet = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => navigate(-1)}
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Back
-            </Button>
-            <div className="w-px h-6 bg-border" />
-            <div
-              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => navigate("/dashboard")}
-            >
-              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-                <Music className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        actions={
+          <>
             <Button
               variant="ghost"
               size="icon"
@@ -313,13 +293,13 @@ const SplitSheet = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" onClick={() => navigate("/tools")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back to Tools
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8 max-w-3xl">
         <div className="mb-6">
@@ -536,7 +516,7 @@ const SplitSheet = () => {
                       )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <Input
                         placeholder="Name *"
                         value={c.name}
@@ -555,7 +535,7 @@ const SplitSheet = () => {
                       </Select>
                     </div>
 
-                    <div className={`grid gap-2 ${splitType === "both" ? "grid-cols-2" : "grid-cols-1"}`}>
+                    <div className={`grid gap-2 ${splitType === "both" ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
                       {needsPublishing && (
                         <Input
                           type="number"

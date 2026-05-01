@@ -151,7 +151,7 @@ export function TaskDetailPanel({
 
   return (
     <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()} modal={false}>
-      <SheetContent side="right" className="sm:max-w-lg w-[500px] overflow-y-auto">
+      <SheetContent side="right" className="w-full sm:w-[500px] sm:max-w-[500px] overflow-y-auto">
         {!isCreateMode && (isLoading || !task) ? (
           <div className="flex items-center justify-center h-full">
             <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />

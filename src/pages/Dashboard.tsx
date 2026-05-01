@@ -1,7 +1,8 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Music, Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, type LucideIcon } from "lucide-react";
+import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, type LucideIcon } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { PageHeader } from "@/components/layout/PageHeader";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -182,19 +183,10 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/dashboard")}
-          >
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-          </div>
-
-          <div className="flex items-center gap-2">
+      <PageHeader
+        showBack={false}
+        actions={
+          <>
             <Button
               variant="ghost"
               size="icon"
@@ -234,9 +226,9 @@ const Dashboard = () => {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">

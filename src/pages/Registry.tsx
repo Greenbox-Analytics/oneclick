@@ -33,9 +33,9 @@ import {
   Users,
   Loader2,
   FileText,
-  ArrowLeft,
   BookOpen,
 } from "lucide-react";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -156,11 +156,12 @@ function ActionRequiredTab({
                     Invited by {inv.name || "someone"} &middot; {timeAgo(inv.invited_at)}
                   </p>
 
-                  <div className="flex items-center gap-3 mt-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mt-3">
                     <Button
                       size="sm"
                       onClick={() => acceptMut.mutate(inv.id)}
                       disabled={busy}
+                      className="w-full sm:w-auto"
                     >
                       <Check className="w-3.5 h-3.5 mr-1" /> Accept
                     </Button>
@@ -169,6 +170,7 @@ function ActionRequiredTab({
                       variant="outline"
                       onClick={() => declineMut.mutate(inv.id)}
                       disabled={busy}
+                      className="w-full sm:w-auto"
                     >
                       <X className="w-3.5 h-3.5 mr-1" /> Decline
                     </Button>
@@ -177,6 +179,7 @@ function ActionRequiredTab({
                         size="sm"
                         variant="ghost"
                         onClick={() => navigate(`/tools/registry/${workId}`)}
+                        className="w-full sm:w-auto"
                       >
                         <ExternalLink className="w-3.5 h-3.5 mr-1" /> View Work
                       </Button>
@@ -521,29 +524,9 @@ const Registry = () => {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => navigate(-1)}
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" /> Back
-            </Button>
-            <div className="w-px h-6 bg-border" />
-            <div
-              className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => navigate("/dashboard")}
-            >
-              <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-                <Music className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        actions={
+          <>
             <ToolHelpButton onClick={() => walkthrough.replay()} />
             <Button
               variant="ghost"
@@ -554,12 +537,12 @@ const Registry = () => {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="outline" onClick={() => navigate("/tools")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
               Back to Tools
             </Button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
         {/* Page Title */}
