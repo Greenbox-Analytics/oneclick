@@ -41,6 +41,12 @@ STREAMING_EQUIVALENT_TERMS = [
     "sound recording royalty splits",
 ]
 
+# Load OneClick-specific extraction context (cached once at module load)
+_ONECLICK_CONTEXT_PATH = os.path.join(os.path.dirname(__file__), "oneclick_context.md")
+with open(_ONECLICK_CONTEXT_PATH) as _f:
+    ONECLICK_CONTEXT = _f.read()
+del _f
+
 
 # ---------------------------------------------------------------------------
 # Data Models
@@ -226,7 +232,12 @@ Return ONLY valid JSON."""
         response = self.openai_client.chat.completions.create(
             model=LLM_MODEL_LARGE,
             messages=[
-                {"role": "system", "content": "You are a music contract analyst. Always respond with valid JSON."},
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are a music contract analyst. Always respond with valid JSON.\n\n{ONECLICK_CONTEXT}"
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
