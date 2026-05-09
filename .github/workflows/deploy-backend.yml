@@ -52,11 +52,12 @@ jobs:
           docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.IMAGE_NAME }}:latest
 
-      - name: Clear conflicting ALLOWED_ORIGINS type
+      - name: Clear conflicting env-var/secret types
         run: |
           gcloud run services update ${{ env.SERVICE_NAME }} \
             --region ${{ env.REGION }} \
-            --remove-secrets ALLOWED_ORIGINS 2>/dev/null || true
+            --remove-secrets ALLOWED_ORIGINS,VITE_FRONTEND_URL,VITE_BACKEND_API_URL \
+            --remove-env-vars INTEGRATION_ENCRYPTION_KEY,INTEGRATION_OAUTH_STATE_SECRET,GOOGLE_DRIVE_CLIENT_ID,GOOGLE_DRIVE_CLIENT_SECRET 2>/dev/null || true
 
       - name: Deploy to Cloud Run
         run: |
@@ -71,8 +72,8 @@ jobs:
             --timeout 300 \
             --max-instances 10 \
             --min-instances 0 \
-            --update-env-vars ALLOWED_ORIGINS=${{ secrets.PROD_ALLOWED_ORIGINS }} \
-            --update-secrets VITE_SUPABASE_URL=VITE_SUPABASE_URL:latest,VITE_SUPABASE_SECRET_KEY=VITE_SUPABASE_SECRET_KEY:latest
+            --update-env-vars "^@^ALLOWED_ORIGINS=${{ secrets.PROD_ALLOWED_ORIGINS }}@VITE_FRONTEND_URL=${{ secrets.PROD_FRONTEND_URL }}@VITE_BACKEND_API_URL=${{ secrets.PROD_BACKEND_API_URL }}" \
+            --update-secrets VITE_SUPABASE_URL=VITE_SUPABASE_URL:latest,VITE_SUPABASE_SECRET_KEY=VITE_SUPABASE_SECRET_KEY:latest,INTEGRATION_ENCRYPTION_KEY=INTEGRATION_ENCRYPTION_KEY:latest,INTEGRATION_OAUTH_STATE_SECRET=INTEGRATION_OAUTH_STATE_SECRET:latest,GOOGLE_DRIVE_CLIENT_ID=GOOGLE_DRIVE_CLIENT_ID:latest,GOOGLE_DRIVE_CLIENT_SECRET=GOOGLE_DRIVE_CLIENT_SECRET:latest
 
       - name: Get Cloud Run URL
         id: get-url
