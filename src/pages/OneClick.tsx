@@ -97,9 +97,9 @@ const OneClick = () => {
 
         <Alert className="mb-6">
           <Info className="w-4 h-4" />
-          <AlertTitle>Master royalties only</AlertTitle>
+          <AlertTitle>Streaming Master royalties only</AlertTitle>
           <AlertDescription>
-            OneClick currently analyzes master royalties only. Split sheets generated for publishing-only will not be recognized.
+            OneClick currently analyzes master royalties related to streaming earnings only. Split sheets generated for publishing-only royalties will not be recognized.
           </AlertDescription>
         </Alert>
 

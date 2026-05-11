@@ -37,6 +37,7 @@ interface NavItem {
   label: string;
   path: string;
   icon: React.ComponentType<{ className?: string }>;
+  disabled?: boolean;
 }
 
 const TOP_LEVEL: NavItem[] = [
@@ -47,7 +48,7 @@ const TOP_LEVEL: NavItem[] = [
 ];
 
 const TOOLS: NavItem[] = [
-  { label: "Registry", path: "/tools/registry", icon: FileText },
+  { label: "Registry", path: "/tools/registry", icon: FileText, disabled: true },
   { label: "OneClick", path: "/tools/oneclick", icon: Calculator },
   { label: "Zoe", path: "/tools/zoe", icon: MessageSquare },
   { label: "Split Sheet", path: "/tools/split-sheet", icon: PieChart },
@@ -104,6 +105,20 @@ export function MobileNavSheet({ children }: MobileNavSheetProps) {
   const renderItem = (item: NavItem) => {
     const Icon = item.icon;
     const active = isActive(item.path);
+    if (item.disabled) {
+      return (
+        <button
+          key={item.path}
+          disabled
+          aria-disabled="true"
+          className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-left text-sm text-muted-foreground opacity-50 cursor-not-allowed"
+        >
+          <Icon className="w-4 h-4 shrink-0" />
+          <span className="flex-1">{item.label}</span>
+          <span className="text-[10px] uppercase tracking-wide">Coming soon</span>
+        </button>
+      );
+    }
     return (
       <button
         key={item.path}
@@ -135,13 +150,13 @@ export function MobileNavSheet({ children }: MobileNavSheetProps) {
         </SheetHeader>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3">
-          <div className="space-y-1">{TOP_LEVEL.map(renderItem)}</div>
+          <div className="space-y-1">{renderItem(TOP_LEVEL[0])}</div>
 
           <Accordion
             type="single"
             collapsible
             defaultValue={isToolsActive ? "tools" : undefined}
-            className="mt-2"
+            className="mt-1"
           >
             <AccordionItem value="tools" className="border-none">
               <AccordionTrigger
@@ -162,6 +177,8 @@ export function MobileNavSheet({ children }: MobileNavSheetProps) {
               </AccordionContent>
             </AccordionItem>
           </Accordion>
+
+          <div className="mt-1 space-y-1">{TOP_LEVEL.slice(1).map(renderItem)}</div>
 
           <div className="mt-4 pt-3 border-t border-border space-y-1">
             {FOOTER.map(renderItem)}
