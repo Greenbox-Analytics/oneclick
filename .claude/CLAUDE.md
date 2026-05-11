@@ -16,7 +16,7 @@ Msanii is a music industry management platform for artists, managers, and collab
 
 **AI:** OpenAI API for contract analysis (Zoe) and document processing
 
-**Email:** Resend for transactional emails (invitations, notifications)
+**Email:** AWS SES for transactional emails (invitations, notifications) via the shared `src/backend/mailer/` module
 
 ## Commands
 

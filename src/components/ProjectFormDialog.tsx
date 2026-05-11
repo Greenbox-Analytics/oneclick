@@ -19,6 +19,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { ArtistInfo } from "@/hooks/usePortfolioData";
+import { NewArtistDialog } from "@/components/NewArtistDialog";
+import { Plus } from "lucide-react";
+
+const ADD_NEW_ARTIST_VALUE = "__add_new_artist__";
 
 interface ProjectFormDialogProps {
   open: boolean;
@@ -41,8 +45,17 @@ export const ProjectFormDialog = ({
   const [description, setDescription] = useState("");
   const [artistId, setArtistId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [newArtistDialogOpen, setNewArtistDialogOpen] = useState(false);
 
   const isEdit = !!project;
+
+  const handleArtistChange = (value: string) => {
+    if (value === ADD_NEW_ARTIST_VALUE) {
+      setNewArtistDialogOpen(true);
+      return;
+    }
+    setArtistId(value);
+  };
 
   useEffect(() => {
     if (project) {
@@ -72,6 +85,7 @@ export const ProjectFormDialog = ({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
@@ -88,7 +102,7 @@ export const ProjectFormDialog = ({
             <Label htmlFor="project-artist">
               Artist <span className="text-green-500">*</span>
             </Label>
-            <Select value={artistId} onValueChange={setArtistId} disabled={isEdit}>
+            <Select value={artistId} onValueChange={handleArtistChange} disabled={isEdit}>
               <SelectTrigger>
                 <SelectValue placeholder="Select artist" />
               </SelectTrigger>
@@ -98,6 +112,19 @@ export const ProjectFormDialog = ({
                     {a.name}
                   </SelectItem>
                 ))}
+                {!isEdit && (
+                  <>
+                    {artists.length > 0 && (
+                      <div className="my-1 h-px bg-border" role="separator" />
+                    )}
+                    <SelectItem value={ADD_NEW_ARTIST_VALUE} className="text-primary font-medium">
+                      <span className="flex items-center gap-2">
+                        <Plus className="w-4 h-4" />
+                        Add new artist
+                      </span>
+                    </SelectItem>
+                  </>
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -136,5 +163,11 @@ export const ProjectFormDialog = ({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <NewArtistDialog
+      open={newArtistDialogOpen}
+      onOpenChange={setNewArtistDialogOpen}
+      onCreated={(id) => setArtistId(id)}
+    />
+    </>
   );
 };
