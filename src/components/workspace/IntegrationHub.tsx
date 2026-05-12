@@ -4,6 +4,8 @@ import { IntegrationCard } from "./IntegrationCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { SlackPanel } from "./integrations/SlackPanel";
 import type { IntegrationProvider, ConnectionStatus } from "@/types/integrations";
+import { useIntegrationAllowed } from "@/hooks/useEntitlements";
+import { PaywallModal } from "@/components/paywall/PaywallModal";
 
 type IntegrationItem = {
   provider: IntegrationProvider | "atlassian";
@@ -51,6 +53,25 @@ const INTEGRATIONS: IntegrationItem[] = [
 export function IntegrationHub() {
   const { connections, connect, disconnect, isConnecting } = useIntegrations();
   const [slackPanelOpen, setSlackPanelOpen] = useState(false);
+  const [paywallOpen, setPaywallOpen] = useState(false);
+  const [paywallReason, setPaywallReason] = useState<string | undefined>(undefined);
+
+  const { allowed: slackAllowed } = useIntegrationAllowed("slack");
+  const { allowed: notionAllowed } = useIntegrationAllowed("notion");
+  const { allowed: mondayAllowed } = useIntegrationAllowed("monday");
+
+  const integrationAllowed: Record<string, boolean> = {
+    google_drive: true, // Drive is always allowed; no paywall
+    slack: slackAllowed,
+    notion: notionAllowed,
+    monday: mondayAllowed,
+  };
+
+  const integrationLabel: Record<string, string> = {
+    slack: "Slack",
+    notion: "Notion",
+    monday: "Monday.com",
+  };
 
   const getStatus = (provider: IntegrationItem["provider"]): ConnectionStatus => {
     if (provider === "atlassian") return "disconnected";
@@ -68,7 +89,15 @@ export function IntegrationHub() {
       });
       return;
     }
-    connect(integration.provider as IntegrationProvider);
+    const provider = integration.provider;
+    if (provider === "atlassian") return;
+    if (!integrationAllowed[provider]) {
+      const label = integrationLabel[provider] ?? provider;
+      setPaywallReason(`${label} integration is a Pro feature. Upgrade to Pro to connect it.`);
+      setPaywallOpen(true);
+      return;
+    }
+    connect(provider);
   };
 
   return (
@@ -108,6 +137,12 @@ export function IntegrationHub() {
       {slackPanelOpen && (
         <SlackPanel onClose={() => setSlackPanelOpen(false)} />
       )}
+
+      <PaywallModal
+        open={paywallOpen}
+        onClose={() => setPaywallOpen(false)}
+        reason={paywallReason}
+      />
     </div>
   );
 }

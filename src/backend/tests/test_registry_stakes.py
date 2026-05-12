@@ -9,7 +9,21 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_wrap(fn):
+    """Wrap a table side-effect function to route subscription tables through the Pro default."""
+
+    def _wrapped(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
+        return fn(name)
+
+    return _wrapped
+
 
 WORK_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 STAKE_ID = "dddddddd-0000-0000-0000-000000000001"
@@ -35,7 +49,7 @@ def test_list_stakes_returns_stakes_key(client, mock_supabase):
     """GET /registry/stakes?work_id=... returns {"stakes": [...]}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_STAKE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/stakes?work_id={WORK_ID}")
 
@@ -49,7 +63,7 @@ def test_list_stakes_empty(client, mock_supabase):
     """GET /registry/stakes?work_id=... returns empty list when no stakes exist."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/stakes?work_id={WORK_ID}")
 
@@ -62,7 +76,7 @@ def test_list_stakes_with_stakes(client, mock_supabase):
     """GET /registry/stakes?work_id=... returns the stakes from Supabase."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_STAKE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/stakes?work_id={WORK_ID}")
 
@@ -104,7 +118,7 @@ def test_create_stake_success(client, mock_supabase):
             return insert_builder
         return MockQueryBuilder()
 
-    mock_supabase.table.side_effect = table_side_effect
+    mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
     payload = {
         "work_id": WORK_ID,
@@ -127,7 +141,7 @@ def test_create_stake_exceeds_100_percent(client, mock_supabase):
     existing_stake = {"id": "other-id", "percentage": 80.0}
     validate_builder = MockQueryBuilder()
     validate_builder.execute.return_value = MagicMock(data=[existing_stake])
-    mock_supabase.table.side_effect = lambda name: validate_builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: validate_builder)
 
     payload = {
         "work_id": WORK_ID,
@@ -160,7 +174,7 @@ def test_create_stake_insert_fails_returns_500(client, mock_supabase):
             return insert_builder
         return MockQueryBuilder()
 
-    mock_supabase.table.side_effect = table_side_effect
+    mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
     payload = {
         "work_id": WORK_ID,
@@ -194,7 +208,7 @@ def test_create_stake_exactly_at_100_percent(client, mock_supabase):
             return insert_builder
         return MockQueryBuilder()
 
-    mock_supabase.table.side_effect = table_side_effect
+    mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
     payload = {
         "work_id": WORK_ID,
@@ -240,7 +254,7 @@ def test_update_stake_success(client, mock_supabase):
             return update_builder
         return MockQueryBuilder()
 
-    mock_supabase.table.side_effect = table_side_effect
+    mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
     payload = {"holder_name": "Updated Name", "percentage": 40.0}
     response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
@@ -254,7 +268,7 @@ def test_update_stake_not_found(client, mock_supabase):
     """PUT /registry/stakes/{stake_id} returns 404 when stake not found for lookup."""
     lookup_builder = MockQueryBuilder()
     lookup_builder.execute.return_value = MagicMock(data=None)
-    mock_supabase.table.side_effect = lambda name: lookup_builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: lookup_builder)
 
     payload = {"holder_name": "Updated Name", "percentage": 40.0}
     response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
@@ -270,7 +284,7 @@ def test_update_stake_without_percentage_skips_validation(client, mock_supabase)
     update_builder = MockQueryBuilder()
     update_builder.execute.return_value = MagicMock(data=[updated_stake])
 
-    mock_supabase.table.side_effect = lambda name: update_builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: update_builder)
 
     payload = {"holder_name": "New Name"}
     response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
@@ -284,7 +298,7 @@ def test_update_stake_not_found_after_update(client, mock_supabase):
     """PUT /registry/stakes/{stake_id} returns 404 when update returns no data."""
     update_builder = MockQueryBuilder()
     update_builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: update_builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: update_builder)
 
     # No percentage in body so validation is skipped
     payload = {"holder_name": "New Name"}
@@ -303,7 +317,7 @@ def test_delete_stake_success(client, mock_supabase):
     """DELETE /registry/stakes/{stake_id} returns {"ok": True}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_STAKE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.delete(f"/registry/stakes/{STAKE_ID}")
 
@@ -315,7 +329,7 @@ def test_delete_stake_always_returns_ok(client, mock_supabase):
     """DELETE /registry/stakes/{stake_id} returns {"ok": True} even if nothing deleted."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.delete(f"/registry/stakes/{STAKE_ID}")
 

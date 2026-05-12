@@ -20,6 +20,8 @@ from integrations.oauth import (
     store_connection,
     verify_oauth_state,
 )
+from subscriptions.enforcement import gated_feature
+from subscriptions.models import Action
 
 router = APIRouter()
 
@@ -38,6 +40,7 @@ class NotionSyncConfig(BaseModel):
 @router.get("/auth")
 async def initiate_auth(user_id: str = Depends(get_current_user_id)):
     """Start Notion OAuth flow."""
+    gated_feature(user_id, Action.USE_INTEGRATION, name="notion")
     auth_url = build_auth_url("notion", user_id)
     return {"auth_url": auth_url}
 

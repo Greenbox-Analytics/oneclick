@@ -1,8 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Music, FolderOpen, TrendingUp, Shield, FileText, Users, BookOpen, User, LogOut } from "lucide-react";
+import { Music, FolderOpen, TrendingUp, Shield, FileText, Users, BookOpen, User, LogOut, CreditCard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useIsAdmin } from "@/hooks/useAdmin";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,6 +16,7 @@ import {
 const Index = () => {
   const navigate = useNavigate();
   const { user, loading, signOut } = useAuth();
+  const { isAdmin } = useIsAdmin();
 
   const features = [
     {
@@ -66,6 +68,9 @@ const Index = () => {
             
             {/* Navigation Buttons */}
             <div className="flex items-center gap-3">
+              <Button variant="ghost" onClick={() => navigate("/pricing")}>
+                Pricing
+              </Button>
               <Button variant="ghost" onClick={() => navigate("/docs")}>
                 Docs
               </Button>
@@ -91,6 +96,16 @@ const Index = () => {
                         <User className="mr-2 h-4 w-4" />
                         <span>Profile Settings</span>
                       </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => navigate("/subscription")}>
+                        <CreditCard className="mr-2 h-4 w-4" />
+                        <span>Subscriptions</span>
+                      </DropdownMenuItem>
+                      {isAdmin && (
+                        <DropdownMenuItem onClick={() => navigate("/admin/users")}>
+                          <Shield className="mr-2 h-4 w-4" />
+                          <span>Admin</span>
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={async () => { await signOut(); navigate("/"); }}>
                         <LogOut className="mr-2 h-4 w-4" />

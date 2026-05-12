@@ -9,7 +9,21 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_wrap(fn):
+    """Wrap a table side-effect function to route subscription tables through the Pro default."""
+
+    def _wrapped(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
+        return fn(name)
+
+    return _wrapped
+
 
 WORK_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 LICENSE_ID = "eeeeeeee-0000-0000-0000-000000000001"
@@ -39,7 +53,7 @@ def test_list_licenses_returns_licenses_key(client, mock_supabase):
     """GET /registry/licenses?work_id=... returns {"licenses": [...]}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/licenses?work_id={WORK_ID}")
 
@@ -53,7 +67,7 @@ def test_list_licenses_empty(client, mock_supabase):
     """GET /registry/licenses?work_id=... returns empty list when no licenses exist."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/licenses?work_id={WORK_ID}")
 
@@ -66,7 +80,7 @@ def test_list_licenses_with_licenses(client, mock_supabase):
     """GET /registry/licenses?work_id=... returns the licenses from Supabase."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/licenses?work_id={WORK_ID}")
 
@@ -93,7 +107,7 @@ def test_create_license_success(client, mock_supabase):
     """POST /registry/licenses creates and returns the new license."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {
         "work_id": WORK_ID,
@@ -114,7 +128,7 @@ def test_create_license_with_all_fields(client, mock_supabase):
     """POST /registry/licenses accepts all optional fields."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {
         "work_id": WORK_ID,
@@ -138,7 +152,7 @@ def test_create_license_insert_fails_returns_500(client, mock_supabase):
     """POST /registry/licenses returns 500 when insert returns no data."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {
         "work_id": WORK_ID,
@@ -170,7 +184,7 @@ def test_create_license_default_territory(client, mock_supabase):
     license_worldwide = {**SAMPLE_LICENSE, "territory": "worldwide"}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[license_worldwide])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {
         "work_id": WORK_ID,
@@ -196,7 +210,7 @@ def test_update_license_success(client, mock_supabase):
     updated_license = {**SAMPLE_LICENSE, "licensee_name": "New Studio LLC"}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[updated_license])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {"licensee_name": "New Studio LLC"}
     response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
@@ -210,7 +224,7 @@ def test_update_license_not_found(client, mock_supabase):
     """PUT /registry/licenses/{license_id} returns 404 when license not found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {"licensee_name": "New Studio LLC"}
     response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
@@ -224,7 +238,7 @@ def test_update_license_status(client, mock_supabase):
     updated_license = {**SAMPLE_LICENSE, "status": "expired"}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[updated_license])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {"status": "expired"}
     response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
@@ -239,7 +253,7 @@ def test_update_license_with_dates(client, mock_supabase):
     updated_license = {**SAMPLE_LICENSE, "end_date": "2028-01-01"}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[updated_license])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {"end_date": "2028-01-01"}
     response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
@@ -258,7 +272,7 @@ def test_delete_license_success(client, mock_supabase):
     """DELETE /registry/licenses/{license_id} returns {"ok": True}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.delete(f"/registry/licenses/{LICENSE_ID}")
 
@@ -270,7 +284,7 @@ def test_delete_license_always_returns_ok(client, mock_supabase):
     """DELETE /registry/licenses/{license_id} returns {"ok": True} even if nothing deleted."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.delete(f"/registry/licenses/{LICENSE_ID}")
 

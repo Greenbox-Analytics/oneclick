@@ -7,7 +7,21 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_wrap(fn):
+    """Wrap a table side-effect function to route subscription tables through the Pro default."""
+
+    def _wrapped(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
+        return fn(name)
+
+    return _wrapped
+
 
 NOTE_ID = "eeeeeeee-0000-0000-0000-000000000001"
 FOLDER_ID = "ffffffff-0000-0000-0000-000000000001"
@@ -49,7 +63,7 @@ def test_list_notes_returns_notes_key(client, mock_supabase):
     """GET /registry/notes returns {"notes": [...]}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTE], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notes")
 
@@ -63,7 +77,7 @@ def test_list_notes_empty(client, mock_supabase):
     """GET /registry/notes returns empty list when no notes exist."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[], count=0)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notes")
 
@@ -75,7 +89,7 @@ def test_list_notes_with_notes(client, mock_supabase):
     """GET /registry/notes returns notes from Supabase."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTE], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notes")
 
@@ -90,7 +104,7 @@ def test_list_notes_filtered_by_artist_id(client, mock_supabase):
     """GET /registry/notes?artist_id=... filters by artist."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTE], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/notes?artist_id={ARTIST_ID}")
 
@@ -103,7 +117,7 @@ def test_list_notes_filtered_by_project_id(client, mock_supabase):
     project_note = {**SAMPLE_NOTE, "artist_id": None, "project_id": PROJECT_ID}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[project_note], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/notes?project_id={PROJECT_ID}")
 
@@ -116,7 +130,7 @@ def test_list_notes_filtered_by_folder_id(client, mock_supabase):
     foldered_note = {**SAMPLE_NOTE, "folder_id": FOLDER_ID}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[foldered_note], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/notes?folder_id={FOLDER_ID}")
 
@@ -133,7 +147,7 @@ def test_get_note_by_id_returns_note(client, mock_supabase):
     """GET /registry/notes/{note_id} returns the note when found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=SAMPLE_NOTE)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/notes/{NOTE_ID}")
 
@@ -147,7 +161,7 @@ def test_get_note_by_id_not_found(client, mock_supabase):
     """GET /registry/notes/{note_id} returns 404 when note not found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=None)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/notes/{NOTE_ID}")
 
@@ -164,7 +178,7 @@ def test_create_note_success(client, mock_supabase):
     """POST /registry/notes creates and returns the new note."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {
         "title": "My Note",
@@ -184,7 +198,7 @@ def test_create_note_minimal_payload(client, mock_supabase):
     minimal_note = {**SAMPLE_NOTE, "title": "Untitled", "content": []}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[minimal_note])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post("/registry/notes", json={})
 
@@ -197,7 +211,7 @@ def test_create_note_db_failure_returns_500(client, mock_supabase):
     """POST /registry/notes returns 500 when Supabase insert returns no data."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post("/registry/notes", json={"title": "Bad Note"})
 
@@ -210,7 +224,7 @@ def test_create_note_pinned_flag(client, mock_supabase):
     pinned_note = {**SAMPLE_NOTE, "pinned": True}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[pinned_note])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post("/registry/notes", json={"title": "Pinned Note", "pinned": True})
 
@@ -228,7 +242,7 @@ def test_update_note_success(client, mock_supabase):
     updated_note = {**SAMPLE_NOTE, "title": "Updated Title"}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[updated_note])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.put(f"/registry/notes/{NOTE_ID}", json={"title": "Updated Title"})
 
@@ -240,7 +254,7 @@ def test_update_note_not_found(client, mock_supabase):
     """PUT /registry/notes/{note_id} returns 404 when note not found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=None)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.put(f"/registry/notes/{NOTE_ID}", json={"title": "New Title"})
 
@@ -253,7 +267,7 @@ def test_update_note_pin_toggle(client, mock_supabase):
     pinned_note = {**SAMPLE_NOTE, "pinned": True}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[pinned_note])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.put(f"/registry/notes/{NOTE_ID}", json={"pinned": True})
 
@@ -266,7 +280,7 @@ def test_update_note_move_to_folder(client, mock_supabase):
     foldered_note = {**SAMPLE_NOTE, "folder_id": FOLDER_ID}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[foldered_note])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.put(f"/registry/notes/{NOTE_ID}", json={"folder_id": FOLDER_ID})
 
@@ -283,7 +297,7 @@ def test_delete_note_success(client, mock_supabase):
     """DELETE /registry/notes/{note_id} returns {"ok": True}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTE])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.delete(f"/registry/notes/{NOTE_ID}")
 
@@ -295,7 +309,7 @@ def test_delete_note_always_returns_ok(client, mock_supabase):
     """DELETE /registry/notes/{note_id} returns {"ok": True} even if note not found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.delete(f"/registry/notes/{NOTE_ID}")
 
@@ -312,7 +326,7 @@ def test_list_folders_returns_folders_key(client, mock_supabase):
     """GET /registry/folders returns {"folders": [...]}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_FOLDER], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/folders")
 
@@ -326,7 +340,7 @@ def test_list_folders_empty(client, mock_supabase):
     """GET /registry/folders returns empty list when no folders exist."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[], count=0)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/folders")
 
@@ -338,7 +352,7 @@ def test_list_folders_with_folders(client, mock_supabase):
     """GET /registry/folders returns folders from Supabase."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_FOLDER], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/folders")
 
@@ -353,7 +367,7 @@ def test_list_folders_filtered_by_artist_id(client, mock_supabase):
     """GET /registry/folders?artist_id=... filters by artist."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_FOLDER], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/folders?artist_id={ARTIST_ID}")
 
@@ -366,7 +380,7 @@ def test_list_folders_filtered_by_project_id(client, mock_supabase):
     project_folder = {**SAMPLE_FOLDER, "artist_id": None, "project_id": PROJECT_ID}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[project_folder], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get(f"/registry/folders?project_id={PROJECT_ID}")
 
@@ -383,7 +397,7 @@ def test_create_folder_success(client, mock_supabase):
     """POST /registry/folders creates and returns the new folder."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_FOLDER])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     payload = {"name": "My Folder", "artist_id": ARTIST_ID}
     response = client.post("/registry/folders", json=payload)
@@ -399,7 +413,7 @@ def test_create_folder_with_sort_order(client, mock_supabase):
     sorted_folder = {**SAMPLE_FOLDER, "sort_order": 5}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[sorted_folder])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post("/registry/folders", json={"name": "Sorted Folder", "sort_order": 5})
 
@@ -411,7 +425,7 @@ def test_create_folder_db_failure_returns_500(client, mock_supabase):
     """POST /registry/folders returns 500 when Supabase insert returns no data."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post("/registry/folders", json={"name": "Bad Folder"})
 
@@ -425,7 +439,7 @@ def test_create_folder_with_parent(client, mock_supabase):
     nested_folder = {**SAMPLE_FOLDER, "parent_folder_id": PARENT_FOLDER_ID}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[nested_folder])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post(
         "/registry/folders",
@@ -446,7 +460,7 @@ def test_update_folder_success(client, mock_supabase):
     updated_folder = {**SAMPLE_FOLDER, "name": "Renamed Folder"}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[updated_folder])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.put(f"/registry/folders/{FOLDER_ID}", json={"name": "Renamed Folder"})
 
@@ -458,7 +472,7 @@ def test_update_folder_not_found(client, mock_supabase):
     """PUT /registry/folders/{folder_id} returns 404 when folder not found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=None)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.put(f"/registry/folders/{FOLDER_ID}", json={"name": "New Name"})
 
@@ -471,7 +485,7 @@ def test_update_folder_sort_order(client, mock_supabase):
     reordered_folder = {**SAMPLE_FOLDER, "sort_order": 10}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[reordered_folder])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.put(f"/registry/folders/{FOLDER_ID}", json={"sort_order": 10})
 
@@ -488,7 +502,7 @@ def test_delete_folder_success(client, mock_supabase):
     """DELETE /registry/folders/{folder_id} returns {"ok": True}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_FOLDER])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.delete(f"/registry/folders/{FOLDER_ID}")
 
@@ -500,7 +514,7 @@ def test_delete_folder_always_returns_ok(client, mock_supabase):
     """DELETE /registry/folders/{folder_id} returns {"ok": True} even if not found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.delete(f"/registry/folders/{FOLDER_ID}")
 

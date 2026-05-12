@@ -104,11 +104,81 @@ class MockStorageBucket:
         self.list = MagicMock(return_value=[])
 
 
+_PRO_TIER_ROW = {
+    "tier": "pro",
+    "max_artists": -1,
+    "max_projects": -1,
+    "max_boards": -1,
+    "max_tasks": -1,
+    "max_storage_bytes": -1,
+    "max_split_sheets_per_month": -1,
+    "zoe_enabled": True,
+    "oneclick_enabled": True,
+    "registry_enabled": True,
+    "integrations_allowed": ["google_drive", "slack", "notion", "monday"],
+    "updated_at": "2026-05-09T00:00:00+00:00",
+}
+
+_PRO_SUB_ROW = {
+    "id": "s-default",
+    "user_id": TEST_USER_ID,
+    "tier": "pro",
+    "status": "active",
+    "stripe_customer_id": None,
+    "stripe_subscription_id": None,
+    "stripe_price_id": None,
+    "current_period_start": None,
+    "current_period_end": None,
+    "cancel_at_period_end": False,
+    "canceled_at": None,
+    "created_at": "2026-05-01T00:00:00+00:00",
+    "updated_at": "2026-05-01T00:00:00+00:00",
+}
+
+_DEFAULT_USAGE_ROW = {
+    "user_id": TEST_USER_ID,
+    "total_storage_bytes": 0,
+    "split_sheets_this_period": 0,
+    "zoe_queries_this_period": 0,
+    "oneclick_runs_this_period": 0,
+    "period_start": "2026-05-09T00:00:00+00:00",
+    "period_end": "2099-05-09T00:00:00+00:00",
+    "updated_at": "2026-05-09T00:00:00+00:00",
+}
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _default_table_side_effect(name):
+    """Default table mock: returns Pro data for subscription tables, empty for all others.
+
+    Tests that need specific data for subscription tables should override
+    mock_supabase.table.side_effect after receiving the fixture.
+    """
+    b = MockQueryBuilder()
+    if name == "subscriptions":
+        b.execute.return_value = MagicMock(data=[_PRO_SUB_ROW], count=1)
+    elif name == "tier_entitlements":
+        b.execute.return_value = MagicMock(data=[_PRO_TIER_ROW], count=1)
+    elif name == "tier_overrides":
+        b.execute.return_value = MagicMock(data=[], count=0)
+    elif name == "usage_counters":
+        b.execute.return_value = MagicMock(data=[_DEFAULT_USAGE_ROW], count=1)
+    return b
+
+
 @pytest.fixture()
 def mock_supabase():
-    """Return a MagicMock Supabase client with `.table()` and `.storage.from_()` wired up."""
+    """Return a MagicMock Supabase client with `.table()` and `.storage.from_()` wired up.
+
+    Subscription/entitlements tables return Pro-tier data by default so subscription
+    gates pass in tests that aren't specifically testing gate behaviour.
+    Tests that override ``mock_supabase.table.side_effect`` are responsible for
+    providing subscription data themselves (or using the monkeypatch approach to
+    patch ``enforcement._service`` directly).
+    """
     mock = MagicMock()
-    mock.table.side_effect = lambda name: MockQueryBuilder()
+    mock.table.side_effect = _default_table_side_effect
     mock.storage.from_.return_value = MockStorageBucket()
     return mock
 
@@ -120,15 +190,21 @@ def client(mock_supabase):
     * ``main.get_supabase_client`` always returns *mock_supabase*.
     * ``main.supabase`` is replaced by *mock_supabase*.
     * ``get_current_user_id`` dependency yields ``TEST_USER_ID``.
+    * ``subscriptions.deps._entitlements_service`` singleton is reset so the
+      EntitlementsService is re-created with the current mock on each test.
     """
     import main
+    import subscriptions.deps as _sub_deps
     from auth import get_current_user_id
 
     original_get_supabase = main.get_supabase_client
     original_supabase = main.supabase
+    original_ent_service = _sub_deps._entitlements_service
 
     main.get_supabase_client = lambda: mock_supabase
     main.supabase = mock_supabase
+    # Reset the singleton so it is re-built with the current mock_supabase
+    _sub_deps._entitlements_service = None
 
     async def _override_user_id():
         return TEST_USER_ID
@@ -141,4 +217,5 @@ def client(mock_supabase):
     # Restore originals
     main.get_supabase_client = original_get_supabase
     main.supabase = original_supabase
+    _sub_deps._entitlements_service = original_ent_service
     main.app.dependency_overrides.clear()

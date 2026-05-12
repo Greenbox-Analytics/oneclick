@@ -508,3 +508,160 @@ class TestDeleteContract:
         client.delete(f"/contracts/{CONTRACT_ID}")
 
         mock_supabase.storage.from_.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# SP3: Upload gating
+# ---------------------------------------------------------------------------
+
+
+class TestUploadGated:
+    """SP3: Free users at storage cap -> POST /upload returns 402."""
+
+    def _make_upload_ownership_router(self):
+        """Table router for POST /upload: artists returns the artist, others return empty."""
+        from tests.conftest import _default_table_side_effect
+
+        def _router(name):
+            if name == "artists":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[{"id": ARTIST_ID}], count=1)
+                return b
+            if name == "project_files":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[], count=0)
+                return b
+            if name == "projects":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[{"id": PROJECT_ID}], count=1)
+                return b
+            return _default_table_side_effect(name)
+
+        return _router
+
+    def test_upload_at_cap_returns_402(self, client, mock_supabase, monkeypatch):
+        """Free user at storage cap -> POST /upload returns 402 before touching Storage."""
+        import io
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(
+            allowed=False,
+            reason="Upload would exceed your storage cap.",
+            upgrade_required=True,
+        )
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        mock_supabase.table.side_effect = self._make_upload_ownership_router()
+
+        files = {"file": ("test.txt", io.BytesIO(b"some bytes"), "text/plain")}
+        data = {"artist_id": ARTIST_ID, "category": "contract", "project_id": PROJECT_ID}
+
+        resp = client.post("/upload", files=files, data=data)
+        assert resp.status_code == 402
+        detail = resp.json()["detail"].lower()
+        assert "storage" in detail or "cap" in detail or "limit" in detail
+
+    def test_upload_at_cap_does_not_touch_storage(self, client, mock_supabase, monkeypatch):
+        """Storage.upload is NOT called when the gate fires."""
+        import io
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(
+            allowed=False,
+            reason="Upload would exceed your storage cap.",
+            upgrade_required=True,
+        )
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        mock_supabase.table.side_effect = self._make_upload_ownership_router()
+
+        files = {"file": ("test.txt", io.BytesIO(b"some bytes"), "text/plain")}
+        data = {"artist_id": ARTIST_ID, "category": "contract", "project_id": PROJECT_ID}
+
+        client.post("/upload", files=files, data=data)
+
+        # Storage.from_("project-files").upload should NOT have been called
+        upload_calls = mock_supabase.storage.from_.return_value.upload.call_count
+        assert upload_calls == 0, f"Storage.upload was called {upload_calls} times; expected 0 (gate should block)"
+
+    def test_contracts_upload_at_cap_returns_402(self, client, mock_supabase, monkeypatch):
+        """Free user at storage cap -> POST /contracts/upload returns 402."""
+        import io
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(
+            allowed=False,
+            reason="Upload would exceed your storage cap.",
+            upgrade_required=True,
+        )
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        # verify_user_owns_project needs artists + projects
+        def _router(name):
+            from tests.conftest import _default_table_side_effect
+
+            if name == "artists":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[{"id": ARTIST_ID}], count=1)
+                return b
+            if name == "projects":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(
+                    data=[{"id": PROJECT_ID, "name": "Test Project", "artist_id": ARTIST_ID}], count=1
+                )
+                return b
+            if name == "project_files":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[], count=0)
+                return b
+            return _default_table_side_effect(name)
+
+        mock_supabase.table.side_effect = _router
+
+        files = {"file": ("contract.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")}
+        data = {"project_id": PROJECT_ID}
+
+        resp = client.post("/contracts/upload", files=files, data=data)
+        assert resp.status_code == 402
+        detail = resp.json()["detail"].lower()
+        assert "storage" in detail or "cap" in detail or "limit" in detail
+
+    def test_contracts_upload_multiple_at_cap_returns_402(self, client, monkeypatch, mock_supabase):
+        """Free user at storage cap -> POST /contracts/upload-multiple returns 402.
+        Verifies single gate decision blocks the WHOLE batch."""
+        import io
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(
+            allowed=False,
+            reason="Upload would exceed your storage cap.",
+            upgrade_required=True,
+        )
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        files = [
+            ("files", ("a.pdf", io.BytesIO(b"%PDF-1.4\n... mock pdf bytes ..."), "application/pdf")),
+            ("files", ("b.pdf", io.BytesIO(b"%PDF-1.4\n... another mock ..."), "application/pdf")),
+        ]
+        data = {"project_id": "some-project-id"}
+        resp = client.post("/contracts/upload-multiple", files=files, data=data)
+
+        assert resp.status_code == 402
+        detail = resp.json()["detail"].lower()
+        assert "storage" in detail or "cap" in detail or "limit" in detail
+
+        # Verify Storage was never touched (gate fired before any upload)
+        upload_calls = mock_supabase.storage.from_.return_value.upload.call_count
+        assert upload_calls == 0, f"Expected 0 storage uploads, got {upload_calls}"

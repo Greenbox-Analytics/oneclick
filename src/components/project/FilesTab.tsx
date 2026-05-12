@@ -18,6 +18,8 @@ import { useDriveExport } from "@/hooks/useGoogleDrive";
 import { DriveImportDialog } from "./integrations/DriveImportDialog";
 import ShareViaEmailDialog from "./ShareViaEmailDialog";
 import BulkActionReviewDialog, { type BulkAction } from "./BulkActionReviewDialog";
+import { useStorageStatus } from "@/hooks/useEntitlements";
+import { useGatedAction } from "@/hooks/useGatedAction";
 
 interface FilesTabProps {
   projectId: string;
@@ -33,6 +35,13 @@ const FOLDER_CATEGORIES = [
 ];
 
 const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
+
+function formatBytes(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)} GB`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} MB`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)} KB`;
+  return `${n} B`;
+}
 
 export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const { user } = useAuth();
@@ -122,13 +131,14 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
     }
   }
 
-  const handleUpload = async (category: string, event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  const storageStatus = useStorageStatus();
 
-    setUploadingCategory(category);
-    try {
-      // Fix #3: Compute SHA-256 hash for dedup
+  const { mutate: gatedUpload, isPending: isGatedUploading, paywallElement } = useGatedAction<
+    void,
+    { file: File; category: string }
+  >({
+    mutationFn: async ({ file, category }) => {
+      // Compute SHA-256 hash for dedup
       const hashBuffer = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       const contentHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
@@ -146,14 +156,10 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           `This file already exists in this project as "${existing[0].file_name}". Link the existing file to works instead?\n\nClick "OK" to skip upload, or "Cancel" to upload anyway.`
         );
         if (proceed) {
-          // Open linking dialog for the existing file instead
-          setUploadingCategory(null);
-          event.target.value = "";
           setLinkingFileId(existing[0].id);
           setSelectedWorkIds([]);
           return;
         }
-        // User chose "Cancel" = upload anyway
       }
 
       const filePath = `${projectId}/${category}/${Date.now()}_${file.name}`;
@@ -186,17 +192,35 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
 
       queryClient.invalidateQueries({ queryKey: ["project-files-tab", projectId] });
       toast.success("File uploaded");
+      setUploadingCategory(null);
 
-      // Fix #4: After upload, prompt to link to works
       if (insertedData?.id && projectWorks && projectWorks.length > 0) {
         setLinkingFileId(insertedData.id);
         setSelectedWorkIds([]);
       }
-    } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : "Failed to upload file");
-    } finally {
+    },
+    onError: (err) => {
       setUploadingCategory(null);
-      event.target.value = "";
+      toast.error(err instanceof Error ? err.message : "Failed to upload file");
+    },
+  });
+
+  const handleUpload = (category: string, event: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (fileList.length === 0) return;
+
+    const totalSize = fileList.reduce((sum, f) => sum + f.size, 0);
+    if (storageStatus.cap !== -1 && (storageStatus.used + totalSize) > storageStatus.cap) {
+      toast.error(
+        `Uploading ${fileList.length} file(s) (${formatBytes(totalSize)}) would exceed your storage cap. Upgrade to Pro for unlimited.`,
+      );
+      return;
+    }
+
+    setUploadingCategory(category);
+    for (const file of fileList) {
+      gatedUpload({ file, category });
     }
   };
 
@@ -654,6 +678,8 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {paywallElement}
     </div>
   );
 }

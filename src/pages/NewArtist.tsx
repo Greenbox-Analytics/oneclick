@@ -9,17 +9,87 @@ import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { useGatedAction } from "@/hooks/useGatedAction";
+import { useEntitlements } from "@/hooks/useEntitlements";
+import { useQuery } from "@tanstack/react-query";
+import { ApiError } from "@/lib/apiFetch";
 
 const NewArtist = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user } = useAuth();
-  const [isLoading, setIsLoading] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: "",
     email: "",
     genre: "",
+  });
+
+  const { data: ent } = useEntitlements();
+  const cap = ent?.caps.maxArtists ?? 0;
+
+  const { data: existingArtists } = useQuery({
+    queryKey: ["artists-count", user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase
+        .from("artists")
+        .select("id")
+        .eq("user_id", user.id);
+      if (error) return [];
+      return data || [];
+    },
+    enabled: !!user?.id,
+  });
+  const currentCount = existingArtists?.length ?? 0;
+
+  const { mutate: createArtist, isPending, paywallElement } = useGatedAction<{ id: string }, {
+    name: string;
+    email: string;
+    genre: string;
+    avatarPreview: string | null;
+  }>({
+    mutationFn: async (vars) => {
+      if (!user) throw new Error("You must be logged in to create an artist");
+
+      // FE-only cap check (no backend /artists POST)
+      if (cap !== -1 && cap !== 0 && currentCount >= cap) {
+        throw new ApiError(`You've reached your limit of ${cap} artists.`, 402);
+      }
+
+      const { data, error } = await supabase
+        .from("artists")
+        .insert({
+          name: vars.name,
+          email: vars.email,
+          bio: "",
+          genres: vars.genre.split(",").map((g) => g.trim()).filter(Boolean),
+          avatar_url: vars.avatarPreview || "",
+          user_id: user.id,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Success",
+        description: "Artist created successfully",
+      });
+      navigate(`/artists/${data.id}`);
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to create artist",
+        variant: "destructive",
+      });
+    },
+    resource: "artist",
+    currentCount,
+    cap,
   });
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -33,49 +103,9 @@ const NewArtist = () => {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!user) {
-      toast({
-        title: "Error",
-        description: "You must be logged in to create an artist",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    setIsLoading(true);
-
-    const { data, error } = await supabase
-      .from('artists')
-      .insert({
-        name: formData.name,
-        email: formData.email,
-        bio: "",
-        genres: formData.genre.split(',').map(g => g.trim()).filter(Boolean),
-        avatar_url: avatarPreview || "",
-        user_id: user.id,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      toast({
-        title: "Error",
-        description: "Failed to create artist",
-        variant: "destructive",
-      });
-      setIsLoading(false);
-      return;
-    }
-
-    toast({
-      title: "Success",
-      description: "Artist created successfully",
-    });
-    
-    navigate(`/artists/${data.id}`);
+    createArtist({ name: formData.name, email: formData.email, genre: formData.genre, avatarPreview });
   };
 
   return (
@@ -190,8 +220,8 @@ const NewArtist = () => {
                 <Input id="phone" type="tel" placeholder="+1 (555) 123-4567" />
               </div>
               <div className="pt-4 flex gap-3">
-                <Button type="submit" disabled={isLoading}>
-                  {isLoading ? "Creating..." : "Create Artist"}
+                <Button type="submit" disabled={isPending}>
+                  {isPending ? "Creating..." : "Create Artist"}
                 </Button>
                 <Button type="button" variant="outline" onClick={() => navigate("/artists")}>
                   Cancel
@@ -201,6 +231,7 @@ const NewArtist = () => {
           </CardContent>
         </Card>
       </main>
+      {paywallElement}
     </div>
   );
 };

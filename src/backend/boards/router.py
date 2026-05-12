@@ -21,6 +21,7 @@ from boards.models import (
     TaskCreate,
     TaskUpdate,
 )
+from subscriptions.enforcement import gated_create
 
 router = APIRouter()
 
@@ -171,6 +172,11 @@ async def list_tasks(
 @router.post("/tasks")
 async def create_task(body: TaskCreate, user_id: str = Depends(get_current_user_id)):
     """Create a new task."""
+    # Gate: count user's existing board tasks
+    count_res = _get_supabase().table("board_tasks").select("id", count="exact").eq("user_id", user_id).execute()
+    task_count = count_res.count or 0
+    gated_create(user_id, "task", current_count=task_count)
+
     data = body.model_dump(exclude_none=True)
     if data.get("due_date"):
         data["due_date"] = str(data["due_date"])

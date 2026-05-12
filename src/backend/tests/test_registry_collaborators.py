@@ -11,7 +11,21 @@ Acceptance criteria:
 from datetime import UTC
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_wrap(fn):
+    """Wrap a table side-effect function to route subscription tables through the Pro default."""
+
+    def _wrapped(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
+        return fn(name)
+
+    return _wrapped
+
 
 WORK_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 COLLAB_ID = "bbbbbbbb-0000-0000-0000-000000000002"
@@ -76,7 +90,7 @@ class TestListCollaborators:
                 # get_collaborators query
                 return collaborators_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
         assert response.status_code == 200
@@ -104,7 +118,7 @@ class TestListCollaborators:
             else:
                 return collab_check_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
         assert response.status_code == 403
@@ -114,7 +128,7 @@ class TestListCollaborators:
         work_builder = MockQueryBuilder()
         work_builder.execute.return_value = MagicMock(data=None, count=0)
 
-        mock_supabase.table.side_effect = lambda name: work_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: work_builder)
 
         response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
         assert response.status_code == 404
@@ -144,7 +158,7 @@ class TestListCollaborators:
             else:
                 return collaborators_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
         assert response.status_code == 200
@@ -192,7 +206,7 @@ class TestInviteCollaborator:
                 # router: profiles inviter name
                 return profile_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         with patch("registry.emails.send_invitation_email") as mock_email:
             response = client.post(
@@ -232,7 +246,7 @@ class TestInviteCollaborator:
             else:
                 return insert_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         with patch("registry.emails.send_invitation_email"):
             response = client.post(
@@ -297,7 +311,7 @@ class TestClaimInvitation:
             else:
                 return notif_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.post(f"/registry/collaborators/claim?invite_token={INVITE_TOKEN}")
         assert response.status_code == 200
@@ -314,7 +328,7 @@ class TestClaimInvitation:
             count=1,
         )
 
-        mock_supabase.table.side_effect = lambda name: claim_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: claim_builder)
 
         response = client.post(f"/registry/collaborators/claim?invite_token={INVITE_TOKEN}")
         assert response.status_code == 410
@@ -324,7 +338,7 @@ class TestClaimInvitation:
         not_found_builder = MockQueryBuilder()
         not_found_builder.execute.return_value = MagicMock(data=None, count=0)
 
-        mock_supabase.table.side_effect = lambda name: not_found_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: not_found_builder)
 
         response = client.post("/registry/collaborators/claim?invite_token=nonexistent-token")
         assert response.status_code == 404
@@ -390,7 +404,7 @@ class TestAcceptFromDashboard:
             else:
                 return notif_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/accept-from-dashboard")
         assert response.status_code == 200
@@ -415,7 +429,7 @@ class TestAcceptFromDashboard:
             else:
                 return profile_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/accept-from-dashboard")
         assert response.status_code == 403
@@ -425,7 +439,7 @@ class TestAcceptFromDashboard:
         not_found_builder = MockQueryBuilder()
         not_found_builder.execute.return_value = MagicMock(data=None, count=0)
 
-        mock_supabase.table.side_effect = lambda name: not_found_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: not_found_builder)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/accept-from-dashboard")
         assert response.status_code == 400
@@ -474,7 +488,7 @@ class TestDeclineInvitation:
             else:
                 return notif_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/decline")
         assert response.status_code == 200
@@ -499,7 +513,7 @@ class TestDeclineInvitation:
             else:
                 return profile_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/decline")
         assert response.status_code == 403
@@ -509,7 +523,7 @@ class TestDeclineInvitation:
         not_found_builder = MockQueryBuilder()
         not_found_builder.execute.return_value = MagicMock(data=None, count=0)
 
-        mock_supabase.table.side_effect = lambda name: not_found_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: not_found_builder)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/decline")
         assert response.status_code == 400
@@ -549,7 +563,7 @@ class TestRevokeCollaborator:
             else:
                 return works_status_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/revoke")
         assert response.status_code == 200
@@ -587,7 +601,7 @@ class TestRevokeCollaborator:
             else:
                 return works_revert_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/revoke")
         assert response.status_code == 200
@@ -597,7 +611,7 @@ class TestRevokeCollaborator:
         not_found_builder = MockQueryBuilder()
         not_found_builder.execute.return_value = MagicMock(data=None, count=0)
 
-        mock_supabase.table.side_effect = lambda name: not_found_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: not_found_builder)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/revoke")
         assert response.status_code == 404
@@ -629,7 +643,7 @@ class TestGetMyInvites:
             else:
                 return invites_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get("/registry/collaborators/my-invites")
         assert response.status_code == 200
@@ -643,7 +657,7 @@ class TestGetMyInvites:
         profile_builder = MockQueryBuilder()
         profile_builder.execute.return_value = MagicMock(data=None, count=0)
 
-        mock_supabase.table.side_effect = lambda name: profile_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: profile_builder)
 
         response = client.get("/registry/collaborators/my-invites")
         assert response.status_code == 200
@@ -668,7 +682,7 @@ class TestGetMyInvites:
             else:
                 return invites_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get("/registry/collaborators/my-invites")
         assert response.status_code == 200
@@ -735,7 +749,7 @@ class TestConfirmStake:
             else:
                 return notif_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/confirm")
         assert response.status_code == 200
@@ -747,7 +761,7 @@ class TestConfirmStake:
         not_found_builder = MockQueryBuilder()
         not_found_builder.execute.return_value = MagicMock(data=None, count=0)
 
-        mock_supabase.table.side_effect = lambda name: not_found_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: not_found_builder)
 
         response = client.post(f"/registry/collaborators/{COLLAB_ID}/confirm")
         assert response.status_code == 404

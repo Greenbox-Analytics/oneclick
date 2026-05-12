@@ -168,3 +168,163 @@ class TestGenerateSplitSheetValidation:
 
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/pdf"
+
+
+# ---------------------------------------------------------------------------
+# Subscription gate tests
+# ---------------------------------------------------------------------------
+
+
+class TestSplitSheetGated:
+    """POST /splitsheet/generate with a Free user at cap returns 402."""
+
+    def test_generate_at_cap_full_path(self, client, mock_supabase):
+        """Full path: real EntitlementsService runs over wired supabase tables.
+
+        Catches count-query regressions (wrong table/filter/etc.) that the monkeypatch
+        test would miss. Free tier max_split_sheets_per_month=5; user has 5 → 402.
+        """
+        from unittest.mock import MagicMock
+
+        from tests.conftest import TEST_USER_ID, MockQueryBuilder
+
+        FREE_TIER = {
+            "tier": "free",
+            "max_artists": 3,
+            "max_projects": 3,
+            "max_boards": -1,
+            "max_tasks": 50,
+            "max_storage_bytes": 1073741824,
+            "max_split_sheets_per_month": 5,
+            "zoe_enabled": False,
+            "oneclick_enabled": False,
+            "registry_enabled": False,
+            "integrations_allowed": ["google_drive"],
+            "updated_at": "2026-05-09T00:00:00+00:00",
+        }
+        FREE_SUB = {
+            "id": "s1",
+            "user_id": TEST_USER_ID,
+            "tier": "free",
+            "status": "active",
+            "stripe_customer_id": None,
+            "stripe_subscription_id": None,
+            "stripe_price_id": None,
+            "current_period_start": None,
+            "current_period_end": None,
+            "cancel_at_period_end": False,
+            "canceled_at": None,
+            "created_at": "2026-05-01T00:00:00+00:00",
+            "updated_at": "2026-05-01T00:00:00+00:00",
+        }
+        AT_CAP_USAGE = {
+            "user_id": TEST_USER_ID,
+            "total_storage_bytes": 0,
+            "split_sheets_this_period": 5,
+            "zoe_queries_this_period": 0,
+            "oneclick_runs_this_period": 0,
+            "period_start": "2026-05-09T00:00:00+00:00",
+            "period_end": "2099-05-09T00:00:00+00:00",
+            "updated_at": "2026-05-09T00:00:00+00:00",
+        }
+
+        # Reset the EntitlementsService singleton so it is rebuilt with free-tier data
+        import subscriptions.deps as _sub_deps
+
+        _sub_deps._entitlements_service = None
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "subscriptions":
+                b.execute.return_value = MagicMock(data=[FREE_SUB], count=1)
+            elif name == "tier_entitlements":
+                b.execute.return_value = MagicMock(data=[FREE_TIER], count=1)
+            elif name == "tier_overrides":
+                b.execute.return_value = MagicMock(data=[], count=0)
+            elif name == "usage_counters":
+                b.execute.return_value = MagicMock(data=[AT_CAP_USAGE], count=1)
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        VALID_BODY = {
+            "work_title": "Test Song",
+            "date": "2026-05-10",
+            "contributors": [
+                {"name": "Alice", "role": "Songwriter"},
+                {"name": "Bob", "role": "Songwriter"},
+            ],
+        }
+        resp = client.post("/splitsheet/generate", json=VALID_BODY)
+        assert resp.status_code == 402
+        assert "split sheet" in resp.json()["detail"].lower()
+
+    def test_generate_increments_usage_counter_on_success(self, client, mock_supabase, monkeypatch):
+        """Successful split-sheet generation increments split_sheets_this_period.
+
+        Verifies that increment_usage is called exactly once with the correct
+        arguments on a successful generation, catching regressions where the
+        increment is accidentally removed or called with wrong args.
+        """
+        from unittest.mock import MagicMock
+
+        from tests.conftest import TEST_USER_ID
+
+        # Pro user — mock_supabase already defaults to Pro so the gate passes.
+        # Patch _get_entitlements_service at the splitsheet router module level
+        # so the mock's increment_usage is the one that gets called.
+        mock_svc = MagicMock()
+        mock_svc.can.return_value = MagicMock(allowed=True)
+
+        import splitsheet.router as ssrouter
+
+        monkeypatch.setattr(ssrouter, "_get_entitlements_service", lambda: mock_svc)
+
+        VALID_BODY = {
+            "work_title": "Test Song",
+            "date": "2026-05-10",
+            "contributors": [
+                {"name": "Alice", "role": "Songwriter"},
+                {"name": "Bob", "role": "Songwriter"},
+            ],
+        }
+        resp = client.post("/splitsheet/generate", json=VALID_BODY)
+
+        # Generation succeeded
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+        # Counter incremented exactly once with the correct args
+        mock_svc.increment_usage.assert_called_once_with(
+            TEST_USER_ID,
+            "split_sheets_this_period",
+        )
+
+    def test_generate_at_cap_returns_402(self, client, mock_supabase, monkeypatch):
+        """Free user at 5/5 split sheets this period → POST /splitsheet/generate returns 402."""
+        from unittest.mock import MagicMock
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        # Patch enforcement._service to return a service that denies GENERATE_SPLIT_SHEET
+        deny_result = CheckResult(
+            allowed=False,
+            reason="You've used your 5 split sheet(s) for this period.",
+            upgrade_required=True,
+        )
+        svc = MagicMock()
+        svc.can.return_value = deny_result
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        VALID_BODY = {
+            "work_title": "Test Song",
+            "date": "2026-05-10",
+            "contributors": [
+                {"name": "Alice", "role": "Songwriter"},
+                {"name": "Bob", "role": "Songwriter"},
+            ],
+        }
+        resp = client.post("/splitsheet/generate", json=VALID_BODY)
+
+        assert resp.status_code == 402
+        assert "split sheet" in resp.json()["detail"].lower()

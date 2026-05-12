@@ -37,7 +37,8 @@ import {
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 
-import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
+import { useGatedAction } from "@/hooks/useGatedAction";
 
 const ROLES = [
   "Artist",
@@ -115,7 +116,6 @@ const SplitSheet = () => {
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [hasGenerated, setHasGenerated] = useState(false);
   const [generatedBlob, setGeneratedBlob] = useState<Blob | null>(null);
 
@@ -184,11 +184,6 @@ const SplitSheet = () => {
 
   const canProceedStep1 = workTitle.trim() !== "" && selectedArtistId !== "";
   const canProceedStep2 = allNamesPresent && allRolesPresent && allPctPresent && isValidTotal;
-  const canGenerate =
-    canProceedStep1 &&
-    canProceedStep2 &&
-    !isGenerating &&
-    (!saveToArtist || selectedProjectId !== "");
 
   const updateContributor = (id: string, field: keyof Contributor, value: string) => {
     setContributors((prev) =>
@@ -204,53 +199,84 @@ const SplitSheet = () => {
     setContributors((prev) => prev.filter((c) => c.id !== id));
   };
 
-  const handleGenerate = async () => {
-    setIsGenerating(true);
-    setHasGenerated(false);
-    setGeneratedBlob(null);
-    try {
+  type GenerateVars = {
+    work_title: string;
+    work_type: string;
+    split_type: string;
+    date: string;
+    format: "pdf" | "docx";
+    save_to_artist: boolean;
+    artist_id: string | null;
+    project_id: string | null;
+    contributors: {
+      name: string;
+      role: string;
+      publishing_percentage: number | null;
+      master_percentage: number | null;
+      publisher_or_label: string | null;
+      ipi_number: string | null;
+    }[];
+  };
+
+  const { mutate: generateSheet, isPending: isGenerating, paywallElement: splitSheetPaywallElement } = useGatedAction<Blob, GenerateVars>({
+    mutationFn: async (vars) => {
       const authHeaders = await getAuthHeaders();
       const response = await fetch(`${API_URL}/splitsheet/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({
-          work_title: workTitle,
-          work_type: workType,
-          split_type: splitType,
-          date,
-          format,
-          save_to_artist: saveToArtist,
-          artist_id: selectedArtistId || null,
-          project_id: saveToArtist && selectedProjectId ? selectedProjectId : null,
-          contributors: contributors.map((c) => ({
-            name: c.name,
-            role: c.role,
-            publishing_percentage: needsPublishing ? parseFloat(c.publishingPercentage) || 0 : null,
-            master_percentage: needsMaster ? parseFloat(c.masterPercentage) || 0 : null,
-            publisher_or_label: c.publisherOrLabel || null,
-            ipi_number: c.ipi || null,
-          })),
-        }),
+        body: JSON.stringify(vars),
       });
 
       if (!response.ok) {
         const err = await response.json().catch(() => null);
+        // Surface 402 as ApiError so PaywallModal fires
+        if (response.status === 402) {
+          throw new ApiError(err?.detail || "Upgrade required", 402);
+        }
         throw new Error(err?.detail || "Failed to generate split sheet");
       }
 
-      const blob = await response.blob();
+      return response.blob();
+    },
+    onSuccess: (blob) => {
       setGeneratedBlob(blob);
       setHasGenerated(true);
-
       const savedMsg = saveToArtist ? " and saved to artist profile" : "";
       toast.success(`Split sheet generated${savedMsg} successfully`);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to generate split sheet";
-      toast.error(message);
-    } finally {
-      setIsGenerating(false);
-    }
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to generate split sheet");
+    },
+  });
+
+  const handleGenerate = () => {
+    setHasGenerated(false);
+    setGeneratedBlob(null);
+    generateSheet({
+      work_title: workTitle,
+      work_type: workType,
+      split_type: splitType,
+      date,
+      format,
+      save_to_artist: saveToArtist,
+      artist_id: selectedArtistId || null,
+      project_id: saveToArtist && selectedProjectId ? selectedProjectId : null,
+      contributors: contributors.map((c) => ({
+        name: c.name,
+        role: c.role,
+        publishing_percentage: needsPublishing ? parseFloat(c.publishingPercentage) || 0 : null,
+        master_percentage: needsMaster ? parseFloat(c.masterPercentage) || 0 : null,
+        publisher_or_label: c.publisherOrLabel || null,
+        ipi_number: c.ipi || null,
+      })),
+    });
   };
+
+  const canGenerate =
+    canProceedStep1 &&
+    canProceedStep2 &&
+    !isGenerating &&
+    (!saveToArtist || selectedProjectId !== "");
 
   const handleDownload = () => {
     if (!generatedBlob) return;
@@ -809,6 +835,7 @@ const SplitSheet = () => {
           onSkip={walkthrough.skip}
         />
       </main>
+      {splitSheetPaywallElement}
     </div>
   );
 };

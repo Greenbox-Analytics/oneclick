@@ -20,6 +20,8 @@ from integrations.oauth import (
     store_connection,
     verify_oauth_state,
 )
+from subscriptions.enforcement import gated_feature
+from subscriptions.models import Action
 
 router = APIRouter()
 
@@ -39,6 +41,7 @@ class NotificationSettingsUpdate(BaseModel):
 @router.get("/auth")
 async def initiate_auth(user_id: str = Depends(get_current_user_id)):
     """Start Slack OAuth flow."""
+    gated_feature(user_id, Action.USE_INTEGRATION, name="slack")
     auth_url = build_auth_url("slack", user_id)
     return {"auth_url": auth_url}
 

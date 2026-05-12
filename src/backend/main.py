@@ -46,6 +46,9 @@ from projects.share_email import router as projects_share_email_router
 from registry.router import router as registry_router
 from settings.router import router as settings_router
 from splitsheet.router import router as splitsheet_router
+from subscriptions.admin_router import router as subscriptions_admin_router
+from subscriptions.pro_requests_router import router as pro_requests_router
+from subscriptions.router import router as subscriptions_router
 from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
@@ -62,6 +65,9 @@ app.include_router(projects_share_email_router, prefix="/projects", tags=["Proje
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
+app.include_router(subscriptions_router, tags=["Entitlements"])
+app.include_router(subscriptions_admin_router, tags=["Admin"])
+app.include_router(pro_requests_router, tags=["Pro Requests"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -156,6 +162,14 @@ def get_supabase_client() -> Client:
 
 def normalize_file_name(file_name: str) -> str:
     return file_name.strip().lower()
+
+
+# SP3: singleton + accessor moved to subscriptions/deps.py to break the import
+# cycle with subscriptions/enforcement.py. Re-export here so SP1/SP2 callers
+# in this file (Zoe/OneClick increments, etc.) keep working unchanged.
+from subscriptions.deps import _get_entitlements_service  # noqa: I001
+from subscriptions.enforcement import gated_create, gated_feature, gated_upload
+from subscriptions.models import Action
 
 
 # --- Ownership verification helpers ---
@@ -297,6 +311,7 @@ class ZoeAskRequest(BaseModel):
     context: ConversationContext | None = None  # Conversation context for structured tracking
     source_preference: Literal["artist_profile", "contract_context", "conversation_history"] | None = None
     contract_markdowns: dict[str, str] | None = None  # Full contract markdown text keyed by contract_id
+    host_user_id: str | None = None  # SP3: project owner for host-wins resolution
 
 
 class ZoeQuickAction(BaseModel):
@@ -472,6 +487,22 @@ async def create_project(project: ProjectCreateRequest, user_id: str = Depends(g
     try:
         if not verify_user_owns_artist(user_id, project.artist_id):
             raise HTTPException(status_code=403, detail="Access denied")
+
+        # Gate: count user's existing projects across all their artists
+        artist_ids = get_user_artist_ids(user_id)
+        if artist_ids:
+            count_res = (
+                get_supabase_client()
+                .table("projects")
+                .select("id", count="exact")
+                .in_("artist_id", artist_ids)
+                .execute()
+            )
+            project_count = count_res.count or 0
+        else:
+            project_count = 0
+        gated_create(user_id, "project", current_count=project_count)
+
         res = (
             get_supabase_client()
             .table("projects")
@@ -598,6 +629,9 @@ async def upload_file(
 
         file_content = await file.read()
 
+        # ---- SP3: gate BEFORE Storage write ----
+        gated_upload(user_id, size=len(file_content), host_user_id=user_id)
+
         # Clean filename
         import re
 
@@ -644,8 +678,14 @@ async def upload_file(
             except Exception as cleanup_error:
                 print(f"Failed to cleanup uploaded file after DB error: {cleanup_error}")
 
-            error_message = str(db_error).lower()
-            if "duplicate" in error_message and "project_files" in error_message:
+            error_message = str(db_error)
+            is_trigger_reject = "Storage cap exceeded" in error_message or "23514" in error_message
+            if is_trigger_reject:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Upload would exceed your storage cap (concurrent upload race). Try again or upgrade to Pro.",
+                )
+            if "duplicate" in error_message.lower() and "project_files" in error_message.lower():
                 raise HTTPException(
                     status_code=409, detail=f'A file named "{file.filename}" already exists in this project.'
                 )
@@ -801,27 +841,18 @@ class ContractDeleteResponse(BaseModel):
     message: str
 
 
-@app.post("/contracts/upload", response_model=ContractUploadResponse)
-async def upload_contract(
+async def _upload_contract_impl(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    project_id: str = Form(...),
-    user_id: str = Depends(get_current_user_id),
-):
-    """
-    Upload and process a contract PDF:
-    1. Save to Supabase Storage
-    2. Extract text and chunk into 300-600 tokens
-    3. Generate deterministic chunk IDs (SHA256 of content + metadata)
-    4. Embed and upsert to user's namespace in Pinecone
+    file: UploadFile,
+    file_content: bytes,
+    project_id: str,
+    user_id: str,
+) -> ContractUploadResponse:
+    """Core contract upload logic. Reusable by single + multi upload endpoints.
 
-    Args:
-        file: PDF file to upload
-        project_id: UUID of the project
-        user_id: UUID of the authenticated user
-
-    Returns:
-        Upload statistics and confirmation
+    Note: file_content is pre-read by the caller. The caller is also responsible
+    for running gated_upload(...) before calling this helper — the multi-upload
+    sums sizes across the batch and runs one gate for all files.
     """
     try:
         # Validate file type
@@ -843,9 +874,6 @@ async def upload_contract(
             )
 
         _project_name = project_res.data[0]["name"]
-
-        # Read file content
-        file_content = await file.read()
 
         # Clean filename
         import re
@@ -881,8 +909,14 @@ async def upload_contract(
             except Exception as cleanup_error:
                 print(f"Failed to cleanup uploaded contract after DB error: {cleanup_error}")
 
-            error_message = str(db_error).lower()
-            if "duplicate" in error_message and "project_files" in error_message:
+            error_message = str(db_error)
+            is_trigger_reject = "Storage cap exceeded" in error_message or "23514" in error_message
+            if is_trigger_reject:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Upload would exceed your storage cap (concurrent upload race). Try again or upgrade to Pro.",
+                )
+            if "duplicate" in error_message.lower() and "project_files" in error_message.lower():
                 raise HTTPException(
                     status_code=409, detail=f'A file named "{file.filename}" already exists in this project.'
                 )
@@ -946,9 +980,39 @@ async def upload_contract(
         raise HTTPException(status_code=500, detail=f"Failed to upload contract: {str(e)}")
 
 
+@app.post("/contracts/upload", response_model=ContractUploadResponse)
+async def upload_contract(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    project_id: str = Form(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Upload and process a contract PDF:
+    1. Save to Supabase Storage
+    2. Extract text and chunk into 300-600 tokens
+    3. Generate deterministic chunk IDs (SHA256 of content + metadata)
+    4. Embed and upsert to user's namespace in Pinecone
+
+    Args:
+        file: PDF file to upload
+        project_id: UUID of the project
+        user_id: UUID of the authenticated user
+
+    Returns:
+        Upload statistics and confirmation
+    """
+    file_content = await file.read()
+    gated_upload(user_id, size=len(file_content), host_user_id=user_id)
+    return await _upload_contract_impl(background_tasks, file, file_content, project_id, user_id)
+
+
 @app.post("/contracts/upload-multiple")
 async def upload_multiple_contracts(
-    files: list[UploadFile] = File(...), project_id: str = Form(...), user_id: str = Depends(get_current_user_id)
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    project_id: str = Form(...),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     Upload and process multiple contract PDFs in one request
@@ -961,22 +1025,37 @@ async def upload_multiple_contracts(
     Returns:
         List of upload results for each file
     """
+    # ---- SP3: read all files upfront, gate with TOTAL batch size ----
+    file_contents: list[tuple[UploadFile, bytes]] = []
+    for file in files:
+        contents = await file.read()
+        file_contents.append((file, contents))
+
+    total_size = sum(len(c) for _, c in file_contents)
+    gated_upload(user_id, size=total_size, host_user_id=user_id)
+
+    # ---- Process each file individually using the shared helper ----
     results = []
 
-    for file in files:
+    for original_file, contents in file_contents:
         try:
-            # Process each file individually
-            result = await upload_contract(file, project_id, user_id)
+            result = await _upload_contract_impl(
+                background_tasks,
+                original_file,
+                contents,
+                project_id,
+                user_id,
+            )
             results.append(
                 {
-                    "filename": file.filename,
+                    "filename": original_file.filename,
                     "status": "success",
                     "contract_id": result.contract_id,
                     "total_chunks": result.total_chunks,
                 }
             )
         except Exception as e:
-            results.append({"filename": file.filename, "status": "error", "error": str(e)})
+            results.append({"filename": original_file.filename, "status": "error", "error": str(e)})
 
     return {
         "total_files": len(files),
@@ -1135,7 +1214,15 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
       complete — instant non-streamed response (tiers 1/2)
       error    — error during generation
     """
+    # SP3: gate Zoe feature; raises 402 for Free users without a Pro host.
+    gated_feature(user_id, Action.USE_ZOE, host_user_id=request.host_user_id)
     try:
+        # SP2: track per-period Zoe usage; best-effort, never blocks.
+        # NOTE: increment fires on connection-open, not completion. A client that
+        # opens-then-closes mid-stream still counts as a query. This is acceptable
+        # for a usage-display counter; if the counter ever becomes billing-relevant,
+        # move this call to the end of the streaming handler (after final yield).
+        _get_entitlements_service().increment_usage(user_id, "zoe_queries_this_period")
         chatbot = get_zoe_chatbot()
         session_id = request.session_id or str(uuid.uuid4())
 
@@ -1237,6 +1324,7 @@ class OneClickRoyaltyRequest(BaseModel):
     contract_ids: list[str] | None = None
     project_id: str
     royalty_statement_file_id: str
+    host_user_id: str | None = None  # SP3: project owner for host-wins resolution
 
 
 class RoyaltyPaymentResponse(BaseModel):
@@ -1344,6 +1432,7 @@ async def oneclick_calculate_royalties_stream(
     contract_id: str | None = None,
     contract_ids: list[str] | None = Query(None),
     force_recalculate: bool = False,
+    host_user_id: str | None = Query(None),
 ):
     """
     OneClick Royalty Calculation with Server-Sent Events (SSE) for real-time progress updates.
@@ -1362,10 +1451,15 @@ async def oneclick_calculate_royalties_stream(
         project_id: Project ID
         royalty_statement_file_id: Royalty Statement File ID
         force_recalculate: If True, bypass cache
+        host_user_id: Project owner user ID for host-wins resolution (SP3)
 
     Returns:
         SSE stream with progress updates and final results
     """
+    # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
+    gated_feature(user_id, Action.USE_ONECLICK, host_user_id=host_user_id)
+    # SP2: track per-period OneClick usage; best-effort, never blocks.
+    _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
 
     async def generate_progress():
         # Initialize paths to None for safe cleanup
@@ -1628,6 +1722,10 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
         Payment breakdown and Excel file URL
     """
     try:
+        # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
+        gated_feature(user_id, Action.USE_ONECLICK, host_user_id=request.host_user_id)
+        # SP2: track per-period OneClick usage; best-effort, never blocks.
+        _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
         print(f"\n{'=' * 80}")
         print("ONECLICK ROYALTY CALCULATION")
         print(f"{'=' * 80}")

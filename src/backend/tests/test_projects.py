@@ -8,7 +8,7 @@ Covers:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import MockQueryBuilder
+from tests.conftest import _DEFAULT_USAGE_ROW, _PRO_SUB_ROW, _PRO_TIER_ROW, TEST_USER_ID, MockQueryBuilder
 
 ARTIST_ID = "artist-001"
 
@@ -26,8 +26,8 @@ def _make_two_table_router(artists_data, projects_data):
     """Build a table side_effect that routes by table name.
 
     'artists' calls return artists_data; 'projects' calls return projects_data.
-    This works for endpoints that call get_user_artist_ids (artists) then query
-    projects, or verify_user_owns_artist (artists) then query projects.
+    Subscription tables are stubbed with Pro-unlimited rows so the subscription
+    gate always passes in tests that aren't testing the gate itself.
     """
 
     def _router(name):
@@ -42,6 +42,14 @@ def _make_two_table_router(artists_data, projects_data):
                 data=projects_data,
                 count=len(projects_data),
             )
+        elif name == "subscriptions":
+            builder.execute.return_value = MagicMock(data=[_PRO_SUB_ROW], count=1)
+        elif name == "tier_entitlements":
+            builder.execute.return_value = MagicMock(data=[_PRO_TIER_ROW], count=1)
+        elif name == "tier_overrides":
+            builder.execute.return_value = MagicMock(data=[], count=0)
+        elif name == "usage_counters":
+            builder.execute.return_value = MagicMock(data=[_DEFAULT_USAGE_ROW], count=1)
         return builder
 
     return _router
@@ -269,3 +277,143 @@ class TestGetProjectsForArtist:
         data = response.json()
         assert len(data) == 2
         assert data[1]["id"] == "project-002"
+
+
+# ---------------------------------------------------------------------------
+# Subscription gate tests
+# ---------------------------------------------------------------------------
+
+
+class TestProjectCreateGated:
+    """POST /projects with a Free user at cap returns 402."""
+
+    def test_create_project_at_cap_full_count_path(self, client, mock_supabase):
+        """Full count-path test: real EntitlementsService runs over wired supabase tables.
+
+        Catches count-query regressions (wrong table/filter/etc.) that the monkeypatch
+        test would miss. Free tier max_projects=3; user has 3 projects → 402.
+        """
+
+        FREE_TIER = {
+            "tier": "free",
+            "max_artists": 3,
+            "max_projects": 3,
+            "max_boards": -1,
+            "max_tasks": 50,
+            "max_storage_bytes": 1073741824,
+            "max_split_sheets_per_month": 5,
+            "zoe_enabled": False,
+            "oneclick_enabled": False,
+            "registry_enabled": False,
+            "integrations_allowed": ["google_drive"],
+            "updated_at": "2026-05-09T00:00:00+00:00",
+        }
+        FREE_SUB = {
+            "id": "s1",
+            "user_id": TEST_USER_ID,
+            "tier": "free",
+            "status": "active",
+            "stripe_customer_id": None,
+            "stripe_subscription_id": None,
+            "stripe_price_id": None,
+            "current_period_start": None,
+            "current_period_end": None,
+            "cancel_at_period_end": False,
+            "canceled_at": None,
+            "created_at": "2026-05-01T00:00:00+00:00",
+            "updated_at": "2026-05-01T00:00:00+00:00",
+        }
+        ZERO_USAGE = {
+            "user_id": TEST_USER_ID,
+            "total_storage_bytes": 0,
+            "split_sheets_this_period": 0,
+            "zoe_queries_this_period": 0,
+            "oneclick_runs_this_period": 0,
+            "period_start": "2026-05-09T00:00:00+00:00",
+            "period_end": "2099-05-09T00:00:00+00:00",
+            "updated_at": "2026-05-09T00:00:00+00:00",
+        }
+
+        # Reset the EntitlementsService singleton so it is rebuilt with free-tier data
+        import subscriptions.deps as _sub_deps
+
+        _sub_deps._entitlements_service = None
+
+        from unittest.mock import MagicMock
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "artists":
+                # verify_user_owns_artist AND get_user_artist_ids both query artists
+                b.execute.return_value = MagicMock(
+                    data=[
+                        {"id": "a1", "user_id": TEST_USER_ID},
+                        {"id": "a2", "user_id": TEST_USER_ID},
+                        {"id": "a3", "user_id": TEST_USER_ID},
+                    ],
+                    count=3,
+                )
+            elif name == "projects":
+                # 3 projects at cap of 3
+                b.execute.return_value = MagicMock(
+                    data=[{"id": "p1"}, {"id": "p2"}, {"id": "p3"}],
+                    count=3,
+                )
+            elif name == "subscriptions":
+                b.execute.return_value = MagicMock(data=[FREE_SUB], count=1)
+            elif name == "tier_entitlements":
+                b.execute.return_value = MagicMock(data=[FREE_TIER], count=1)
+            elif name == "tier_overrides":
+                b.execute.return_value = MagicMock(data=[], count=0)
+            elif name == "usage_counters":
+                b.execute.return_value = MagicMock(data=[ZERO_USAGE], count=1)
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = client.post(
+            "/projects",
+            json={
+                "artist_id": "a1",
+                "name": "Project 4",
+                "description": "",
+            },
+        )
+        assert resp.status_code == 402
+        assert "project" in resp.json()["detail"].lower()
+
+    def test_create_project_at_cap_returns_402(self, client, mock_supabase, monkeypatch):
+        """Free user at 3/3 projects → POST /projects returns 402."""
+        from unittest.mock import MagicMock
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        # Patch enforcement._service to return a service that denies CREATE_PROJECT
+        deny_result = CheckResult(
+            allowed=False,
+            reason="You've reached your limit of 3 projects.",
+            upgrade_required=True,
+        )
+        svc = MagicMock()
+        svc.can.return_value = deny_result
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        # artists table: user owns artist a1 (so ownership check passes)
+        # projects table: returns 3 projects (count=3 at cap — used by the gate query)
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "artists":
+                b.execute.return_value = MagicMock(data=[{"id": "a1"}], count=1)
+            elif name == "projects":
+                b.execute.return_value = MagicMock(data=[{"id": "p1"}, {"id": "p2"}, {"id": "p3"}], count=3)
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = client.post(
+            "/projects",
+            json={"artist_id": "a1", "name": "Project 4", "description": ""},
+        )
+        assert resp.status_code == 402
+        assert "project" in resp.json()["detail"].lower()

@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/contexts/AuthContext";
+import { RequireFeature } from "@/components/paywall/RequireFeature";
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
@@ -67,10 +68,11 @@ const OneClick = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <PageHeader
-        showBack={false}
-        actions={
+    <RequireFeature feature="oneclick">
+      <div className="min-h-screen bg-background">
+        <PageHeader
+          showBack={false}
+          actions={
           <>
             <Button
               variant="ghost"
@@ -156,7 +158,8 @@ const OneClick = () => {
           )}
         </div>
       </main>
-    </div>
+      </div>
+    </RequireFeature>
   );
 };
 

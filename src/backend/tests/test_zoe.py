@@ -9,7 +9,7 @@ Acceptance criteria:
 import json
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import MockQueryBuilder
+from tests.conftest import MockQueryBuilder, _default_table_side_effect
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -35,6 +35,22 @@ def _builder(data: list):
     b = MockQueryBuilder()
     b.execute.return_value = MagicMock(data=data, count=len(data))
     return b
+
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_builder(data: list):
+    """Return a side-effect function that serves subscription tables from the default Pro
+    fixture and all other tables from *data*. Use in tests that override table.side_effect
+    but still need the SP3 feature gates to pass (Pro user → allowed)."""
+
+    def _side_effect(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
+        return _builder(data)
+
+    return _side_effect
 
 
 def _make_mock_chatbot(history=None):
@@ -185,7 +201,7 @@ class TestZoeAskStream:
                 'data: {"type": "done"}\n\n',
             ]
         )
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = _sub_builder([])
 
         response, _ = self._stream_events(mock_chatbot, client)
 
@@ -201,7 +217,7 @@ class TestZoeAskStream:
                 'data: {"type": "done"}\n\n',
             ]
         )
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = _sub_builder([])
 
         response, events = self._stream_events(mock_chatbot, client)
 
@@ -214,7 +230,7 @@ class TestZoeAskStream:
         """POST /zoe/ask-stream passes the session_id to chatbot.ask_stream."""
         mock_chatbot = _make_mock_chatbot()
         mock_chatbot.ask_stream.return_value = iter(['data: {"type": "done"}\n\n'])
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = _sub_builder([])
 
         with patch("main.get_zoe_chatbot", return_value=mock_chatbot):
             client.post(
@@ -234,7 +250,7 @@ class TestZoeAskStream:
         """POST /zoe/ask-stream auto-generates a session_id if none is provided."""
         mock_chatbot = _make_mock_chatbot()
         mock_chatbot.ask_stream.return_value = iter(['data: {"type": "done"}\n\n'])
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = _sub_builder([])
 
         with patch("main.get_zoe_chatbot", return_value=mock_chatbot):
             response = client.post(
@@ -254,7 +270,7 @@ class TestZoeAskStream:
             yield  # make it a generator
 
         mock_chatbot.ask_stream.return_value = _raise()
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = _sub_builder([])
 
         response, events = self._stream_events(mock_chatbot, client)
 
@@ -275,6 +291,8 @@ class TestZoeAskStream:
 
         def _side_effect(name):
             call_idx[0] += 1
+            if name in _SUBSCRIPTION_TABLES:
+                return _default_table_side_effect(name)
             if name == "artists":
                 return _builder([artist_data])
             return _builder([])
@@ -300,7 +318,11 @@ class TestZoeAskStream:
         mock_chatbot.ask_stream.return_value = iter(['data: {"type": "done"}\n\n'])
 
         contract_file = {"id": CONTRACT_ID, "file_name": "deal_memo.pdf"}
-        mock_supabase.table.side_effect = lambda name: _builder([contract_file] if name == "project_files" else [])
+        mock_supabase.table.side_effect = lambda name: (
+            _default_table_side_effect(name)
+            if name in _SUBSCRIPTION_TABLES
+            else _builder([contract_file] if name == "project_files" else [])
+        )
 
         with patch("main.get_zoe_chatbot", return_value=mock_chatbot):
             response = client.post(
@@ -312,3 +334,31 @@ class TestZoeAskStream:
             )
 
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# SP3: Feature gate — Zoe
+# ---------------------------------------------------------------------------
+
+
+class TestZoeGated:
+    """POST /zoe/ask-stream with a Free user returns 402."""
+
+    def test_free_user_returns_402(self, client, monkeypatch):
+        """Free user → POST /zoe/ask-stream returns 402."""
+        from unittest.mock import MagicMock
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(
+            allowed=False,
+            reason="Zoe is a Pro feature.",
+            upgrade_required=True,
+        )
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        resp = client.post("/zoe/ask-stream", json={"query": "test"})
+        assert resp.status_code == 402
+        assert "zoe" in resp.json()["detail"].lower()

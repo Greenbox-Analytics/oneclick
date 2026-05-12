@@ -9,7 +9,21 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_wrap(fn):
+    """Wrap a table side-effect function to route subscription tables through the Pro default."""
+
+    def _wrapped(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
+        return fn(name)
+
+    return _wrapped
+
 
 WORK_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 PROJECT_ID = "bbbbbbbb-0000-0000-0000-000000000001"
@@ -113,7 +127,7 @@ class TestGetProjectAbout:
             n = call_count["n"]
             return builders[min(n - 1, len(builders) - 1)]
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/projects/{PROJECT_ID}/about")
 
@@ -125,7 +139,7 @@ class TestGetProjectAbout:
         """Returns 404 when project does not exist."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=None, count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/projects/{PROJECT_ID}/about")
 
@@ -158,7 +172,7 @@ class TestGetProjectAbout:
             else:
                 return works_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/projects/{PROJECT_ID}/about")
 
@@ -180,7 +194,7 @@ class TestGetProjectAbout:
             n = call_count["n"]
             return builders[min(n - 1, len(builders) - 1)]
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/projects/{PROJECT_ID}/about")
 
@@ -221,7 +235,7 @@ class TestUpdateProjectAbout:
             else:
                 return project_update_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.put(
             f"/registry/projects/{PROJECT_ID}/about",
@@ -235,7 +249,7 @@ class TestUpdateProjectAbout:
         """Returns 404 when project does not exist (service returns None)."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=None, count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.put(
             f"/registry/projects/{PROJECT_ID}/about",
@@ -268,7 +282,7 @@ class TestUpdateProjectAbout:
             else:
                 return project_update_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.put(
             f"/registry/projects/{PROJECT_ID}/about",
@@ -291,7 +305,7 @@ class TestListAgreements:
         """Returns {"agreements": [...]} envelope."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_AGREEMENT], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/agreements?work_id={WORK_ID}")
 
@@ -304,7 +318,7 @@ class TestListAgreements:
         """Returns empty list when no agreements exist for the work."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/agreements?work_id={WORK_ID}")
 
@@ -315,7 +329,7 @@ class TestListAgreements:
         """Returns agreements list with correct data."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_AGREEMENT], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/agreements?work_id={WORK_ID}")
 
@@ -339,7 +353,7 @@ class TestCreateAgreement:
         """Creates and returns new agreement."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_AGREEMENT], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         payload = {
             "work_id": WORK_ID,
@@ -359,7 +373,7 @@ class TestCreateAgreement:
         """Returns 500 when insert fails."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         payload = {
             "work_id": WORK_ID,
@@ -385,7 +399,7 @@ class TestCreateAgreement:
 
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[enriched], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         payload = {
             "work_id": WORK_ID,
@@ -415,7 +429,7 @@ class TestWorkFileLinks:
         """Returns {"files": [...]} envelope."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_FILE_LINK], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/works/{WORK_ID}/files")
 
@@ -428,7 +442,7 @@ class TestWorkFileLinks:
         """Returns empty list when no files linked."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/works/{WORK_ID}/files")
 
@@ -439,7 +453,7 @@ class TestWorkFileLinks:
         """Returns file link records."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_FILE_LINK], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/works/{WORK_ID}/files")
 
@@ -452,7 +466,7 @@ class TestWorkFileLinks:
         """POST creates a work-file link and returns {"link": {...}}."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_FILE_LINK], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.post(f"/registry/works/{WORK_ID}/files?file_id={FILE_ID}")
 
@@ -470,7 +484,7 @@ class TestWorkFileLinks:
         """DELETE removes link and returns {"deleted": link_id}."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.delete(f"/registry/works/{WORK_ID}/files/{LINK_ID}")
 
@@ -482,7 +496,7 @@ class TestWorkFileLinks:
         """POST returns {"link": null} when insert returns no data."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.post(f"/registry/works/{WORK_ID}/files?file_id={FILE_ID}")
 
@@ -504,7 +518,7 @@ class TestWorkAudioLinks:
         """Returns {"audio": [...]} envelope."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_AUDIO_LINK], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/works/{WORK_ID}/audio")
 
@@ -517,7 +531,7 @@ class TestWorkAudioLinks:
         """Returns empty list when no audio linked."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/works/{WORK_ID}/audio")
 
@@ -528,7 +542,7 @@ class TestWorkAudioLinks:
         """Returns audio link records."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_AUDIO_LINK], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/works/{WORK_ID}/audio")
 
@@ -541,7 +555,7 @@ class TestWorkAudioLinks:
         """POST creates a work-audio link and returns {"link": {...}}."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[SAMPLE_AUDIO_LINK], count=1)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.post(f"/registry/works/{WORK_ID}/audio?audio_file_id={AUDIO_FILE_ID}")
 
@@ -559,7 +573,7 @@ class TestWorkAudioLinks:
         """DELETE removes link and returns {"deleted": link_id}."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.delete(f"/registry/works/{WORK_ID}/audio/{LINK_ID}")
 
@@ -571,7 +585,7 @@ class TestWorkAudioLinks:
         """POST returns {"link": null} when insert returns no data."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.post(f"/registry/works/{WORK_ID}/audio?audio_file_id={AUDIO_FILE_ID}")
 

@@ -14,6 +14,8 @@ if str(BACKEND_DIR) not in sys.path:
 from auth import get_current_user_id
 from splitsheet.docx_generator import generate_split_sheet_docx
 from splitsheet.pdf_generator import generate_split_sheet_pdf
+from subscriptions.deps import _get_entitlements_service
+from subscriptions.enforcement import gated_split_sheet
 
 router = APIRouter()
 
@@ -41,6 +43,9 @@ class SplitSheetRequest(BaseModel):
 
 @router.post("/generate")
 async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(get_current_user_id)):
+    # Gate: 402 if at per-period split-sheet cap
+    gated_split_sheet(user_id)
+
     if not req.contributors:
         raise HTTPException(status_code=400, detail="At least one contributor is required")
 
@@ -100,6 +105,9 @@ async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(ge
         except Exception as e:
             # Still return the file even if saving fails
             print(f"Warning: Failed to save split sheet to artist profile: {e}")
+
+    # Increment counter on the all-success path only (not in early-return / except branches)
+    _get_entitlements_service().increment_usage(user_id, "split_sheets_this_period")
 
     return StreamingResponse(
         buffer,

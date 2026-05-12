@@ -4,6 +4,20 @@ export const API_URL =
   import.meta.env.VITE_BACKEND_API_URL || "http://localhost:8000";
 
 /**
+ * Error class thrown by apiFetch on non-2xx responses.
+ * Extends Error so existing `err.message` usage is unaffected.
+ * New callers can branch on `err instanceof ApiError && err.status === 403`.
+ */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/**
  * Get Authorization headers from the current Supabase session.
  * Use this for streaming/direct fetch calls that can't use apiFetch.
  */
@@ -17,6 +31,7 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
 
 /**
  * Fetch wrapper that automatically includes Supabase auth headers.
+ * Throws ApiError (with HTTP status) on non-2xx responses.
  */
 export async function apiFetch<T>(
   url: string,
@@ -32,7 +47,7 @@ export async function apiFetch<T>(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed: ${res.status}`);
+    throw new ApiError(body.detail || `Request failed: ${res.status}`, res.status);
   }
   return res.json();
 }
