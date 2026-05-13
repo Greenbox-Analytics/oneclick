@@ -42,7 +42,7 @@ const INTEGRATIONS: IntegrationItem[] = [
     provider: "atlassian",
     name: "Jira & Confluence",
     description: "Sync tasks with Jira and link Confluence pages to your projects",
-    icon: <img src="/atlassian.jpg" alt="Atlassian" className="w-6 h-6 object-contain rounded" />,
+    icon: <img src="/atlassian.png" alt="Atlassian" className="w-6 h-6 object-contain rounded" />,
     color: "#0052CC",
     comingSoon: true,
   },
