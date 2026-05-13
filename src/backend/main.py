@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-import resend
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +22,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_id
+from mailer import send_html
 from pagination import PaginatedResponse, paginate_query
 from zoe_chatbot.contract_chatbot import ContractChatbot
 from zoe_chatbot.helpers import calculate_royalty_payments
@@ -1769,7 +1769,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
         raise HTTPException(status_code=500, detail=f"Failed to calculate royalties: {str(e)}")
 
 
-# ─── File Sharing via Resend ────────────────────────────────────────────────
+# ─── File Sharing via SES ───────────────────────────────────────────────────
 
 
 class ShareFileItem(BaseModel):
@@ -1789,16 +1789,11 @@ class ShareFilesRequest(BaseModel):
 
 @app.post("/share/files")
 async def share_files(req: ShareFilesRequest, user_id: str = Depends(get_current_user_id)):
-    """Generate signed download URLs and send them via Resend email."""
+    """Generate signed download URLs and email them via AWS SES."""
     try:
         if not req.files:
             raise HTTPException(status_code=400, detail="No files to share")
 
-        api_key = os.getenv("RESEND_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="Email service not configured")
-
-        resend.api_key = api_key
         sb = get_supabase_client()
 
         # All files are stored in the project-files bucket
@@ -1913,21 +1908,13 @@ async def share_files(req: ShareFilesRequest, user_id: str = Depends(get_current
         </div>
         """
 
-        # Send email via Resend
-        # Use onboarding@resend.dev as from address until a custom domain is verified
-        from_address = os.getenv("RESEND_FROM_EMAIL", "Msanii <onboarding@resend.dev>")
-        try:
-            resend.Emails.send(
-                {
-                    "from": from_address,
-                    "to": [req.recipient_email],
-                    "subject": f"{sender_name} shared files with you — Msanii",
-                    "html": html_body,
-                }
-            )
-        except Exception as e:
-            print(f"Resend error: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+        result = send_html(
+            to=req.recipient_email,
+            subject=f"{sender_name} shared files with you — Msanii",
+            html_body=html_body,
+        )
+        if result is None:
+            raise HTTPException(status_code=500, detail="Email service not configured")
 
         # Record shares in DB
         for fl in file_links:

@@ -215,7 +215,7 @@ const ProjectDetail = () => {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="works"><span className="inline-flex items-center gap-2"><Music className="w-4 h-4" /> Works</span></SelectItem>
+                <SelectItem value="works" disabled><span className="inline-flex items-center gap-2 opacity-60"><Music className="w-4 h-4" /> Works <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-1">Coming soon</span></span></SelectItem>
                 <SelectItem value="files"><span className="inline-flex items-center gap-2"><FileText className="w-4 h-4" /> Files</span></SelectItem>
                 <SelectItem value="audio"><span className="inline-flex items-center gap-2"><Volume2 className="w-4 h-4" /> Audio</span></SelectItem>
                 <SelectItem value="members"><span className="inline-flex items-center gap-2"><Users className="w-4 h-4" /> Members</span></SelectItem>
@@ -225,8 +225,13 @@ const ProjectDetail = () => {
             </Select>
           ) : (
             <TabsList data-walkthrough="project-tabs" className="mb-6">
-              <TabsTrigger value="works" className="gap-1.5">
+              <TabsTrigger
+                value="works"
+                disabled
+                className="gap-1.5 data-[disabled]:opacity-50 data-[disabled]:cursor-not-allowed"
+              >
                 <Music className="w-4 h-4" /> Works
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-1">Coming soon</span>
               </TabsTrigger>
               <TabsTrigger value="files" className="gap-1.5">
                 <FileText className="w-4 h-4" /> Files
