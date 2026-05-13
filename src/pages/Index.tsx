@@ -120,8 +120,12 @@ const Index = () => {
             <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
               Streamline your workflow with powerful tools built for music professionals.
             </p>
-            <Button size="lg" onClick={() => navigate("/auth")} className="text-base px-8 h-12">
-              Get Started
+            <Button
+              size="lg"
+              onClick={() => navigate(user ? "/dashboard" : "/auth")}
+              className="text-base px-8 h-12"
+            >
+              {user ? "Go to Dashboard" : "Get Started"}
             </Button>
           </div>
         </div>
