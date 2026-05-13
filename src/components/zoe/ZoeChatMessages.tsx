@@ -2,7 +2,7 @@ import { RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Bot, User, Loader2, Copy, Check, RefreshCw } from "lucide-react";
+import { Bot, User, Loader2, Copy, Check, RefreshCw, PanelLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Message, AssistantQuickAction } from "@/hooks/useStreamingChat";
 
@@ -18,7 +18,20 @@ interface ZoeChatMessagesProps {
   onAssistantQuickAction: (action: AssistantQuickAction) => void;
   onRetry: () => void;
   onCopyMessage: (content: string, messageId: string) => void;
+  isMobile?: boolean;
+  onOpenSidebar?: () => void;
 }
+
+const InlinePanelIcon = ({ onClick }: { onClick?: () => void }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className="inline-flex items-center align-middle mx-0.5 px-1.5 py-0.5 rounded-md border border-border bg-muted hover:bg-muted/70 transition-colors"
+    aria-label="Open contracts panel"
+  >
+    <PanelLeft className="w-3.5 h-3.5" />
+  </button>
+);
 
 export function ZoeChatMessages({
   messages,
@@ -32,6 +45,8 @@ export function ZoeChatMessages({
   onAssistantQuickAction,
   onRetry,
   onCopyMessage,
+  isMobile = false,
+  onOpenSidebar,
 }: ZoeChatMessagesProps) {
   return (
     <ScrollArea className="flex-1">
@@ -44,13 +59,33 @@ export function ZoeChatMessages({
               </div>
               <h3 className="text-xl font-semibold mb-2">Hi, I'm Zoe!</h3>
               <p className="text-muted-foreground mb-2 max-w-md mx-auto">
-                {!selectedArtist
-                  ? "Select an artist and project from the sidebar, then select contracts to get started."
-                  : !selectedProject
-                    ? "Select a project and choose contracts to start asking questions."
-                    : selectedContracts.length === 0
-                      ? "Select one or more contracts from the sidebar to get started. I answer questions based on your selected contracts."
-                      : "I'm ready to answer questions about your selected contracts. Ask me about royalty splits, payment terms, parties involved, and more."}
+                {!selectedArtist ? (
+                  isMobile ? (
+                    <>
+                      Tap <InlinePanelIcon onClick={onOpenSidebar} /> at the top-left to pick an artist, project, and contracts.
+                    </>
+                  ) : (
+                    "Select an artist and project from the sidebar, then select contracts to get started."
+                  )
+                ) : !selectedProject ? (
+                  isMobile ? (
+                    <>
+                      Tap <InlinePanelIcon onClick={onOpenSidebar} /> at the top-left to choose a project and contracts.
+                    </>
+                  ) : (
+                    "Select a project and choose contracts to start asking questions."
+                  )
+                ) : selectedContracts.length === 0 ? (
+                  isMobile ? (
+                    <>
+                      Tap <InlinePanelIcon onClick={onOpenSidebar} /> at the top-left to select one or more contracts. I answer based on what you choose.
+                    </>
+                  ) : (
+                    "Select one or more contracts from the sidebar to get started. I answer questions based on your selected contracts."
+                  )
+                ) : (
+                  "I'm ready to answer questions about your selected contracts. Ask me about royalty splits, payment terms, parties involved, and more."
+                )}
               </p>
               <p className="text-xs text-muted-foreground/70 mb-8 max-w-md mx-auto">
                 Zoe's answers are based on your selected contracts.

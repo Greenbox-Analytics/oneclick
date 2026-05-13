@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Music, PanelLeftClose, PanelLeft, RefreshCw, BookOpen, FileText } from "lucide-react";
+import { ArrowLeft, Music, PanelLeftClose, PanelLeft, RefreshCw, BookOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -119,10 +119,12 @@ const Zoe = () => {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="h-9 w-9 hidden md:inline-flex"
+              onClick={() => (isMobile ? setMobileDocsOpen(true) : setSidebarOpen(!sidebarOpen))}
+              className="h-9 w-9"
+              aria-label="Select contracts"
+              title="Select contracts"
             >
-              {sidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeft className="h-5 w-5" />}
+              {!isMobile && sidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeft className="h-5 w-5" />}
             </Button>
             <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/dashboard")}>
               <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
@@ -151,15 +153,6 @@ const Zoe = () => {
                 )}
               </Badge>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2 md:hidden"
-              onClick={() => setMobileDocsOpen(true)}
-            >
-              <FileText className="w-4 h-4" />
-              Docs
-            </Button>
             {messages.length > 0 && (
               <Button data-walkthrough="zoe-newchat" variant="outline" onClick={handleNewConversation} size="sm" className="gap-2">
                 <RefreshCw className="w-4 h-4" />
@@ -245,6 +238,8 @@ const Zoe = () => {
             onAssistantQuickAction={handleAssistantQuickAction}
             onRetry={handleRetry}
             onCopyMessage={handleCopyMessage}
+            isMobile={isMobile}
+            onOpenSidebar={() => setMobileDocsOpen(true)}
           />
           <div data-walkthrough="zoe-chat">
             <ZoeInputBar
@@ -272,7 +267,7 @@ const Zoe = () => {
       <Sheet open={mobileDocsOpen} onOpenChange={setMobileDocsOpen}>
         <SheetContent side="left" className="w-[90vw] max-w-md p-0 flex flex-col">
           <SheetHeader className="px-4 py-3 border-b border-border text-left">
-            <SheetTitle>Documents</SheetTitle>
+            <SheetTitle>Select Contracts</SheetTitle>
           </SheetHeader>
           <div className="flex-1 overflow-hidden">
             <ZoeDocumentPanel
