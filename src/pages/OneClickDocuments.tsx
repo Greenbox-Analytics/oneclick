@@ -61,6 +61,8 @@ const OneClickDocuments = () => {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [newProjectNameInput, setNewProjectNameInput] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [showReviewDialog, setShowReviewDialog] = useState(false);
+  const [pendingForceRecalculate, setPendingForceRecalculate] = useState(false);
   const autoSaveTriggeredRef = useRef<string | null>(null);
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
   const walkthrough = useToolWalkthrough(TOOL_CONFIGS.oneclick, {
@@ -402,6 +404,35 @@ const OneClickDocuments = () => {
       handleConfirmResultsWithContext();
   }, [calculationResult, lastCalculationContext, user]);
 
+  const openReviewDialog = (forceRecalculate: boolean) => {
+    const hasContracts = contractFiles.length > 0 || selectedExistingContracts.length > 0;
+    const hasRoyaltyStatement = royaltyStatementFile !== null || selectedExistingRoyaltyStatement !== null;
+    if (!hasContracts || !hasRoyaltyStatement) {
+      toast.error("Please provide both contracts/split sheets and a royalty statement.");
+      return;
+    }
+    setPendingForceRecalculate(forceRecalculate);
+    setShowReviewDialog(true);
+  };
+
+  const handleConfirmReview = () => {
+    setShowReviewDialog(false);
+    handleCalculateRoyalties(pendingForceRecalculate);
+  };
+
+  const reviewContractNames: string[] = [
+    ...contractFiles.map(f => f.name),
+    ...selectedExistingContracts
+      .map(id => existingContracts.find(c => c.id === id)?.file_name)
+      .filter((n): n is string => Boolean(n)),
+  ];
+
+  const reviewStatementName: string | null =
+    royaltyStatementFile?.name ??
+    (selectedExistingRoyaltyStatement
+      ? existingRoyaltyStatements.find(s => s.id === selectedExistingRoyaltyStatement)?.file_name ?? null
+      : null);
+
   if (isLoadingArtist) {
     return (
       <div className="min-h-screen bg-background">
@@ -512,7 +543,7 @@ const OneClickDocuments = () => {
         <div className="flex gap-3 justify-center mb-8">
           <Button
             data-walkthrough="oneclick-calculate"
-            onClick={() => handleCalculateRoyalties(false)}
+            onClick={() => openReviewDialog(false)}
             disabled={((contractFiles.length === 0 && selectedExistingContracts.length === 0) ||
                        (royaltyStatementFile === null && selectedExistingRoyaltyStatement === null)) ||
                        isUploading}
@@ -546,8 +577,57 @@ const OneClickDocuments = () => {
           calculationMessage={calculationMessage}
           calculationResult={calculationResult}
           isUploading={isUploading}
-          handleCalculateRoyalties={handleCalculateRoyalties}
+          handleCalculateRoyalties={openReviewDialog}
         />
+
+        {/* Review Selection Dialog */}
+        <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
+          <DialogContent className="sm:max-w-[480px]">
+            <DialogHeader>
+              <DialogTitle>Review your selection</DialogTitle>
+              <DialogDescription>
+                Confirm the documents that will be used for this calculation. Stale selections from a previous run will be included if you don't remove them.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-foreground">
+                  Contracts ({reviewContractNames.length})
+                </p>
+                {reviewContractNames.length > 0 ? (
+                  <ul className="space-y-1 max-h-48 overflow-y-auto rounded-md border border-border bg-secondary/30 p-2">
+                    {reviewContractNames.map((name, i) => (
+                      <li key={i} className="text-sm text-foreground truncate">• {name}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No contracts selected.</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-foreground">Royalty Statement</p>
+                {reviewStatementName ? (
+                  <div className="rounded-md border border-border bg-secondary/30 p-2 text-sm text-foreground truncate">
+                    • {reviewStatementName}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No statement selected.</p>
+                )}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowReviewDialog(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleConfirmReview}
+                disabled={reviewContractNames.length === 0 || !reviewStatementName}
+              >
+                Confirm & Calculate
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Create Project Dialog */}
         <Dialog open={isCreateProjectOpen} onOpenChange={setIsCreateProjectOpen}>

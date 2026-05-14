@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+import resend
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,7 +23,6 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_id
-from mailer import send_html
 from pagination import PaginatedResponse, paginate_query
 from zoe_chatbot.contract_chatbot import ContractChatbot
 from zoe_chatbot.helpers import calculate_royalty_payments
@@ -46,6 +46,7 @@ from projects.share_email import router as projects_share_email_router
 from registry.router import router as registry_router
 from settings.router import router as settings_router
 from splitsheet.router import router as splitsheet_router
+from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
@@ -60,6 +61,7 @@ app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
+app.include_router(users_router, prefix="/users", tags=["Users"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -1769,7 +1771,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
         raise HTTPException(status_code=500, detail=f"Failed to calculate royalties: {str(e)}")
 
 
-# ─── File Sharing via SES ───────────────────────────────────────────────────
+# ─── File Sharing via Resend ────────────────────────────────────────────────
 
 
 class ShareFileItem(BaseModel):
@@ -1789,11 +1791,16 @@ class ShareFilesRequest(BaseModel):
 
 @app.post("/share/files")
 async def share_files(req: ShareFilesRequest, user_id: str = Depends(get_current_user_id)):
-    """Generate signed download URLs and email them via AWS SES."""
+    """Generate signed download URLs and send them via Resend email."""
     try:
         if not req.files:
             raise HTTPException(status_code=400, detail="No files to share")
 
+        api_key = os.getenv("RESEND_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="Email service not configured")
+
+        resend.api_key = api_key
         sb = get_supabase_client()
 
         # All files are stored in the project-files bucket
@@ -1908,13 +1915,25 @@ async def share_files(req: ShareFilesRequest, user_id: str = Depends(get_current
         </div>
         """
 
-        result = send_html(
-            to=req.recipient_email,
-            subject=f"{sender_name} shared files with you — Msanii",
-            html_body=html_body,
-        )
-        if result is None:
-            raise HTTPException(status_code=500, detail="Email service not configured")
+        # Send email via Resend
+        from_address = os.getenv("RESEND_FROM_EMAIL")
+        if not from_address:
+            raise HTTPException(
+                status_code=500,
+                detail="Email service not configured: RESEND_FROM_EMAIL not set",
+            )
+        try:
+            resend.Emails.send(
+                {
+                    "from": from_address,
+                    "to": [req.recipient_email],
+                    "subject": f"{sender_name} shared files with you — Msanii",
+                    "html": html_body,
+                }
+            )
+        except Exception as e:
+            print(f"Resend error: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
 
         # Record shares in DB
         for fl in file_links:

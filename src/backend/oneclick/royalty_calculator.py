@@ -848,8 +848,8 @@ class RoyaltyCalculator:
             "Role",
             "Royalty Type",
             "Share %",
-            "Total Royalty",
-            "Amount to Pay",
+            "Total Song(s) Revenue",
+            "Amount Owed",
             "Terms",
         ]
         sheet.append(headers)

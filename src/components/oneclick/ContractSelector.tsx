@@ -127,14 +127,35 @@ const ContractSelector = ({
     );
   };
 
+  const totalSelectedContracts = contractFiles.length + selectedExistingContracts.length;
+  const handleClearAllContracts = () => {
+    setContractFiles([]);
+    setSelectedExistingContracts([]);
+  };
+
   return (
     <Card data-walkthrough="oneclick-contracts">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <FileSignature className="w-5 h-5 text-primary" />
-          Upload Contracts
-        </CardTitle>
-        <CardDescription>Upload or select contract documents</CardDescription>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <FileSignature className="w-5 h-5 text-primary" />
+              Upload Contracts
+            </CardTitle>
+            <CardDescription>Upload or select contract documents</CardDescription>
+          </div>
+          {totalSelectedContracts > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearAllContracts}
+              className="text-muted-foreground hover:text-destructive shrink-0 h-8"
+            >
+              <X className="w-3.5 h-3.5 mr-1" />
+              Clear all ({totalSelectedContracts})
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <Tabs value={contractTabValue} onValueChange={setContractTabValue} className="w-full">

@@ -40,7 +40,7 @@ If a skill plausibly applies, invoke it — don't rationalize skipping it.
 
 **AI:** OpenAI API for contract analysis (Zoe) and document processing
 
-**Email:** AWS SES for transactional emails (invitations, notifications) via the shared `src/backend/mailer/` module
+**Email:** Resend for transactional emails (invitations, notifications)
 
 ## Commands
 

@@ -1,18 +1,18 @@
+import base64
 import html
+import os
 
+import resend
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from supabase import Client
 
 from auth import get_current_user_id
-from mailer import send_with_attachments
 from projects import service
 
 router = APIRouter()
 
-# SES SendRawEmail caps a full MIME message at 40 MB. After base64 + headers
-# overhead (~33%) the safe raw-input ceiling is ~25 MB.
-MAX_TOTAL_BYTES = 25 * 1024 * 1024
+MAX_TOTAL_BYTES = 40 * 1024 * 1024  # Resend enforces a 40 MB attachment cap per email.
 
 
 class ShareEmailRequest(BaseModel):
@@ -97,7 +97,7 @@ async def share_via_email(
                 status_code=413,
                 detail=f"Total attachment size exceeds {MAX_TOTAL_BYTES // (1024 * 1024)} MB",
             )
-        attachments.append({"filename": row["file_name"], "content": content})
+        attachments.append({"filename": row["file_name"], "content": base64.b64encode(content).decode("ascii")})
 
     for audio_id in body.audio_file_ids:
         row = _fetch_audio_file(db, audio_id, project_id)
@@ -108,7 +108,20 @@ async def share_via_email(
                 status_code=413,
                 detail=f"Total attachment size exceeds {MAX_TOTAL_BYTES // (1024 * 1024)} MB",
             )
-        attachments.append({"filename": row["file_name"], "content": content})
+        attachments.append({"filename": row["file_name"], "content": base64.b64encode(content).decode("ascii")})
+
+    api_key = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Email service not configured")
+
+    from_address = os.getenv("RESEND_FROM_EMAIL")
+    if not from_address:
+        raise HTTPException(
+            status_code=503,
+            detail="Email service not configured: RESEND_FROM_EMAIL not set",
+        )
+
+    resend.api_key = api_key
 
     inviter = db.table("profiles").select("full_name").eq("id", user_id).maybe_single().execute()
     inviter_name = (inviter.data or {}).get("full_name") or "A Msanii user"
@@ -128,14 +141,15 @@ async def share_via_email(
     """
 
     try:
-        send_with_attachments(
-            to=body.recipient_email,
-            subject=body.subject,
-            html_body=html_body,
-            attachments=attachments,
+        resend.Emails.send(
+            {
+                "from": from_address,
+                "to": [body.recipient_email],
+                "subject": body.subject,
+                "html": html_body,
+                "attachments": attachments,
+            }
         )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail="Email service not configured") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to send email: {exc}") from exc
 

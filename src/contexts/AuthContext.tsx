@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
+import { apiFetch, API_URL } from '@/lib/apiFetch';
 
 interface AuthContextType {
   user: User | null;
@@ -38,10 +39,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
       setLoading(false);
+
+      if (event === 'SIGNED_IN' && session?.access_token) {
+        // Fire-and-forget — backend is idempotent via welcome_email_sent_at.
+        apiFetch(`${API_URL}/users/welcome`, { method: 'POST' }).catch((err) => {
+          console.warn('Welcome email trigger failed:', err);
+        });
+      }
     });
 
     return () => subscription.unsubscribe();

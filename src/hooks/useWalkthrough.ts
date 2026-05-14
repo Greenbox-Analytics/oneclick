@@ -2,6 +2,9 @@ import { useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 
+// Flip to false to restore Rights Registry / works mentions in the dashboard walkthrough.
+const HIDE_REGISTRY_AND_WORKS = true;
+
 export interface WalkthroughStep {
   targetSelector: string;
   title: string;
@@ -13,8 +16,9 @@ export const WALKTHROUGH_STEPS: WalkthroughStep[] = [
   {
     targetSelector: '[data-walkthrough="tools"]',
     title: "Tools",
-    description:
-      "OneClick for royalty calculations, Zoe AI for contract analysis, Split Sheets for ownership docs, and the Rights Registry to track and protect your catalog.",
+    description: HIDE_REGISTRY_AND_WORKS
+      ? "OneClick for royalty calculations, Zoe AI for contract analysis, and Split Sheets for ownership docs."
+      : "OneClick for royalty calculations, Zoe AI for contract analysis, Split Sheets for ownership docs, and the Rights Registry to track and protect your catalog.",
     placement: "bottom",
   },
   {
@@ -34,8 +38,9 @@ export const WALKTHROUGH_STEPS: WalkthroughStep[] = [
   {
     targetSelector: '[data-walkthrough="portfolio"]',
     title: "Portfolio",
-    description:
-      "All your projects grouped by year and artist. See work counts, team members, and access projects shared with you by collaborators — with your role clearly visible.",
+    description: HIDE_REGISTRY_AND_WORKS
+      ? "All your projects grouped by year and artist. See file counts, audio counts, team members, and access projects shared with you by collaborators — with your role clearly visible."
+      : "All your projects grouped by year and artist. See work counts, team members, and access projects shared with you by collaborators — with your role clearly visible.",
     placement: "bottom",
   },
 ];

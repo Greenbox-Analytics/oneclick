@@ -6,6 +6,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Music, FileText, Users, DollarSign, Download, CheckCircle2, Loader2, RefreshCw, Share2, HardDrive, MessageSquare } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import type { PieLabelRenderProps } from "recharts";
 import ExcelJS from "exceljs";
 import { toPng } from "html-to-image";
 import { toast } from "sonner";
@@ -89,7 +90,7 @@ const CalculationResults = ({
 
   const handleExportCSV = () => {
     if (!calculationResult) return;
-    const headers = ["Song Title", "Payee", "Role", "Royalty Type", "Total Revenue", "Share %", "Amount to Pay"];
+    const headers = ["Song Title", "Payee", "Role", "Royalty Type", "Total Song(s) Revenue", "Share %", "Amount Owed"];
     const rows = calculationResult.payments.map(p => [
       p.song_title,
       p.party_name,
@@ -113,7 +114,7 @@ const CalculationResults = ({
   const handleExportExcel = async () => {
     if (!calculationResult) return;
     const excelData = [
-      ["Song Title", "Payee", "Role", "Royalty Type", "Total Revenue", "Share %", "Amount to Pay"],
+      ["Song Title", "Payee", "Role", "Royalty Type", "Total Song(s) Revenue", "Share %", "Amount Owed"],
       ...calculationResult.payments.map(p => [
         p.song_title, p.party_name, p.role, p.royalty_type, p.total_royalty, p.percentage, p.amount_to_pay
       ])
@@ -151,6 +152,59 @@ const CalculationResults = ({
       toast.error("Failed to download chart. Please try again.");
     }
   };
+
+  const UNALLOCATED_LABEL = "Unallocated";
+  const wrapLabel = (text: string, max = 28): string[] => {
+    if (text.length <= max) return [text];
+    let splitAt = text.lastIndexOf(" ", max);
+    if (splitAt <= 0) splitAt = text.indexOf(" ", max);
+    if (splitAt <= 0) splitAt = Math.floor(text.length / 2);
+    return [text.slice(0, splitAt).trim(), text.slice(splitAt).trim()];
+  };
+  const renderPieLabel = (props: PieLabelRenderProps) => {
+    const { cx, cy, midAngle, outerRadius, percent, value, name, fill } = props;
+    const cxNum = Number(cx);
+    const cyNum = Number(cy);
+    const outerRadiusNum = Number(outerRadius);
+    const midAngleNum = Number(midAngle);
+    const fullLabel = `${name} (${((percent ?? 0) * 100).toFixed(1)}%): ${formatCurrency(Number(value))}`;
+    const lines = wrapLabel(fullLabel);
+    const RADIAN = Math.PI / 180;
+    const radius = outerRadiusNum + 24;
+    const x = cxNum + radius * Math.cos(-midAngleNum * RADIAN);
+    const y = cyNum + radius * Math.sin(-midAngleNum * RADIAN);
+    const textAnchor = x > cxNum ? "start" : "end";
+    return (
+      <text
+        x={x}
+        y={y}
+        textAnchor={textAnchor}
+        dominantBaseline="central"
+        fill={fill}
+        style={{ fontSize: 11 }}
+      >
+        {lines.map((line, i) => (
+          <tspan key={i} x={x} dy={i === 0 ? 0 : 13}>{line}</tspan>
+        ))}
+      </text>
+    );
+  };
+  const payments = calculationResult?.payments ?? [];
+  const totalRevenue = Array.from(
+    new Map(payments.map(p => [p.song_title, p.total_royalty])).values()
+  ).reduce((sum, val) => sum + val, 0);
+  const payeeTotals = Object.values(
+    payments.reduce((acc, curr) => {
+      if (!acc[curr.party_name]) acc[curr.party_name] = { name: curr.party_name, value: 0 };
+      acc[curr.party_name].value += curr.amount_to_pay;
+      return acc;
+    }, {} as Record<string, { name: string; value: number }>)
+  ).sort((a, b) => b.value - a.value);
+  const allocated = payeeTotals.reduce((sum, p) => sum + p.value, 0);
+  const unallocated = Math.max(0, totalRevenue - allocated);
+  const pieData = unallocated > 0.005
+    ? [...payeeTotals, { name: UNALLOCATED_LABEL, value: unallocated }]
+    : payeeTotals;
 
   return (
     <>
@@ -322,15 +376,12 @@ const CalculationResults = ({
             </Card>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
+                <CardTitle className="text-sm font-medium">Total Song(s) Revenue</CardTitle>
                 <DollarSign className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-foreground">
-                  {formatCurrency(
-                    Array.from(new Map(calculationResult.payments.map(p => [p.song_title, p.total_royalty])).values())
-                      .reduce((sum, val) => sum + val, 0)
-                  )}
+                  {formatCurrency(totalRevenue)}
                 </div>
               </CardContent>
             </Card>
@@ -351,29 +402,22 @@ const CalculationResults = ({
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={Object.values(calculationResult.payments.reduce((acc, curr) => {
-                          if (!acc[curr.party_name]) acc[curr.party_name] = { name: curr.party_name, value: 0 };
-                          acc[curr.party_name].value += curr.amount_to_pay;
-                          return acc;
-                      }, {} as Record<string, {name: string, value: number}>)).sort((a, b) => b.value - a.value)}
+                      data={pieData}
                       cx="50%"
                       cy="50%"
                       outerRadius={130}
                       dataKey="value"
                       nameKey="name"
-                      label={({ name, value, percent }) => `${name} (${(percent * 100).toFixed(1)}%): ${formatCurrency(value)}`}
+                      label={renderPieLabel}
                       labelLine={true}
-                      style={{ fontSize: '11px' }}
                     >
-                       {Object.values(calculationResult.payments.reduce((acc, curr) => {
-                          if (!acc[curr.party_name]) acc[curr.party_name] = { name: curr.party_name, value: 0 };
-                          acc[curr.party_name].value += curr.amount_to_pay;
-                          return acc;
-                      }, {} as Record<string, {name: string, value: number}>))
-                      .sort((a, b) => b.value - a.value)
-                      .map((entry, index, arr) => (
-                        <Cell key={`cell-${index}`} fill={`hsl(150, ${50 + (index / (arr.length || 1)) * 10}%, ${25 + (index / (arr.length || 1)) * 40}%)`} />
-                      ))}
+                      {pieData.map((entry, index, arr) => {
+                        const isUnallocated = entry.name === UNALLOCATED_LABEL;
+                        const fill = isUnallocated
+                          ? "hsl(150, 8%, 22%)"
+                          : `hsl(150, ${50 + (index / (arr.length || 1)) * 10}%, ${25 + (index / (arr.length || 1)) * 40}%)`;
+                        return <Cell key={`cell-${index}`} fill={fill} />;
+                      })}
                     </Pie>
                   </PieChart>
                 </ResponsiveContainer>
@@ -403,7 +447,7 @@ const CalculationResults = ({
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Song</TableHead><TableHead>Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Total Revenue</TableHead><TableHead>Share %</TableHead><TableHead>Amount</TableHead>
+                                <TableHead>Song</TableHead><TableHead>Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Total Song(s) Revenue</TableHead><TableHead>Share %</TableHead><TableHead>Amount Owed</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -439,11 +483,11 @@ const CalculationResults = ({
                             <p className="font-medium">{row.percentage}%</p>
                           </div>
                           <div>
-                            <p className="text-muted-foreground">Total revenue</p>
+                            <p className="text-muted-foreground">Total Song(s) Revenue</p>
                             <p className="font-medium">{formatCurrency(row.total_royalty)}</p>
                           </div>
                           <div>
-                            <p className="text-muted-foreground">Amount</p>
+                            <p className="text-muted-foreground">Amount Owed</p>
                             <p className="font-semibold text-foreground">{formatCurrency(row.amount_to_pay)}</p>
                           </div>
                         </div>
