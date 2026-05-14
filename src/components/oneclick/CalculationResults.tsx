@@ -6,6 +6,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Music, FileText, Users, DollarSign, Download, CheckCircle2, Loader2, RefreshCw, Share2, HardDrive, MessageSquare } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import type { PieLabelRenderProps } from "recharts";
 import ExcelJS from "exceljs";
 import { toPng } from "html-to-image";
 import { toast } from "sonner";
@@ -160,14 +161,19 @@ const CalculationResults = ({
     if (splitAt <= 0) splitAt = Math.floor(text.length / 2);
     return [text.slice(0, splitAt).trim(), text.slice(splitAt).trim()];
   };
-  const renderPieLabel = ({ cx, cy, midAngle, outerRadius, percent, value, name, fill }: any) => {
-    const fullLabel = `${name} (${(percent * 100).toFixed(1)}%): ${formatCurrency(value)}`;
+  const renderPieLabel = (props: PieLabelRenderProps) => {
+    const { cx, cy, midAngle, outerRadius, percent, value, name, fill } = props;
+    const cxNum = Number(cx);
+    const cyNum = Number(cy);
+    const outerRadiusNum = Number(outerRadius);
+    const midAngleNum = Number(midAngle);
+    const fullLabel = `${name} (${((percent ?? 0) * 100).toFixed(1)}%): ${formatCurrency(Number(value))}`;
     const lines = wrapLabel(fullLabel);
     const RADIAN = Math.PI / 180;
-    const radius = outerRadius + 24;
-    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-    const y = cy + radius * Math.sin(-midAngle * RADIAN);
-    const textAnchor = x > cx ? "start" : "end";
+    const radius = outerRadiusNum + 24;
+    const x = cxNum + radius * Math.cos(-midAngleNum * RADIAN);
+    const y = cyNum + radius * Math.sin(-midAngleNum * RADIAN);
+    const textAnchor = x > cxNum ? "start" : "end";
     return (
       <text
         x={x}
