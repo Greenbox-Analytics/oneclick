@@ -30,7 +30,7 @@ PyJWT = "2.12.1"
 httpx = "0.28.1"
 reportlab = "4.4.10"
 python-docx = "1.2.0"
-boto3 = "1.35.99"
+resend = "2.7.0"
 email-validator = "2.3.0"
 
 [tool.poetry.group.dev.dependencies]
@@ -57,7 +57,7 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501", "E402", "E741", "B008", "B904", "SIM102", "SIM103", "SIM105", "SIM108", "UP028", "UP038"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["auth", "pagination", "mailer", "boards", "credentials", "registry", "projects", "settings", "splitsheet", "oneclick", "zoe_chatbot", "integrations"]
+known-first-party = ["auth", "pagination", "boards", "credentials", "registry", "projects", "settings", "splitsheet", "oneclick", "users", "zoe_chatbot", "integrations"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["SIM116"]  # Allow if-chains for test mock sequencing

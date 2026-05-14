@@ -1,12 +1,9 @@
 """Invitation and verification emails for the Rights Registry."""
 
 import html
-import logging
 import os
 
-from mailer import send_html
-
-logger = logging.getLogger(__name__)
+import resend
 
 
 def send_invitation_email(
@@ -17,9 +14,21 @@ def send_invitation_email(
     role: str,
     invite_token: str,
 ):
+    api_key = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        print("Warning: RESEND_API_KEY not set — skipping invitation email")
+        return None
+
+    from_address = os.getenv("RESEND_FROM_EMAIL")
+    if not from_address:
+        print("Warning: RESEND_FROM_EMAIL not set — skipping invitation email")
+        return None
+
+    resend.api_key = api_key
     frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
     claim_url = f"{frontend_url}/tools/registry/invite/{invite_token}"
 
+    # Escape all user-supplied values to prevent HTML injection
     safe_name = html.escape(recipient_name)
     safe_inviter = html.escape(inviter_name)
     safe_title = html.escape(work_title)
@@ -60,13 +69,17 @@ def send_invitation_email(
     """
 
     try:
-        return send_html(
-            to=recipient_email,
-            subject=f'{safe_inviter} needs you to confirm your stake on "{safe_title}"',
-            html_body=html_body,
+        response = resend.Emails.send(
+            {
+                "from": from_address,
+                "to": [recipient_email],
+                "subject": f'{safe_inviter} needs you to confirm your stake on "{safe_title}"',
+                "html": html_body,
+            }
         )
+        return response
     except Exception as e:
-        logger.warning("Failed to send invitation email: %s", e)
+        print(f"Warning: Failed to send invitation email: {e}")
         return None
 
 
@@ -82,6 +95,17 @@ def send_rich_invitation_email(
     notes: str = None,
     invite_token: str = "",
 ):
+    api_key = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        print("Warning: RESEND_API_KEY not set — skipping invitation email")
+        return None
+
+    from_address = os.getenv("RESEND_FROM_EMAIL")
+    if not from_address:
+        print("Warning: RESEND_FROM_EMAIL not set — skipping invitation email")
+        return None
+
+    resend.api_key = api_key
     frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
     claim_url = f"{frontend_url}/tools/registry/invite/{invite_token}"
 
@@ -137,11 +161,15 @@ def send_rich_invitation_email(
     """
 
     try:
-        return send_html(
-            to=recipient_email,
-            subject=f'{safe_inviter} needs you to confirm your stake on "{safe_title}"',
-            html_body=html_body,
+        response = resend.Emails.send(
+            {
+                "from": from_address,
+                "to": [recipient_email],
+                "subject": f'{safe_inviter} needs you to confirm your stake on "{safe_title}"',
+                "html": html_body,
+            }
         )
+        return response
     except Exception as e:
-        logger.warning("Failed to send invitation email: %s", e)
+        print(f"Warning: Failed to send invitation email: {e}")
         return None
