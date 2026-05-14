@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
-  Loader2, ChevronRight, Upload, FileText, Search, Download, Trash2, HardDrive, Mail,
+  Loader2, ChevronRight, Upload, FileText, Search, Download, Trash2, HardDrive, Send,
 } from "lucide-react";
 import { toast } from "sonner";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
@@ -17,6 +17,7 @@ import { useIntegrations } from "@/hooks/useIntegrations";
 import { useDriveExport } from "@/hooks/useGoogleDrive";
 import { DriveImportDialog } from "./integrations/DriveImportDialog";
 import ShareViaEmailDialog from "./ShareViaEmailDialog";
+import BulkActionReviewDialog, { type BulkAction } from "./BulkActionReviewDialog";
 
 interface FilesTabProps {
   projectId: string;
@@ -47,7 +48,8 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const [driveImportOpen, setDriveImportOpen] = useState(false);
-  const [shareFile, setShareFile] = useState<{ id: string; file_name: string } | null>(null);
+  const [shareFileIds, setShareFileIds] = useState<string[] | null>(null);
+  const [shareSubject, setShareSubject] = useState<string>("");
   const { connections } = useIntegrations();
   const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
   const driveExport = useDriveExport();
@@ -56,6 +58,11 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const [linkingFileId, setLinkingFileId] = useState<string | null>(null);
   const [selectedWorkIds, setSelectedWorkIds] = useState<string[]>([]);
   const [linkingInProgress, setLinkingInProgress] = useState(false);
+
+  // Per-category multi-select state
+  const [selectedByCategory, setSelectedByCategory] = useState<Record<string, Set<string>>>({});
+  const [bulkAction, setBulkAction] = useState<{ category: string; action: BulkAction } | null>(null);
+  const [bulkInFlight, setBulkInFlight] = useState(false);
 
   // Fetch project files
   const { data: files, isLoading, isError } = useQuery({
@@ -163,6 +170,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           project_id: projectId,
           file_name: file.name,
           file_url: urlData.publicUrl,
+          file_path: filePath,
           folder_category: category,
           file_size: file.size,
           file_type: file.type,
@@ -213,12 +221,22 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
     }
   };
 
-  const handleDownload = async (file: { file_path?: string | null; file_name?: string | null }) => {
+  const deriveProjectFilePath = (file: { file_path?: string | null; file_url?: string | null }): string | null => {
+    if (file.file_path) return file.file_path;
+    if (!file.file_url) return null;
+    const marker = "/storage/v1/object/public/project-files/";
+    const idx = file.file_url.indexOf(marker);
+    if (idx < 0) return null;
+    return decodeURIComponent(file.file_url.slice(idx + marker.length));
+  };
+
+  const handleDownload = async (file: { file_path?: string | null; file_url?: string | null; file_name?: string | null }) => {
     try {
-      if (file.file_path) {
+      const path = deriveProjectFilePath(file);
+      if (path) {
         const { data } = await supabase.storage
           .from("project-files")
-          .createSignedUrl(file.file_path, 60);
+          .createSignedUrl(path, 60, { download: file.file_name || true });
         if (data?.signedUrl) {
           const a = document.createElement("a");
           a.href = data.signedUrl;
@@ -243,6 +261,70 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
       toast.success("File deleted");
     } catch {
       toast.error("Failed to delete file");
+    }
+  };
+
+  const toggleSelected = (category: string, fileId: string) => {
+    setSelectedByCategory((prev) => {
+      const next = { ...prev };
+      const set = new Set(next[category] ?? []);
+      if (set.has(fileId)) set.delete(fileId);
+      else set.add(fileId);
+      next[category] = set;
+      return next;
+    });
+  };
+  const clearSelected = (category: string) => {
+    setSelectedByCategory((prev) => ({ ...prev, [category]: new Set() }));
+  };
+  const getSelectedIds = (category: string): string[] =>
+    Array.from(selectedByCategory[category] ?? []);
+
+  const bulkDownload = async (filesToDownload: { id: string; file_path?: string | null; file_url?: string | null; file_name?: string | null }[]) => {
+    setBulkInFlight(true);
+    try {
+      for (const file of filesToDownload) {
+        const path = deriveProjectFilePath(file);
+        if (!path) continue;
+        const { data } = await supabase.storage
+          .from("project-files")
+          .createSignedUrl(path, 60, { download: file.file_name || true });
+        if (data?.signedUrl) {
+          const a = document.createElement("a");
+          a.href = data.signedUrl;
+          a.download = file.file_name || "download";
+          a.click();
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      }
+      toast.success(`Downloaded ${filesToDownload.length} file${filesToDownload.length === 1 ? "" : "s"}`);
+    } catch {
+      toast.error("Failed to download some files");
+    } finally {
+      setBulkInFlight(false);
+      if (bulkAction) clearSelected(bulkAction.category);
+      setBulkAction(null);
+    }
+  };
+
+  const bulkDelete = async (filesToDelete: { id: string; file_path?: string | null }[]) => {
+    setBulkInFlight(true);
+    try {
+      const ids = filesToDelete.map((f) => f.id);
+      const paths = filesToDelete.map((f) => f.file_path).filter(Boolean) as string[];
+      if (paths.length > 0) {
+        await supabase.storage.from("project-files").remove(paths);
+      }
+      const { error } = await supabase.from("project_files").delete().in("id", ids);
+      if (error) throw error;
+      queryClient.invalidateQueries({ queryKey: ["project-files-tab", projectId] });
+      toast.success(`Deleted ${ids.length} file${ids.length === 1 ? "" : "s"}`);
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete some files");
+    } finally {
+      setBulkInFlight(false);
+      if (bulkAction) clearSelected(bulkAction.category);
+      setBulkAction(null);
     }
   };
 
@@ -355,13 +437,63 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                     <p className="px-3 pb-3 text-xs text-muted-foreground">No files in this folder.</p>
                   ) : (
                     <div className="border-t border-border/50">
+                      {(selectedByCategory[cat.key]?.size ?? 0) > 0 && (
+                        <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b border-border/50">
+                          <span className="text-sm font-medium text-foreground">
+                            {selectedByCategory[cat.key]!.size} selected
+                          </span>
+                          <div className="flex-1" />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setBulkAction({ category: cat.key, action: "download" })}
+                          >
+                            <Download className="w-3.5 h-3.5 mr-1.5" />
+                            Download
+                          </Button>
+                          {canEdit(userRole) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const ids = getSelectedIds(cat.key);
+                                setShareFileIds(ids);
+                                setShareSubject(`${ids.length} ${cat.label.toLowerCase()}`);
+                              }}
+                            >
+                              <Send className="w-3.5 h-3.5 mr-1.5" />
+                              Send
+                            </Button>
+                          )}
+                          {canEdit(userRole) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => setBulkAction({ category: cat.key, action: "delete" })}
+                            >
+                              <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                              Delete
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" onClick={() => clearSelected(cat.key)}>
+                            Clear
+                          </Button>
+                        </div>
+                      )}
                       {catFiles.map((file) => {
                         const linkedWorks = fileWorksMap.get(file.id);
+                        const isSelected = selectedByCategory[cat.key]?.has(file.id) ?? false;
                         return (
                           <div
                             key={file.id}
-                            className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 border-b border-border/30 last:border-b-0 transition-colors"
+                            className="flex items-center gap-2 px-4 py-2.5 hover:bg-muted/20 border-b border-border/30 last:border-b-0 transition-colors"
                           >
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={() => toggleSelected(cat.key, file.id)}
+                              aria-label={`Select ${file.file_name}`}
+                            />
                             <div className="flex-1 min-w-0">
                               <p className="text-sm text-foreground truncate">{file.file_name}</p>
                               <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -405,9 +537,12 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                                 variant="ghost"
                                 className="h-7 w-7 p-0 shrink-0"
                                 title="Share via email"
-                                onClick={() => setShareFile({ id: file.id, file_name: file.file_name })}
+                                onClick={() => {
+                                  setShareFileIds([file.id]);
+                                  setShareSubject(`File: ${file.file_name}`);
+                                }}
                               >
-                                <Mail className="w-3.5 h-3.5" />
+                                <Send className="w-3.5 h-3.5" />
                               </Button>
                             )}
                             <Button
@@ -450,11 +585,33 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
       />
 
       <ShareViaEmailDialog
-        open={!!shareFile}
-        onClose={() => setShareFile(null)}
+        open={!!shareFileIds}
+        onClose={() => setShareFileIds(null)}
         projectId={projectId}
-        fileIds={shareFile ? [shareFile.id] : []}
-        defaultSubject={shareFile ? `File: ${shareFile.file_name}` : ""}
+        fileIds={shareFileIds || []}
+        defaultSubject={shareSubject}
+      />
+
+      <BulkActionReviewDialog
+        open={bulkAction !== null}
+        onOpenChange={(open) => { if (!open) setBulkAction(null); }}
+        action={bulkAction?.action ?? "download"}
+        files={
+          bulkAction
+            ? (filesByCategory.get(bulkAction.category) || [])
+                .filter((f) => selectedByCategory[bulkAction.category]?.has(f.id))
+                .map((f) => ({ id: f.id, name: f.file_name }))
+            : []
+        }
+        onConfirm={() => {
+          if (!bulkAction) return;
+          const selected = (filesByCategory.get(bulkAction.category) || []).filter((f) =>
+            selectedByCategory[bulkAction.category]?.has(f.id)
+          );
+          if (bulkAction.action === "download") bulkDownload(selected);
+          else if (bulkAction.action === "delete") bulkDelete(selected);
+        }}
+        isWorking={bulkInFlight}
       />
 
       {/* Work-linking dialog (Fix #4) */}
