@@ -1,11 +1,9 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,11 +14,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Loader2, Music, Upload, Volume2, Link as LinkIcon, Trash2, Mail } from "lucide-react";
+import { Loader2, Music, Upload, Volume2, Trash2, Send, Download } from "lucide-react";
 import { toast } from "sonner";
-import { API_URL, apiFetch } from "@/lib/apiFetch";
 import type { AudioFile, ProjectAudioLink } from "@/types/audio";
 import ShareViaEmailDialog from "./ShareViaEmailDialog";
+import BulkActionReviewDialog, { type BulkAction } from "./BulkActionReviewDialog";
 
 interface AudioTabProps {
   projectId: string;
@@ -51,15 +49,18 @@ async function computeSha256(file: File): Promise<string> {
 }
 
 export default function AudioTab({ projectId, userRole, artistId }: AudioTabProps) {
-  const { user } = useAuth();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [linkingAudioId, setLinkingAudioId] = useState<string | null>(null);
-  const [linkingInProgress, setLinkingInProgress] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<AudioFile | null>(null);
   const [deleteInFlight, setDeleteInFlight] = useState(false);
-  const [shareAudio, setShareAudio] = useState<AudioFile | null>(null);
+  const [shareAudioIds, setShareAudioIds] = useState<string[] | null>(null);
+  const [shareSubject, setShareSubject] = useState<string>("");
+
+  // Multi-select state
+  const [selectedAudioIds, setSelectedAudioIds] = useState<Set<string>>(new Set());
+  const [bulkAction, setBulkAction] = useState<BulkAction | null>(null);
+  const [bulkInFlight, setBulkInFlight] = useState(false);
 
   const { data: audioLinks, isLoading: linksLoading, isError: linksError } = useQuery<
     (ProjectAudioLink & { audio_files: AudioFile })[]
@@ -75,66 +76,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     },
     enabled: !!projectId,
   });
-
-  const { data: projectWorks } = useQuery({
-    queryKey: ["project-works-for-audio-linking", projectId],
-    queryFn: async () => {
-      const { data, error } = await sb
-        .from("works_registry")
-        .select("id, title")
-        .eq("project_id", projectId)
-        .order("title");
-      if (error) return [];
-      return data || [];
-    },
-    enabled: !!projectId,
-  });
-
-  const audioFileIds = (audioLinks || [])
-    .map((l) => l.audio_files?.id)
-    .filter(Boolean);
-
-  const { data: workAudioLinks } = useQuery({
-    queryKey: ["work-audio-links-for-project", projectId, audioFileIds],
-    queryFn: async () => {
-      if (audioFileIds.length === 0) return [];
-      const { data, error } = await sb
-        .from("work_audio")
-        .select("audio_file_id, work_id, works_registry(id, title)")
-        .in("audio_file_id", audioFileIds);
-      if (error) return [];
-      return data || [];
-    },
-    enabled: audioFileIds.length > 0,
-  });
-
-  const audioWorksMap = new Map<string, { workId: string; title: string }[]>();
-  if (workAudioLinks) {
-    for (const link of workAudioLinks) {
-      const w = link.works_registry;
-      if (!w) continue;
-      if (!audioWorksMap.has(link.audio_file_id)) audioWorksMap.set(link.audio_file_id, []);
-      audioWorksMap.get(link.audio_file_id)!.push({ workId: w.id, title: w.title });
-    }
-  }
-
-  const handleLinkToWork = async (audioFileId: string, workId: string) => {
-    if (!user?.id) return;
-    setLinkingInProgress(true);
-    try {
-      await apiFetch(
-        `${API_URL}/registry/works/${workId}/audio?audio_file_id=${audioFileId}`,
-        { method: "POST" }
-      );
-      queryClient.invalidateQueries({ queryKey: ["work-audio-links-for-project", projectId] });
-      toast.success("Audio linked to work");
-    } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : "Failed to link audio");
-    } finally {
-      setLinkingInProgress(false);
-      setLinkingAudioId(null);
-    }
-  };
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -178,7 +119,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
         folderId = newFolder.id;
       }
 
-      // Dedup: reuse an existing audio_files row with the same hash in the folder.
       const { data: existing } = await sb
         .from("audio_files")
         .select("id")
@@ -228,7 +168,6 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       queryClient.invalidateQueries({ queryKey: ["project-audio-tab", projectId] });
       toast.success(existing?.id ? "Audio linked (duplicate reused)" : "Audio uploaded and linked");
     } catch (error: unknown) {
-      // Roll back any partial work to avoid orphans.
       if (insertedAudioId) {
         await sb.from("audio_files").delete().eq("id", insertedAudioId);
       }
@@ -242,15 +181,36 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     }
   };
 
-  const handleOpen = async (audio: AudioFile) => {
-    const { data, error } = await supabase.storage
-      .from("audio-files")
-      .createSignedUrl(audio.file_path, 60 * 60);
-    if (error || !data?.signedUrl) {
-      toast.error(error?.message || "Failed to generate audio URL");
-      return;
+  const deriveAudioFilePath = (audio: { file_path?: string | null; file_url?: string | null }): string | null => {
+    if (audio.file_path) return audio.file_path;
+    if (!audio.file_url) return null;
+    const marker = "/storage/v1/object/public/audio-files/";
+    const idx = audio.file_url.indexOf(marker);
+    if (idx < 0) return null;
+    return decodeURIComponent(audio.file_url.slice(idx + marker.length));
+  };
+
+  const handleDownloadAudio = async (audio: AudioFile) => {
+    try {
+      const path = deriveAudioFilePath(audio);
+      if (!path) {
+        toast.error("File not available for download");
+        return;
+      }
+      const { data, error } = await supabase.storage
+        .from("audio-files")
+        .createSignedUrl(path, 60, { download: audio.file_name || true });
+      if (error || !data?.signedUrl) {
+        toast.error(error?.message || "Failed to generate audio URL");
+        return;
+      }
+      const a = document.createElement("a");
+      a.href = data.signedUrl;
+      a.download = audio.file_name || "audio";
+      a.click();
+    } catch {
+      toast.error("Failed to download audio");
     }
-    window.open(data.signedUrl, "_blank");
   };
 
   const handleDelete = async (audio: AudioFile) => {
@@ -263,13 +223,75 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       await supabase.storage.from("audio-files").remove([audio.file_path]);
 
       queryClient.invalidateQueries({ queryKey: ["project-audio-tab", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["work-audio-links-for-project", projectId] });
       toast.success("Audio deleted");
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : "Failed to delete audio");
     } finally {
       setDeleteInFlight(false);
       setPendingDelete(null);
+    }
+  };
+
+  const toggleAudioSelected = (id: string) => {
+    setSelectedAudioIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const clearAudioSelected = () => setSelectedAudioIds(new Set());
+
+  const getSelectedAudios = (audios: AudioFile[]) =>
+    audios.filter((a) => selectedAudioIds.has(a.id));
+
+  const bulkDownload = async (audios: AudioFile[]) => {
+    setBulkInFlight(true);
+    try {
+      for (const audio of audios) {
+        const path = deriveAudioFilePath(audio);
+        if (!path) continue;
+        const { data } = await supabase.storage
+          .from("audio-files")
+          .createSignedUrl(path, 60, { download: audio.file_name || true });
+        if (data?.signedUrl) {
+          const a = document.createElement("a");
+          a.href = data.signedUrl;
+          a.download = audio.file_name || "audio";
+          a.click();
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      }
+      toast.success(`Downloaded ${audios.length} file${audios.length === 1 ? "" : "s"}`);
+      clearAudioSelected();
+    } catch {
+      toast.error("Failed to download some files");
+    } finally {
+      setBulkInFlight(false);
+      setBulkAction(null);
+    }
+  };
+
+  const bulkDelete = async (audios: AudioFile[]) => {
+    setBulkInFlight(true);
+    try {
+      const ids = audios.map((a) => a.id);
+      const paths = audios.map((a) => a.file_path).filter(Boolean) as string[];
+      await sb.from("project_audio_links").delete().in("audio_file_id", ids);
+      await sb.from("work_audio").delete().in("audio_file_id", ids);
+      const { error } = await sb.from("audio_files").delete().in("id", ids);
+      if (error) throw error;
+      if (paths.length > 0) {
+        await supabase.storage.from("audio-files").remove(paths);
+      }
+      queryClient.invalidateQueries({ queryKey: ["project-audio-tab", projectId] });
+      toast.success(`Deleted ${ids.length} file${ids.length === 1 ? "" : "s"}`);
+      clearAudioSelected();
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete some files");
+    } finally {
+      setBulkInFlight(false);
+      setBulkAction(null);
     }
   };
 
@@ -294,6 +316,9 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
   const audioFiles = (audioLinks || [])
     .map((l) => l.audio_files)
     .filter(Boolean) as AudioFile[];
+
+  const selectedAudios = getSelectedAudios(audioFiles);
+  const hasSelection = selectedAudios.length > 0;
 
   return (
     <div className="space-y-4">
@@ -323,21 +348,71 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
         </div>
       )}
 
+      {hasSelection && (
+        <div className="flex items-center gap-2 p-2 rounded-lg border border-border bg-muted/40">
+          <span className="text-sm font-medium text-foreground">
+            {selectedAudios.length} selected
+          </span>
+          <div className="flex-1" />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setBulkAction("download")}
+            title="Download selected"
+          >
+            <Download className="w-3.5 h-3.5 mr-1.5" />
+            Download
+          </Button>
+          {canEdit(userRole) && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setShareAudioIds(selectedAudios.map((a) => a.id));
+                setShareSubject(`${selectedAudios.length} audio file${selectedAudios.length === 1 ? "" : "s"}`);
+              }}
+              title="Send selected"
+            >
+              <Send className="w-3.5 h-3.5 mr-1.5" />
+              Send
+            </Button>
+          )}
+          {canEdit(userRole) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setBulkAction("delete")}
+              title="Delete selected"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+              Delete
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={clearAudioSelected}>
+            Clear
+          </Button>
+        </div>
+      )}
+
       {audioFiles.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <Volume2 className="w-10 h-10 text-muted-foreground/40 mb-3" />
           <p className="text-sm text-muted-foreground">No audio files yet</p>
-          <p className="text-xs text-muted-foreground/60 mt-1">Upload audio files to link them to works in this project</p>
+          <p className="text-xs text-muted-foreground/60 mt-1">Upload audio files to use them in this project</p>
         </div>
       ) : (
         <div className="grid gap-2">
           {audioFiles.map((audio) => {
-            const linkedWorks = audioWorksMap.get(audio.id);
-            const hasNoWorkLinks = !linkedWorks || linkedWorks.length === 0;
-            const isLinkingThis = linkingAudioId === audio.id;
+            const isSelected = selectedAudioIds.has(audio.id);
             return (
               <Card key={audio.id} className="p-3">
                 <div className="flex items-center gap-3">
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={() => toggleAudioSelected(audio.id)}
+                    aria-label={`Select ${audio.file_name}`}
+                  />
                   <div className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center shrink-0">
                     <Music className="w-4 h-4 text-primary" />
                   </div>
@@ -348,68 +423,30 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       {audio.file_type && <span>{audio.file_type}</span>}
                       {audio.file_size && <span>{formatFileSize(audio.file_size)}</span>}
-                      {linkedWorks && linkedWorks.length > 0 ? (
-                        <span className="flex items-center gap-1">
-                          Relevant works:{" "}
-                          {linkedWorks.map((w) => (
-                            <Badge key={w.workId} variant="outline" className="text-[10px] px-1.5 py-0">
-                              {w.title}
-                            </Badge>
-                          ))}
-                        </span>
-                      ) : (
-                        <span className="italic text-muted-foreground">Not linked to any work</span>
-                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {hasNoWorkLinks && canEdit(userRole) && projectWorks && projectWorks.length > 0 && (
-                      isLinkingThis ? (
-                        <Select
-                          onValueChange={(workId) => handleLinkToWork(audio.id, workId)}
-                          disabled={linkingInProgress}
-                        >
-                          <SelectTrigger className="h-7 w-32 text-xs">
-                            <SelectValue placeholder="Select work..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {projectWorks.map((work: { id: string; title: string }) => (
-                              <SelectItem key={work.id} value={work.id}>
-                                {work.title}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 px-2 text-xs"
-                          disabled={linkingInProgress}
-                          onClick={() => setLinkingAudioId(audio.id)}
-                        >
-                          <LinkIcon className="w-3 h-3 mr-1" />
-                          Link to work
-                        </Button>
-                      )
-                    )}
                     <Button
                       size="sm"
                       variant="ghost"
                       className="h-7 px-2 text-xs shrink-0"
-                      onClick={() => handleOpen(audio)}
+                      onClick={() => handleDownloadAudio(audio)}
+                      title="Download"
                     >
-                      Open
+                      <Download className="w-3 h-3" />
                     </Button>
                     {canEdit(userRole) && (
                       <Button
                         size="sm"
                         variant="ghost"
                         className="h-7 px-2 text-xs shrink-0"
-                        onClick={() => setShareAudio(audio)}
+                        onClick={() => {
+                          setShareAudioIds([audio.id]);
+                          setShareSubject(`Audio: ${audio.file_name}`);
+                        }}
                         title="Share via email"
                       >
-                        <Mail className="w-3 h-3" />
+                        <Send className="w-3 h-3" />
                       </Button>
                     )}
                     {canEdit(userRole) && (
@@ -456,11 +493,23 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
       </AlertDialog>
 
       <ShareViaEmailDialog
-        open={!!shareAudio}
-        onClose={() => setShareAudio(null)}
+        open={!!shareAudioIds}
+        onClose={() => setShareAudioIds(null)}
         projectId={projectId}
-        audioFileIds={shareAudio ? [shareAudio.id] : []}
-        defaultSubject={shareAudio ? `Audio: ${shareAudio.file_name}` : ""}
+        audioFileIds={shareAudioIds || []}
+        defaultSubject={shareSubject}
+      />
+
+      <BulkActionReviewDialog
+        open={bulkAction !== null}
+        onOpenChange={(open) => { if (!open) setBulkAction(null); }}
+        action={bulkAction ?? "download"}
+        files={selectedAudios.map((a) => ({ id: a.id, name: a.file_name }))}
+        onConfirm={() => {
+          if (bulkAction === "download") bulkDownload(selectedAudios);
+          else if (bulkAction === "delete") bulkDelete(selectedAudios);
+        }}
+        isWorking={bulkInFlight}
       />
     </div>
   );
