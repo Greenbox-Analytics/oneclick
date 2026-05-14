@@ -20,6 +20,8 @@ export interface ProjectCard {
   artist_avatar?: string;
   member_count: number;
   work_count: number;
+  file_count: number;
+  audio_count: number;
 }
 
 export interface SharedProjectCard extends ProjectCard {
@@ -127,6 +129,52 @@ export function usePortfolioData(filters: PortfolioFilters) {
     enabled: projectIds.length > 0,
   });
 
+  // Query 4a: Fetch file counts per project
+  const fileCountsQuery = useQuery<Map<string, number>>({
+    queryKey: ["portfolio-file-counts", projectIds],
+    queryFn: async () => {
+      if (projectIds.length === 0) return new Map();
+      const map = new Map<string, number>();
+      const batchSize = 100;
+      for (let i = 0; i < projectIds.length; i += batchSize) {
+        const batch = projectIds.slice(i, i + batchSize);
+        const { data, error } = await supabase
+          .from("project_files")
+          .select("project_id")
+          .in("project_id", batch);
+        if (error) { console.error("Error fetching file counts:", error); continue; }
+        for (const row of data || []) {
+          map.set(row.project_id, (map.get(row.project_id) || 0) + 1);
+        }
+      }
+      return map;
+    },
+    enabled: projectIds.length > 0,
+  });
+
+  // Query 4b: Fetch audio counts per project (via project_audio_links join table)
+  const audioCountsQuery = useQuery<Map<string, number>>({
+    queryKey: ["portfolio-audio-counts", projectIds],
+    queryFn: async () => {
+      if (projectIds.length === 0) return new Map();
+      const map = new Map<string, number>();
+      const batchSize = 100;
+      for (let i = 0; i < projectIds.length; i += batchSize) {
+        const batch = projectIds.slice(i, i + batchSize);
+        const { data, error } = await supabase
+          .from("project_audio_links")
+          .select("project_id")
+          .in("project_id", batch);
+        if (error) { console.error("Error fetching audio counts:", error); continue; }
+        for (const row of data || []) {
+          map.set(row.project_id, (map.get(row.project_id) || 0) + 1);
+        }
+      }
+      return map;
+    },
+    enabled: projectIds.length > 0,
+  });
+
   // Query 5: Fetch shared projects (where user is a member but NOT the owner)
   const sharedProjectsQuery = useQuery<SharedProjectCard[]>({
     queryKey: ["portfolio-shared-projects", user?.id],
@@ -181,6 +229,26 @@ export function usePortfolioData(filters: PortfolioFilters) {
         sharedWorkCounts.set(row.project_id, (sharedWorkCounts.get(row.project_id) || 0) + 1);
       }
 
+      // Fetch file counts for shared projects
+      const { data: fileRows } = await supabase
+        .from("project_files")
+        .select("project_id")
+        .in("project_id", sharedProjectIds);
+      const sharedFileCounts = new Map<string, number>();
+      for (const row of fileRows || []) {
+        sharedFileCounts.set(row.project_id, (sharedFileCounts.get(row.project_id) || 0) + 1);
+      }
+
+      // Fetch audio counts for shared projects
+      const { data: audioRows } = await supabase
+        .from("project_audio_links")
+        .select("project_id")
+        .in("project_id", sharedProjectIds);
+      const sharedAudioCounts = new Map<string, number>();
+      for (const row of audioRows || []) {
+        sharedAudioCounts.set(row.project_id, (sharedAudioCounts.get(row.project_id) || 0) + 1);
+      }
+
       return projects.map(p => {
         const artist = sharedArtistMap.get(p.artist_id);
         return {
@@ -193,6 +261,8 @@ export function usePortfolioData(filters: PortfolioFilters) {
           artist_avatar: artist?.avatar_url || undefined,
           member_count: sharedMemberCounts.get(p.id) || 0,
           work_count: sharedWorkCounts.get(p.id) || 0,
+          file_count: sharedFileCounts.get(p.id) || 0,
+          audio_count: sharedAudioCounts.get(p.id) || 0,
           role: roleMap.get(p.id) as "admin" | "editor" | "viewer",
         };
       });
@@ -206,6 +276,8 @@ export function usePortfolioData(filters: PortfolioFilters) {
     const search = filters.searchQuery.toLowerCase();
     const memberCounts = memberCountsQuery.data || new Map();
     const workCounts = workCountsQuery.data || new Map();
+    const fileCounts = fileCountsQuery.data || new Map();
+    const audioCounts = audioCountsQuery.data || new Map();
 
     const filtered = projects.filter(p => {
       if (filters.selectedArtistIds.length > 0 && !filters.selectedArtistIds.includes(p.artist_id)) {
@@ -229,6 +301,8 @@ export function usePortfolioData(filters: PortfolioFilters) {
         artist_avatar: artist?.avatar,
         member_count: memberCounts.get(p.id) || 0,
         work_count: workCounts.get(p.id) || 0,
+        file_count: fileCounts.get(p.id) || 0,
+        audio_count: audioCounts.get(p.id) || 0,
       };
     });
 
@@ -240,7 +314,7 @@ export function usePortfolioData(filters: PortfolioFilters) {
     });
 
     return cards;
-  }, [projectsQuery.data, filters, artistMap, memberCountsQuery.data, workCountsQuery.data]);
+  }, [projectsQuery.data, filters, artistMap, memberCountsQuery.data, workCountsQuery.data, fileCountsQuery.data, audioCountsQuery.data]);
 
   // Filter shared projects by search and artist
   const sharedProjects = useMemo((): SharedProjectCard[] => {

@@ -1,7 +1,7 @@
 import html
 import os
 
-from mailer import send_html
+import resend
 
 
 def send_project_invite_email(
@@ -10,6 +10,17 @@ def send_project_invite_email(
     inviter_name: str,
     role: str,
 ):
+    api_key = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        print("Warning: RESEND_API_KEY not set — skipping project invite email")
+        return None
+
+    from_address = os.getenv("RESEND_FROM_EMAIL")
+    if not from_address:
+        print("Warning: RESEND_FROM_EMAIL not set — skipping project invite email")
+        return None
+
+    resend.api_key = api_key
     frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
 
     safe_project = html.escape(project_name)
@@ -39,8 +50,12 @@ def send_project_invite_email(
     </div>
     """
 
-    return send_html(
-        to=recipient_email,
-        subject=f'{safe_inviter} invited you to "{safe_project}" on Msanii',
-        html_body=html_body,
+    response = resend.Emails.send(
+        {
+            "from": from_address,
+            "to": [recipient_email],
+            "subject": f'{safe_inviter} invited you to "{safe_project}" on Msanii',
+            "html": html_body,
+        }
     )
+    return response

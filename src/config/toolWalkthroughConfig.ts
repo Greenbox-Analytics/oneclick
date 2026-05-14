@@ -12,6 +12,9 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+// Flip to false to restore the Rights Registry walkthrough and works mentions.
+const HIDE_REGISTRY_AND_WORKS = true;
+
 export interface ToolWalkthroughStep {
   targetSelector: string;
   title: string;
@@ -30,7 +33,7 @@ export interface ToolWalkthroughConfig {
   steps: ToolWalkthroughStep[];
 }
 
-export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
+const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
   oneclick: {
     key: "oneclick",
     intro: {
@@ -224,15 +227,17 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
     intro: {
       icon: FolderOpen,
       title: "Portfolio",
-      description:
-        "Your entire catalog organized by year and artist. Create projects, track works and members, and see projects shared with you by collaborators — all from one view.",
+      description: HIDE_REGISTRY_AND_WORKS
+        ? "Your entire catalog organized by year and artist. Create projects, track files, audio, and members, and see projects shared with you by collaborators — all from one view."
+        : "Your entire catalog organized by year and artist. Create projects, track works and members, and see projects shared with you by collaborators — all from one view.",
     },
     steps: [
       {
         targetSelector: '[data-walkthrough="portfolio-add"]',
         title: "Create a Project",
-        description:
-          "Start a new project for an artist — albums, EPs, singles, or any body of work. Each project holds documents, audio files, works, and team members.",
+        description: HIDE_REGISTRY_AND_WORKS
+          ? "Start a new project for an artist — albums, EPs, singles, or any body of work. Each project holds documents, audio files, and team members."
+          : "Start a new project for an artist — albums, EPs, singles, or any body of work. Each project holds documents, audio files, works, and team members.",
         placement: "bottom",
       },
       {
@@ -245,8 +250,9 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       {
         targetSelector: '[data-walkthrough="portfolio-year"]',
         title: "Year & Artist Groups",
-        description:
-          "Projects are grouped by year, then by artist. Each project card shows work count and member count. Click any project to open its detail page.",
+        description: HIDE_REGISTRY_AND_WORKS
+          ? "Projects are grouped by year, then by artist. Each project card shows file count, audio count, and member count. Click any project to open its detail page."
+          : "Projects are grouped by year, then by artist. Each project card shows work count and member count. Click any project to open its detail page.",
         placement: "bottom",
         skipIfMissing: true,
       },
@@ -307,37 +313,45 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
     intro: {
       icon: Layers,
       title: "Project Detail",
-      description:
-        "Everything about a project in one place — works (tracks/compositions), files, audio, team members, notes, and settings. Your role determines what you can do here.",
+      description: HIDE_REGISTRY_AND_WORKS
+        ? "Everything about a project in one place — files, audio, team members, notes, and settings. Your role determines what you can do here."
+        : "Everything about a project in one place — works (tracks/compositions), files, audio, team members, notes, and settings. Your role determines what you can do here.",
     },
     steps: [
       {
         targetSelector: '[data-walkthrough="project-role"]',
         title: "Your Role",
-        description:
-          "Your role badge shows your access level. Owners and admins can manage members and settings. Editors can add works and files. Viewers have read-only access.",
+        description: HIDE_REGISTRY_AND_WORKS
+          ? "Your role badge shows your access level. Owners and admins can manage members and settings. Editors can add files and audio. Viewers have read-only access."
+          : "Your role badge shows your access level. Owners and admins can manage members and settings. Editors can add works and files. Viewers have read-only access.",
         placement: "bottom",
       },
       {
         targetSelector: '[data-walkthrough="project-tabs"]',
         title: "Project Tabs",
-        description:
-          "Works: tracks and compositions linked to this project. Files: contracts, split sheets, and documents — upload directly or import from Google Drive (each category accepts specific file types like PDFs for contracts, Excel/CSV for royalty statements). Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration and Slack channel linking.",
+        description: HIDE_REGISTRY_AND_WORKS
+          ? "Files: contracts, split sheets, and documents — upload directly or import from Google Drive (each category accepts specific file types like PDFs for contracts, Excel/CSV for royalty statements). Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration and Slack channel linking."
+          : "Works: tracks and compositions linked to this project. Files: contracts, split sheets, and documents — upload directly or import from Google Drive (each category accepts specific file types like PDFs for contracts, Excel/CSV for royalty statements). Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration and Slack channel linking.",
         placement: "bottom",
       },
-      {
-        targetSelector: '[data-walkthrough="project-add-work"]',
-        title: "Add Works",
-        description:
-          "Create a new work (track or composition) inside this project. Works can then be registered in the Rights Registry with ownership stakes and collaborators.",
-        placement: "bottom",
-        skipIfMissing: true,
-      },
+      ...(HIDE_REGISTRY_AND_WORKS
+        ? []
+        : [
+            {
+              targetSelector: '[data-walkthrough="project-add-work"]',
+              title: "Add Works",
+              description:
+                "Create a new work (track or composition) inside this project. Works can then be registered in the Rights Registry with ownership stakes and collaborators.",
+              placement: "bottom" as const,
+              skipIfMissing: true,
+            },
+          ]),
       {
         targetSelector: '[data-walkthrough="project-members"]',
         title: "Team Members",
-        description:
-          "Invite people by email and assign them a role — Admin, Editor, or Viewer. Members see all works in this project. For work-level access only, invite collaborators from the Rights Registry instead.",
+        description: HIDE_REGISTRY_AND_WORKS
+          ? "Invite people by email and assign them a role — Admin, Editor, or Viewer. Members see everything in this project."
+          : "Invite people by email and assign them a role — Admin, Editor, or Viewer. Members see all works in this project. For work-level access only, invite collaborators from the Rights Registry instead.",
         placement: "bottom",
       },
     ],
@@ -417,3 +431,9 @@ export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
     ],
   },
 };
+
+const HIDDEN_TOOL_KEYS = new Set(HIDE_REGISTRY_AND_WORKS ? ["registry", "work_detail"] : []);
+
+export const TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = Object.fromEntries(
+  Object.entries(ALL_TOOL_CONFIGS).filter(([key]) => !HIDDEN_TOOL_KEYS.has(key))
+);

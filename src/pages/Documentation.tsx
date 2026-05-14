@@ -24,6 +24,9 @@ import {
 // Types & Constants — hoisted to module scope (rendering-hoist-jsx)
 // ---------------------------------------------------------------------------
 
+// Flip to false to restore Rights Registry / Work Detail docs and works references.
+const HIDE_REGISTRY_AND_WORKS = true;
+
 interface Section {
   id: string;
   label: string;
@@ -32,8 +35,7 @@ interface Section {
   parent?: string; // parent section id for sidebar grouping
 }
 
-// Flat list of ALL navigable sections — order determines prev/next (rendering-hoist-jsx)
-const SECTIONS: Section[] = [
+const ALL_SECTIONS: Section[] = [
   { id: "getting-started", label: "Getting Started", icon: Rocket, color: "emerald" },
   { id: "portfolio", label: "Portfolio", icon: Folder, color: "blue" },
   { id: "project-detail", label: "Project Detail", icon: FolderOpen, color: "purple", parent: "portfolio" },
@@ -46,6 +48,11 @@ const SECTIONS: Section[] = [
   { id: "workspace", label: "Workspace", icon: LayoutGrid, color: "sky" },
   { id: "best-practices", label: "Best Practices", icon: Lightbulb, color: "amber" },
 ];
+
+const HIDDEN_SECTION_IDS = new Set(HIDE_REGISTRY_AND_WORKS ? ["rights-registry", "work-detail"] : []);
+
+// Flat list of ALL navigable sections — order determines prev/next (rendering-hoist-jsx)
+const SECTIONS: Section[] = ALL_SECTIONS.filter((s) => !HIDDEN_SECTION_IDS.has(s.id));
 
 // Set of child section ids for O(1) lookup (js-set-map-lookups)
 const CHILD_SECTIONS = new Set(SECTIONS.filter((s) => s.parent).map((s) => s.id));
@@ -69,7 +76,9 @@ const SECTION_INDEX = new Map(SECTIONS.map((s, i) => [s.id, i]));
 const SECTION_DESCRIPTIONS: Record<string, string> = {
   "getting-started": "Get up and running with Msanii in just a few steps.",
   portfolio: "Browse your projects as a card grid grouped by year and artist.",
-  "project-detail": "The central hub for a project — works, files, audio, members, notes, and settings.",
+  "project-detail": HIDE_REGISTRY_AND_WORKS
+    ? "The central hub for a project — files, audio, members, notes, and settings."
+    : "The central hub for a project — works, files, audio, members, notes, and settings.",
   "work-detail": "Manage a single work — ownership splits, collaborators, licensing, agreements, and industry codes.",
   "rights-registry": "Track ownership, manage collaborator invitations, and confirm rights across all your works.",
   oneclick: "Calculate royalty splits and payments from your contracts in one click using AI.",
@@ -169,7 +178,8 @@ function RolePills() {
 
 function TabChips() {
   const tabs = [
-    { icon: Music, label: "Works" }, { icon: FileText, label: "Files" },
+    ...(HIDE_REGISTRY_AND_WORKS ? [] : [{ icon: Music, label: "Works" }]),
+    { icon: FileText, label: "Files" },
     { icon: Volume2, label: "Audio" }, { icon: Users, label: "Members" },
     { icon: StickyNote, label: "Notes" }, { icon: Settings, label: "Settings" },
   ];
@@ -210,8 +220,12 @@ const GettingStartedContent = () => (
     <Step num={2} title="Add Your First Artist">
       Navigate to <strong>Artist Profiles</strong> and click <strong>Add Artist</strong>. Fill in their name, bio, genres, and connect streaming profiles (Spotify, Apple Music, SoundCloud). Add social media links and custom URLs for press kits or EPKs.
     </Step>
-    <Step num={3} title="Create a Project and Add Works">
-      Create a <strong>Project</strong> in your Portfolio, then add <strong>Works</strong> to it. Upload contracts and audio files, and link them to specific works. Msanii stores your files securely and makes contracts searchable by Zoe AI.
+    <Step num={3} title={HIDE_REGISTRY_AND_WORKS ? "Create a Project" : "Create a Project and Add Works"}>
+      {HIDE_REGISTRY_AND_WORKS ? (
+        <>Create a <strong>Project</strong> in your Portfolio. Upload contracts and audio files into it. Msanii stores your files securely and makes contracts searchable by Zoe AI.</>
+      ) : (
+        <>Create a <strong>Project</strong> in your Portfolio, then add <strong>Works</strong> to it. Upload contracts and audio files, and link them to specific works. Msanii stores your files securely and makes contracts searchable by Zoe AI.</>
+      )}
     </Step>
     <Step num={4} title="Explore the Tools" isLast>
       Head to the <strong>Tools</strong> page to access OneClick (royalty calculations), Zoe (AI contract analysis), and the Split Sheet Generator. Each tool reads from your uploaded data — upload once, benefit everywhere.
@@ -241,13 +255,24 @@ const PortfolioContent = () => (
       <SectionHeading>Project Cards</SectionHeading>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <FeatureCard icon={FileText} title="Project Name & Artist" description="Identify the project and its primary artist at a glance." color="emerald" />
-        <FeatureCard icon={Music} title="Work Count" description="Number of works (tracks/compositions) in the project." color="amber" />
+        {HIDE_REGISTRY_AND_WORKS ? (
+          <>
+            <FeatureCard icon={FileText} title="File Count" description="Number of files (contracts, split sheets, royalty statements, and other documents) in the project." color="amber" />
+            <FeatureCard icon={Volume2} title="Audio Count" description="Number of audio files uploaded to the project." color="rose" />
+          </>
+        ) : (
+          <FeatureCard icon={Music} title="Work Count" description="Number of works (tracks/compositions) in the project." color="amber" />
+        )}
         <FeatureCard icon={Users} title="Member Count" description="How many collaborators have access to this project." color="teal" />
         <FeatureCard icon={Zap} title="Last Updated" description="Timestamp showing when the project was last modified." color="indigo" />
       </div>
     </div>
     <Callout type="info" title="Navigation">
-      Click any project card to open its <strong>Project Detail</strong> page with full access to works, files, members, and more.
+      {HIDE_REGISTRY_AND_WORKS ? (
+        <>Click any project card to open its <strong>Project Detail</strong> page with full access to files, audio, members, and more.</>
+      ) : (
+        <>Click any project card to open its <strong>Project Detail</strong> page with full access to works, files, members, and more.</>
+      )}
     </Callout>
   </div>
 );
@@ -257,15 +282,48 @@ const ProjectDetailContent = () => (
     <div>
       <SectionHeading>Overview</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">
-        The Project Detail page is the central hub for everything in a project. It features six tabs giving you organized access to every aspect. You can inline-rename the project title and individual work titles by clicking on them.
+        {HIDE_REGISTRY_AND_WORKS ? (
+          <>The Project Detail page is the central hub for everything in a project. The tabs give you organized access to every aspect. You can inline-rename the project title by clicking on it.</>
+        ) : (
+          <>The Project Detail page is the central hub for everything in a project. It features six tabs giving you organized access to every aspect. You can inline-rename the project title and individual work titles by clicking on them.</>
+        )}
       </p>
       <TabChips />
     </div>
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      <FeatureCard icon={Music} title="Works Tab" description="Create and manage works (tracks/compositions). Set type (single, EP track, album track, composition, or custom), ISRC, and link audio files." color="blue" />
-      <FeatureCard icon={FileText} title="Files Tab" description="4 folder categories: Contracts, Split Sheets, Royalty Statements, Other. Upload files and link them to specific works with 'Relevant works' labels." color="emerald" />
-      <FeatureCard icon={Volume2} title="Audio Tab" description="Upload and manage audio files. Link audio to works. Files are project-scoped — only this project's audio appears in work dropdowns." color="purple" />
-      <FeatureCard icon={Users} title="Members Tab" description="Manage project-level access (Owner, Admin, Editor, Viewer) and view work-only collaborators. Invite new members by email." color="amber" />
+      {!HIDE_REGISTRY_AND_WORKS && (
+        <FeatureCard icon={Music} title="Works Tab" description="Create and manage works (tracks/compositions). Set type (single, EP track, album track, composition, or custom), ISRC, and link audio files." color="blue" />
+      )}
+      <FeatureCard
+        icon={FileText}
+        title="Files Tab"
+        description={
+          HIDE_REGISTRY_AND_WORKS
+            ? "4 folder categories: Contracts, Split Sheets, Royalty Statements, Other. Upload files directly or import from Google Drive."
+            : "4 folder categories: Contracts, Split Sheets, Royalty Statements, Other. Upload files and link them to specific works with 'Relevant works' labels."
+        }
+        color="emerald"
+      />
+      <FeatureCard
+        icon={Volume2}
+        title="Audio Tab"
+        description={
+          HIDE_REGISTRY_AND_WORKS
+            ? "Upload and manage audio files. Files are project-scoped."
+            : "Upload and manage audio files. Link audio to works. Files are project-scoped — only this project's audio appears in work dropdowns."
+        }
+        color="purple"
+      />
+      <FeatureCard
+        icon={Users}
+        title="Members Tab"
+        description={
+          HIDE_REGISTRY_AND_WORKS
+            ? "Manage project-level access (Owner, Admin, Editor, Viewer). Invite new members by email."
+            : "Manage project-level access (Owner, Admin, Editor, Viewer) and view work-only collaborators. Invite new members by email."
+        }
+        color="amber"
+      />
       <FeatureCard icon={StickyNote} title="Notes Tab" description="Rich text notes scoped to the project using BlockNote editor. Great for meeting notes, strategy docs, or project context." color="teal" />
       <FeatureCard icon={Settings} title="Settings Tab" description="Edit project name and description. View primary artist. Leave project (non-owners) or delete project (owner only)." color="red" />
     </div>
@@ -284,14 +342,23 @@ const ProjectDetailContent = () => (
             </tr>
           </thead>
           <tbody className="text-muted-foreground">
-            {[
-              ["See all works & files", true, true, true, true],
-              ["Create/edit works", true, true, true, false],
-              ["Upload files & audio", true, true, true, false],
-              ["Manage members", true, true, false, false],
-              ["Edit project settings", true, true, false, false],
-              ["Delete project", true, false, false, false],
-            ].map(([cap, ...roles], i) => (
+            {(HIDE_REGISTRY_AND_WORKS
+              ? [
+                  ["See all files", true, true, true, true],
+                  ["Upload files & audio", true, true, true, false],
+                  ["Manage members", true, true, false, false],
+                  ["Edit project settings", true, true, false, false],
+                  ["Delete project", true, false, false, false],
+                ]
+              : [
+                  ["See all works & files", true, true, true, true],
+                  ["Create/edit works", true, true, true, false],
+                  ["Upload files & audio", true, true, true, false],
+                  ["Manage members", true, true, false, false],
+                  ["Edit project settings", true, true, false, false],
+                  ["Delete project", true, false, false, false],
+                ]
+            ).map(([cap, ...roles], i) => (
               <tr key={i} className="border-b border-border/50 last:border-b-0">
                 <td className="p-3 text-foreground/80">{cap as string}</td>
                 {(roles as boolean[]).map((has, j) => (
@@ -306,7 +373,11 @@ const ProjectDetailContent = () => (
       </div>
     </div>
     <Callout type="important" title="Inline Editing">
-      Click any project or work title to rename it directly. Press <strong>Enter</strong> to save, <strong>Escape</strong> to cancel.
+      {HIDE_REGISTRY_AND_WORKS ? (
+        <>Click any project title to rename it directly. Press <strong>Enter</strong> to save, <strong>Escape</strong> to cancel.</>
+      ) : (
+        <>Click any project or work title to rename it directly. Press <strong>Enter</strong> to save, <strong>Escape</strong> to cancel.</>
+      )}
     </Callout>
   </div>
 );
@@ -553,7 +624,9 @@ const ZoeContent = () => (
         <FeatureCard icon={Bot} title="Ask a Question" description="Type specific questions like 'What is the royalty rate for streaming?' for the best results." color="indigo" />
         <FeatureCard icon={Zap} title="Quick Actions" description="Use suggested buttons for common queries: summarize, find key terms, identify expiration dates." color="amber" />
         <FeatureCard icon={FileText} title="Source Citations" description="Zoe references the specific contract sections so you can verify against original documents." color="emerald" />
-        <FeatureCard icon={Shield} title="Shared Works" description="Access contracts from works you're a collaborator on via the 'From Shared Works' source option." color="blue" />
+        {!HIDE_REGISTRY_AND_WORKS && (
+          <FeatureCard icon={Shield} title="Shared Works" description="Access contracts from works you're a collaborator on via the 'From Shared Works' source option." color="blue" />
+        )}
       </div>
     </div>
     <div>
@@ -610,11 +683,19 @@ const ArtistManagementContent = () => (
     <div>
       <SectionHeading>Projects & Documents</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed">
-        Organize an artist's work into <strong>Projects</strong>. Each project stores contracts, royalty statements, works, and audio files. Uploaded contracts are automatically available to OneClick and Zoe AI — upload once, benefit everywhere.
+        {HIDE_REGISTRY_AND_WORKS ? (
+          <>Organize an artist's work into <strong>Projects</strong>. Each project stores contracts, royalty statements, and audio files. Uploaded contracts are automatically available to OneClick and Zoe AI — upload once, benefit everywhere.</>
+        ) : (
+          <>Organize an artist's work into <strong>Projects</strong>. Each project stores contracts, royalty statements, works, and audio files. Uploaded contracts are automatically available to OneClick and Zoe AI — upload once, benefit everywhere.</>
+        )}
       </p>
     </div>
     <Callout type="important" title="Privacy">
-      Artist profiles are <strong>private to you</strong>. Only you can see an artist's notes and profile details. Works and their linked contracts can be shared with collaborators through the Rights Registry.
+      {HIDE_REGISTRY_AND_WORKS ? (
+        <>Artist profiles are <strong>private to you</strong>. Only you can see an artist's notes and profile details.</>
+      ) : (
+        <>Artist profiles are <strong>private to you</strong>. Only you can see an artist's notes and profile details. Works and their linked contracts can be shared with collaborators through the Rights Registry.</>
+      )}
     </Callout>
   </div>
 );
@@ -644,9 +725,11 @@ const BestPracticesContent = () => (
     <Callout type="important" title="Contract Management">
       Upload contracts as soon as they're signed. Use text-based PDFs (not scanned images) for best AI accuracy. After uploading, use Zoe to verify key terms were correctly extracted. Track expiration dates using Workspace boards.
     </Callout>
-    <Callout type="info" title="Rights & Ownership">
-      Use the Rights Registry to track ownership of every work before distributing or licensing. When inviting collaborators, include detailed stake information so everyone has a clear record. Keep files linked to works — collaborators see linked files once they accept.
-    </Callout>
+    {!HIDE_REGISTRY_AND_WORKS && (
+      <Callout type="info" title="Rights & Ownership">
+        Use the Rights Registry to track ownership of every work before distributing or licensing. When inviting collaborators, include detailed stake information so everyone has a clear record. Keep files linked to works — collaborators see linked files once they accept.
+      </Callout>
+    )}
     <Callout type="tip" title="Workflow Recommendations">
       <strong>New artist:</strong> Create profile → Add projects → Upload contracts → Set up Workspace board.<br />
       <strong>Royalty period:</strong> Upload statements → Run OneClick → Export Excel → Record payments.<br />

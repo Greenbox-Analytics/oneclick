@@ -38,6 +38,7 @@ import {
   Plus,
   Users,
   FileText,
+  Volume2,
   Calendar,
   ChevronDown,
   ChevronRight,
@@ -669,10 +670,16 @@ function ProjectCardComponent({
         )}
 
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          {project.work_count > 0 && (
+          {project.file_count > 0 && (
             <span className="flex items-center gap-1">
               <FileText className="w-3.5 h-3.5" />
-              {project.work_count} work{project.work_count !== 1 ? "s" : ""}
+              {project.file_count}
+            </span>
+          )}
+          {project.audio_count > 0 && (
+            <span className="flex items-center gap-1">
+              <Volume2 className="w-3.5 h-3.5" />
+              {project.audio_count}
             </span>
           )}
           {project.member_count > 0 && (
@@ -731,10 +738,16 @@ function SharedProjectCardComponent({
         )}
 
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          {project.work_count > 0 && (
+          {project.file_count > 0 && (
             <span className="flex items-center gap-1">
               <FileText className="w-3.5 h-3.5" />
-              {project.work_count} work{project.work_count !== 1 ? "s" : ""}
+              {project.file_count}
+            </span>
+          )}
+          {project.audio_count > 0 && (
+            <span className="flex items-center gap-1">
+              <Volume2 className="w-3.5 h-3.5" />
+              {project.audio_count}
             </span>
           )}
           {project.member_count > 0 && (
