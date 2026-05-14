@@ -6,6 +6,7 @@ OneClick is a royalty calculation tool that cross-references one or more contrac
 
 ## Backend Endpoints
 
+
 All OneClick routes are registered under the `/oneclick` prefix in `src/backend/main.py` and `src/backend/oneclick/share.py`.
 
 | Method | Path | Purpose |
