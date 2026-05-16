@@ -11,6 +11,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from registry import service, work_links_service
 from registry.models import (
@@ -103,6 +104,7 @@ async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_
     work = await service.create_work(_get_supabase(), user_id, data)
     if not work:
         raise HTTPException(status_code=500, detail="Failed to create work")
+    analytics_capture(user_id, "work_created", {"work_type": data.get("work_type", "unknown")})
     return work
 
 
@@ -131,6 +133,7 @@ async def submit_for_approval(work_id: str, user_id: str = Depends(get_current_u
     result, error = await service.submit_for_approval(_get_supabase(), user_id, work_id)
     if error:
         raise HTTPException(status_code=400, detail=error)
+    analytics_capture(user_id, "work_submitted_for_registration", {"work_id": work_id})
 
     # Re-send invitation emails to all collaborators
     renotify = (result or {}).pop("_renotify_collabs", [])

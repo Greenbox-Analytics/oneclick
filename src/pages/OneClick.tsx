@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/contexts/AuthContext";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
@@ -21,7 +22,7 @@ interface Artist {
 const OneClick = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  
+
   // State for fetched artists
   const [artists, setArtists] = useState<Artist[]>([]);
   const hasFetchedRef = useRef(false);
@@ -31,12 +32,18 @@ const OneClick = () => {
   const [selectedArtists, setSelectedArtists] = useState<string[]>([]);
   const [error, setError] = useState<string>("");
 
+  const { captureToolOpened } = useAnalytics();
+  useEffect(() => {
+    captureToolOpened("oneclick");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Fetch artists from backend on component mount
   useEffect(() => {
     if (!user || hasFetchedRef.current) return;
-    
+
     hasFetchedRef.current = true;
-    
+
     apiFetch<Artist[]>(`${API_URL}/artists`)
       .then((data) => setArtists(data))
       .catch((err) => {

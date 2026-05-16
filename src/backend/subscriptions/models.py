@@ -24,6 +24,7 @@ class Caps:
     max_tasks: int
     max_storage_bytes: int
     max_split_sheets_per_month: int
+    max_oneclick_runs_per_month: int = 1
 
 
 @dataclass
@@ -53,9 +54,19 @@ class Entitlements:
     usage: Usage
     has_overrides: bool
     degraded: bool = False
+    # Stripe billing fields — None for free / admin-override-only users
+    stripe_subscription_id: str | None = None
+    stripe_price_id: str | None = None
+    current_period_end: datetime | None = None
+    cancel_at_period_end: bool = False
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-friendly dict using camelCase keys for the frontend."""
+        # Derive plan_period from price_id suffix: prices ending in "_annual" → "annual"
+        plan_period: str | None = None
+        if self.stripe_price_id:
+            plan_period = "annual" if "annual" in self.stripe_price_id else "monthly"
+
         return {
             "tier": self.tier,
             "status": self.status,
@@ -65,6 +76,7 @@ class Entitlements:
                 "maxTasks": self.caps.max_tasks,
                 "maxStorageBytes": self.caps.max_storage_bytes,
                 "maxSplitSheetsPerMonth": self.caps.max_split_sheets_per_month,
+                "maxOneclickRunsPerMonth": self.caps.max_oneclick_runs_per_month,
             },
             "features": {
                 "zoeEnabled": self.features.zoe_enabled,
@@ -81,6 +93,13 @@ class Entitlements:
             },
             "hasOverrides": self.has_overrides,
             "degraded": self.degraded,
+            "subscription": {
+                "stripeSubscriptionId": self.stripe_subscription_id,
+                "stripePriceId": self.stripe_price_id,
+                "currentPeriodEnd": self.current_period_end.isoformat() if self.current_period_end else None,
+                "cancelAtPeriodEnd": self.cancel_at_period_end,
+                "planPeriod": plan_period,
+            },
         }
 
 

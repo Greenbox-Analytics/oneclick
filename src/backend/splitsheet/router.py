@@ -11,6 +11,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from splitsheet.docx_generator import generate_split_sheet_docx
 from splitsheet.pdf_generator import generate_split_sheet_pdf
@@ -45,6 +46,7 @@ class SplitSheetRequest(BaseModel):
 async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(get_current_user_id)):
     # Gate: 402 if at per-period split-sheet cap
     gated_split_sheet(user_id)
+    started_at = time.perf_counter()
 
     if not req.contributors:
         raise HTTPException(status_code=400, detail="At least one contributor is required")
@@ -108,6 +110,17 @@ async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(ge
 
     # Increment counter on the all-success path only (not in early-return / except branches)
     _get_entitlements_service().increment_usage(user_id, "split_sheets_this_period")
+
+    duration_ms = int((time.perf_counter() - started_at) * 1000)
+    analytics_capture(
+        user_id,
+        "tool_used",
+        {
+            "tool": "splitsheet",
+            "success": True,
+            "duration_ms": duration_ms,
+        },
+    )
 
     return StreamingResponse(
         buffer,

@@ -9,6 +9,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AdminProtectedRoute } from "@/components/AdminProtectedRoute";
+import { usePageTimer } from "@/hooks/usePageTimer";
 
 // Eager — small, needed on initial load
 import Index from "./pages/Index";
@@ -48,6 +49,11 @@ const PageLoader = () => (
   </div>
 );
 
+function PageTimer() {
+  usePageTimer();
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider>
@@ -56,6 +62,7 @@ const App = () => (
         <Sonner />
         <ThemeToggle />
         <BrowserRouter>
+          <PageTimer />
           <AuthProvider>
             <Suspense fallback={<PageLoader />}>
           <Routes>

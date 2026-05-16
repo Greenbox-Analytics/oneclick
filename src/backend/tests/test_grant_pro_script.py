@@ -164,19 +164,11 @@ class TestClearOverrideCommand:
 
         sb = MagicMock()
         _wire_user_lookup(sb)
-        deleted_for = {}
+        builders = {}
 
         def _table(name):
             b = MockQueryBuilder()
-            if name == "tier_overrides":
-                original_eq = b.eq
-
-                def _capture_eq(field, value):
-                    if field == "user_id":
-                        deleted_for["user_id"] = value
-                    return original_eq(field, value)
-
-                b.eq = _capture_eq
+            builders[name] = b
             return b
 
         sb.table.side_effect = _table
@@ -184,7 +176,9 @@ class TestClearOverrideCommand:
 
         exit_code = grant_pro.main(["clear-override", USER_EMAIL])
         assert exit_code == 0
-        assert deleted_for["user_id"] == TEST_USER_ID
+        # Verify delete().eq("user_id", ...) was called with the correct user_id
+        b = builders["tier_overrides"]
+        b.delete.return_value.eq.assert_called_with("user_id", TEST_USER_ID)
 
 
 class TestListCommand:

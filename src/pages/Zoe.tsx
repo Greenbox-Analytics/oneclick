@@ -4,6 +4,7 @@ import { ArrowLeft, Music, PanelLeftClose, PanelLeft, RefreshCw, BookOpen } from
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
+import { useAnalytics } from "@/hooks/useAnalytics";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -100,6 +101,12 @@ const Zoe = () => {
   const walkthrough = useToolWalkthrough(TOOL_CONFIGS.zoe, {
     onComplete: () => markToolCompleted("zoe"),
   });
+
+  const { captureToolOpened } = useAnalytics();
+  useEffect(() => {
+    captureToolOpened("zoe");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!onboardingLoading && !statuses.zoe && walkthrough.phase === "idle") {

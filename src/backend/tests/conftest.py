@@ -19,26 +19,38 @@ TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 class MockQueryBuilder:
     """Chainable mock that mimics the supabase-py query builder interface.
 
-    Every filter / modifier method returns ``self`` so calls can be chained
+    Most filter / modifier methods return ``self`` so calls can be chained
     just like the real client.  ``execute()`` is a :class:`MagicMock` so
     tests can configure ``return_value`` freely.
+
+    ``insert`` is a MagicMock with ``return_value=self`` so that both:
+    - ``builder.insert({...}).execute()`` → ``builder.execute()`` (existing pattern)
+    - ``builder.insert.return_value.execute.side_effect = ...`` (new test pattern)
+    work identically, since ``insert.return_value`` is ``self``.
+
+    ``delete`` is a plain MagicMock whose ``return_value`` is an independent
+    auto-MagicMock chain (NOT ``self``). This allows webhook tests to configure
+    ``builder.delete.return_value.eq.return_value.execute = mock`` independently
+    from ``builder.execute``. Tests that need to verify the eq argument should
+    use ``builder.delete.return_value.eq.assert_called_with(...)`` rather than
+    the old ``b.eq = _capture`` pattern.
     """
 
     def __init__(self):
         self.execute = MagicMock(return_value=MagicMock(data=[], count=0))
+        # insert.return_value = self so that insert({...}).execute() → self.execute()
+        # and insert.return_value.execute IS self.execute (configurable by tests)
+        self.insert = MagicMock(return_value=self)
+        # delete is an independent MagicMock: delete().eq().execute() goes through
+        # an auto-MagicMock chain separate from self.execute
+        self.delete = MagicMock()
 
     # --- chainable methods ---------------------------------------------------
 
     def select(self, *args, **kwargs):
         return self
 
-    def insert(self, *args, **kwargs):
-        return self
-
     def update(self, *args, **kwargs):
-        return self
-
-    def delete(self, *args, **kwargs):
         return self
 
     def upsert(self, *args, **kwargs):
@@ -112,6 +124,7 @@ _PRO_TIER_ROW = {
     "max_tasks": -1,
     "max_storage_bytes": -1,
     "max_split_sheets_per_month": -1,
+    "max_oneclick_runs_per_month": -1,
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
@@ -183,6 +196,9 @@ def mock_supabase():
     return mock
 
 
+TEST_USER_EMAIL = "test@example.com"
+
+
 @pytest.fixture()
 def client(mock_supabase):
     """FastAPI TestClient with Supabase mocked and auth overridden.
@@ -190,12 +206,13 @@ def client(mock_supabase):
     * ``main.get_supabase_client`` always returns *mock_supabase*.
     * ``main.supabase`` is replaced by *mock_supabase*.
     * ``get_current_user_id`` dependency yields ``TEST_USER_ID``.
+    * ``get_current_user_email`` dependency yields ``TEST_USER_EMAIL``.
     * ``subscriptions.deps._entitlements_service`` singleton is reset so the
       EntitlementsService is re-created with the current mock on each test.
     """
     import main
     import subscriptions.deps as _sub_deps
-    from auth import get_current_user_id
+    from auth import get_current_user_email, get_current_user_id
 
     original_get_supabase = main.get_supabase_client
     original_supabase = main.supabase
@@ -209,7 +226,11 @@ def client(mock_supabase):
     async def _override_user_id():
         return TEST_USER_ID
 
+    async def _override_user_email():
+        return TEST_USER_EMAIL
+
     main.app.dependency_overrides[get_current_user_id] = _override_user_id
+    main.app.dependency_overrides[get_current_user_email] = _override_user_email
 
     with TestClient(main.app) as tc:
         yield tc

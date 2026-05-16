@@ -1,10 +1,13 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Music, Check, Lock, Sparkles, Calculator, FileText } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Music, Check, Lock, Sparkles, FileText } from "lucide-react";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   useEntitlements,
@@ -14,6 +17,8 @@ import {
 import { useArtistsList } from "@/hooks/useArtistsList";
 import { useProjectsList } from "@/hooks/useProjectsList";
 import { useBoards } from "@/hooks/useBoards";
+import { useCreateCheckoutSession, useCreatePortalSession } from "@/hooks/useBilling";
+import { useAnalytics, type Plan } from "@/hooks/useAnalytics";
 
 // IMPORTANT: hook return shapes (verified against actual files):
 //   useArtistsList()  → { artists, isLoading }
@@ -104,8 +109,21 @@ const Subscription = () => {
   // apply to this hook. Boards card is omitted — see module-level comment.
   const { tasks } = useBoards();
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const stripeSessionId = searchParams.get("stripe_session_id");
+  const welcome = searchParams.get("welcome") === "true";
+  const [plan, setPlan] = useState<"monthly" | "annual">("monthly");
+  const [isPolling, setIsPolling] = useState(false);
+  const { mutateAsync: createCheckout, isPending: isStartingCheckout } = useCreateCheckoutSession();
+  const { mutateAsync: createPortal, isPending: isOpeningPortal } = useCreatePortalSession();
+  const queryClient = useQueryClient();
+  const { captureCheckoutStarted, captureCheckoutCompleted } = useAnalytics();
+  const checkoutCompletedFiredRef = useRef(false);
+
   const ent: Entitlements | undefined = entQuery.data;
   const isPro = ent?.tier === "pro";
+  const hasStripeSubscription = Boolean(ent?.subscription?.stripeSubscriptionId);
+  const isProViaOverride = isPro && !hasStripeSubscription;
 
   // Suppress unused-var lint warning — user is consumed by useEntitlements indirectly
   void user;
@@ -126,6 +144,59 @@ const Subscription = () => {
     );
   }, [ent, artistsCount, projectsCount, tasksCount]);
 
+  // Post-Checkout polling — fires when returning from Stripe with ?welcome=true&stripe_session_id=...
+  useEffect(() => {
+    if (!welcome || !stripeSessionId) return;
+    if (isPro) {
+      if (!checkoutCompletedFiredRef.current) {
+        checkoutCompletedFiredRef.current = true;
+        const completedPlan = (ent?.subscription?.planPeriod as Plan | undefined) ?? "monthly";
+        captureCheckoutCompleted(completedPlan);
+      }
+      setSearchParams({});
+      toast.success("Welcome to Pro! Your subscription is active.");
+      return;
+    }
+    setIsPolling(true);
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["entitlements"] });
+    }, 1000);
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+      setIsPolling(false);
+      toast.info("Subscription is processing. Refresh in a moment if it doesn't show up.");
+    }, 10_000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [welcome, stripeSessionId, isPro]);
+
+  const handleSubscribe = async () => {
+    try {
+      const url = await createCheckout(plan);
+      captureCheckoutStarted(plan);
+      window.location.href = url;
+    } catch {
+      toast.error("Couldn't start checkout. Try again or contact support.");
+    }
+  };
+
+  const handleManageBilling = async () => {
+    try {
+      const url = await createPortal();
+      window.location.href = url;
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status;
+      if (status === 404) {
+        toast.error("No Stripe subscription on file. If you believe this is an error, contact support.");
+      } else {
+        toast.error("Couldn't open billing portal. Try again or contact support.");
+      }
+    }
+  };
+
   if (entQuery.isLoading || !ent) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -136,6 +207,16 @@ const Subscription = () => {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Post-Checkout polling overlay */}
+      {isPolling && (
+        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur flex items-center justify-center">
+          <div className="text-center">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <div className="text-sm">Activating your Pro subscription…</div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4">
@@ -159,6 +240,7 @@ const Subscription = () => {
       <main className="container mx-auto px-4 py-8 max-w-5xl">
         <h1 className="text-3xl font-semibold tracking-tight mb-6">Subscription &amp; usage</h1>
 
+        {/* Over-cap banner (SP3) */}
         {isOverCap && (
           <div className="mb-6 rounded-lg border border-destructive/20 bg-destructive/5 p-4 flex items-center justify-between">
             <div className="flex-1">
@@ -171,6 +253,61 @@ const Subscription = () => {
           </div>
         )}
 
+        {/* Cancel-scheduled banner */}
+        {ent.subscription?.cancelAtPeriodEnd && ent.subscription?.currentPeriodEnd && (
+          <div className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+            <div className="font-medium text-sm">Subscription scheduled to end</div>
+            <div className="text-sm text-muted-foreground mt-1">
+              Your Pro access ends on {new Date(ent.subscription.currentPeriodEnd).toLocaleDateString()}.
+              Reactivate via Manage Billing if you change your mind.
+            </div>
+          </div>
+        )}
+
+        {/* Override-only Pro banner */}
+        {isProViaOverride && (
+          <div className="mb-6 rounded-lg border border-border bg-card p-4">
+            <div className="font-medium text-sm">Pro access granted by admin</div>
+            <div className="text-sm text-muted-foreground mt-1">
+              You have Pro access via an admin grant, not a paid subscription.
+              For billing questions,{" "}
+              <a href="mailto:tech@greenboxanalytics.ca" className="underline">
+                contact support
+              </a>
+              .
+            </div>
+          </div>
+        )}
+
+        {/* Subscribe CTA for Free users */}
+        {!isPro && (
+          <Card className="p-8 mb-6">
+            <h2 className="text-xl font-semibold mb-2">Upgrade to Pro</h2>
+            <p className="text-sm text-muted-foreground mb-6">
+              Unlimited artists, projects, tasks, storage, split sheets, plus Zoe AI, OneClick, Registry, and all
+              integrations.
+            </p>
+            <Tabs value={plan} onValueChange={(v) => setPlan(v as "monthly" | "annual")} className="mb-6">
+              <TabsList className="grid w-full max-w-xs grid-cols-2">
+                <TabsTrigger value="monthly">Monthly — $25/mo</TabsTrigger>
+                <TabsTrigger value="annual">Annual — $250/yr</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <Button onClick={handleSubscribe} disabled={isStartingCheckout} size="lg">
+              {isStartingCheckout ? "Starting checkout…" : "Subscribe to Pro"}
+            </Button>
+          </Card>
+        )}
+
+        {/* Manage Billing button for Stripe-Pro users */}
+        {isPro && hasStripeSubscription && (
+          <div className="flex justify-end mb-4">
+            <Button variant="outline" onClick={handleManageBilling} disabled={isOpeningPortal}>
+              {isOpeningPortal ? "Opening…" : "Manage billing"}
+            </Button>
+          </div>
+        )}
+
         {/* Tier card */}
         <Card className="p-6 mb-8 flex items-center justify-between">
           <div>
@@ -178,42 +315,47 @@ const Subscription = () => {
               <h2 className="text-xl font-semibold">{isPro ? "Pro" : "Free"} plan</h2>
               {isPro && <Badge>Pro</Badge>}
               {ent.degraded && (
-                <Badge variant="outline" className="text-xs">Account state temporarily unavailable</Badge>
+                <Badge variant="outline" className="text-xs">
+                  Account state temporarily unavailable
+                </Badge>
               )}
             </div>
             <div className="text-muted-foreground">
-              {isPro ? "$25 / month" : "$0 / month"}
+              {isPro
+                ? ent.subscription?.planPeriod === "annual"
+                  ? "$250 / year"
+                  : "$25 / month"
+                : "$0 / month"}
             </div>
-            {ent.usage.periodEnd && (
+            {isPro && hasStripeSubscription && ent.subscription?.currentPeriodEnd && (
+              <div className="text-xs text-muted-foreground mt-1">
+                {ent.subscription.cancelAtPeriodEnd ? "Access ends" : "Renews"}{" "}
+                {formatPeriodEnd(ent.subscription.currentPeriodEnd)} (in{" "}
+                {daysUntil(ent.subscription.currentPeriodEnd)} days)
+              </div>
+            )}
+            {!isPro && ent.usage.periodEnd && (
               <div className="text-xs text-muted-foreground mt-1">
                 Period resets {formatPeriodEnd(ent.usage.periodEnd)} (in {daysUntil(ent.usage.periodEnd)} days)
               </div>
             )}
           </div>
-          {isPro ? (
-            <Button variant="outline" disabled>Manage plan (coming soon)</Button>
-          ) : (
-            <Button onClick={() => navigate("/pricing")}>Upgrade to Pro →</Button>
-          )}
         </Card>
 
         {/* Resource limits */}
-        <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3">
-          Resource limits
-        </h3>
+        <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3">Resource limits</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
           <QuotaCard label="Artists" current={artistsCount} cap={ent.caps.maxArtists} />
           <QuotaCard label="Projects" current={projectsCount} cap={ent.caps.maxProjects} />
           <QuotaCard label="Tasks" current={tasksCount} cap={ent.caps.maxTasks} />
           <Card className="p-5 col-span-2">
-            <div className="text-sm text-muted-foreground mb-2 flex items-center gap-2">
-              Storage
-            </div>
+            <div className="text-sm text-muted-foreground mb-2 flex items-center gap-2">Storage</div>
             <div className="text-2xl font-semibold tracking-tight">
               {formatBytes(ent.usage.totalStorageBytes)}
               {ent.caps.maxStorageBytes !== -1 && (
                 <span className="text-base text-muted-foreground font-normal">
-                  {" / "}{formatBytes(ent.caps.maxStorageBytes)}
+                  {" / "}
+                  {formatBytes(ent.caps.maxStorageBytes)}
                 </span>
               )}
             </div>
@@ -229,9 +371,7 @@ const Subscription = () => {
         </div>
 
         {/* This period */}
-        <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3">
-          This period
-        </h3>
+        <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3">This period</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
           <Card className="p-5">
             <div className="text-sm text-muted-foreground mb-2 flex items-center gap-2">
@@ -241,7 +381,8 @@ const Subscription = () => {
               {ent.usage.splitSheetsThisPeriod}
               {ent.caps.maxSplitSheetsPerMonth !== -1 && (
                 <span className="text-base text-muted-foreground font-normal">
-                  {" / "}{ent.caps.maxSplitSheetsPerMonth}
+                  {" / "}
+                  {ent.caps.maxSplitSheetsPerMonth}
                 </span>
               )}
             </div>
@@ -250,30 +391,18 @@ const Subscription = () => {
             <div className="text-sm text-muted-foreground mb-2 flex items-center gap-2">
               <Sparkles className="w-4 h-4" /> Zoe queries
             </div>
-            <div className="text-2xl font-semibold tracking-tight">
-              {ent.usage.zoeQueriesThisPeriod}
-            </div>
-            {!ent.features.zoeEnabled && (
-              <div className="text-xs text-muted-foreground mt-1">Pro feature</div>
-            )}
+            <div className="text-2xl font-semibold tracking-tight">{ent.usage.zoeQueriesThisPeriod}</div>
+            {!ent.features.zoeEnabled && <div className="text-xs text-muted-foreground mt-1">Pro feature</div>}
           </Card>
-          <Card className="p-5">
-            <div className="text-sm text-muted-foreground mb-2 flex items-center gap-2">
-              <Calculator className="w-4 h-4" /> OneClick runs
-            </div>
-            <div className="text-2xl font-semibold tracking-tight">
-              {ent.usage.oneclickRunsThisPeriod}
-            </div>
-            {!ent.features.oneclickEnabled && (
-              <div className="text-xs text-muted-foreground mt-1">Pro feature</div>
-            )}
-          </Card>
+          <QuotaCard
+            label="OneClick runs this period"
+            current={ent.usage.oneclickRunsThisPeriod ?? 0}
+            cap={ent.caps.maxOneclickRunsPerMonth}
+          />
         </div>
 
         {/* Integrations */}
-        <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3">
-          Integrations
-        </h3>
+        <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide mb-3">Integrations</h3>
         <Card className="p-5">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {(Object.keys(INTEGRATION_LABELS) as IntegrationName[]).map((name) => {

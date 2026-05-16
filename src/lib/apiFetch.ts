@@ -31,6 +31,8 @@ export async function getAuthHeaders(): Promise<Record<string, string>> {
 
 /**
  * Fetch wrapper that automatically includes Supabase auth headers.
+ * Auto-sets `Content-Type: application/json` for string bodies (FormData
+ * uploads must set their own multipart Content-Type, so are left alone).
  * Throws ApiError (with HTTP status) on non-2xx responses.
  */
 export async function apiFetch<T>(
@@ -38,11 +40,16 @@ export async function apiFetch<T>(
   opts?: RequestInit
 ): Promise<T> {
   const authHeaders = await getAuthHeaders();
+  const isStringBody = typeof opts?.body === "string";
+  const jsonHeader: Record<string, string> = isStringBody
+    ? { "Content-Type": "application/json" }
+    : {};
   const res = await fetch(url, {
     ...opts,
     headers: {
       ...authHeaders,
-      ...opts?.headers,
+      ...jsonHeader,
+      ...opts?.headers, // explicit caller headers win
     },
   });
   if (!res.ok) {

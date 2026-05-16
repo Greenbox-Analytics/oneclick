@@ -22,7 +22,10 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from analytics import capture as analytics_capture
+from analytics import init_analytics
 from auth import get_current_user_id
+from middleware.analytics_middleware import AnalyticsMiddleware
 from pagination import PaginatedResponse, paginate_query
 from zoe_chatbot.contract_chatbot import ContractChatbot
 from zoe_chatbot.helpers import calculate_royalty_payments
@@ -31,6 +34,7 @@ from zoe_chatbot.helpers import calculate_royalty_payments
 load_dotenv()
 
 app = FastAPI()
+init_analytics()
 
 # --- Mount Integration & Board Routers ---
 from boards.router import router as boards_router
@@ -47,6 +51,7 @@ from registry.router import router as registry_router
 from settings.router import router as settings_router
 from splitsheet.router import router as splitsheet_router
 from subscriptions.admin_router import router as subscriptions_admin_router
+from subscriptions.billing_router import router as billing_router
 from subscriptions.pro_requests_router import router as pro_requests_router
 from subscriptions.router import router as subscriptions_router
 from users.router import router as users_router
@@ -68,6 +73,7 @@ app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
 app.include_router(subscriptions_admin_router, tags=["Admin"])
 app.include_router(pro_requests_router, tags=["Pro Requests"])
+app.include_router(billing_router)
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -139,6 +145,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AnalyticsMiddleware)
 
 # Initialize Supabase Client (lazy initialization to avoid startup failures)
 supabase: Client = None
@@ -965,6 +972,7 @@ async def _upload_contract_impl(
         except Exception:
             pass
 
+        analytics_capture(user_id, "contract_uploaded", {"file_size": len(file_content)})
         return ContractUploadResponse(
             status="success",
             contract_id=contract_id,
@@ -1223,6 +1231,7 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
         # for a usage-display counter; if the counter ever becomes billing-relevant,
         # move this call to the end of the streaming handler (after final yield).
         _get_entitlements_service().increment_usage(user_id, "zoe_queries_this_period")
+        analytics_capture(user_id, "tool_used", {"tool": "zoe"})
         chatbot = get_zoe_chatbot()
         session_id = request.session_id or str(uuid.uuid4())
 
@@ -1460,6 +1469,7 @@ async def oneclick_calculate_royalties_stream(
     gated_feature(user_id, Action.USE_ONECLICK, host_user_id=host_user_id)
     # SP2: track per-period OneClick usage; best-effort, never blocks.
     _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
+    analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
 
     async def generate_progress():
         # Initialize paths to None for safe cleanup

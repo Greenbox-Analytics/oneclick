@@ -23,7 +23,7 @@ export const PaywallModal = ({
         feature={feature}
         resource={resource}
         reason={reason}
-        variant="inline"
+        variant="modal"
       />
     </DialogContent>
   </Dialog>

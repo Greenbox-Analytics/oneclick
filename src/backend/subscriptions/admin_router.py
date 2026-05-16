@@ -3,7 +3,8 @@
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, EmailStr
 
 # Ensure backend dir is in path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -14,6 +15,13 @@ from subscriptions.admin_auth import require_admin
 from subscriptions.admin_service import AdminService
 from subscriptions.models import OverridePayload
 from subscriptions.service import EntitlementsService
+
+
+class CreateTesterGrantRequest(BaseModel):
+    email: EmailStr
+    expires_at: str | None = None
+    reason: str = "tester"
+
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -109,3 +117,34 @@ async def list_pro_requests(
     _admin: str = Depends(require_admin),
 ) -> list[dict]:
     return _get_admin_service().list_pro_requests(status=status)
+
+
+@router.get("/tester-grants")
+async def list_tester_grants(
+    _admin: str = Depends(require_admin),
+) -> list[dict]:
+    return _get_admin_service().list_tester_grants()
+
+
+@router.post("/tester-grants")
+async def create_tester_grant(
+    body: CreateTesterGrantRequest,
+    _admin: str = Depends(require_admin),
+) -> dict:
+    try:
+        return _get_admin_service().create_tester_grant(
+            email=body.email,
+            expires_at=body.expires_at,
+            reason=body.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.delete("/tester-grants/{user_id}", status_code=204)
+async def revoke_tester_grant(
+    user_id: str,
+    _admin: str = Depends(require_admin),
+) -> Response:
+    _get_admin_service().revoke_tester_grant(user_id)
+    return Response(status_code=204)

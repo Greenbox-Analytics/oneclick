@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
+import { useAnalytics } from "@/hooks/useAnalytics";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
@@ -124,6 +125,12 @@ const SplitSheet = () => {
   const walkthrough = useToolWalkthrough(TOOL_CONFIGS.splitsheet, {
     onComplete: () => markToolCompleted("splitsheet"),
   });
+
+  const { captureToolOpened } = useAnalytics();
+  useEffect(() => {
+    captureToolOpened("splitsheet");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!onboardingLoading && !statuses.splitsheet && walkthrough.phase === "idle") {

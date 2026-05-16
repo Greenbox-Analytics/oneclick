@@ -170,27 +170,21 @@ class TestClearOverride:
         from subscriptions.admin_service import AdminService
         from subscriptions.service import EntitlementsService
 
-        captured = {}
+        builders = {}
         sb = MagicMock()
 
         def _table(name):
             b = MockQueryBuilder()
-            if name == "tier_overrides":
-                original = b.eq
-
-                def _capture(field, value):
-                    if field == "user_id":
-                        captured["user_id"] = value
-                    return original(field, value)
-
-                b.eq = _capture
+            builders[name] = b
             return b
 
         sb.table.side_effect = _table
         svc = AdminService(sb, EntitlementsService(sb))
 
         svc.clear_override(TEST_USER_ID)
-        assert captured["user_id"] == TEST_USER_ID
+        # Verify delete().eq("user_id", ...) was called with the correct user_id
+        b = builders["tier_overrides"]
+        b.delete.return_value.eq.assert_called_with("user_id", TEST_USER_ID)
 
 
 class TestListProRequests:
@@ -285,6 +279,110 @@ class TestListUsers:
         assert result["has_more"] is False
 
 
+class TestTesterGrants:
+    def test_list_returns_only_tester_grants_active(self):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        # The DB-side LIKE filter returns only tester* rows; Python-side filter
+        # removes expired ones. Simulate what the DB returns after LIKE 'tester%':
+        # 2 rows matching reason prefix — 1 active, 1 expired.
+        tester_rows = [
+            {"user_id": "uid-1", "reason": "tester", "expires_at": None, "granted_at": "2026-05-01T00:00:00+00:00"},
+            {
+                "user_id": "uid-3",
+                "reason": "tester-beta",
+                "expires_at": "2020-01-01T00:00:00+00:00",
+                "granted_at": "2019-12-01T00:00:00+00:00",
+            },
+        ]
+        sb = _wire_supabase({"tier_overrides": tester_rows})
+        svc = AdminService(sb, EntitlementsService(sb))
+
+        result = svc.list_tester_grants()
+        # Only the active tester row should survive the expiry filter
+        assert len(result) == 1
+        assert result[0]["user_id"] == "uid-1"
+
+    def test_create_full_pro_override(self):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        captured = {}
+        sb = MagicMock()
+        sb.auth.admin.list_users.return_value = [
+            MagicMock(id="uid-10", email="tester@example.com"),
+        ]
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "tier_overrides":
+                original = b.upsert
+
+                def _capture(payload, *a, **kw):
+                    captured["payload"] = payload
+                    captured["on_conflict"] = kw.get("on_conflict")
+                    return original(payload, *a, **kw)
+
+                b.upsert = _capture
+            return b
+
+        sb.table.side_effect = _table
+        svc = AdminService(sb, EntitlementsService(sb))
+
+        result = svc.create_tester_grant(email="tester@example.com", expires_at="2027-01-01T00:00:00+00:00")
+
+        p = captured["payload"]
+        assert p["max_artists"] == -1
+        assert p["max_projects"] == -1
+        assert p["max_tasks"] == -1
+        assert p["max_storage_bytes"] == -1
+        assert p["max_split_sheets_per_month"] == -1
+        assert p["max_oneclick_runs_per_month"] == -1
+        assert p["zoe_enabled"] is True
+        assert p["oneclick_enabled"] is True
+        assert p["registry_enabled"] is True
+        assert p["integrations_allowed"] == ["google_drive", "slack", "notion", "monday"]
+        assert p["reason"] == "tester"
+        assert p["expires_at"] == "2027-01-01T00:00:00+00:00"
+        assert captured["on_conflict"] == "user_id"
+
+        assert result["user_id"] == "uid-10"
+        assert result["email"] == "tester@example.com"
+
+    def test_create_user_not_found_raises(self):
+        import pytest
+
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        sb = MagicMock()
+        sb.auth.admin.list_users.return_value = []
+        svc = AdminService(sb, EntitlementsService(sb))
+
+        with pytest.raises(ValueError, match="User not found"):
+            svc.create_tester_grant(email="nobody@example.com")
+
+    def test_revoke_deletes_by_user_id(self):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        builders = {}
+        sb = MagicMock()
+
+        def _table(name):
+            b = MockQueryBuilder()
+            builders[name] = b
+            return b
+
+        sb.table.side_effect = _table
+        svc = AdminService(sb, EntitlementsService(sb))
+
+        svc.revoke_tester_grant("uid-99")
+        b = builders["tier_overrides"]
+        b.delete.return_value.eq.assert_called_with("user_id", "uid-99")
+
+
 class TestGetUserDetail:
     def test_returns_user_plus_entitlements_plus_raw_override(self):
         from subscriptions.admin_service import AdminService
@@ -318,8 +416,9 @@ class TestGetUserDetail:
             "max_tasks": 50,
             "max_storage_bytes": 1073741824,
             "max_split_sheets_per_month": 5,
+            "max_oneclick_runs_per_month": 1,
             "zoe_enabled": False,
-            "oneclick_enabled": False,
+            "oneclick_enabled": True,
             "registry_enabled": False,
             "integrations_allowed": ["google_drive"],
             "updated_at": "2026-05-09T00:00:00+00:00",

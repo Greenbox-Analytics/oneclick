@@ -13,12 +13,154 @@ import {
   type OverridePayloadInput,
 } from "@/hooks/useAdmin";
 import { useEntitlementsForUser, type RawOverride } from "@/hooks/useEntitlements";
+import {
+  useTesterGrants,
+  useCreateTesterGrant,
+  useRevokeTesterGrant,
+  ApiError,
+} from "@/hooks/useTesterGrants";
 import { toast } from "sonner";
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+};
+
+// ---------------------------------------------------------------------------
+// TesterGrantsPanel — grant / revoke beta tester access
+// ---------------------------------------------------------------------------
+
+const TesterGrantsPanel = () => {
+  const grantsQuery = useTesterGrants();
+  const createGrant = useCreateTesterGrant();
+  const revokeGrant = useRevokeTesterGrant();
+
+  const [email, setEmail] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [reason, setReason] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+
+    try {
+      await createGrant.mutateAsync({
+        email: email.trim(),
+        expires_at: expiresAt ? expiresAt : null,
+        reason: reason.trim() || "tester",
+      });
+      toast.success(`Granted tester access to ${email.trim()}`);
+      setEmail("");
+      setExpiresAt("");
+      setReason("");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        toast.error(`User ${email.trim()} hasn't signed up yet. Ask them to register first.`);
+      } else {
+        toast.error("Failed to grant tester access. Try again.");
+      }
+    }
+  };
+
+  const handleRevoke = async (userId: string) => {
+    try {
+      await revokeGrant.mutateAsync(userId);
+      toast.success("Tester access revoked.");
+    } catch {
+      toast.error("Failed to revoke tester access. Try again.");
+    }
+  };
+
+  return (
+    <Card className="p-4 mb-6">
+      <div className="text-sm font-semibold mb-4">Beta Tester Access</div>
+
+      {/* Grant form */}
+      <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 mb-6">
+        <label className="text-xs flex-1 min-w-[200px]">
+          Email (required)
+          <Input
+            type="email"
+            required
+            placeholder="user@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="mt-1"
+          />
+        </label>
+        <label className="text-xs w-40">
+          Expires (optional)
+          <Input
+            type="date"
+            value={expiresAt}
+            onChange={(e) => setExpiresAt(e.target.value)}
+            className="mt-1"
+          />
+        </label>
+        <label className="text-xs flex-1 min-w-[160px]">
+          Reason (optional)
+          <Input
+            type="text"
+            placeholder="tester"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            className="mt-1"
+          />
+        </label>
+        <Button type="submit" size="sm" disabled={createGrant.isPending} className="mb-0.5">
+          Grant Tester Access
+        </Button>
+      </form>
+
+      {/* Active grants table */}
+      <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Active grants</div>
+      <table className="w-full text-sm">
+        <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 font-medium">User ID</th>
+            <th className="px-3 py-2 font-medium">Expires</th>
+            <th className="px-3 py-2 font-medium text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {grantsQuery.isLoading && (
+            <tr>
+              <td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">
+                Loading...
+              </td>
+            </tr>
+          )}
+          {!grantsQuery.isLoading && grantsQuery.data?.length === 0 && (
+            <tr>
+              <td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">
+                No active tester grants.
+              </td>
+            </tr>
+          )}
+          {grantsQuery.data?.map((grant) => (
+            <tr key={grant.user_id} className="border-t border-border hover:bg-muted/30">
+              <td className="px-3 py-2 font-mono text-xs">{grant.user_id}</td>
+              <td className="px-3 py-2 text-muted-foreground">
+                {grant.expires_at ? grant.expires_at.split("T")[0] : "Never"}
+              </td>
+              <td className="px-3 py-2 text-right">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => handleRevoke(grant.user_id)}
+                  disabled={revokeGrant.isPending}
+                >
+                  Revoke
+                </Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
 };
 
 const AdminUsers = () => {
@@ -28,6 +170,7 @@ const AdminUsers = () => {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
   const usersQuery = useAdminUsers(search, page);
+  const posthogUrl = import.meta.env.VITE_POSTHOG_DASHBOARD_URL || "https://us.posthog.com";
 
   return (
     <div className="min-h-screen bg-background">
@@ -50,6 +193,16 @@ const AdminUsers = () => {
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
         <h1 className="text-2xl font-semibold tracking-tight mb-6">Users</h1>
+
+        <div className="flex justify-end mb-4">
+          <Button variant="outline" asChild>
+            <a href={posthogUrl} target="_blank" rel="noopener noreferrer">
+              View Analytics ↗
+            </a>
+          </Button>
+        </div>
+
+        <TesterGrantsPanel />
 
         <div className="flex items-center gap-3 mb-4">
           <div className="relative flex-1 max-w-md">

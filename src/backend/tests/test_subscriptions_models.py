@@ -13,6 +13,7 @@ class TestCaps:
             max_tasks=-1,
             max_storage_bytes=-1,
             max_split_sheets_per_month=-1,
+            max_oneclick_runs_per_month=-1,
         )
         assert c.max_artists == -1
 
@@ -36,7 +37,7 @@ class TestEntitlements:
             user_id="00000000-0000-0000-0000-000000000001",
             tier="free",
             status="active",
-            caps=Caps(3, 3, 50, 1073741824, 5),
+            caps=Caps(3, 3, 50, 1073741824, 5, 1),
             features=Features(False, False, False, ["google_drive"]),
             usage=Usage(0, 0, 0, 0, datetime.now(UTC)),
             has_overrides=False,
@@ -45,10 +46,59 @@ class TestEntitlements:
         d = ent.to_dict()
         assert d["tier"] == "free"
         assert d["caps"]["maxArtists"] == 3
+        assert "maxOneclickRunsPerMonth" in d["caps"]
+        assert d["caps"]["maxOneclickRunsPerMonth"] == 1
         assert d["features"]["integrationsAllowed"] == ["google_drive"]
         assert d["usage"]["splitSheetsThisPeriod"] == 0
         assert d["hasOverrides"] is False
         assert d["degraded"] is False
+        # Stripe billing sub-object always present; None for free users
+        assert "subscription" in d
+        assert d["subscription"]["stripeSubscriptionId"] is None
+        assert d["subscription"]["cancelAtPeriodEnd"] is False
+        assert d["subscription"]["planPeriod"] is None
+
+    def test_to_dict_subscription_stripe_fields(self):
+        """to_dict() exposes stripe billing fields when set."""
+        from subscriptions.models import Caps, Entitlements, Features, Usage
+
+        ent = Entitlements(
+            user_id="u1",
+            tier="pro",
+            status="active",
+            caps=Caps(-1, -1, -1, -1, -1, -1),
+            features=Features(True, True, True, ["google_drive", "slack"]),
+            usage=Usage(0, 0, 0, 0, datetime.now(UTC)),
+            has_overrides=False,
+            stripe_subscription_id="sub_abc123",
+            stripe_price_id="price_monthly_pro",
+            current_period_end=datetime(2026, 6, 9, tzinfo=UTC),
+            cancel_at_period_end=True,
+        )
+        d = ent.to_dict()
+        sub = d["subscription"]
+        assert sub["stripeSubscriptionId"] == "sub_abc123"
+        assert sub["stripePriceId"] == "price_monthly_pro"
+        assert sub["currentPeriodEnd"] == "2026-06-09T00:00:00+00:00"
+        assert sub["cancelAtPeriodEnd"] is True
+        assert sub["planPeriod"] == "monthly"
+
+    def test_to_dict_annual_plan_period(self):
+        """plan_period is 'annual' when price_id contains 'annual'."""
+        from subscriptions.models import Caps, Entitlements, Features, Usage
+
+        ent = Entitlements(
+            user_id="u2",
+            tier="pro",
+            status="active",
+            caps=Caps(-1, -1, -1, -1, -1, -1),
+            features=Features(True, True, True, []),
+            usage=Usage(0, 0, 0, 0, datetime.now(UTC)),
+            has_overrides=False,
+            stripe_price_id="price_annual_pro",
+        )
+        d = ent.to_dict()
+        assert d["subscription"]["planPeriod"] == "annual"
 
     def test_degraded_flag_default_false(self):
         from subscriptions.models import Caps, Entitlements, Features, Usage
@@ -57,7 +107,7 @@ class TestEntitlements:
             user_id="x",
             tier="free",
             status="active",
-            caps=Caps(0, 0, 0, 0, 0),
+            caps=Caps(0, 0, 0, 0, 0, 0),
             features=Features(False, False, False, []),
             usage=Usage(0, 0, 0, 0, datetime.now(UTC)),
             has_overrides=False,
@@ -116,7 +166,7 @@ class TestUsageNewFields:
             user_id="x",
             tier="free",
             status="active",
-            caps=Caps(0, 0, 0, 0, 0),
+            caps=Caps(0, 0, 0, 0, 0, 0),
             features=Features(False, False, False, []),
             usage=Usage(0, 1, 7, 3, datetime.now(UTC)),
             has_overrides=False,

@@ -16,14 +16,24 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from auth import get_current_user_id
+from auth import get_current_user_email, get_current_user_id
 from subscriptions.deps import _get_entitlements_service
+from subscriptions.service import _is_admin_email
 
 router = APIRouter()
 
 
 @router.get("/me/entitlements")
-async def get_my_entitlements(user_id: str = Depends(get_current_user_id)):
-    """Return the current user's merged entitlements (tier + caps + features + usage)."""
-    ent = _get_entitlements_service().get_for_user_safe(user_id)
+async def get_my_entitlements(
+    user_id: str = Depends(get_current_user_id),
+    user_email: str = Depends(get_current_user_email),
+):
+    """Return the current user's merged entitlements (tier + caps + features + usage).
+
+    Admin users (email in ADMIN_EMAILS) receive Pro-shaped entitlements regardless
+    of their subscription tier.  When BYPASS_PAYWALLS=true, all users get Pro-shaped
+    entitlements (handled inside get_for_user_safe).
+    """
+    is_admin = _is_admin_email(user_email)
+    ent = _get_entitlements_service().get_for_user_safe(user_id, is_admin=is_admin)
     return ent.to_dict()

@@ -1,16 +1,18 @@
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Lock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import type { GatedFeature, CountableResource } from "@/hooks/useEntitlements";
+import { useAnalytics, type PaywallFeature } from "@/hooks/useAnalytics";
 
 interface PaywallCardProps {
   feature?: GatedFeature;
   resource?: CountableResource;
   reason?: string;
   onUpgrade?: () => void;
-  variant?: "page" | "inline";
+  variant?: "page" | "inline" | "modal";
 }
 
 const FEATURE_LABELS: Record<GatedFeature, string> = {
@@ -33,7 +35,19 @@ export const PaywallCard = ({
   variant = "page",
 }: PaywallCardProps) => {
   const navigate = useNavigate();
+  const { capturePaywallShown, capturePaywallUpgradeClicked } = useAnalytics();
+  const pwFeature = (feature ?? "create_cap") as PaywallFeature;
+
+  useEffect(() => {
+    capturePaywallShown(pwFeature, variant ?? "page", reason);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const upgrade = onUpgrade ?? (() => navigate("/pricing"));
+  const handleUpgradeClick = () => {
+    capturePaywallUpgradeClicked(pwFeature, variant ?? "page");
+    upgrade();
+  };
 
   const title = feature
     ? `${FEATURE_LABELS[feature]} is a Pro feature`
@@ -61,7 +75,7 @@ export const PaywallCard = ({
         </div>
         <h2 className="text-xl font-semibold">{title}</h2>
         <p className="text-muted-foreground text-sm max-w-sm">{body}</p>
-        <Button onClick={upgrade} className="mt-2">
+        <Button onClick={handleUpgradeClick} className="mt-2">
           Upgrade to Pro
         </Button>
       </div>

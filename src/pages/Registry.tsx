@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
 import { ComingSoon } from "@/components/ComingSoon";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 // Local toggle: set to false to expose the full Registry UI while developing.
 // Keep true on main until the Registry is ready to ship to users.
@@ -484,6 +485,12 @@ const RegistryFull = () => {
   const collabQuery = useMyCollaborations();
   const invitesQuery = useMyInvites();
   const notificationsQuery = useRegistryNotifications();
+
+  const { captureToolOpened } = useAnalytics();
+  useEffect(() => {
+    captureToolOpened("registry");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const works = worksQuery.data || [];
   const collabs = collabQuery.data || [];

@@ -19,8 +19,9 @@ FREE_TIER_ROW = {
     "max_tasks": 50,
     "max_storage_bytes": 1073741824,
     "max_split_sheets_per_month": 5,
+    "max_oneclick_runs_per_month": 1,
     "zoe_enabled": False,
-    "oneclick_enabled": False,
+    "oneclick_enabled": True,
     "registry_enabled": False,
     "integrations_allowed": ["google_drive"],
     "updated_at": "2026-05-09T00:00:00+00:00",
@@ -33,6 +34,7 @@ PRO_TIER_ROW = {
     "max_tasks": -1,
     "max_storage_bytes": -1,
     "max_split_sheets_per_month": -1,
+    "max_oneclick_runs_per_month": -1,
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
@@ -773,6 +775,61 @@ class TestCanSplitSheet:
         assert result.allowed is False
 
 
+class TestCanOneClick:
+    def test_free_user_under_cap_allowed(self):
+        """Free user with 0 runs this period and cap=1 should be allowed."""
+        from subscriptions.models import Action
+        from subscriptions.service import EntitlementsService
+
+        sb = _make_supabase_with_rows(
+            {
+                "subscriptions": [FREE_SUB_ROW],
+                "tier_entitlements": [FREE_TIER_ROW],
+                "tier_overrides": [],
+                "usage_counters": [{**ZERO_USAGE_ROW, "oneclick_runs_this_period": 0}],
+            }
+        )
+        svc = EntitlementsService(sb)
+        result = svc.can(TEST_USER_ID, Action.USE_ONECLICK)
+        assert result.allowed is True
+
+    def test_free_user_at_cap_denied(self):
+        """Free user with 1 run this period and cap=1 should be denied."""
+        from subscriptions.models import Action
+        from subscriptions.service import EntitlementsService
+
+        sb = _make_supabase_with_rows(
+            {
+                "subscriptions": [FREE_SUB_ROW],
+                "tier_entitlements": [FREE_TIER_ROW],
+                "tier_overrides": [],
+                "usage_counters": [{**ZERO_USAGE_ROW, "oneclick_runs_this_period": 1}],
+            }
+        )
+        svc = EntitlementsService(sb)
+        result = svc.can(TEST_USER_ID, Action.USE_ONECLICK)
+        assert result.allowed is False
+        assert result.upgrade_required is True
+        assert "OneClick" in result.reason
+
+    def test_pro_user_unlimited(self):
+        """Pro user with cap=-1 should always be allowed regardless of run count."""
+        from subscriptions.models import Action
+        from subscriptions.service import EntitlementsService
+
+        sb = _make_supabase_with_rows(
+            {
+                "subscriptions": [PRO_SUB_ROW],
+                "tier_entitlements": [PRO_TIER_ROW],
+                "tier_overrides": [],
+                "usage_counters": [{**ZERO_USAGE_ROW, "oneclick_runs_this_period": 999}],
+            }
+        )
+        svc = EntitlementsService(sb)
+        result = svc.can(TEST_USER_ID, Action.USE_ONECLICK)
+        assert result.allowed is True
+
+
 class TestDegradedFallback:
     def test_get_for_user_safe_returns_degraded_on_db_error(self):
         from subscriptions.service import EntitlementsService
@@ -883,3 +940,88 @@ class TestRolloverResetsNewCounters:
         assert any(
             u.get("zoe_queries_this_period") == 0 and u.get("oneclick_runs_this_period") == 0 for u in captured_updates
         ), f"rollover UPDATE should reset zoe + oneclick counters; saw: {captured_updates}"
+
+
+# ---------------------------------------------------------------------------
+# Beta bypass + admin entitlement tests (Task 3 of Beta+Tester plan)
+# ---------------------------------------------------------------------------
+
+
+def _make_free_supabase():
+    """Returns a mock Supabase client configured with Free-tier rows for TEST_USER_ID."""
+    return _make_supabase_with_rows(
+        {
+            "subscriptions": [FREE_SUB_ROW],
+            "tier_entitlements": [FREE_TIER_ROW],
+            "tier_overrides": [],
+            "usage_counters": [ZERO_USAGE_ROW],
+        }
+    )
+
+
+class TestBypassPaywalls:
+    def test_bypass_off_normal_user_normal_caps(self, monkeypatch):
+        """With BYPASS_PAYWALLS unset/false, a Free user gets normal Free caps."""
+        from subscriptions.service import EntitlementsService
+
+        monkeypatch.delenv("BYPASS_PAYWALLS", raising=False)
+
+        svc = EntitlementsService(_make_free_supabase())
+        ent = svc.get_for_user(TEST_USER_ID)
+
+        assert ent.caps.max_artists == 3
+        assert ent.caps.max_projects == 3
+        assert ent.features.zoe_enabled is False
+        assert ent.features.registry_enabled is False
+
+    def test_bypass_on_normal_user_max_caps(self, monkeypatch):
+        """With BYPASS_PAYWALLS=true, a Free user receives all caps=-1 and all features=true."""
+        from subscriptions.service import EntitlementsService
+
+        monkeypatch.setenv("BYPASS_PAYWALLS", "true")
+
+        svc = EntitlementsService(_make_free_supabase())
+        ent = svc.get_for_user(TEST_USER_ID)
+
+        assert ent.caps.max_artists == -1
+        assert ent.caps.max_projects == -1
+        assert ent.caps.max_tasks == -1
+        assert ent.caps.max_storage_bytes == -1
+        assert ent.caps.max_split_sheets_per_month == -1
+        assert ent.caps.max_oneclick_runs_per_month == -1
+        assert ent.features.zoe_enabled is True
+        assert ent.features.oneclick_enabled is True
+        assert ent.features.registry_enabled is True
+        assert set(ent.features.integrations_allowed) == {"google_drive", "slack", "notion", "monday"}
+        # Usage, tier string, status, user_id must be preserved
+        assert ent.tier == "free"
+        assert ent.user_id == TEST_USER_ID
+        assert ent.usage.total_storage_bytes == 0
+
+    def test_admin_user_gets_max_caps(self, monkeypatch):
+        """is_admin=True gives a Free user Pro-shaped entitlements even when bypass is off."""
+        from subscriptions.service import EntitlementsService
+
+        monkeypatch.delenv("BYPASS_PAYWALLS", raising=False)
+
+        svc = EntitlementsService(_make_free_supabase())
+        ent = svc.get_for_user(TEST_USER_ID, is_admin=True)
+
+        assert ent.caps.max_artists == -1
+        assert ent.caps.max_oneclick_runs_per_month == -1
+        assert ent.features.zoe_enabled is True
+        assert ent.features.registry_enabled is True
+        assert "slack" in ent.features.integrations_allowed
+
+    def test_non_admin_user_normal_caps_when_bypass_off(self, monkeypatch):
+        """is_admin=False + BYPASS_PAYWALLS unset → normal Free caps (no accidental elevation)."""
+        from subscriptions.service import EntitlementsService
+
+        monkeypatch.delenv("BYPASS_PAYWALLS", raising=False)
+
+        svc = EntitlementsService(_make_free_supabase())
+        ent = svc.get_for_user(TEST_USER_ID, is_admin=False)
+
+        assert ent.caps.max_artists == 3
+        assert ent.features.zoe_enabled is False
+        assert ent.features.registry_enabled is False

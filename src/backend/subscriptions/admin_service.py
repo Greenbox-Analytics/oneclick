@@ -154,3 +154,57 @@ class AdminService:
             q = q.eq("status", status)
         res = q.execute()
         return res.data or []
+
+    # ------------------------------------------------------------------
+    # Tester grants — "tester" reason tier_overrides rows
+    # ------------------------------------------------------------------
+
+    def list_tester_grants(self) -> list[dict]:
+        """Returns active tier_overrides rows where reason LIKE 'tester%'.
+
+        Filters expired rows in Python (expires_at < now) rather than
+        composing a Supabase OR filter. Suitable for small admin-facing lists.
+        """
+        res = self.supabase.table("tier_overrides").select("*").like("reason", "tester%").execute()
+        now = datetime.now(UTC).isoformat()
+        return [row for row in (res.data or []) if row.get("expires_at") is None or row["expires_at"] > now]
+
+    def create_tester_grant(
+        self,
+        email: str,
+        expires_at: str | None = None,
+        reason: str = "tester",
+    ) -> dict:
+        """Look up user by email, upsert a full-Pro override with reason='tester*'.
+
+        Raises ValueError if no auth user matches the email.
+        """
+        auth_users = self.supabase.auth.admin.list_users()
+        matched = [u for u in auth_users if (getattr(u, "email", "") or "").lower() == email.lower()]
+        if not matched:
+            raise ValueError(f"User not found: {email}")
+        user = matched[0]
+        user_id = getattr(user, "id", None)
+
+        payload = {
+            "user_id": user_id,
+            "max_artists": -1,
+            "max_projects": -1,
+            "max_tasks": -1,
+            "max_storage_bytes": -1,
+            "max_split_sheets_per_month": -1,
+            "max_oneclick_runs_per_month": -1,
+            "zoe_enabled": True,
+            "oneclick_enabled": True,
+            "registry_enabled": True,
+            "integrations_allowed": ["google_drive", "slack", "notion", "monday"],
+            "reason": reason,
+            "expires_at": expires_at,
+            "granted_at": datetime.now(UTC).isoformat(),
+        }
+        self.supabase.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
+        return {"user_id": user_id, "email": email, "expires_at": expires_at, "reason": reason}
+
+    def revoke_tester_grant(self, user_id: str) -> None:
+        """DELETE the tier_overrides row for user_id."""
+        self.supabase.table("tier_overrides").delete().eq("user_id", user_id).execute()

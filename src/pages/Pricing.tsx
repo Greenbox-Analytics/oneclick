@@ -2,10 +2,13 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Check, X, Music } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { UpgradeRequestModal } from "@/components/upgrade/UpgradeRequestModal";
+import { toast } from "sonner";
+import { useCreateCheckoutSession } from "@/hooks/useBilling";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 type Feature = { included: boolean; label: string };
 
@@ -15,9 +18,9 @@ const FREE_FEATURES: Feature[] = [
   { included: true, label: "50 tasks total" },
   { included: true, label: "1 GB storage" },
   { included: true, label: "5 split sheets per month" },
+  { included: true, label: "OneClick royalty calculator (1 run/month)" },
   { included: true, label: "Google Drive integration" },
   { included: false, label: "Zoe AI contract analysis" },
-  { included: false, label: "OneClick royalty calculator" },
   { included: false, label: "Rights Registry" },
   { included: false, label: "Slack · Notion · Monday integrations" },
 ];
@@ -27,7 +30,7 @@ const PRO_FEATURES: Feature[] = [
   { included: true, label: "Unlimited storage" },
   { included: true, label: "Unlimited split sheets" },
   { included: true, label: "Zoe AI contract analysis" },
-  { included: true, label: "OneClick royalty calculator" },
+  { included: true, label: "Unlimited OneClick royalty calculations" },
   { included: true, label: "Rights Registry" },
   { included: true, label: "All integrations: Drive, Slack, Notion, Monday" },
   { included: true, label: "Priority support" },
@@ -50,14 +53,26 @@ const Pricing = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [plan, setPlan] = useState<"monthly" | "annual">("monthly");
+  const { mutateAsync: createCheckout, isPending } = useCreateCheckoutSession();
+  const { captureCheckoutStarted } = useAnalytics();
 
   const handleFreeClick = () => {
     navigate(user ? "/dashboard" : "/auth");
   };
 
-  const handleProClick = () => {
-    setUpgradeModalOpen(true);
+  const handleProClick = async () => {
+    if (!user) {
+      navigate(`/auth?redirect=/pricing&plan=${plan}`);
+      return;
+    }
+    try {
+      const url = await createCheckout(plan);
+      captureCheckoutStarted(plan);
+      window.location.href = url;
+    } catch (err) {
+      toast.error("Couldn't start checkout. Try again or contact support.");
+    }
   };
 
   return (
@@ -134,30 +149,44 @@ const Pricing = () => {
                 For managers, labels, and serious creators
               </p>
             </div>
-            <div className="mb-8">
-              <span className="text-4xl font-semibold tracking-tight">$25</span>
-              <span className="text-muted-foreground ml-1">/month</span>
-            </div>
+
+            {/* Plan toggle */}
+            <Tabs value={plan} onValueChange={(v) => setPlan(v as "monthly" | "annual")} className="mb-6">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="monthly">Monthly</TabsTrigger>
+                <TabsTrigger value="annual">Annual</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            {/* Price */}
+            {plan === "monthly" ? (
+              <div className="mb-8">
+                <span className="text-4xl font-semibold tracking-tight">$25</span>
+                <span className="text-muted-foreground ml-1">/month</span>
+              </div>
+            ) : (
+              <div className="mb-8">
+                <span className="text-4xl font-semibold tracking-tight">$250</span>
+                <span className="text-muted-foreground ml-1">/year</span>
+                <div className="text-sm text-muted-foreground mt-1">≈ $20.83/month — save 2 months</div>
+              </div>
+            )}
+
             <ul className="space-y-3 flex-1 mb-8">
               {PRO_FEATURES.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
-            <Button size="lg" className="w-full" onClick={handleProClick}>
-              Upgrade to Pro
+            <Button size="lg" className="w-full" onClick={handleProClick} disabled={isPending}>
+              {isPending ? "Starting checkout…" : "Upgrade to Pro"}
             </Button>
           </Card>
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-8">
-          USD pricing. Cancel anytime. Annual billing coming soon.
+          USD pricing. Cancel anytime.
         </p>
       </section>
-
-      <UpgradeRequestModal
-        open={upgradeModalOpen}
-        onClose={() => setUpgradeModalOpen(false)}
-      />
     </div>
   );
 };

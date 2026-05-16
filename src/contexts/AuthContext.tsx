@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { apiFetch, API_URL } from '@/lib/apiFetch';
+import { identifyUser, resetUser } from '@/lib/posthog';
 
 interface AuthContextType {
   user: User | null;
@@ -28,6 +29,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Parse admin emails from env at provider initialization
+  const adminEmails = (import.meta.env.VITE_ADMIN_EMAILS || "")
+    .split(",")
+    .map((e: string) => e.trim().toLowerCase())
+    .filter(Boolean);
+
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -50,10 +57,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           console.warn('Welcome email trigger failed:', err);
         });
       }
+
+      // SP-Analytics: identify/reset PostHog distinct_id
+      if (session?.user) {
+        const isAdmin = adminEmails.includes((session.user.email || "").toLowerCase());
+        identifyUser(session.user.id, {
+          email: session.user.email,
+          ...(isAdmin && { is_admin: true }),
+        });
+      } else if (event === "SIGNED_OUT") {
+        resetUser();
+      }
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [adminEmails]);
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({

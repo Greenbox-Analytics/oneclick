@@ -11,6 +11,7 @@ export interface EntitlementCaps {
   maxTasks: number;
   maxStorageBytes: number;
   maxSplitSheetsPerMonth: number;
+  maxOneclickRunsPerMonth: number;
 }
 
 export interface EntitlementFeatures {
@@ -29,6 +30,19 @@ export interface EntitlementUsage {
   periodEnd: string;
 }
 
+export interface EntitlementSubscription {
+  /** Stripe subscription ID — null for free or admin-grant-only Pro users. */
+  stripeSubscriptionId: string | null;
+  /** Stripe price ID — null when no Stripe subscription. */
+  stripePriceId: string | null;
+  /** ISO timestamp of when the current billing period ends. */
+  currentPeriodEnd: string | null;
+  /** True if the subscription is set to cancel at the end of the period. */
+  cancelAtPeriodEnd: boolean;
+  /** "monthly" | "annual" | null — derived from price_id on the backend. */
+  planPeriod: "monthly" | "annual" | null;
+}
+
 export interface Entitlements {
   tier: Tier;
   status: SubscriptionStatus;
@@ -38,6 +52,8 @@ export interface Entitlements {
   hasOverrides: boolean;
   /** True when the backend served safe defaults due to an internal error. */
   degraded: boolean;
+  /** Stripe billing details — always present; fields are null for free users. */
+  subscription: EntitlementSubscription;
 }
 
 /**

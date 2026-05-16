@@ -5,6 +5,7 @@ import logging
 
 from fastapi import HTTPException
 
+from analytics import capture as analytics_capture
 from subscriptions.deps import _get_entitlements_service
 from subscriptions.models import Action
 from subscriptions.service import EntitlementsService
@@ -37,6 +38,15 @@ def gated_create(user_id: str, resource: str, current_count: int) -> None:
         return
     result = _service().can(user_id, action, current_count=current_count)
     if not result.allowed:
+        analytics_capture(
+            user_id,
+            "paywall_blocked",
+            {
+                "kind": "create_cap",
+                "resource": resource,
+                "reason": result.reason,
+            },
+        )
         raise HTTPException(status_code=402, detail=result.reason or "Limit reached")
 
 
@@ -49,6 +59,15 @@ def gated_feature(
     """402 if user can't use this feature (with host-wins resolution)."""
     result = _service().can(user_id, action, host_user_id=host_user_id, **ctx)
     if not result.allowed:
+        analytics_capture(
+            user_id,
+            "paywall_blocked",
+            {
+                "kind": "feature",
+                "action": str(action),
+                "reason": result.reason,
+            },
+        )
         raise HTTPException(status_code=402, detail=result.reason or "Pro feature")
 
 
@@ -65,6 +84,15 @@ def gated_upload(
         host_user_id=host_user_id,
     )
     if not result.allowed:
+        analytics_capture(
+            user_id,
+            "paywall_blocked",
+            {
+                "kind": "upload_cap",
+                "size": size,
+                "reason": result.reason,
+            },
+        )
         raise HTTPException(status_code=402, detail=result.reason or "Storage limit reached")
 
 
@@ -72,4 +100,12 @@ def gated_split_sheet(user_id: str) -> None:
     """402 if user is over their per-period split-sheet cap."""
     result = _service().can(user_id, Action.GENERATE_SPLIT_SHEET)
     if not result.allowed:
+        analytics_capture(
+            user_id,
+            "paywall_blocked",
+            {
+                "kind": "splitsheet_cap",
+                "reason": result.reason,
+            },
+        )
         raise HTTPException(status_code=402, detail=result.reason or "Split sheet limit reached")

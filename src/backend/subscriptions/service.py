@@ -5,6 +5,8 @@ Per-field override merge with integrations_allowed replace-semantics.
 Lazy period rollover and the can() chokepoint are added in Tasks 4 and 5.
 """
 
+import os
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from dateutil.relativedelta import relativedelta
@@ -16,6 +18,55 @@ from subscriptions.models import (
     Features,
     Usage,
 )
+
+# ---------------------------------------------------------------------------
+# Beta bypass + admin helpers
+# ---------------------------------------------------------------------------
+
+
+def _bypass_paywalls_enabled() -> bool:
+    """Returns True when BYPASS_PAYWALLS env var is set to 'true' (case-insensitive).
+
+    Defaults to False if unset so that toggling behaviour is explicit.
+    """
+    return os.getenv("BYPASS_PAYWALLS", "").strip().lower() == "true"
+
+
+def _is_admin_email(email: str | None) -> bool:
+    """Returns True if *email* is in the ADMIN_EMAILS allowlist (case-insensitive).
+
+    Replicates the same lookup logic used in subscriptions/admin_auth.py so
+    that the service layer can check admin status without depending on FastAPI
+    request machinery.  Returns False if email is None or ADMIN_EMAILS is unset.
+    """
+    if not email:
+        return False
+    raw = os.getenv("ADMIN_EMAILS", "")
+    admin_emails = {e.strip().lower() for e in raw.split(",") if e.strip()}
+    return email.strip().lower() in admin_emails
+
+
+def _patch_for_max_pro(ent: Entitlements) -> Entitlements:
+    """Return a copy of *ent* with all caps set to -1 (unlimited) and all features enabled.
+
+    Preserves: usage, tier string, status, user_id, has_overrides, and all
+    Stripe billing fields.  Only caps and features are replaced.
+    """
+    max_caps = Caps(
+        max_artists=-1,
+        max_projects=-1,
+        max_tasks=-1,
+        max_storage_bytes=-1,
+        max_split_sheets_per_month=-1,
+        max_oneclick_runs_per_month=-1,
+    )
+    max_features = Features(
+        zoe_enabled=True,
+        oneclick_enabled=True,
+        registry_enabled=True,
+        integrations_allowed=["google_drive", "slack", "notion", "monday"],
+    )
+    return replace(ent, caps=max_caps, features=max_features)
 
 
 def _parse_iso(ts: str | None) -> datetime | None:
@@ -31,8 +82,13 @@ class EntitlementsService:
     def __init__(self, supabase: Client):
         self.supabase = supabase
 
-    def get_for_user(self, user_id: str) -> Entitlements:
-        """Returns merged entitlements (subscription + tier defaults + overrides + usage)."""
+    def get_for_user(self, user_id: str, *, is_admin: bool = False) -> Entitlements:
+        """Returns merged entitlements (subscription + tier defaults + overrides + usage).
+
+        If BYPASS_PAYWALLS env var is 'true' OR *is_admin* is True, all caps are
+        patched to -1 (unlimited) and all features are enabled — effectively giving
+        every affected user Pro-shaped entitlements without touching the DB.
+        """
         sub = self._read_or_create_subscription(user_id)
         tier_row = self._read_tier_entitlements(sub["tier"])
         if tier_row is None:
@@ -53,7 +109,7 @@ class EntitlementsService:
             period_end=_parse_iso(usage_row["period_end"]),
         )
 
-        return Entitlements(
+        ent = Entitlements(
             user_id=user_id,
             tier=sub["tier"],
             status=sub["status"],
@@ -61,7 +117,16 @@ class EntitlementsService:
             features=features,
             usage=usage,
             has_overrides=has_overrides,
+            stripe_subscription_id=sub.get("stripe_subscription_id"),
+            stripe_price_id=sub.get("stripe_price_id"),
+            current_period_end=_parse_iso(sub.get("current_period_end")),
+            cancel_at_period_end=bool(sub.get("cancel_at_period_end", False)),
         )
+
+        if _bypass_paywalls_enabled() or is_admin:
+            ent = _patch_for_max_pro(ent)
+
+        return ent
 
     # -----------------------------------------------------------------------
     # DB reads (with auto-create-on-miss)
@@ -183,6 +248,7 @@ class EntitlementsService:
             max_tasks=pick("max_tasks"),
             max_storage_bytes=pick("max_storage_bytes"),
             max_split_sheets_per_month=pick("max_split_sheets_per_month"),
+            max_oneclick_runs_per_month=pick("max_oneclick_runs_per_month"),
         )
         features = Features(
             zoe_enabled=pick("zoe_enabled"),
@@ -260,13 +326,21 @@ class EntitlementsService:
             return deny("Zoe is a Pro feature.")
 
         if action == Action.USE_ONECLICK:
-            if ent.features.oneclick_enabled:
-                return allow()
-            if host_user_id and host_user_id != user_id:
+            # Feature flag check (with host-wins resolution)
+            feature_ok = ent.features.oneclick_enabled
+            resolved_ent = ent  # the entitlements whose caps we'll enforce
+            if not feature_ok and host_user_id and host_user_id != user_id:
                 host_ent = self.get_for_user(host_user_id)
                 if host_ent.features.oneclick_enabled:
-                    return allow()
-            return deny("OneClick is a Pro feature.")
+                    feature_ok = True
+                    resolved_ent = host_ent
+            if not feature_ok:
+                return deny("OneClick is a Pro feature.")
+            # Per-period cap check (against the entitlements that granted access)
+            cap = resolved_ent.caps.max_oneclick_runs_per_month
+            if cap != -1 and ent.usage.oneclick_runs_this_period >= cap:
+                return deny(f"You've used your {cap} OneClick run(s) for this period.")
+            return allow()
 
         if action == Action.USE_REGISTRY:
             if ent.features.registry_enabled:
@@ -407,8 +481,12 @@ class EntitlementsService:
     # Safe variant — never raises, returns degraded=True Free defaults on error
     # -----------------------------------------------------------------------
 
-    def get_for_user_safe(self, user_id: str) -> Entitlements:
+    def get_for_user_safe(self, user_id: str, *, is_admin: bool = False) -> Entitlements:
         """Endpoint-friendly wrapper. Logs and returns degraded Free entitlements on error.
+
+        Accepts the same *is_admin* flag as get_for_user; passes it through so that
+        admin users (or all users when BYPASS_PAYWALLS=true) receive Pro-shaped
+        entitlements even on the safe path.
 
         IMPORTANT: the hardcoded fallback caps/features below MUST be kept in sync with
         the seed values in supabase/migrations/20260509000001_subscription_foundation.sql
@@ -424,7 +502,7 @@ class EntitlementsService:
         somewhere.
         """
         try:
-            return self.get_for_user(user_id)
+            return self.get_for_user(user_id, is_admin=is_admin)
         except Exception:
             import logging
 
@@ -441,10 +519,11 @@ class EntitlementsService:
                     max_tasks=50,
                     max_storage_bytes=1073741824,
                     max_split_sheets_per_month=5,
+                    max_oneclick_runs_per_month=1,
                 ),
                 features=Features(
                     zoe_enabled=False,
-                    oneclick_enabled=False,
+                    oneclick_enabled=True,
                     registry_enabled=False,
                     integrations_allowed=["google_drive"],
                 ),

@@ -145,8 +145,9 @@ class TestGetUserDetail:
             "max_tasks": 50,
             "max_storage_bytes": 1073741824,
             "max_split_sheets_per_month": 5,
+            "max_oneclick_runs_per_month": 1,
             "zoe_enabled": False,
-            "oneclick_enabled": False,
+            "oneclick_enabled": True,
             "registry_enabled": False,
             "integrations_allowed": ["google_drive"],
             "updated_at": "2026-05-09T00:00:00+00:00",
@@ -292,26 +293,20 @@ class TestOverride:
         assert resp.status_code == 422
 
     def test_clear_override_returns_ok(self, admin_client, mock_supabase):
-        captured = {}
+        builders = {}
 
         def _table(name):
             b = MockQueryBuilder()
-            if name == "tier_overrides":
-                original = b.eq
-
-                def _capture(field, value):
-                    if field == "user_id":
-                        captured["user_id"] = value
-                    return original(field, value)
-
-                b.eq = _capture
+            builders[name] = b
             return b
 
         mock_supabase.table.side_effect = _table
 
         resp = admin_client.delete(f"/admin/users/{TEST_USER_ID}/override")
         assert resp.status_code == 200
-        assert captured["user_id"] == TEST_USER_ID
+        # Verify delete().eq("user_id", ...) was called with the correct user_id
+        b = builders["tier_overrides"]
+        b.delete.return_value.eq.assert_called_with("user_id", TEST_USER_ID)
 
 
 class TestProRequests:
@@ -334,6 +329,98 @@ class TestProRequests:
         assert len(body) == 1
 
 
+class TestTesterGrantEndpoints:
+    def test_list_returns_200_for_admin(self, admin_client, mock_supabase):
+        grant_row = {
+            "user_id": TEST_USER_ID,
+            "reason": "tester",
+            "expires_at": None,
+            "granted_at": "2026-05-01T00:00:00+00:00",
+        }
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "tier_overrides":
+                b.execute.return_value = MagicMock(data=[grant_row], count=1)
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = admin_client.get("/admin/tester-grants")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) == 1
+        assert body[0]["user_id"] == TEST_USER_ID
+
+    def test_list_returns_403_for_non_admin(self, non_admin_client):
+        resp = non_admin_client.get("/admin/tester-grants")
+        assert resp.status_code == 403
+
+    def test_create_returns_404_when_user_not_found(self, admin_client, mock_supabase):
+        mock_supabase.auth.admin.list_users.return_value = []
+
+        resp = admin_client.post(
+            "/admin/tester-grants",
+            json={"email": "nobody@example.com"},
+        )
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
+
+    def test_create_returns_422_invalid_email(self, admin_client):
+        resp = admin_client.post(
+            "/admin/tester-grants",
+            json={"email": "not-an-email"},
+        )
+        assert resp.status_code == 422
+
+    def test_create_calls_service_with_correct_args(self, admin_client, mock_supabase):
+        mock_supabase.auth.admin.list_users.return_value = [
+            MagicMock(id=TEST_USER_ID, email="tester@example.com"),
+        ]
+        captured = {}
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "tier_overrides":
+                original = b.upsert
+
+                def _capture(payload, *a, **kw):
+                    captured["payload"] = payload
+                    return original(payload, *a, **kw)
+
+                b.upsert = _capture
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = admin_client.post(
+            "/admin/tester-grants",
+            json={"email": "tester@example.com", "expires_at": "2027-01-01T00:00:00+00:00", "reason": "tester-beta"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["email"] == "tester@example.com"
+        assert body["reason"] == "tester-beta"
+        assert body["expires_at"] == "2027-01-01T00:00:00+00:00"
+
+    def test_delete_returns_204(self, admin_client, mock_supabase):
+        builders = {}
+
+        def _table(name):
+            b = MockQueryBuilder()
+            builders[name] = b
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = admin_client.delete(f"/admin/tester-grants/{TEST_USER_ID}")
+        assert resp.status_code == 204
+        assert resp.content == b""
+        b = builders["tier_overrides"]
+        b.delete.return_value.eq.assert_called_with("user_id", TEST_USER_ID)
+
+
 class TestNonAdminBlocked:
     """Parameterized: every /admin/* route returns 403 for non-admin."""
 
@@ -346,6 +433,8 @@ class TestNonAdminBlocked:
         ("POST", f"/admin/users/{TEST_USER_ID}/override"),
         ("DELETE", f"/admin/users/{TEST_USER_ID}/override"),
         ("GET", "/admin/pro-requests"),
+        ("GET", "/admin/tester-grants"),
+        ("DELETE", f"/admin/tester-grants/{TEST_USER_ID}"),
     ]
 
     @pytest.mark.parametrize("method,path", ROUTES)
