@@ -9,11 +9,15 @@ customer.subscription.updated event carries the same period_end info, and
 handling both would create redundant DB writes.
 """
 
+import logging
 from datetime import UTC, datetime
 
 import stripe
 
 from analytics import capture as analytics_capture
+from analytics import identify as analytics_identify
+
+logger = logging.getLogger(__name__)
 
 
 def _ts(epoch: int | None) -> str | None:
@@ -53,6 +57,10 @@ def handle_checkout_session_completed(event, supabase) -> None:
         on_conflict="user_id",
     ).execute()
     analytics_capture(user_id, "subscription_activated", {"stripe_price_id": price_id, "status": sub.status})
+    try:
+        analytics_identify(user_id, {"plan": "pro"})
+    except Exception as e:
+        logger.warning("analytics identify on subscription_activated failed: %s", e)
 
 
 def handle_subscription_updated(event, supabase) -> None:
@@ -98,6 +106,10 @@ def handle_subscription_deleted(event, supabase) -> None:
         }
     ).eq("user_id", user_id).execute()
     analytics_capture(user_id, "subscription_canceled", {})
+    try:
+        analytics_identify(user_id, {"plan": "free"})
+    except Exception as e:
+        logger.warning("analytics identify on subscription_canceled failed: %s", e)
 
 
 def handle_invoice_payment_failed(event, supabase) -> None:
@@ -120,6 +132,10 @@ def handle_invoice_payment_failed(event, supabase) -> None:
         }
     ).eq("user_id", user_id).execute()
     analytics_capture(user_id, "payment_failed", {})
+    try:
+        analytics_identify(user_id, {"plan": "free"})
+    except Exception as e:
+        logger.warning("analytics identify on payment_failed failed: %s", e)
 
 
 # Dispatcher: maps Stripe event types to handler functions.

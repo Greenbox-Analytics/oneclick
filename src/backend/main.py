@@ -27,6 +27,7 @@ from analytics import init_analytics
 from auth import get_current_user_id
 from middleware.analytics_middleware import AnalyticsMiddleware
 from pagination import PaginatedResponse, paginate_query
+from subscriptions.admin_auth import is_active_tester_row, is_user_admin
 from zoe_chatbot.contract_chatbot import ContractChatbot
 from zoe_chatbot.helpers import calculate_royalty_payments
 
@@ -37,6 +38,7 @@ app = FastAPI()
 init_analytics()
 
 # --- Mount Integration & Board Routers ---
+from admin.analytics_router import router as admin_analytics_router
 from boards.router import router as boards_router
 from credentials.router import router as credentials_router
 from integrations.connections_router import router as connections_router
@@ -72,6 +74,7 @@ app.include_router(subscriptions_router, tags=["Entitlements"])
 app.include_router(subscriptions_admin_router, tags=["Admin"])
 app.include_router(pro_requests_router, tags=["Pro Requests"])
 app.include_router(billing_router)
+app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -428,6 +431,54 @@ def health_check():
     Returns 200 OK if the service is healthy.
     """
     return {"status": "healthy", "service": "msanii-backend", "version": "1.0.0"}
+
+
+class AnalyticsContext(BaseModel):
+    is_tester: bool
+    is_admin: bool
+    plan: Literal["free", "pro"]
+    role: str | None
+    email: str | None
+    signed_up_at: str | None
+    tester_granted_at: str | None
+    tester_expires_at: str | None
+
+
+@app.get("/me/analytics-context", response_model=AnalyticsContext)
+async def get_analytics_context(user_id: str = Depends(get_current_user_id)):
+    """Pure read — returns identity properties for client-side PostHog identify().
+
+    Does NOT call analytics.identify(): GETs stay idempotent. The client owns
+    identify() and server-side identify only fires from explicit mutation handlers.
+    """
+    sb = get_supabase_client()
+
+    overrides = (
+        sb.table("tier_overrides")
+        .select("reason, granted_at, expires_at")
+        .eq("user_id", user_id)
+        .like("reason", "tester%")
+        .execute()
+    )
+    active_tester_row = next((r for r in (overrides.data or []) if is_active_tester_row(r)), None)
+
+    profile_res = sb.table("profiles").select("role, email, created_at").eq("id", user_id).single().execute()
+    profile = profile_res.data or {}
+
+    sub_res = sb.table("subscriptions").select("tier").eq("user_id", user_id).execute()
+    sub_rows = sub_res.data or []
+    plan = sub_rows[0]["tier"] if sub_rows else "free"
+
+    return AnalyticsContext(
+        is_tester=active_tester_row is not None,
+        is_admin=is_user_admin(sb, profile.get("email"), user_id),
+        plan=plan,
+        role=profile.get("role"),
+        email=profile.get("email"),
+        signed_up_at=profile.get("created_at"),
+        tester_granted_at=active_tester_row.get("granted_at") if active_tester_row else None,
+        tester_expires_at=active_tester_row.get("expires_at") if active_tester_row else None,
+    )
 
 
 @app.get("/artists")
@@ -1222,6 +1273,24 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
     """
     # SP3: gate Zoe feature; raises 402 for Free users without a Pro host.
     gated_feature(user_id, Action.USE_ZOE, host_user_id=request.host_user_id)
+
+    # Step event: fire BEFORE any work begins so we capture even early failures.
+    import time as _time
+
+    _zoe_started_at = _time.perf_counter()
+    _query_text = request.query or ""
+    # ZoeAskRequest has no attachment field today; reserve for future and default False.
+    _has_attachment = bool(getattr(request, "attachment_id", None) or getattr(request, "file_id", None))
+    analytics_capture(
+        user_id,
+        "zoe_query_submitted",
+        {
+            "tool": "zoe",
+            "query_length": len(_query_text),
+            "has_attachment": _has_attachment,
+        },
+    )
+
     try:
         # SP2: track per-period Zoe usage; best-effort, never blocks.
         # NOTE: increment fires on connection-open, not completion. A client that
@@ -1265,6 +1334,9 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                 print(f"Warning: Could not fetch contract names: {e}")
 
         def generate():
+            import json as _json
+
+            source_count = 0
             try:
                 for event in chatbot.ask_stream(
                     query=request.query,
@@ -1279,17 +1351,49 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                     contract_markdowns=request.contract_markdowns,
                     contract_names=contract_names,
                 ):
+                    # Count sources events for the response_received step event.
+                    # Real chatbot yields SSE-formatted strings; tests may yield dicts.
+                    try:
+                        if isinstance(event, dict):
+                            payload = event
+                        elif isinstance(event, str) and event.startswith("data: "):
+                            payload = _json.loads(event[6:].strip())
+                        else:
+                            payload = None
+                        if isinstance(payload, dict) and payload.get("type") == "sources":
+                            source_count += len(payload.get("sources") or [])
+                    except (ValueError, TypeError):
+                        # Best-effort parsing; never block the stream on counter errors.
+                        pass
                     yield event
+
+                analytics_capture(
+                    user_id,
+                    "zoe_response_received",
+                    {
+                        "tool": "zoe",
+                        "duration_ms": int((_time.perf_counter() - _zoe_started_at) * 1000),
+                        "source_count": source_count,
+                    },
+                )
             except Exception as e:
                 print(f"[Stream] Error in Zoe streaming: {e}")
-                import json as _json
-
+                analytics_capture(
+                    user_id,
+                    "zoe_query_failed",
+                    {"tool": "zoe", "error_code": type(e).__name__},
+                )
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     except Exception as e:
         print(f"Error in Zoe streaming chatbot: {str(e)}")
+        analytics_capture(
+            user_id,
+            "zoe_query_failed",
+            {"tool": "zoe", "error_code": type(e).__name__},
+        )
         raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
 
 
@@ -1469,6 +1573,14 @@ async def oneclick_calculate_royalties_stream(
     _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
     analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
 
+    # Step-event instrumentation (Task 7 of PostHog dashboard plan).
+    # `_started`/`_completed` are paired so funnel volumes match (cache-hit
+    # path fires both together with cached=True, duration_ms=0).
+    import time as _time
+
+    _calc_started_at = _time.perf_counter()
+    _contract_count = len(contract_ids) if contract_ids else (1 if contract_id else 0)
+
     async def generate_progress():
         # Initialize paths to None for safe cleanup
         contract_path = None
@@ -1487,6 +1599,11 @@ async def oneclick_calculate_royalties_stream(
                 target_contract_ids = [contract_id]
 
             if not target_contract_ids:
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_failed",
+                    {"tool": "oneclick", "error_code": "ValidationError", "stage": "validation"},
+                )
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No contracts specified'})}\n\n"
                 return
 
@@ -1537,11 +1654,37 @@ async def oneclick_calculate_royalties_stream(
                                 # Add type field so frontend SSE handler recognizes it
                                 result["type"] = "complete"
 
+                                # Cache hit: fire paired _started + _completed so
+                                # the funnel sees the same volume on each step.
+                                analytics_capture(
+                                    user_id,
+                                    "oneclick_calc_started",
+                                    {"tool": "oneclick", "contract_count": _contract_count, "cached": True},
+                                )
+                                analytics_capture(
+                                    user_id,
+                                    "oneclick_calc_completed",
+                                    {
+                                        "tool": "oneclick",
+                                        "duration_ms": 0,
+                                        "contract_count": _contract_count,
+                                        "cached": True,
+                                    },
+                                )
+
                                 yield f"data: {json.dumps(result)}\n\n"
                                 return
 
                 except Exception as e:
                     print(f"Cache check failed (continuing to calculate): {e}")
+
+            # Cache miss (or force_recalculate) — fire `_started` AFTER the
+            # cache check so cache hits don't double-fire.
+            analytics_capture(
+                user_id,
+                "oneclick_calc_started",
+                {"tool": "oneclick", "contract_count": _contract_count, "cached": False},
+            )
 
             # Step 1: Download royalty statement
             yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
@@ -1550,6 +1693,11 @@ async def oneclick_calculate_royalties_stream(
                 get_supabase_client().table("project_files").select("*").eq("id", royalty_statement_file_id).execute()
             )
             if not statement_res.data:
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_failed",
+                    {"tool": "oneclick", "error_code": "ValidationError", "stage": "validation"},
+                )
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Royalty statement file not found'})}\n\n"
                 return
 
@@ -1655,6 +1803,11 @@ async def oneclick_calculate_royalties_stream(
             await asyncio.sleep(0.3)
 
             if not payments or len(payments) == 0:
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_failed",
+                    {"tool": "oneclick", "error_code": "NoPaymentsCalculated", "stage": "calc"},
+                )
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
                 return
 
@@ -1689,11 +1842,28 @@ async def oneclick_calculate_royalties_stream(
 
             yield f"data: {json.dumps(result)}\n\n"
 
+            _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
+            analytics_capture(
+                user_id,
+                "oneclick_calc_completed",
+                {
+                    "tool": "oneclick",
+                    "duration_ms": _duration_ms,
+                    "contract_count": _contract_count,
+                    "cached": False,
+                },
+            )
+
         except Exception as e:
             import traceback
 
             error_detail = str(e)
             traceback.print_exc()
+            analytics_capture(
+                user_id,
+                "oneclick_calc_failed",
+                {"tool": "oneclick", "error_code": type(e).__name__, "stage": "calc"},
+            )
             yield f"data: {json.dumps({'type': 'error', 'message': error_detail})}\n\n"
 
         finally:
@@ -1729,11 +1899,22 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
     Returns:
         Payment breakdown and Excel file URL
     """
+    # Step-event instrumentation (Task 7).
+    import time as _time
+
+    _calc_started_at = _time.perf_counter()
+    _contract_count = len(request.contract_ids) if request.contract_ids else (1 if request.contract_id else 0)
+
     try:
         # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
         gated_feature(user_id, Action.USE_ONECLICK, host_user_id=request.host_user_id)
         # SP2: track per-period OneClick usage; best-effort, never blocks.
         _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
+        analytics_capture(
+            user_id,
+            "oneclick_calc_started",
+            {"tool": "oneclick", "contract_count": _contract_count, "cached": False},
+        )
         print(f"\n{'=' * 80}")
         print("ONECLICK ROYALTY CALCULATION")
         print(f"{'=' * 80}")
@@ -1852,6 +2033,18 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
             print("CALCULATION COMPLETE")
             print(f"{'=' * 80}\n")
 
+            _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
+            analytics_capture(
+                user_id,
+                "oneclick_calc_completed",
+                {
+                    "tool": "oneclick",
+                    "duration_ms": _duration_ms,
+                    "contract_count": _contract_count,
+                    "cached": False,
+                },
+            )
+
             return OneClickRoyaltyResponse(
                 status="success",
                 total_payments=len(payments),
@@ -1874,6 +2067,11 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
         import traceback
 
         traceback.print_exc()
+        analytics_capture(
+            user_id,
+            "oneclick_calc_failed",
+            {"tool": "oneclick", "error_code": type(e).__name__, "stage": "calc"},
+        )
         raise HTTPException(status_code=500, detail=f"Failed to calculate royalties: {str(e)}")
 
 

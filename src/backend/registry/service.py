@@ -1,11 +1,15 @@
 """Service layer for the Rights & Ownership Registry with collaboration, TeamCards, notes, and verification."""
 
 import hashlib
+import logging
 from datetime import UTC
 
 from supabase import Client
 
+from analytics import capture as analytics_capture
 from pagination import PaginatedResponse, paginate_query
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # Works
@@ -361,6 +365,17 @@ async def check_and_update_work_status(db: Client, work_id: str):
         return
     if all(c["status"] == "confirmed" for c in collabs.data):
         db.table("works_registry").update({"status": "registered"}).eq("id", work_id).execute()
+        try:
+            work_owner = db.table("works_registry").select("user_id").eq("id", work_id).single().execute()
+            owner_id = (work_owner.data or {}).get("user_id")
+            if owner_id:
+                analytics_capture(
+                    owner_id,
+                    "registry_work_registered",
+                    {"tool": "registry", "work_id": work_id},
+                )
+        except Exception as e:
+            logger.warning("registry_work_registered emit failed for work_id=%s: %s", work_id, e)
 
 
 async def resend_invitation(db: Client, user_id: str, collaborator_id: str):
@@ -650,6 +665,17 @@ async def _check_auto_register(db: Client, work_id: str):
     all_confirmed = all(c["status"] == "confirmed" for c in collabs.data)
     if all_confirmed:
         db.table("works_registry").update({"status": "registered"}).eq("id", work_id).execute()
+        try:
+            work_owner = db.table("works_registry").select("user_id").eq("id", work_id).single().execute()
+            owner_id = (work_owner.data or {}).get("user_id")
+            if owner_id:
+                analytics_capture(
+                    owner_id,
+                    "registry_work_registered",
+                    {"tool": "registry", "work_id": work_id},
+                )
+        except Exception as e:
+            logger.warning("registry_work_registered emit failed for work_id=%s: %s", work_id, e)
 
 
 # ============================================================

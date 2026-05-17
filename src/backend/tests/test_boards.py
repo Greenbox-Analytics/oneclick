@@ -551,10 +551,12 @@ class TestUpdateTask:
         updated_task = {**SAMPLE_TASK, "title": "Updated Title"}
 
         # update_task sequence:
-        # 1. board_columns -> single (for Done-column title check)
-        # 2. board_tasks -> list (update result)
+        # 1. board_tasks -> single (router pre-read of existing column_id for analytics)
+        # 2. board_columns -> single (for Done-column title check in service)
+        # 3. board_tasks -> list (update result)
         mock_supabase.table.side_effect = _sequence_side_effect_mixed(
             [
+                {"column_id": COLUMN_ID},  # router pre-read of existing task
                 {"id": COLUMN_ID, "title": "In Progress"},  # single for board_columns
                 [updated_task],  # board_tasks update result
             ]
@@ -571,10 +573,12 @@ class TestUpdateTask:
 
     def test_update_task_returns_404_when_not_found(self, client, mock_supabase):
         """PUT /boards/tasks/{task_id} returns 404 when task absent."""
-        # board_columns returns the column, board_tasks update returns empty
+        # 1. board_tasks router pre-read (existing column_id for analytics)
+        # 2. board_columns returns the column, 3. board_tasks update returns empty
         mock_supabase.table.side_effect = _sequence_side_effect_mixed(
             [
-                {"id": COLUMN_ID, "title": "To Do"},
+                {"column_id": COLUMN_ID},  # router pre-read
+                {"id": COLUMN_ID, "title": "To Do"},  # service done-check lookup
                 [],  # update returns empty -> task = {}
             ]
         )

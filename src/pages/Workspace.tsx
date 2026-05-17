@@ -22,6 +22,7 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 const Workspace = () => {
   const navigate = useNavigate();
@@ -80,6 +81,15 @@ const Workspace = () => {
   const defaultTab = searchParams.get("tab") || "integrations";
   const [activeTab, setActiveTab] = useState(defaultTab);
   const initialTaskId = searchParams.get("taskId") || undefined;
+
+  // Fire tool_opened when the active tab corresponds to a tool surface.
+  // integrations / notifications / settings are NOT tools — skip them.
+  const { captureToolOpened } = useAnalytics();
+  useEffect(() => {
+    if (activeTab === "boards") captureToolOpened("boards");
+    else if (activeTab === "calendar") captureToolOpened("calendar");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();

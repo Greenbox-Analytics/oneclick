@@ -3,6 +3,8 @@
 import httpx
 from supabase import Client
 
+from analytics import capture as analytics_capture
+
 SLACK_API = "https://slack.com/api"
 
 
@@ -24,8 +26,18 @@ async def get_channels(token: str) -> list:
         ]
 
 
-async def send_notification(token: str, channel_id: str, text: str, blocks: list = None) -> dict:
-    """Send a notification message to a Slack channel."""
+async def send_notification(
+    token: str,
+    channel_id: str,
+    text: str,
+    blocks: list = None,
+    user_id: str | None = None,
+) -> dict:
+    """Send a notification message to a Slack channel.
+
+    ``user_id`` is optional so existing callers don't break; when provided
+    we emit an ``integration_used`` analytics event on a successful send.
+    """
     payload = {"channel": channel_id, "text": text}
     if blocks:
         payload["blocks"] = blocks
@@ -37,7 +49,15 @@ async def send_notification(token: str, channel_id: str, text: str, blocks: list
             json=payload,
         )
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+
+    if user_id:
+        analytics_capture(
+            user_id,
+            "integration_used",
+            {"tool": "slack", "action": "notification_sent"},
+        )
+    return result
 
 
 async def upload_file_to_channel(token: str, channel_id: str, file_content: bytes, filename: str, title: str) -> dict:
@@ -70,7 +90,7 @@ async def notify_for_event(supabase: Client, user_id: str, event_name: str, even
     # 1. Try project-level channel
     project_id = event_data.get("project_id") or _extract_project_id(event_data)
     if project_id:
-        sent = await _try_project_channel(supabase, project_id, event_name, token, text, blocks)
+        sent = await _try_project_channel(supabase, project_id, event_name, token, text, blocks, user_id)
         if sent:
             return
 
@@ -92,7 +112,7 @@ async def notify_for_event(supabase: Client, user_id: str, event_name: str, even
     if not channel_id:
         return
 
-    await send_notification(token, channel_id, text, blocks)
+    await send_notification(token, channel_id, text, blocks, user_id=user_id)
 
 
 async def _try_project_channel(
@@ -102,6 +122,7 @@ async def _try_project_channel(
     token: str,
     text: str,
     blocks: list | None,
+    user_id: str | None = None,
 ) -> bool:
     """Try to send to a project's linked Slack channel. Returns True if sent."""
     project = supabase.table("projects").select("slack_channel_id").eq("id", project_id).single().execute()
@@ -120,7 +141,7 @@ async def _try_project_channel(
     if setting.data and not setting.data[0].get("enabled", True):
         return False
 
-    await send_notification(token, channel_id, text, blocks)
+    await send_notification(token, channel_id, text, blocks, user_id=user_id)
     return True
 
 

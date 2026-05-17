@@ -13,6 +13,14 @@ Domain-specific guides organized by tool/product area. Each doc covers backend e
 | [Zoe](zoe.md) | Zoe AI | `/tools/zoe` | AI contract analysis chatbot, streaming, document processing |
 | [Split Sheet](split-sheet.md) | Split Sheet | `/tools/split-sheet` | Split sheet PDF/DOCX generator |
 
+## Operational Guides
+
+| Doc | Covers |
+|-----|--------|
+| [Secrets & Env Vars](secrets.md) | Every env var the app reads, where to get it, what's required to boot vs feature-optional, prod-vs-local storage |
+| [Stripe Integration](stripe-integration.md) | Checkout + Portal + webhook wiring, full local-test flow with Stripe CLI, prod cutover checklist |
+| [Admin Roles](admin-roles.md) | `ADMIN_EMAILS` bootstrap + `profiles.is_admin` DB grants, `/admin/users` console, promote/demote flow, three-layer gating |
+
 ## Other Documentation
 
 - **[README.md](../README.md)** — Setup, installation, deployment

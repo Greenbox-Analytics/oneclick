@@ -22,6 +22,7 @@ import {
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { AnalyticsSummaryCard } from "@/components/admin/AnalyticsSummaryCard";
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -203,6 +204,8 @@ const AdminUsers = () => {
             </a>
           </Button>
         </div>
+
+        <AnalyticsSummaryCard />
 
         <TesterGrantsPanel />
 

@@ -47,3 +47,6 @@ docs/superpowers/specs/
 
 # bun lockfile (not used — project uses npm)
 bun.lockb
+
+# PostHog dashboard setup state (entity ID maps, env-scoped)
+src/backend/scripts/.posthog_dashboard_state.*.json

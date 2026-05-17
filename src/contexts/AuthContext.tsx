@@ -3,6 +3,12 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { apiFetch, API_URL } from '@/lib/apiFetch';
 import { identifyUser, resetUser } from '@/lib/posthog';
+import { useAnalyticsContext } from '@/hooks/useAnalyticsContext';
+
+const AnalyticsIdentifyEffect = () => {
+  useAnalyticsContext();
+  return null;
+};
 
 interface AuthContextType {
   user: User | null;
@@ -112,5 +118,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     [user, session, loading],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <AnalyticsIdentifyEffect />
+      {children}
+    </AuthContext.Provider>
+  );
 };

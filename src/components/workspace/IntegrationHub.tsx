@@ -6,6 +6,14 @@ import { SlackPanel } from "./integrations/SlackPanel";
 import type { IntegrationProvider, ConnectionStatus } from "@/types/integrations";
 import { useIntegrationAllowed } from "@/hooks/useEntitlements";
 import { PaywallModal } from "@/components/paywall/PaywallModal";
+import { useAnalytics } from "@/hooks/useAnalytics";
+
+// Map backend provider key to the analytics tool id used in the registry.
+const PROVIDER_TO_TOOL: Record<IntegrationProvider, "drive" | "slack" | "notion"> = {
+  google_drive: "drive",
+  slack: "slack",
+  notion: "notion",
+};
 
 type IntegrationItem = {
   provider: IntegrationProvider | "atlassian";
@@ -52,6 +60,7 @@ const INTEGRATIONS: IntegrationItem[] = [
 
 export function IntegrationHub() {
   const { connections, connect, disconnect, isConnecting } = useIntegrations();
+  const { captureIntegrationConnectStarted } = useAnalytics();
   const [slackPanelOpen, setSlackPanelOpen] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [paywallReason, setPaywallReason] = useState<string | undefined>(undefined);
@@ -94,6 +103,7 @@ export function IntegrationHub() {
       setPaywallOpen(true);
       return;
     }
+    captureIntegrationConnectStarted(PROVIDER_TO_TOOL[provider]);
     connect(provider);
   };
 

@@ -9,6 +9,7 @@ allowlist OR with profiles.is_admin = true.
 import logging
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import Depends, HTTPException
@@ -27,6 +28,22 @@ def env_admin_emails() -> set[str]:
     """Lowercased, whitespace-stripped set of admin emails from ADMIN_EMAILS env."""
     raw = os.getenv("ADMIN_EMAILS", "")
     return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def is_active_tester_row(row: dict) -> bool:
+    """Match AdminService.list_tester_grants() predicate:
+    reason LIKE 'tester%' AND (expires_at IS NULL OR expires_at > now())."""
+    reason = row.get("reason") or ""
+    if not reason.startswith("tester"):
+        return False
+    expires_at = row.get("expires_at")
+    if expires_at is None:
+        return True
+    try:
+        expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return False
+    return expiry > datetime.now(UTC)
 
 
 def is_env_admin(email: str | None) -> bool:

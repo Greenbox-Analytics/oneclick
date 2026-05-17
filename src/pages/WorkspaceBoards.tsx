@@ -1,11 +1,19 @@
+import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Music, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 const WorkspaceBoards = () => {
   const navigate = useNavigate();
   const { artistId } = useParams<{ artistId?: string }>();
+  const { captureToolOpened } = useAnalytics();
+
+  useEffect(() => {
+    captureToolOpened("boards");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">

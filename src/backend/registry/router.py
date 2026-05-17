@@ -347,6 +347,12 @@ async def invite_collaborator(body: CollaboratorInvite, user_id: str = Depends(g
     if not collab:
         raise HTTPException(status_code=500, detail="Failed to invite collaborator")
 
+    analytics_capture(
+        user_id,
+        "registry_collaborator_invited",
+        {"tool": "registry", "role": data.get("role", "collaborator")},
+    )
+
     # Always send email
     from registry.emails import send_invitation_email
 

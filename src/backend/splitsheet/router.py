@@ -75,6 +75,11 @@ async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(ge
             media_type = "application/pdf"
             ext = "pdf"
     except Exception as e:
+        analytics_capture(
+            user_id,
+            "splitsheet_generation_failed",
+            {"tool": "splitsheet", "error_code": type(e).__name__},
+        )
         raise HTTPException(status_code=500, detail=f"Failed to generate document: {str(e)}")
 
     safe_title = re.sub(r"[^a-zA-Z0-9._-]", "_", req.work_title)
@@ -118,6 +123,16 @@ async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(ge
         {
             "tool": "splitsheet",
             "success": True,
+            "duration_ms": duration_ms,
+        },
+    )
+    analytics_capture(
+        user_id,
+        "splitsheet_generated",
+        {
+            "tool": "splitsheet",
+            "format": req.format,
+            "collaborator_count": len(req.contributors),
             "duration_ms": duration_ms,
         },
     )

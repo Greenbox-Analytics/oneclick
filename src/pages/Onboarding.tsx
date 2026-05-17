@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Music } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { useAnalytics } from "@/hooks/useAnalytics";
 import OnboardingProgress from "@/components/onboarding/OnboardingProgress";
 import StepWelcome from "@/components/onboarding/StepWelcome";
 import StepName from "@/components/onboarding/StepName";
@@ -11,9 +12,18 @@ import StepReady from "@/components/onboarding/StepReady";
 
 const TOTAL_STEPS = 4;
 
+// Map step index to display name for analytics
+const STEP_NAMES = {
+  0: "welcome",
+  1: "name",
+  2: "preferences",
+  3: "ready",
+} as const;
+
 const Onboarding = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { captureOnboardingStepCompleted, captureOnboardingFinished } = useAnalytics();
   const [currentStep, setCurrentStep] = useState(0);
   const [checkingStatus, setCheckingStatus] = useState(true);
 
@@ -72,8 +82,23 @@ const Onboarding = () => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
+  const handleStepComplete = (stepIndex: number) => {
+    const stepName = STEP_NAMES[stepIndex as keyof typeof STEP_NAMES];
+
+    // Fire onboarding_step_completed for all steps
+    captureOnboardingStepCompleted(stepName);
+
+    // Advance to next step
+    setCurrentStep(stepIndex + 1);
+  };
+
   const handleFinish = () => {
     if (!user) return;
+
+    // Fire events for the final step
+    const stepName = STEP_NAMES[3];
+    captureOnboardingStepCompleted(stepName);
+    captureOnboardingFinished();
 
     // Navigate immediately — optimistic UI. The user sees the dashboard
     // instantly while the profile upsert runs in the background.
@@ -126,14 +151,14 @@ const Onboarding = () => {
       {/* Step content */}
       <div className="w-full max-w-lg flex items-center justify-center">
         {currentStep === 0 && (
-          <StepWelcome onNext={() => setCurrentStep(1)} />
+          <StepWelcome onNext={() => handleStepComplete(0)} />
         )}
         {currentStep === 1 && (
           <StepName
             firstName={formData.firstName}
             lastName={formData.lastName}
             onUpdate={handleUpdate}
-            onNext={() => setCurrentStep(2)}
+            onNext={() => handleStepComplete(1)}
             onBack={() => setCurrentStep(0)}
           />
         )}
@@ -143,7 +168,7 @@ const Onboarding = () => {
             role={formData.role}
             company={formData.company}
             onUpdate={handleUpdate}
-            onNext={() => setCurrentStep(3)}
+            onNext={() => handleStepComplete(2)}
             onBack={() => setCurrentStep(1)}
           />
         )}

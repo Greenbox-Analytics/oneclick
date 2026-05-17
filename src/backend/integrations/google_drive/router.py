@@ -10,6 +10,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from integrations.google_drive.models import DriveExportRequest, DriveImportRequest, DriveSyncSetup
 from integrations.oauth import (
@@ -50,9 +51,24 @@ async def oauth_callback(code: str, state: str):
     try:
         tokens = await exchange_code_for_tokens("google_drive", code)
     except Exception as e:
+        analytics_capture(
+            user_id,
+            "integration_connect_failed",
+            {"tool": "drive", "error_code": type(e).__name__},
+        )
         raise HTTPException(status_code=400, detail=f"Token exchange failed: {str(e)}")
 
-    await store_connection(_get_supabase(), user_id, "google_drive", tokens)
+    try:
+        await store_connection(_get_supabase(), user_id, "google_drive", tokens)
+    except Exception as e:
+        analytics_capture(
+            user_id,
+            "integration_connect_failed",
+            {"tool": "drive", "error_code": type(e).__name__},
+        )
+        raise
+
+    analytics_capture(user_id, "integration_connected", {"tool": "drive"})
     return RedirectResponse(url=f"{FRONTEND_URL}/workspace?connected=google_drive")
 
 
@@ -98,6 +114,12 @@ async def import_file(body: DriveImportRequest, user_id: str = Depends(get_curre
         result = await import_drive_file(token, _get_supabase(), user_id, body.model_dump())
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+    analytics_capture(
+        user_id,
+        "integration_used",
+        {"tool": "drive", "action": "file_imported"},
+    )
     return result
 
 

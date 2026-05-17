@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, FileText, X, FileSignature, Folder, Loader2, Search, Plus } from "lucide-react";
 import { toast } from "sonner";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface Project {
   id: string;
@@ -74,6 +76,18 @@ const ContractSelector = ({
   setSelectedExistingContracts,
   fetchProjectFilesForValidation,
 }: ContractSelectorProps) => {
+  const { captureOneClickContractSelected } = useAnalytics();
+  // Fire `oneclick_contract_selected` once per page-instance (any contract pick).
+  const contractSelectedFiredRef = useRef(false);
+  const fireContractSelectedOnce = () => {
+    if (!contractSelectedFiredRef.current) {
+      // OneClickDocuments is mounted at /oneclick/:artistId/documents — the
+      // picker scope is per-artist, so source="artist".
+      captureOneClickContractSelected("artist");
+      contractSelectedFiredRef.current = true;
+    }
+  };
+
   const handleContractFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
@@ -112,6 +126,7 @@ const ContractSelector = ({
 
     if (allowedFiles.length > 0) {
       setContractFiles(prev => [...prev, ...allowedFiles]);
+      fireContractSelectedOnce();
     }
 
     e.target.value = "";
@@ -122,9 +137,13 @@ const ContractSelector = ({
   };
 
   const handleToggleExistingContract = (fileId: string) => {
-    setSelectedExistingContracts(prev =>
-      prev.includes(fileId) ? prev.filter(p => p !== fileId) : [...prev, fileId]
-    );
+    setSelectedExistingContracts(prev => {
+      const next = prev.includes(fileId) ? prev.filter(p => p !== fileId) : [...prev, fileId];
+      // Only count this as a "selected" event when an item is being added,
+      // not when toggling off.
+      if (next.length > prev.length) fireContractSelectedOnce();
+      return next;
+    });
   };
 
   const totalSelectedContracts = contractFiles.length + selectedExistingContracts.length;

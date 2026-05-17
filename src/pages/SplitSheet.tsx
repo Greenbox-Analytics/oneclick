@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
@@ -126,11 +126,24 @@ const SplitSheet = () => {
     onComplete: () => markToolCompleted("splitsheet"),
   });
 
-  const { captureToolOpened } = useAnalytics();
+  const {
+    captureToolOpened,
+    captureSplitSheetFormStarted,
+    captureSplitSheetFormCompleted,
+  } = useAnalytics();
   useEffect(() => {
     captureToolOpened("splitsheet");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fire `splitsheet_form_started` once per page-instance on first field interaction.
+  const formStartedRef = useRef(false);
+  const handleFormInteraction = () => {
+    if (!formStartedRef.current) {
+      captureSplitSheetFormStarted();
+      formStartedRef.current = true;
+    }
+  };
 
   useEffect(() => {
     if (!onboardingLoading && !statuses.splitsheet && walkthrough.phase === "idle") {
@@ -257,6 +270,7 @@ const SplitSheet = () => {
   });
 
   const handleGenerate = () => {
+    captureSplitSheetFormCompleted(contributors.length);
     setHasGenerated(false);
     setGeneratedBlob(null);
     generateSheet({
@@ -334,7 +348,11 @@ const SplitSheet = () => {
         }
       />
 
-      <main className="container mx-auto px-4 py-8 max-w-3xl">
+      <main
+        className="container mx-auto px-4 py-8 max-w-3xl"
+        onChange={handleFormInteraction}
+        onFocus={handleFormInteraction}
+      >
         <div className="mb-6">
           <h2 className="text-3xl font-bold text-foreground">Split Sheet Generator</h2>
           <p className="text-sm text-muted-foreground mt-1">

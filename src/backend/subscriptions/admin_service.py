@@ -11,6 +11,7 @@ from typing import Literal
 
 from supabase import Client
 
+from analytics import identify as analytics_identify
 from subscriptions.admin_auth import env_admin_emails, is_env_admin
 from subscriptions.service import EntitlementsService
 
@@ -225,11 +226,33 @@ class AdminService:
             "granted_at": datetime.now(UTC).isoformat(),
         }
         self.supabase.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
+        try:
+            analytics_identify(
+                user_id,
+                {
+                    "is_tester": True,
+                    "tester_granted_at": payload.get("granted_at"),
+                    "tester_expires_at": expires_at,
+                },
+            )
+        except Exception as e:
+            logger.warning("analytics identify on tester-grant create failed: %s", e)
         return {"user_id": user_id, "email": email, "expires_at": expires_at, "reason": reason}
 
     def revoke_tester_grant(self, user_id: str) -> None:
         """DELETE the tier_overrides row for user_id."""
         self.supabase.table("tier_overrides").delete().eq("user_id", user_id).execute()
+        try:
+            analytics_identify(
+                user_id,
+                {
+                    "is_tester": False,
+                    "tester_granted_at": None,
+                    "tester_expires_at": None,
+                },
+            )
+        except Exception as e:
+            logger.warning("analytics identify on tester-grant revoke failed: %s", e)
 
     # ------------------------------------------------------------------
     # Admin role management (profiles.is_admin toggle)
