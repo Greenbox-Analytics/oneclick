@@ -103,8 +103,7 @@ src/
 │   │   ├── connections_router.py  # GET /integrations/connections (list user's connections)
 │   │   ├── google_drive/   # OAuth, file browse, import/export, PDF upload
 │   │   ├── slack/          # OAuth, channels, Block Kit notifications, webhook (@mentions)
-│   │   ├── notion/         # OAuth, database listing, bidirectional task sync
-│   │   └── monday/         # OAuth, board listing, bidirectional task sync
+│   │   └── notion/         # OAuth, database listing, bidirectional task sync
 │   ├── oneclick/           # Royalty calculation tool + PDF share to Drive/Slack
 │   ├── registry/           # Rights registry (works, stakes, collaborators, licensing, PDF)
 │   ├── splitsheet/         # Split sheet PDF/DOCX generator
@@ -160,7 +159,6 @@ All routers are mounted in `src/backend/main.py`:
 | `/integrations/google-drive` | Google Drive | OAuth, file browse, import/export, PDF upload |
 | `/integrations/slack` | Slack | OAuth, channels, notification settings, webhook |
 | `/integrations/notion` | Notion | OAuth, database listing, task sync |
-| `/integrations/monday` | Monday.com | OAuth, board listing, task sync |
 | `/boards` | Boards | Kanban board CRUD |
 | `/settings` | Settings | Workspace settings |
 | `/splitsheet` | Split Sheet | PDF/DOCX generation |

@@ -192,7 +192,7 @@ oneclick/
 │   ├── backend/               # FastAPI server (Python, Poetry, Docker)
 │   │   ├── main.py            # App entry, all routers mounted here
 │   │   ├── boards/            # Kanban board management
-│   │   ├── integrations/      # Google Drive, Slack, Notion, Monday.com
+│   │   ├── integrations/      # Google Drive, Slack, Notion
 │   │   ├── oneclick/          # Royalty calculator + PDF share
 │   │   ├── registry/          # Rights registry
 │   │   ├── splitsheet/        # Split sheet generator

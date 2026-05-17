@@ -342,7 +342,7 @@ class TestTesterGrants:
         assert p["zoe_enabled"] is True
         assert p["oneclick_enabled"] is True
         assert p["registry_enabled"] is True
-        assert p["integrations_allowed"] == ["google_drive", "slack", "notion", "monday"]
+        assert p["integrations_allowed"] == ["google_drive", "slack", "notion"]
         assert p["reason"] == "tester"
         assert p["expires_at"] == "2027-01-01T00:00:00+00:00"
         assert captured["on_conflict"] == "user_id"

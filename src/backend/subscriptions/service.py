@@ -64,7 +64,7 @@ def _patch_for_max_pro(ent: Entitlements) -> Entitlements:
         zoe_enabled=True,
         oneclick_enabled=True,
         registry_enabled=True,
-        integrations_allowed=["google_drive", "slack", "notion", "monday"],
+        integrations_allowed=["google_drive", "slack", "notion"],
     )
     return replace(ent, caps=max_caps, features=max_features)
 

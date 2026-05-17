@@ -58,19 +58,16 @@ export function IntegrationHub() {
 
   const { allowed: slackAllowed } = useIntegrationAllowed("slack");
   const { allowed: notionAllowed } = useIntegrationAllowed("notion");
-  const { allowed: mondayAllowed } = useIntegrationAllowed("monday");
 
   const integrationAllowed: Record<string, boolean> = {
     google_drive: true, // Drive is always allowed; no paywall
     slack: slackAllowed,
     notion: notionAllowed,
-    monday: mondayAllowed,
   };
 
   const integrationLabel: Record<string, string> = {
     slack: "Slack",
     notion: "Notion",
-    monday: "Monday.com",
   };
 
   const getStatus = (provider: IntegrationItem["provider"]): ConnectionStatus => {

@@ -9,7 +9,7 @@ Usage:
         [--zoe-enabled] [--no-zoe-enabled]
         [--oneclick-enabled] [--no-oneclick-enabled]
         [--registry-enabled] [--no-registry-enabled]
-        [--integrations slack notion monday google_drive]
+        [--integrations slack notion google_drive]
         [--reason "..."] [--expires-days N]
   poetry run python scripts/grant_pro.py clear-override <email>
   poetry run python scripts/grant_pro.py list

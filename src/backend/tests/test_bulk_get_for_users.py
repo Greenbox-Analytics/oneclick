@@ -33,7 +33,7 @@ PRO_TIER_ROW = {
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
-    "integrations_allowed": ["google_drive", "slack", "notion", "monday"],
+    "integrations_allowed": ["google_drive", "slack", "notion"],
     "updated_at": "2026-05-09T00:00:00+00:00",
 }
 USER_A = "00000000-0000-0000-0000-00000000000a"

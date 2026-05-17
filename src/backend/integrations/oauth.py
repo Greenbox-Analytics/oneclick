@@ -46,13 +46,6 @@ PROVIDER_CONFIGS = {
         "token_url": "https://api.notion.com/v1/oauth/token",
         "scopes": [],  # Notion scopes are set in the integration config
     },
-    "monday": {
-        "client_id": lambda: os.getenv("MONDAY_CLIENT_ID"),
-        "client_secret": lambda: os.getenv("MONDAY_CLIENT_SECRET"),
-        "auth_url": "https://auth.monday.com/oauth2/authorize",
-        "token_url": "https://auth.monday.com/oauth2/token",
-        "scopes": ["boards:read", "boards:write", "updates:read", "updates:write"],
-    },
 }
 
 

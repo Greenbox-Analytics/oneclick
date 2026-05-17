@@ -6,7 +6,7 @@ The Workspace (`/workspace`) is the operational hub — integrations, Kanban boa
 
 # Integrations
 
-Msanii connects to four external services — Google Drive, Slack, Notion, and Monday.com — through a shared OAuth layer. Each integration stores encrypted tokens in Supabase, fires named events through an internal event bus, and exposes FastAPI routers under `/integrations/<provider>`. Google Drive and Slack are the two fully implemented integrations; Notion and Monday.com share the same OAuth plumbing but are not yet configured in the frontend.
+Msanii connects to three external services — Google Drive, Slack, and Notion — through a shared OAuth layer. Each integration stores encrypted tokens in Supabase, fires named events through an internal event bus, and exposes FastAPI routers under `/integrations/<provider>`. Google Drive and Slack are the two fully implemented integrations; Notion shares the same OAuth plumbing but is not yet configured in the frontend.
 
 ---
 

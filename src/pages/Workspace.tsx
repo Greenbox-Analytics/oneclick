@@ -70,7 +70,6 @@ const Workspace = () => {
         google_drive: "Google Drive",
         slack: "Slack",
         notion: "Notion",
-        monday: "Monday.com",
       };
       toast.success(`${providerNames[connected] || connected} connected successfully!`);
       queryClient.invalidateQueries({ queryKey: ["integrations"] });

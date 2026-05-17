@@ -91,7 +91,6 @@ const INTEGRATION_LABELS: Record<IntegrationName, string> = {
   google_drive: "Google Drive",
   slack: "Slack",
   notion: "Notion",
-  monday: "Monday",
 };
 
 const Subscription = () => {
