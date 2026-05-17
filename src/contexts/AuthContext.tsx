@@ -1,8 +1,16 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { apiFetch, API_URL } from '@/lib/apiFetch';
 import { identifyUser, resetUser } from '@/lib/posthog';
+
+// Env-driven, never changes at runtime — hoist out of the component so it's not
+// rebuilt as a new array reference per render (which would invalidate the
+// auth-subscription useEffect deps and trigger an infinite re-subscribe loop).
+const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "")
+  .split(",")
+  .map((e: string) => e.trim().toLowerCase())
+  .filter(Boolean);
 
 interface AuthContextType {
   user: User | null;
@@ -29,12 +37,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Parse admin emails from env at provider initialization
-  const adminEmails = (import.meta.env.VITE_ADMIN_EMAILS || "")
-    .split(",")
-    .map((e: string) => e.trim().toLowerCase())
-    .filter(Boolean);
-
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -60,7 +62,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       // SP-Analytics: identify/reset PostHog distinct_id
       if (session?.user) {
-        const isAdmin = adminEmails.includes((session.user.email || "").toLowerCase());
+        const isAdmin = ADMIN_EMAILS.includes((session.user.email || "").toLowerCase());
         identifyUser(session.user.id, {
           email: session.user.email,
           ...(isAdmin && { is_admin: true }),
@@ -71,7 +73,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     });
 
     return () => subscription.unsubscribe();
-  }, [adminEmails]);
+    // Subscribe ONCE on mount — re-subscribing on every render causes
+    // setUser/setSession to fire repeatedly with fresh object refs from
+    // getSession(), which trips every consumer hook that depends on `user`.
+  }, []);
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({
@@ -110,15 +115,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (error) throw error;
   };
 
-  const value = {
-    user,
-    session,
-    loading,
-    signIn,
-    signUp,
-    signInWithGoogle,
-    signOut,
-  };
+  // Memoize so consumers don't re-render when AuthProvider re-renders for
+  // unrelated reasons. signIn/signUp/etc are stable closures over supabase.
+  const value = useMemo(
+    () => ({ user, session, loading, signIn, signUp, signInWithGoogle, signOut }),
+    [user, session, loading],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

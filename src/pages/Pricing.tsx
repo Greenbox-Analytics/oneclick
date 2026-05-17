@@ -22,7 +22,7 @@ const FREE_FEATURES: Feature[] = [
   { included: true, label: "Google Drive integration" },
   { included: false, label: "Zoe AI contract analysis" },
   { included: false, label: "Rights Registry" },
-  { included: false, label: "Slack · Notion · Monday integrations" },
+  { included: false, label: "Slack · Notion · Jira · Confluence integrations" },
 ];
 
 const PRO_FEATURES: Feature[] = [
@@ -32,7 +32,7 @@ const PRO_FEATURES: Feature[] = [
   { included: true, label: "Zoe AI contract analysis" },
   { included: true, label: "Unlimited OneClick royalty calculations" },
   { included: true, label: "Rights Registry" },
-  { included: true, label: "All integrations: Drive, Slack, Notion, Monday" },
+  { included: true, label: "All integrations: Drive, Slack, Notion, Jira, Confluence" },
   { included: true, label: "Priority support" },
 ];
 

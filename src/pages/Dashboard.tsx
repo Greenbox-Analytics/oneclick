@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, type LucideIcon } from "lucide-react";
+import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, CreditCard, Shield, type LucideIcon } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
@@ -18,6 +18,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
 import { useWalkthrough } from "@/hooks/useWalkthrough";
+import { useIsAdmin } from "@/hooks/useAdmin";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 
 // Tool registry for Recently Used
@@ -74,6 +75,7 @@ export function trackToolUsage(name: string, route: string) {
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+  const { isAdmin } = useIsAdmin();
   const [profile, setProfile] = useState<{
     full_name: string | null;
     avatar_url: string | null;
@@ -150,7 +152,10 @@ const Dashboard = () => {
     };
 
     fetchProfile();
-  }, [user]);
+    // user.id is stable; user object reference may not be (see useOnboardingStatus
+    // for the same fix + rationale)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const getInitials = () => {
     if (profile?.full_name) {
@@ -219,6 +224,16 @@ const Dashboard = () => {
                   <User className="mr-2 h-4 w-4" />
                   <span>Profile</span>
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/subscription")}>
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  <span>Billing & subscription</span>
+                </DropdownMenuItem>
+                {isAdmin && (
+                  <DropdownMenuItem onClick={() => navigate("/admin/users")}>
+                    <Shield className="mr-2 h-4 w-4" />
+                    <span>Admin</span>
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={async () => { await signOut(); navigate("/"); }}>
                   <LogOut className="mr-2 h-4 w-4" />

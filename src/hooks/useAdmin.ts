@@ -15,12 +15,16 @@ export function useIsAdmin(): { isAdmin: boolean; loading: boolean } {
       try {
         return await apiFetch<{ email: string; isAdmin: boolean }>(`${API_URL}/admin/me`);
       } catch (err: unknown) {
-        // 403 means "not admin" — treat as clean negative, not hook error.
-        // Status comes from ApiError; robust to backend message changes.
-        if (err instanceof ApiError && err.status === 403) {
-          return { email: "", isAdmin: false };
+        // 403 = "not admin", expected clean negative.
+        // 500 = ADMIN_EMAILS unset on backend (intentional SP2 fail-loud) OR
+        //   backend error. Either way, admin UI shouldn't block the dashboard,
+        //   so treat as "not admin" and keep the app usable.
+        // Network errors / anything else → same: degrade silently to non-admin.
+        if (!(err instanceof ApiError && err.status === 403)) {
+          // Log non-403 for debuggability without surfacing a user-facing error.
+          console.warn("useIsAdmin: /admin/me failed; treating as not-admin", err);
         }
-        throw err;
+        return { email: "", isAdmin: false };
       }
     },
     enabled: !!user?.id,
@@ -28,10 +32,10 @@ export function useIsAdmin(): { isAdmin: boolean; loading: boolean } {
     retry: false,
   });
 
-  if (query.isLoading || !query.data) {
+  if (query.isLoading) {
     return { isAdmin: false, loading: true };
   }
-  return { isAdmin: !!query.data.isAdmin, loading: false };
+  return { isAdmin: !!query.data?.isAdmin, loading: false };
 }
 
 // ---------------------------------------------------------------------------

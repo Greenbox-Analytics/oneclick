@@ -36,7 +36,7 @@ __pycache__/
 *.pyd
 
 # superpowers brainstorm sessions
-.superpowers/
+.docs/superpowers/
 
 # supabase temp files
 .temp

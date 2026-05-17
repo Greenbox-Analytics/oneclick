@@ -44,7 +44,13 @@ export const useOnboardingStatus = (): OnboardingStatus => {
     };
 
     checkStatus();
-  }, [user]);
+    // Depend on user.id (stable scalar), NOT user (object reference) — the
+    // AuthContext can re-render with a new user object on every parent render,
+    // which would re-fire this effect forever and DoS the supabase REST endpoint
+    // with thousands of identical queries (browser then errors with
+    // ERR_INSUFFICIENT_RESOURCES). The id is what actually identifies the user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   return { onboardingCompleted, walkthroughCompleted, loading };
 };
