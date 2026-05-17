@@ -41,7 +41,10 @@ def is_streaming_equivalent_royalty_type(royalty_type: str) -> bool:
     if not royalty_type:
         return False
     normalized = royalty_type.lower()
-    return any(term in normalized for term in STREAMING_EQUIVALENT_TERMS)
+    # Lowercase each term too — STREAMING_EQUIVALENT_TERMS contains mixed-case
+    # entries like "DPD" and "SoundExchange royalties" that would otherwise
+    # never match a lowercased input.
+    return any(term.lower() in normalized for term in STREAMING_EQUIVALENT_TERMS)
 
 
 @dataclass
@@ -752,6 +755,12 @@ class RoyaltyCalculator:
 
         if not song_totals:
             raise ValueError("❌ No songs found in royalty statement")
+
+        # Debug: log raw royalty_type vs terms to disambiguate streaming-filter misses
+        logger.info("   🔎 Royalty shares before streaming filter:")
+        for i, share in enumerate(contract_data.royalty_shares, 1):
+            logger.info(f"      {i}. royalty_type={share.royalty_type!r}")
+            logger.info(f"         terms={share.terms!r}")
 
         # Filter for streaming royalties (including equivalent master/producer labels)
         streaming_shares = [
