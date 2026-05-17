@@ -23,5 +23,10 @@ export function useAnalytics() {
       capture("paywall_upgrade_clicked", { feature, source }),
     captureCheckoutStarted: (plan: Plan) => capture("checkout_started", { plan }),
     captureCheckoutCompleted: (plan: Plan) => capture("checkout_completed", { plan }),
+    // NEW — admin role grants (Task 5 of DB-backed admin roles)
+    captureAdminUserPromoted: (targetUserId: string) =>
+      capture("admin_user_promoted", { target_user_id: targetUserId }),
+    captureAdminUserDemoted: (targetUserId: string) =>
+      capture("admin_user_demoted", { target_user_id: targetUserId }),
   };
 }

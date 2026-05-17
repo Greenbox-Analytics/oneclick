@@ -10,6 +10,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AdminProtectedRoute } from "@/components/AdminProtectedRoute";
 import { usePageTimer } from "@/hooks/usePageTimer";
+import { useAdminPosthogTag } from "@/hooks/useAdminPosthogTag";
 
 // Eager — small, needed on initial load
 import Index from "./pages/Index";
@@ -54,6 +55,11 @@ function PageTimer() {
   return null;
 }
 
+function AdminPosthogTagger() {
+  useAdminPosthogTag();
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider>
@@ -64,6 +70,7 @@ const App = () => (
         <BrowserRouter>
           <PageTimer />
           <AuthProvider>
+            <AdminPosthogTagger />
             <Suspense fallback={<PageLoader />}>
           <Routes>
             <Route path="/" element={<Index />} />

@@ -47,6 +47,8 @@ export interface AdminUserRow {
   email: string | null;
   tier: "free" | "pro";
   has_override: boolean;
+  is_admin: boolean;
+  is_env_admin: boolean;
   created_at: string | null;
 }
 
@@ -132,7 +134,19 @@ export function useAdminMutations() {
     onSuccess: (_data, userId) => invalidateUser(userId),
   });
 
-  return { grantPro, revokePro, applyOverride, clearOverride };
+  const promoteAdmin = useMutation({
+    mutationFn: async (userId: string) =>
+      apiFetch(`${API_URL}/admin/users/${userId}/promote`, { method: "POST" }),
+    onSuccess: (_data, userId) => invalidateUser(userId),
+  });
+
+  const demoteAdmin = useMutation({
+    mutationFn: async (userId: string) =>
+      apiFetch(`${API_URL}/admin/users/${userId}/demote`, { method: "POST" }),
+    onSuccess: (_data, userId) => invalidateUser(userId),
+  });
+
+  return { grantPro, revokePro, applyOverride, clearOverride, promoteAdmin, demoteAdmin };
 }
 
 // ---------------------------------------------------------------------------

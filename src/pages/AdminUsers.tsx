@@ -20,6 +20,8 @@ import {
   ApiError,
 } from "@/hooks/useTesterGrants";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -222,6 +224,7 @@ const AdminUsers = () => {
               <tr>
                 <th className="px-4 py-3 font-medium">Email</th>
                 <th className="px-4 py-3 font-medium">Tier</th>
+                <th className="px-4 py-3 font-medium">Admin</th>
                 <th className="px-4 py-3 font-medium">Override</th>
                 <th className="px-4 py-3 font-medium">Created</th>
                 <th className="px-4 py-3 font-medium text-right">Actions</th>
@@ -229,10 +232,10 @@ const AdminUsers = () => {
             </thead>
             <tbody>
               {usersQuery.isLoading && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
               )}
               {usersQuery.error && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-destructive">
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-destructive">
                   Couldn't load users — please refresh.
                 </td></tr>
               )}
@@ -243,6 +246,15 @@ const AdminUsers = () => {
                     <Badge variant={u.tier === "pro" ? "default" : "outline"}>
                       {u.tier === "pro" ? "Pro" : "Free"}
                     </Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    {u.is_env_admin ? (
+                      <Badge variant="secondary">Admin (env)</Badge>
+                    ) : u.is_admin ? (
+                      <Badge variant="secondary">Admin</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {u.has_override ? "Yes" : "—"}
@@ -299,8 +311,10 @@ interface SheetProps {
 
 const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
   const detailQuery = useEntitlementsForUser(userId);
-  const { grantPro, revokePro, clearOverride } = useAdminMutations();
+  const { grantPro, revokePro, clearOverride, promoteAdmin, demoteAdmin } = useAdminMutations();
   const [overrideOpen, setOverrideOpen] = useState(false);
+  const { user: currentUser } = useAuth();
+  const { captureAdminUserPromoted, captureAdminUserDemoted } = useAnalytics();
 
   const handleGrant = async () => {
     if (!userId) return;
@@ -327,6 +341,28 @@ const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
     try {
       await clearOverride.mutateAsync(userId);
       toast.success("Override cleared");
+    } catch (e) {
+      toast.error(`Failed: ${(e as Error).message}`);
+    }
+  };
+
+  const handlePromote = async () => {
+    if (!userId) return;
+    try {
+      await promoteAdmin.mutateAsync(userId);
+      captureAdminUserPromoted(userId);
+      toast.success("Promoted to admin");
+    } catch (e) {
+      toast.error(`Failed: ${(e as Error).message}`);
+    }
+  };
+
+  const handleDemote = async () => {
+    if (!userId) return;
+    try {
+      await demoteAdmin.mutateAsync(userId);
+      captureAdminUserDemoted(userId);
+      toast.success("Demoted from admin");
     } catch (e) {
       toast.error(`Failed: ${(e as Error).message}`);
     }
@@ -367,6 +403,47 @@ const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
                 ) : (
                   <Button size="sm" variant="outline" onClick={handleRevoke} disabled={revokePro.isPending}>
                     Revoke Pro
+                  </Button>
+                )}
+              </div>
+            </section>
+
+            {/* Role */}
+            <section>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Role</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {data.user.is_env_admin ? (
+                  <>
+                    <Badge variant="secondary">Admin (env)</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      Managed via ADMIN_EMAILS — edit env to revoke.
+                    </span>
+                  </>
+                ) : data.user.is_admin ? (
+                  <>
+                    <Badge variant="secondary">Admin</Badge>
+                    {currentUser?.id === userId ? (
+                      <span className="text-xs text-muted-foreground">
+                        (cannot demote yourself)
+                      </span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleDemote}
+                        disabled={demoteAdmin.isPending}
+                      >
+                        Demote
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={handlePromote}
+                    disabled={promoteAdmin.isPending}
+                  >
+                    Promote to admin
                   </Button>
                 )}
               </div>

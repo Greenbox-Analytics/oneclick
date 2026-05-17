@@ -471,3 +471,153 @@ class TestGetUserDetail:
         assert result["override"] is not None
         assert result["override"]["max_artists"] == 10
         assert result["override"]["zoe_enabled"] is True
+
+
+class TestPromoteDemote:
+    """profiles.is_admin toggle via AdminService.
+
+    Note: mock_supabase.table.side_effect is _default_table_side_effect which
+    returns a FRESH MockQueryBuilder per call. To assert on the builder used
+    inside the service call, we register a custom side_effect that returns a
+    shared, pre-spied builder for the 'profiles' table.
+    """
+
+    def _profiles_builder_with_spy(self, mock_supabase):
+        """Install a shared MockQueryBuilder for the 'profiles' table with
+        update() spied. Returns (builder, update_spy)."""
+        builder = MockQueryBuilder()
+        update_spy = MagicMock(return_value=builder)
+        builder.update = update_spy
+
+        original_side = mock_supabase.table.side_effect
+
+        def _side(name):
+            if name == "profiles":
+                return builder
+            return original_side(name)
+
+        mock_supabase.table.side_effect = _side
+        return builder, update_spy
+
+    def test_promote_user_calls_update_with_is_admin_true(self, mock_supabase):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        builder, update_spy = self._profiles_builder_with_spy(mock_supabase)
+        target_uid = "44444444-4444-4444-4444-444444444444"
+
+        svc = AdminService(mock_supabase, EntitlementsService(mock_supabase))
+        svc.promote_user(target_uid)
+
+        update_spy.assert_called_once_with({"is_admin": True})
+        assert builder.execute.called
+
+    def test_demote_user_calls_update_with_is_admin_false(self, mock_supabase):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        builder, update_spy = self._profiles_builder_with_spy(mock_supabase)
+        target_uid = "55555555-5555-5555-5555-555555555555"
+
+        svc = AdminService(mock_supabase, EntitlementsService(mock_supabase))
+        svc.demote_user(target_uid)
+
+        update_spy.assert_called_once_with({"is_admin": False})
+        assert builder.execute.called
+
+    def test_get_email_for_user_id_returns_email_when_found(self, mock_supabase):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        mock_user = MagicMock()
+        mock_user.email = "target@example.com"
+        mock_supabase.auth.admin.get_user_by_id.return_value = MagicMock(user=mock_user)
+
+        svc = AdminService(mock_supabase, EntitlementsService(mock_supabase))
+        result = svc.get_email_for_user_id("66666666-6666-6666-6666-666666666666")
+        assert result == "target@example.com"
+
+    def test_get_email_for_user_id_returns_none_on_lookup_failure(self, mock_supabase):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        mock_supabase.auth.admin.get_user_by_id.side_effect = Exception("404")
+        svc = AdminService(mock_supabase, EntitlementsService(mock_supabase))
+        assert svc.get_email_for_user_id("nope") is None
+
+
+class TestAdminFlagsInResponses:
+    def test_list_users_includes_is_admin_and_is_env_admin(self, mock_supabase, monkeypatch):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        monkeypatch.setenv("ADMIN_EMAILS", "env@example.com")
+
+        u1 = MagicMock(id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email="env@example.com", created_at="2026-01-01")
+        u2 = MagicMock(id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", email="db@example.com", created_at="2026-01-02")
+        mock_supabase.auth.admin.list_users.return_value = [u1, u2]
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "profiles":
+                b.execute.return_value = MagicMock(
+                    data=[
+                        {"id": str(u1.id), "is_admin": False},
+                        {"id": str(u2.id), "is_admin": True},
+                    ]
+                )
+            elif name in ("subscriptions", "tier_overrides"):
+                b.execute.return_value = MagicMock(data=[])
+            return b
+
+        original_side = mock_supabase.table.side_effect
+
+        def _side(name):
+            if name in ("profiles", "subscriptions", "tier_overrides"):
+                return _table(name)
+            return original_side(name)
+
+        mock_supabase.table.side_effect = _side
+        svc = AdminService(mock_supabase, EntitlementsService(mock_supabase))
+        result = svc.list_users()
+
+        rows = {r["id"]: r for r in result["users"]}
+        assert rows[str(u1.id)]["is_env_admin"] is True
+        assert rows[str(u1.id)]["is_admin"] is False
+        assert rows[str(u2.id)]["is_env_admin"] is False
+        assert rows[str(u2.id)]["is_admin"] is True
+
+    def test_get_user_detail_includes_admin_flags(self, mock_supabase, monkeypatch):
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        monkeypatch.setenv("ADMIN_EMAILS", "env@example.com")
+        uid = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+        mock_user = MagicMock()
+        mock_user.id = uid
+        mock_user.email = "env@example.com"
+        mock_user.created_at = "2026-01-01"
+        mock_supabase.auth.admin.get_user_by_id.return_value = MagicMock(user=mock_user)
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "profiles":
+                b.execute.return_value = MagicMock(data=[{"is_admin": False}])
+            elif name == "tier_overrides":
+                b.execute.return_value = MagicMock(data=[])
+            return b
+
+        original_side = mock_supabase.table.side_effect
+
+        def _side(name):
+            if name in ("profiles", "tier_overrides"):
+                return _table(name)
+            return original_side(name)
+
+        mock_supabase.table.side_effect = _side
+        svc = AdminService(mock_supabase, EntitlementsService(mock_supabase))
+        result = svc.get_user_detail(uid)
+
+        assert result["user"]["is_env_admin"] is True
+        assert result["user"]["is_admin"] is False

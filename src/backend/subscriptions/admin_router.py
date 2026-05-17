@@ -11,7 +11,8 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from subscriptions.admin_auth import require_admin
+from auth import get_current_user_id
+from subscriptions.admin_auth import is_env_admin, require_admin
 from subscriptions.admin_service import AdminService
 from subscriptions.models import OverridePayload
 from subscriptions.service import EntitlementsService
@@ -89,6 +90,39 @@ async def revoke_pro(
         if "foreign key" in msg or "violates" in msg:
             raise HTTPException(status_code=400, detail="User not found")
         raise
+    return {"ok": True}
+
+
+@router.post("/users/{user_id}/promote")
+async def promote_user(
+    user_id: str,
+    _admin: str = Depends(require_admin),
+) -> dict:
+    """Grant admin privileges to *user_id* via profiles.is_admin = true."""
+    _get_admin_service().promote_user(user_id)
+    return {"ok": True}
+
+
+@router.post("/users/{user_id}/demote")
+async def demote_user(
+    user_id: str,
+    caller_id: str = Depends(get_current_user_id),
+    _admin: str = Depends(require_admin),
+) -> dict:
+    """Revoke admin privileges. Blocks self-demote, env-admin demote, and
+    fails closed when the target's email can't be verified (so the UI never
+    shows a misleading "Demoted" toast for a still-admin user)."""
+    if user_id == caller_id:
+        raise HTTPException(status_code=400, detail="Cannot demote yourself")
+    target_email = _get_admin_service().get_email_for_user_id(user_id)
+    if target_email is None:
+        raise HTTPException(status_code=400, detail="Could not verify target user — try again")
+    if is_env_admin(target_email):
+        raise HTTPException(
+            status_code=400,
+            detail=("Cannot demote env-managed admin — remove from ADMIN_EMAILS instead"),
+        )
+    _get_admin_service().demote_user(user_id)
     return {"ok": True}
 
 

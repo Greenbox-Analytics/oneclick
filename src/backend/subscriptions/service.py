@@ -32,20 +32,6 @@ def _bypass_paywalls_enabled() -> bool:
     return os.getenv("BYPASS_PAYWALLS", "").strip().lower() == "true"
 
 
-def _is_admin_email(email: str | None) -> bool:
-    """Returns True if *email* is in the ADMIN_EMAILS allowlist (case-insensitive).
-
-    Replicates the same lookup logic used in subscriptions/admin_auth.py so
-    that the service layer can check admin status without depending on FastAPI
-    request machinery.  Returns False if email is None or ADMIN_EMAILS is unset.
-    """
-    if not email:
-        return False
-    raw = os.getenv("ADMIN_EMAILS", "")
-    admin_emails = {e.strip().lower() for e in raw.split(",") if e.strip()}
-    return email.strip().lower() in admin_emails
-
-
 def _patch_for_max_pro(ent: Entitlements) -> Entitlements:
     """Return a copy of *ent* with all caps set to -1 (unlimited) and all features enabled.
 

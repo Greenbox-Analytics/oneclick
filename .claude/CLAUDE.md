@@ -215,6 +215,14 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 - **Zoe** analyzes contracts tied to works (including shared works where user is a collaborator)
 - Both tools are standalone but read from the shared data model
 
+### Admin Roles
+
+Admin access is granted two ways:
+1. **Bootstrap:** Emails in the `ADMIN_EMAILS` env var are always admins. Used to seed the first admin(s); store in GSM in prod.
+2. **DB-managed:** `profiles.is_admin = true` grants admin access. Toggled by other admins via `/admin/users` → "Promote to admin" / "Demote".
+
+Self-demote and env-admin demote are blocked at the backend. To revoke an env admin, remove them from `ADMIN_EMAILS` and redeploy. The single source of truth for "is this user an admin?" is `is_user_admin(supabase, email, user_id)` in `src/backend/subscriptions/admin_auth.py`.
+
 ## Database Conventions
 
 - All tables use UUID primary keys (`gen_random_uuid()`)

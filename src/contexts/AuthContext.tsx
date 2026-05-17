@@ -4,14 +4,6 @@ import { supabase } from '@/integrations/supabase/client';
 import { apiFetch, API_URL } from '@/lib/apiFetch';
 import { identifyUser, resetUser } from '@/lib/posthog';
 
-// Env-driven, never changes at runtime — hoist out of the component so it's not
-// rebuilt as a new array reference per render (which would invalidate the
-// auth-subscription useEffect deps and trigger an infinite re-subscribe loop).
-const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "")
-  .split(",")
-  .map((e: string) => e.trim().toLowerCase())
-  .filter(Boolean);
-
 interface AuthContextType {
   user: User | null;
   session: Session | null;
@@ -62,10 +54,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       // SP-Analytics: identify/reset PostHog distinct_id
       if (session?.user) {
-        const isAdmin = ADMIN_EMAILS.includes((session.user.email || "").toLowerCase());
         identifyUser(session.user.id, {
           email: session.user.email,
-          ...(isAdmin && { is_admin: true }),
         });
       } else if (event === "SIGNED_OUT") {
         resetUser();

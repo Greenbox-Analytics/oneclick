@@ -168,6 +168,20 @@ export interface RawOverride {
   expires_at: string | null;
 }
 
+export interface AdminUserDetailUser {
+  id: string;
+  email: string | null;
+  created_at: string | null;
+  is_admin: boolean;
+  is_env_admin: boolean;
+}
+
+export interface AdminUserDetail {
+  user: AdminUserDetailUser;
+  entitlements: Entitlements;
+  override: RawOverride | null;
+}
+
 /**
  * Admin-only hook to fetch any user's full entitlements + identity + raw override.
  * Calls GET /admin/users/{id}; only enabled when userId is set.
@@ -176,19 +190,11 @@ export interface RawOverride {
  * override-editor can pre-fill with current values (vs starting empty and
  * accidentally clearing existing overrides via incomplete re-submit).
  */
-export function useEntitlementsForUser(userId: string | null): UseQueryResult<{
-  user: { id: string; email: string | null; created_at: string | null };
-  entitlements: Entitlements;
-  override: RawOverride | null;
-}> {
+export function useEntitlementsForUser(userId: string | null): UseQueryResult<AdminUserDetail> {
   return useQuery({
     queryKey: ["admin", "users", userId, "detail"],
     queryFn: async () =>
-      apiFetch<{
-        user: { id: string; email: string | null; created_at: string | null };
-        entitlements: Entitlements;
-        override: RawOverride | null;
-      }>(`${API_URL}/admin/users/${userId}`),
+      apiFetch<AdminUserDetail>(`${API_URL}/admin/users/${userId}`),
     enabled: !!userId,
     staleTime: 30_000,
   });

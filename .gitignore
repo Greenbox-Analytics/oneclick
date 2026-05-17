@@ -35,8 +35,9 @@ __pycache__/
 *.pyo
 *.pyd
 
-# superpowers brainstorm sessions
-.docs/superpowers/
+# superpowers brainstorm sessions / plans / specs (local-only, not pushed to GitHub)
+docs/superpowers/plans/
+docs/superpowers/specs/
 
 # supabase temp files
 .temp

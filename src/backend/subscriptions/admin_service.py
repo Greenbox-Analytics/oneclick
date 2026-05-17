@@ -5,12 +5,16 @@ The require_admin FastAPI dependency is the security gate; this service
 itself does NOT re-check admin permissions.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from supabase import Client
 
+from subscriptions.admin_auth import env_admin_emails, is_env_admin
 from subscriptions.service import EntitlementsService
+
+logger = logging.getLogger(__name__)
 
 
 class AdminService:
@@ -49,6 +53,12 @@ class AdminService:
         overrides_res = self.supabase.table("tier_overrides").select("user_id").in_("user_id", user_ids).execute()
         override_uids = {row["user_id"] for row in (overrides_res.data or [])}
 
+        # Bulk fetch profiles.is_admin for these user_ids (no N+1)
+        profiles_res = self.supabase.table("profiles").select("id, is_admin").in_("id", user_ids).execute()
+        admin_uids = {row["id"] for row in (profiles_res.data or []) if row.get("is_admin") is True}
+
+        env_emails = env_admin_emails()
+
         users = []
         for u in auth_users:
             uid = getattr(u, "id", None)
@@ -63,6 +73,8 @@ class AdminService:
                     "email": email,
                     "tier": sub.get("tier", "free"),
                     "has_override": uid in override_uids,
+                    "is_admin": uid in admin_uids,
+                    "is_env_admin": bool(email and email.strip().lower() in env_emails),
                     "created_at": str(created_at) if created_at else None,
                 }
             )
@@ -91,6 +103,16 @@ class AdminService:
             }
         except Exception:
             user = {"id": user_id, "email": None, "created_at": None}
+
+        # Enrich with admin flags (defensive: missing profile row → False)
+        try:
+            pr = self.supabase.table("profiles").select("is_admin").eq("id", user_id).limit(1).execute()
+            user["is_admin"] = bool(pr.data and pr.data[0].get("is_admin") is True)
+        except Exception as exc:
+            logger.warning("get_user_detail profiles lookup failed for %s: %s", user_id, exc)
+            user["is_admin"] = False
+
+        user["is_env_admin"] = is_env_admin(user.get("email"))
 
         ent = self.entitlements_service.get_for_user(user_id)
 
@@ -208,3 +230,38 @@ class AdminService:
     def revoke_tester_grant(self, user_id: str) -> None:
         """DELETE the tier_overrides row for user_id."""
         self.supabase.table("tier_overrides").delete().eq("user_id", user_id).execute()
+
+    # ------------------------------------------------------------------
+    # Admin role management (profiles.is_admin toggle)
+    # ------------------------------------------------------------------
+
+    def promote_user(self, user_id: str) -> None:
+        """Set profiles.is_admin = true for user_id. Idempotent.
+
+        Uses service-role client — bypasses RLS.
+        """
+        self.supabase.table("profiles").update({"is_admin": True}).eq("id", user_id).execute()
+
+    def demote_user(self, user_id: str) -> None:
+        """Set profiles.is_admin = false for user_id. Idempotent.
+
+        Note: this only affects DB-backed admin status. If the target is
+        ALSO in ADMIN_EMAILS env-var, they remain admin via the env path
+        until removed from the allowlist — the admin_router endpoint
+        rejects demote requests against env-admins so the operator sees
+        the correct next step.
+        """
+        self.supabase.table("profiles").update({"is_admin": False}).eq("id", user_id).execute()
+
+    def get_email_for_user_id(self, user_id: str) -> str | None:
+        """Look up an auth user's email by id. Returns None if not found
+        or the lookup fails — callers should treat None as "unknown" and
+        decide what's safe (e.g. promote may proceed without email, demote
+        cannot verify env-admin status without it)."""
+        try:
+            res = self.supabase.auth.admin.get_user_by_id(user_id)
+            user = getattr(res, "user", None)
+            return getattr(user, "email", None) if user else None
+        except Exception as exc:
+            logger.warning("get_email_for_user_id lookup failed for %s: %s", user_id, exc)
+            return None

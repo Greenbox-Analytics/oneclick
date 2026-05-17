@@ -100,6 +100,155 @@ class TestAdminMe:
         assert resp.status_code == 200
 
 
+class TestRequireAdminDbPath:
+    """require_admin must accept users whose profiles.is_admin = true even
+    if their email is NOT in ADMIN_EMAILS."""
+
+    def _install_profiles_side_effect(self, mock_supabase, profiles_builder):
+        """Install a side_effect that returns *profiles_builder* for the
+        'profiles' table and delegates to the default for everything else."""
+        original_side = mock_supabase.table.side_effect
+
+        def _side(name):
+            if name == "profiles":
+                return profiles_builder
+            return original_side(name)
+
+        mock_supabase.table.side_effect = _side
+
+    def test_db_admin_with_empty_env_can_access_admin_me(self, mock_supabase, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        import main
+        from auth import get_current_user_email, get_current_user_id
+
+        monkeypatch.setenv("ADMIN_EMAILS", "")  # no env admins at all
+        DB_ADMIN_EMAIL = "dbadmin@example.com"
+        DB_ADMIN_UID = "11111111-1111-1111-1111-111111111111"
+
+        # Profile lookup for the caller returns is_admin=true. The bootstrap
+        # check (any admin exists) ALSO needs to see at least one row, so the
+        # same builder serves both calls — its .execute returns the same data
+        # each time (the chain returns self).
+        profiles_builder = MockQueryBuilder()
+        profiles_builder.execute.return_value = MagicMock(data=[{"is_admin": True}])
+        self._install_profiles_side_effect(mock_supabase, profiles_builder)
+
+        main.get_supabase_client = lambda: mock_supabase
+        main.supabase = mock_supabase
+
+        async def _email():
+            return DB_ADMIN_EMAIL
+
+        async def _uid():
+            return DB_ADMIN_UID
+
+        main.app.dependency_overrides[get_current_user_email] = _email
+        main.app.dependency_overrides[get_current_user_id] = _uid
+
+        with TestClient(main.app) as tc:
+            r = tc.get("/admin/me")
+        main.app.dependency_overrides.clear()
+
+        assert r.status_code == 200
+        assert r.json() == {"email": DB_ADMIN_EMAIL, "isAdmin": True}
+
+    def test_non_admin_with_empty_env_returns_500_when_no_db_admin(self, mock_supabase, monkeypatch):
+        """Empty env + no DB admin = operator misconfig -> 500."""
+        from fastapi.testclient import TestClient
+
+        import main
+        from auth import get_current_user_email, get_current_user_id
+
+        monkeypatch.setenv("ADMIN_EMAILS", "")
+        NON_ADMIN_UID = "22222222-2222-2222-2222-222222222222"
+
+        profiles_builder = MockQueryBuilder()
+        profiles_builder.execute.return_value = MagicMock(data=[])
+        self._install_profiles_side_effect(mock_supabase, profiles_builder)
+
+        main.get_supabase_client = lambda: mock_supabase
+        main.supabase = mock_supabase
+
+        async def _email():
+            return "user@example.com"
+
+        async def _uid():
+            return NON_ADMIN_UID
+
+        main.app.dependency_overrides[get_current_user_email] = _email
+        main.app.dependency_overrides[get_current_user_id] = _uid
+
+        with TestClient(main.app) as tc:
+            r = tc.get("/admin/me")
+        main.app.dependency_overrides.clear()
+
+        assert r.status_code == 500
+
+    def test_non_admin_with_env_configured_returns_403(self, mock_supabase, monkeypatch):
+        """Env IS configured but caller isn't admin via either path -> 403."""
+        from fastapi.testclient import TestClient
+
+        import main
+        from auth import get_current_user_email, get_current_user_id
+
+        monkeypatch.setenv("ADMIN_EMAILS", "root@example.com")
+        NON_ADMIN_UID = "44444444-4444-4444-4444-444444444444"
+
+        profiles_builder = MockQueryBuilder()
+        profiles_builder.execute.return_value = MagicMock(data=[])
+        self._install_profiles_side_effect(mock_supabase, profiles_builder)
+
+        main.get_supabase_client = lambda: mock_supabase
+        main.supabase = mock_supabase
+
+        async def _email():
+            return "user@example.com"
+
+        async def _uid():
+            return NON_ADMIN_UID
+
+        main.app.dependency_overrides[get_current_user_email] = _email
+        main.app.dependency_overrides[get_current_user_id] = _uid
+
+        with TestClient(main.app) as tc:
+            r = tc.get("/admin/me")
+        main.app.dependency_overrides.clear()
+
+        assert r.status_code == 403
+
+    def test_env_admin_works_even_when_db_lookup_fails(self, mock_supabase, monkeypatch):
+        """If profiles lookup raises, env-admin path still works."""
+        from fastapi.testclient import TestClient
+
+        import main
+        from auth import get_current_user_email, get_current_user_id
+
+        monkeypatch.setenv("ADMIN_EMAILS", "root@example.com")
+
+        profiles_builder = MockQueryBuilder()
+        profiles_builder.execute.side_effect = Exception("DB unreachable")
+        self._install_profiles_side_effect(mock_supabase, profiles_builder)
+
+        main.get_supabase_client = lambda: mock_supabase
+        main.supabase = mock_supabase
+
+        async def _email():
+            return "root@example.com"
+
+        async def _uid():
+            return "33333333-3333-3333-3333-333333333333"
+
+        main.app.dependency_overrides[get_current_user_email] = _email
+        main.app.dependency_overrides[get_current_user_id] = _uid
+
+        with TestClient(main.app) as tc:
+            r = tc.get("/admin/me")
+        main.app.dependency_overrides.clear()
+
+        assert r.status_code == 200
+
+
 class TestListUsers:
     def test_admin_can_list(self, admin_client, mock_supabase):
         mock_supabase.auth.admin.list_users.return_value = [
@@ -419,6 +568,56 @@ class TestTesterGrantEndpoints:
         assert resp.content == b""
         b = builders["tier_overrides"]
         b.delete.return_value.eq.assert_called_with("user_id", TEST_USER_ID)
+
+
+class TestPromoteDemote:
+    """POST /admin/users/{id}/promote and /demote endpoints."""
+
+    def test_promote_returns_ok(self, admin_client, mock_supabase):
+        target_uid = "77777777-7777-7777-7777-777777777777"
+        r = admin_client.post(f"/admin/users/{target_uid}/promote")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+    def test_demote_returns_ok_for_other_user(self, admin_client, mock_supabase):
+        target_uid = "88888888-8888-8888-8888-888888888888"
+        mock_user = MagicMock()
+        mock_user.email = "other@example.com"
+        mock_supabase.auth.admin.get_user_by_id.return_value = MagicMock(user=mock_user)
+
+        r = admin_client.post(f"/admin/users/{target_uid}/demote")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+    def test_demote_self_returns_400(self, admin_client):
+        r = admin_client.post(f"/admin/users/{TEST_USER_ID}/demote")
+        assert r.status_code == 400
+        assert "yourself" in r.json()["detail"].lower()
+
+    def test_demote_env_admin_returns_400(self, admin_client, mock_supabase):
+        target_uid = "99999999-9999-9999-9999-999999999999"
+        mock_user = MagicMock()
+        mock_user.email = ADMIN_EMAIL
+        mock_supabase.auth.admin.get_user_by_id.return_value = MagicMock(user=mock_user)
+
+        r = admin_client.post(f"/admin/users/{target_uid}/demote")
+        assert r.status_code == 400
+        assert "env" in r.json()["detail"].lower()
+
+    def test_demote_fails_closed_when_email_lookup_returns_none(self, admin_client, mock_supabase):
+        """If the auth lookup can't find the user (deleted, API hiccup),
+        we MUST refuse rather than silently demote — the env-admin check
+        depends on a real email, and a silent demote would lie to the UI."""
+        target_uid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"
+        mock_supabase.auth.admin.get_user_by_id.side_effect = Exception("user not found")
+
+        r = admin_client.post(f"/admin/users/{target_uid}/demote")
+        assert r.status_code == 400
+        assert "verify" in r.json()["detail"].lower()
+
+    def test_non_admin_cannot_promote(self, non_admin_client):
+        r = non_admin_client.post("/admin/users/00000000-0000-0000-0000-000000000099/promote")
+        assert r.status_code == 403
 
 
 class TestNonAdminBlocked:
