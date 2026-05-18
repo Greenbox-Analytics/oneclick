@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { markOnboardedCached } from "@/lib/onboardingCache";
 
 interface OnboardingStatus {
   onboardingCompleted: boolean;
@@ -33,8 +34,12 @@ export const useOnboardingStatus = (): OnboardingStatus => {
           setOnboardingCompleted(false);
           setWalkthroughCompleted(false);
         } else {
-          setOnboardingCompleted(data?.onboarding_completed ?? false);
+          const completed = data?.onboarding_completed ?? false;
+          setOnboardingCompleted(completed);
           setWalkthroughCompleted(data?.walkthrough_completed ?? false);
+          // Backfill the durable bypass — self-heals if the localStorage cache
+          // was ever cleared (e.g., user wiped browser data).
+          if (completed) markOnboardedCached(user.id);
         }
       } catch (err) {
         console.error("Unexpected error checking onboarding:", err);

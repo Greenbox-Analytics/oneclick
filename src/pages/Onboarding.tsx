@@ -12,6 +12,7 @@ import StepName from "@/components/onboarding/StepName";
 import StepPreferences from "@/components/onboarding/StepPreferences";
 import StepPlan from "@/components/onboarding/StepPlan";
 import StepReady from "@/components/onboarding/StepReady";
+import { markOnboardedCached } from "@/lib/onboardingCache";
 
 const TOTAL_STEPS = 5;
 
@@ -32,6 +33,7 @@ const Onboarding = () => {
   const { mutateAsync: createCheckout } = useCreateCheckoutSession();
   const [currentStep, setCurrentStep] = useState(0);
   const [checkingStatus, setCheckingStatus] = useState(true);
+  const [finishing, setFinishing] = useState(false);
 
   // Returning from a cancelled Stripe Checkout — show toast, jump back to plan step.
   // Profile was already saved before the redirect, so this is just resuming UI flow.
@@ -67,6 +69,9 @@ const Onboarding = () => {
         .single();
 
       if (data?.onboarding_completed) {
+        // Backfill the durable cache so a fully-onboarded user who lands here
+        // (e.g., bookmark to /onboarding) gets their guard bypass restored.
+        markOnboardedCached(user.id);
         navigate("/dashboard", { replace: true });
         return;
       }
@@ -93,7 +98,14 @@ const Onboarding = () => {
     };
 
     loadProfile();
-  }, [user, navigate]);
+    // Depend on user.id (stable scalar), NOT user (object reference). When the
+    // AuthContext hands down a new `user` object on a parent re-render or auth
+    // event, depending on the object would re-fire this effect and re-issue
+    // navigate("/dashboard"), producing rapid back-and-forth navigations that
+    // Chromium throttles ("Throttling navigation to prevent the browser from
+    // hanging"). Same fix as useOnboardingStatus.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, navigate]);
 
   const handleUpdate = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -129,7 +141,7 @@ const Onboarding = () => {
     return { error: error ? new Error(error.message) : null };
   };
 
-  const handleFinish = () => {
+  const handleFinish = async () => {
     if (!user) return;
 
     // Fire events for the final step (after the plan step — index 4)
@@ -137,14 +149,24 @@ const Onboarding = () => {
     captureOnboardingStepCompleted(stepName);
     captureOnboardingFinished();
 
-    // Navigate immediately — optimistic UI. The user sees the dashboard
-    // instantly while the profile upsert runs in the background.
+    // Persist BEFORE navigating so onboarding_completed=true is committed
+    // before any post-onboarding route runs its useOnboardingStatus check.
+    // Optimistic navigation here caused a race: the next route could observe
+    // onboarding_completed=false, redirect to /onboarding, and ping-pong with
+    // Onboarding.loadProfile (which then sees the committed `true` and
+    // navigates back), tripping Chromium's navigation throttle.
+    setFinishing(true);
+    const { error } = await persistProfile();
+    if (error) {
+      setFinishing(false);
+      toast.error("Couldn't save your profile — please retry");
+      return;
+    }
+    // Set the durable bypass BEFORE navigating so the next route's
+    // ProtectedRoute can trust localStorage instead of racing the supabase
+    // query for onboarding_completed.
+    markOnboardedCached(user.id);
     navigate("/dashboard", { replace: true, state: { fromOnboarding: true } });
-
-    // Fire-and-forget: persist profile in the background
-    persistProfile().then(({ error }) => {
-      if (error) console.error("Background profile save failed:", error);
-    });
   };
 
   /** Free path from the plan step — save profile + skip Stripe. */
@@ -157,6 +179,7 @@ const Onboarding = () => {
       toast.error("Couldn't save your profile — please retry");
       return;
     }
+    if (user) markOnboardedCached(user.id);
     setCurrentStep(4);
   };
 
@@ -170,6 +193,7 @@ const Onboarding = () => {
       toast.error("Couldn't save your profile — please retry");
       return;
     }
+    if (user) markOnboardedCached(user.id);
     try {
       const url = await createCheckout({
         plan,
@@ -244,7 +268,7 @@ const Onboarding = () => {
             preferredName={formData.preferredName}
             firstName={formData.firstName}
             onFinish={handleFinish}
-            isLoading={false}
+            isLoading={finishing}
           />
         )}
       </div>

@@ -50,7 +50,8 @@ const OneClick = () => {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists. Please check your backend connection.");
       });
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   // This lets us select/deselect a single artist (only one artist can be selected at a time)
   const handleArtistToggle = (artistId: string) => {

@@ -47,7 +47,8 @@ const Payments = () => {
     };
 
     fetchPayments();
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const formatCurrency = (amount: number, currency: string = "usd") => {
     return new Intl.NumberFormat("en-US", {

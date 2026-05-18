@@ -107,7 +107,10 @@ export const useToolOnboardingStatus = (): ToolOnboardingStatus => {
     };
 
     fetchStatus();
-  }, [user]);
+    // user.id is stable; user object reference may not be (AuthContext can hand
+    // down a new object on auth events). See useOnboardingStatus for full rationale.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const markToolCompleted = useCallback(
     async (toolKey: ToolKey) => {
@@ -134,7 +137,8 @@ export const useToolOnboardingStatus = (): ToolOnboardingStatus => {
         console.error("Error marking tool onboarding complete:", error);
       }
     },
-    [user]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [user?.id]
   );
 
   return { statuses, loading, markToolCompleted };

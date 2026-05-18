@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
+import { isOnboardedCached } from "@/lib/onboardingCache";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -16,7 +17,14 @@ export const ProtectedRoute = ({ children, skipOnboardingCheck = false }: Protec
   // instead of waiting for a fresh Supabase query (avoids redirect loop).
   const fromOnboarding = (location.state as { fromOnboarding?: boolean } | null)?.fromOnboarding === true;
 
-  if (authLoading || (!skipOnboardingCheck && !fromOnboarding && onboardingLoading)) {
+  // Durable bypass: once a user has finished onboarding on this browser,
+  // localStorage remembers it. A transient `false` from a racing Supabase
+  // query no longer triggers a redirect to /onboarding (which would then
+  // ping-pong with Onboarding.loadProfile's redirect back to /dashboard and
+  // hit the Chromium navigation throttle). See lib/onboardingCache.ts.
+  const cachedOnboarded = isOnboardedCached(user?.id);
+
+  if (authLoading || (!skipOnboardingCheck && !fromOnboarding && !cachedOnboarded && onboardingLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
@@ -28,7 +36,13 @@ export const ProtectedRoute = ({ children, skipOnboardingCheck = false }: Protec
     return <Navigate to="/auth" replace />;
   }
 
-  if (!skipOnboardingCheck && !fromOnboarding && !onboardingCompleted && location.pathname !== "/onboarding") {
+  if (
+    !skipOnboardingCheck &&
+    !fromOnboarding &&
+    !cachedOnboarded &&
+    !onboardingCompleted &&
+    location.pathname !== "/onboarding"
+  ) {
     return <Navigate to="/onboarding" replace />;
   }
 

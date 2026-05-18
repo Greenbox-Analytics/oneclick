@@ -60,7 +60,8 @@ const Contacts = () => {
 
   useEffect(() => {
     fetchContacts();
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const handleSave = async (data: {
     name: string;

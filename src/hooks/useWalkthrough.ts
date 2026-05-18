@@ -66,7 +66,8 @@ export const useWalkthrough = (): UseWalkthroughReturn => {
       .from("profiles")
       .update({ walkthrough_completed: true, updated_at: new Date().toISOString() })
       .eq("id", user.id);
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const start = useCallback(() => {
     setCurrentStepIndex(0);

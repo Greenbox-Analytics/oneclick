@@ -103,7 +103,8 @@ const Portfolio = () => {
       });
     };
     fetchProfile();
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const getInitials = () => {
     if (profile?.full_name) {
