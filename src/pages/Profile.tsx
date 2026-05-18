@@ -12,6 +12,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import TeamCardSettings from "@/components/profile/TeamCardSettings";
+import { DeleteAccountDialog } from "@/components/profile/DeleteAccountDialog";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -24,6 +25,7 @@ const Profile = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("theme") === "dark" || document.documentElement.classList.contains("dark");
@@ -295,6 +297,27 @@ const Profile = () => {
             </div>
           </CardContent>
         </Card>
+
+        <Card className="mt-6 border-destructive/50">
+          <CardHeader>
+            <CardTitle className="text-destructive">Danger Zone</CardTitle>
+            <CardDescription>
+              Permanently delete your account and all associated data. This action cannot be undone —
+              your projects, files, audio, and subscription will be removed immediately.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
+              Delete account
+            </Button>
+          </CardContent>
+        </Card>
+
+        <DeleteAccountDialog
+          open={deleteDialogOpen}
+          onOpenChange={setDeleteDialogOpen}
+          userEmail={user?.email ?? ""}
+        />
       </main>
 
       <ToolIntroModal

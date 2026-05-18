@@ -1,13 +1,20 @@
 """User-scoped endpoints (welcome email, future profile actions)."""
 
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from supabase import Client
 
 from analytics import capture as analytics_capture
 from analytics import identify as analytics_identify
-from auth import get_current_user_id
+from auth import get_current_user_email, get_current_user_id
 from subscriptions.admin_auth import is_active_tester_row, is_user_admin
+from users.account_deletion_service import LastAdminError, delete_user_account
 from users.emails import send_welcome_email
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -142,3 +149,37 @@ async def send_welcome(user_id: str = Depends(get_current_user_id)):
     _fire_signup_analytics(db, user_id, recipient_email, p)
 
     return {"sent": True}
+
+
+class DeleteAccountRequest(BaseModel):
+    confirmation_email: str = Field(min_length=1)
+
+
+@router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account(
+    body: DeleteAccountRequest,
+    user_id: str = Depends(get_current_user_id),
+    user_email: str = Depends(get_current_user_email),
+):
+    """Permanently delete the authenticated user's account.
+
+    Body must include `confirmation_email` matching the user's verified email
+    (case-insensitive). Cancels Stripe, removes storage objects, then deletes
+    auth.users (FKs cascade the rest). Audit logs include the email because
+    user_id will not resolve to anything after this completes.
+    """
+    if not user_email or body.confirmation_email.strip().lower() != user_email.strip().lower():
+        raise HTTPException(status_code=400, detail="confirmation_email must match your account email")
+
+    logger.info("account_delete_requested user_id=%s email=%s", user_id, user_email)
+    try:
+        delete_user_account(_get_supabase(), user_id, user_email)
+    except LastAdminError:
+        logger.info("account_delete_blocked_last_admin user_id=%s email=%s", user_id, user_email)
+        raise HTTPException(status_code=409, detail="last_admin")
+    except Exception as exc:
+        logger.exception("account_delete_failed user_id=%s email=%s: %s", user_id, user_email, exc)
+        raise HTTPException(status_code=502, detail="account_delete_failed") from exc
+
+    logger.info("account_delete_completed user_id=%s email=%s", user_id, user_email)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
