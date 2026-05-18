@@ -180,6 +180,26 @@ def _default_table_side_effect(name):
     return b
 
 
+@pytest.fixture(autouse=True)
+def _disable_paywall_bypass_by_default(monkeypatch):
+    """Ensure BYPASS_PAYWALLS is unset for every test by default.
+
+    Background: main.py calls load_dotenv() at import time, which seeds
+    os.environ from the developer's local .env. Any dev who has
+    BYPASS_PAYWALLS=true locally (to demo full-Pro UX) would otherwise see
+    ~16 gating/entitlement tests fail with assertions like `assert -1 == 3`
+    (expected Free cap of 3, got Pro cap of -1).
+
+    This fixture clears the var per-test so tests deterministically exercise
+    the gated paths regardless of the dev's local config. Tests that
+    intentionally exercise the bypass path (see
+    test_entitlements_service.py::TestBypassPaywallsBehavior) monkeypatch
+    BYPASS_PAYWALLS back to "true" themselves — that still works because
+    monkeypatch.setenv overrides the delete this fixture performs.
+    """
+    monkeypatch.delenv("BYPASS_PAYWALLS", raising=False)
+
+
 @pytest.fixture()
 def mock_supabase():
     """Return a MagicMock Supabase client with `.table()` and `.storage.from_()` wired up.

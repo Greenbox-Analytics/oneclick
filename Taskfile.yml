@@ -39,44 +39,255 @@ tasks:
       - task: setup:secrets
 
   setup:secrets:
-    desc: Pull secrets from Google Secret Manager into .env
+    desc: Pull secrets from GSM into .env (alias for setup:secrets:dev)
+    cmds:
+      - task: setup:secrets:dev
+
+  setup:secrets:dev:
+    desc: |
+      Merge DEV-flavored secrets from GSM into .env (Stripe test mode, dev PostHog).
+      Additive only: keys with a live (uncommented, non-empty) value in .env are preserved;
+      keys missing, commented out, or empty get filled from GSM.
+    cmds:
+      - task: _setup:secrets:internal
+        vars:
+          ENV_SUFFIX: DEV
+          BYPASS_PAYWALLS: "false"
+          POSTHOG_ENABLED: "false"
+          FRONTEND_URL: "http://localhost:8080"
+          VITE_BACKEND_API_URL: "http://localhost:8000"
+
+  setup:secrets:prod:
+    desc: |
+      Merge PROD-flavored secrets from GSM into .env (Stripe LIVE mode, prod PostHog).
+      Additive only: existing live values in .env are preserved.
+      Use with care — never run a local dev server with prod Stripe keys against prod data.
+      To do a clean refill, run setup:secrets:reset:prod instead.
+    prompt: Merge PROD secrets (Stripe LIVE keys) into .env? Continue?
+    cmds:
+      - task: _setup:secrets:internal
+        vars:
+          ENV_SUFFIX: PROD
+          BYPASS_PAYWALLS: "false"
+          POSTHOG_ENABLED: "false"
+          FRONTEND_URL: "https://app.msanii.com"
+          VITE_BACKEND_API_URL: "https://msanii-backend-529844341368.northamerica-northeast2.run.app"
+
+  setup:secrets:reset:dev:
+    desc: |
+      DESTRUCTIVE: replace .env entirely with DEV-flavored GSM secrets.
+      Your current .env is backed up to .env.backup (gitignored) before deletion.
+      Use when you want a clean slate; otherwise prefer the additive setup:secrets:dev.
+    prompt: This will DELETE your .env and refill with DEV secrets. Continue?
+    cmds:
+      - task: _setup:secrets:reset-env-file
+      - task: setup:secrets:dev
+
+  setup:secrets:reset:prod:
+    desc: |
+      DESTRUCTIVE: replace .env entirely with PROD-flavored GSM secrets (Stripe LIVE).
+      Your current .env is backed up to .env.backup (gitignored) before deletion.
+      Use when you want a clean slate; otherwise prefer the additive setup:secrets:prod.
+    prompt: This will DELETE your .env and refill with PROD secrets (Stripe LIVE). Continue?
+    cmds:
+      - task: _setup:secrets:reset-env-file
+      - task: _setup:secrets:internal
+        vars:
+          ENV_SUFFIX: PROD
+          BYPASS_PAYWALLS: "false"
+          POSTHOG_ENABLED: "false"
+          FRONTEND_URL: "https://app.msanii.com"
+          VITE_BACKEND_API_URL: "https://msanii-backend-529844341368.northamerica-northeast2.run.app"
+
+  _setup:secrets:reset-env-file:
+    desc: Internal — back up and delete .env. Used by setup:secrets:reset:* tasks.
+    internal: true
+    cmds:
+      - |
+        if [[ -f .env ]]; then
+          cp .env .env.backup
+          echo "Backed up current .env to .env.backup ($(wc -l < .env | tr -d ' ') lines)"
+          rm .env
+          echo "Deleted .env"
+        else
+          echo "No .env to back up"
+        fi
+
+  _setup:secrets:internal:
+    desc: Internal — do not call directly. Use setup:secrets:dev or setup:secrets:prod.
+    internal: true
     preconditions:
       - sh: gcloud auth print-identity-token > /dev/null 2>&1
         msg: |
           Not authenticated with gcloud. Run:
-            gcloud auth login
+            gcloud auth login --update-adc
             gcloud config set project {{.GCP_PROJECT}}
-    vars:
-      SECRETS: >-
-        VITE_SUPABASE_URL
-        VITE_SUPABASE_ANON_KEY
-        VITE_SUPABASE_SECRET_KEY
-        OPENAI_API_KEY
-        OPENAI_LLM_MODEL
-        OPENAI_LLM_MODEL_LARGE
-        DEV_ALLOWED_ORIGINS
-        PROD_ALLOWED_ORIGINS
-        INTEGRATION_ENCRYPTION_KEY
-        INTEGRATION_OAUTH_STATE_SECRET
-        GOOGLE_DRIVE_CLIENT_ID
-        GOOGLE_DRIVE_CLIENT_SECRET
-        SLACK_CLIENT_ID
-        SLACK_CLIENT_SECRET
+      - sh: '[[ "{{.ENV_SUFFIX}}" == "DEV" || "{{.ENV_SUFFIX}}" == "PROD" ]]'
+        msg: ENV_SUFFIX must be DEV or PROD
     cmds:
       - |
-        echo "Pulling secrets from GSM (project: {{.GCP_PROJECT}})..."
-        > .env
-        for secret in {{.SECRETS}}; do
-          value=$(gcloud secrets versions access latest \
-            --secret="$secret" \
-            --project="{{.GCP_PROJECT}}" 2>/dev/null) && \
-          echo "${secret}=${value}" >> .env && \
-          echo "  ✓ ${secret}" || \
-          echo "  ✗ ${secret} (not found or no access)"
-        done
-        echo "Secrets written to .env"
-    status:
-      - test -f .env
+        echo "Merging {{.ENV_SUFFIX}} secrets from GSM into .env (project: {{.GCP_PROJECT}})..."
+        echo "Legend:  ✓ added   ◌ kept your local value   ✗ not in GSM"
+        touch .env
+
+        # True if KEY has an uncommented, non-empty value in .env.
+        # Handles all of these formats as "live":
+        #   KEY=value
+        #   KEY = value          (whitespace around =)
+        #     KEY=value          (leading whitespace)
+        # Treated as "missing" (will be filled from GSM/literal):
+        #   # KEY=value          (commented out)
+        #   KEY=                 (empty value)
+        #   KEY =                (empty with whitespace)
+        has_live_entry() {
+          local key="$1"
+          grep -qE "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*[^[:space:]#]" .env
+        }
+
+        # ---- Section machinery ----
+        # Each "section" buffers its additions in PENDING_LINES. end_section()
+        # emits the section header + buffered lines to .env, but only if at
+        # least one key was added (so re-runs don't produce empty headers).
+        PENDING_LINES=()
+        CURRENT_SECTION_TITLE=""
+
+        start_section() {
+          CURRENT_SECTION_TITLE="$1"
+          PENDING_LINES=()
+          echo
+          echo "[$CURRENT_SECTION_TITLE]"
+        }
+
+        end_section() {
+          if (( ${#PENDING_LINES[@]} == 0 )); then
+            return
+          fi
+          {
+            echo ""
+            echo "# ============================================================================"
+            echo "# ${CURRENT_SECTION_TITLE}"
+            echo "# ============================================================================"
+            for line in "${PENDING_LINES[@]}"; do
+              echo "$line"
+            done
+          } >> .env
+          PENDING_LINES=()
+        }
+
+        # Try a shared GSM secret (GSM name == env-var name)
+        try_gsm() {
+          local key="$1"
+          if has_live_entry "$key"; then
+            echo "  ◌ $key"
+            return
+          fi
+          local value
+          if value=$(gcloud secrets versions access latest --secret="$key" --project="{{.GCP_PROJECT}}" 2>/dev/null); then
+            PENDING_LINES+=("${key}=${value}")
+            echo "  ✓ $key"
+          else
+            echo "  ✗ $key (not in GSM or no access)"
+          fi
+        }
+
+        # Try an env-scoped GSM secret (GSM stores NAME_DEV / NAME_PROD; written as NAME)
+        try_gsm_scoped() {
+          local base="$1"
+          if has_live_entry "$base"; then
+            echo "  ◌ $base"
+            return
+          fi
+          local gsm_name="${base}_{{.ENV_SUFFIX}}"
+          local value
+          if value=$(gcloud secrets versions access latest --secret="$gsm_name" --project="{{.GCP_PROJECT}}" 2>/dev/null); then
+            PENDING_LINES+=("${base}=${value}")
+            echo "  ✓ $base (from $gsm_name)"
+          else
+            echo "  ✗ $gsm_name (not in GSM or no access)"
+          fi
+        }
+
+        # Literal value (env-specific config, not from GSM)
+        try_literal() {
+          local key="$1"
+          local value="$2"
+          if has_live_entry "$key"; then
+            echo "  ◌ $key"
+            return
+          fi
+          PENDING_LINES+=("${key}=${value}")
+          echo "  ✓ $key"
+        }
+
+        # ============ Sections (mirror docs/.env.example structure) ============
+
+        start_section "SUPABASE"
+        try_gsm "VITE_SUPABASE_URL"
+        try_gsm "VITE_SUPABASE_ANON_KEY"
+        try_gsm "VITE_SUPABASE_SECRET_KEY"
+        try_gsm "DATABASE_PW"
+        end_section
+
+        start_section "OPENAI API KEYS"
+        try_gsm "OPENAI_API_KEY"
+        try_gsm "OPENAI_LLM_MODEL"
+        try_gsm "OPENAI_LLM_MODEL_LARGE"
+        end_section
+
+        start_section "ENCRYPTION KEYS & SECRETS"
+        try_gsm "INTEGRATION_ENCRYPTION_KEY"
+        try_gsm "INTEGRATION_OAUTH_STATE_SECRET"
+        try_gsm "CREDENTIALS_AES_KEY"
+        end_section
+
+        start_section "GOOGLE DRIVE AUTH MSANII BACKEND"
+        try_gsm "GOOGLE_DRIVE_CLIENT_ID"
+        try_gsm "GOOGLE_DRIVE_CLIENT_SECRET"
+        end_section
+
+        start_section "SLACK INTEGRATION"
+        try_gsm "SLACK_CLIENT_ID"
+        try_gsm "SLACK_CLIENT_SECRET"
+        end_section
+
+        start_section "NOTION INTEGRATION"
+        try_gsm "NOTION_CLIENT_ID"
+        try_gsm "NOTION_CLIENT_SECRET"
+        end_section
+
+        start_section "POSTHOG"
+        try_literal "POSTHOG_ENABLED" "{{.POSTHOG_ENABLED}}"
+        try_gsm "POSTHOG_PROJECT_TOKEN"
+        try_literal "POSTHOG_HOST" "https://us.i.posthog.com"
+        try_gsm "POSTHOG_PERSONAL_API_KEY"
+        try_gsm "POSTHOG_PROJECT_ID"
+        end_section
+
+        start_section "STRIPE INTEGRATION"
+        try_gsm_scoped "STRIPE_SECRET_KEY"
+        try_gsm_scoped "STRIPE_WEBHOOK_SECRET"
+        try_gsm "STRIPE_PRICE_MONTHLY"
+        try_gsm "STRIPE_PRICE_ANNUAL"
+        end_section
+
+        start_section "RESEND SMTP"
+        try_gsm "RESEND_API_KEY"
+        try_gsm "RESEND_FROM_EMAIL"
+        end_section
+
+        start_section "LOCAL TESTING VARS & LOCAL ADMIN RIGHTS"
+        try_gsm "ADMIN_EMAILS"
+        try_literal "OPS_NOTIFICATION_EMAIL" "tech@greenboxanalytics.ca"
+        try_literal "BYPASS_PAYWALLS" "{{.BYPASS_PAYWALLS}}"
+        try_literal "FRONTEND_URL" "{{.FRONTEND_URL}}"
+        try_literal "VITE_FRONTEND_URL" "{{.FRONTEND_URL}}"
+        try_literal "VITE_BACKEND_API_URL" "{{.VITE_BACKEND_API_URL}}"
+        try_literal "ALLOWED_ORIGINS" "{{.FRONTEND_URL}}"
+        end_section
+
+        echo
+        echo "Done. .env now has $(wc -l < .env | tr -d ' ') lines."
+        echo "Tip: to fully reset .env, run 'task setup:secrets:reset:dev' (backs up first)."
 
   test:
     desc: Run all backend tests

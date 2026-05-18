@@ -15,6 +15,22 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 
 class CreateCheckoutRequest(BaseModel):
     plan: str  # "monthly" | "annual"
+    # Optional return paths so different flows (onboarding, pricing page, etc.)
+    # can land users back where they were when they cancel. Must be relative
+    # paths starting with "/" — absolute URLs are rejected to prevent open
+    # redirects to phishing domains. None = use the default /pricing or
+    # /subscription page.
+    cancel_path: str | None = None
+    success_path: str | None = None
+
+
+def _safe_return_path(path: str | None, default: str) -> str:
+    """Whitelist relative paths to prevent open-redirect via cancel_url."""
+    if not path:
+        return default
+    if not path.startswith("/") or path.startswith("//"):
+        return default
+    return path
 
 
 @router.post("/create-checkout-session")
@@ -32,6 +48,14 @@ async def create_checkout_session(
         raise HTTPException(status_code=400, detail=f"Invalid plan: {body.plan}")
 
     frontend_url = os.environ["FRONTEND_URL"]
+    success_path = _safe_return_path(
+        body.success_path, "/subscription?stripe_session_id={CHECKOUT_SESSION_ID}&welcome=true"
+    )
+    cancel_path = _safe_return_path(body.cancel_path, "/pricing?canceled=true")
+    # Stripe replaces {CHECKOUT_SESSION_ID} server-side; preserve the literal
+    # placeholder if it's in the path. The default already includes it.
+    success_url = f"{frontend_url}{success_path}"
+    cancel_url = f"{frontend_url}{cancel_path}"
 
     stripe = stripe_client_module.get_stripe()
     session = stripe.checkout.Session.create(
@@ -40,8 +64,8 @@ async def create_checkout_session(
         customer_email=email,
         metadata={"user_id": user_id},
         subscription_data={"metadata": {"user_id": user_id}},
-        success_url=f"{frontend_url}/subscription?stripe_session_id={{CHECKOUT_SESSION_ID}}&welcome=true",
-        cancel_url=f"{frontend_url}/pricing?canceled=true",
+        success_url=success_url,
+        cancel_url=cancel_url,
     )
     analytics_capture(user_id, "checkout_started", {"plan": body.plan})
     return {"url": session.url}

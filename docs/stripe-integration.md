@@ -201,7 +201,7 @@ Portal access is gated on having a `stripe_customer_id` in `subscriptions`. Admi
 
 - [ ] Live-mode `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_*` all set in GSM
 - [ ] `FRONTEND_URL=https://app.msanii.com` (or the live domain — `localhost` will break Stripe redirects)
-- [ ] `BYPASS_PAYWALLS=false` flipped — until then, every user gets Pro-shaped entitlements regardless of Stripe status
+- [ ] `BYPASS_PAYWALLS` is `false` (or unset) — setting it to `true` would give every user Pro-shaped entitlements regardless of Stripe status
 - [ ] Live webhook endpoint receives a test event from Dashboard ("Send test webhook") and returns 200
 - [ ] Run one real `$0.50` Pro signup with your own card, then refund + cancel — sanity check the round-trip
 
@@ -213,7 +213,7 @@ Handle in Stripe Dashboard. The current handler set does NOT process `charge.ref
 
 ## Beta-Period Behavior
 
-`BYPASS_PAYWALLS=true` (current default in `.env.example`) makes every authenticated user receive Pro-shaped entitlements regardless of their `subscriptions.tier`. Stripe still works — checkout completes, webhooks update the DB — but no UI gates fire because the bypass short-circuits in `EntitlementsService.get_for_user`. Flip to `false` when you want paywalls to actually engage.
+`BYPASS_PAYWALLS=true` (opt-in via your local `.env`) makes every authenticated user receive Pro-shaped entitlements regardless of their `subscriptions.tier`. Stripe still works — checkout completes, webhooks update the DB — but no UI gates fire because the bypass short-circuits in `EntitlementsService.get_for_user`. Useful for demoing the Pro UX without paying; never set in production. Default is `false` everywhere.
 
 Admin users (env or DB) always get Pro entitlements at `/me/entitlements` even when `BYPASS_PAYWALLS=false`. See [admin-roles.md](admin-roles.md).
 

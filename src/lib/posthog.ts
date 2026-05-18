@@ -1,12 +1,12 @@
 import posthog from "posthog-js";
 
-const API_KEY = import.meta.env.VITE_POSTHOG_API_KEY as string | undefined;
+const API_KEY = import.meta.env.VITE_POSTHOG_PROJECT_TOKEN as string | undefined;
 const HOST = (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ?? "https://us.i.posthog.com";
 
 let initialized = false;
 
 /**
- * Initialize PostHog. No-op if VITE_POSTHOG_API_KEY is unset (e.g., dev/test).
+ * Initialize PostHog. No-op if VITE_POSTHOG_PROJECT_TOKEN is unset (e.g., dev/test).
  * Idempotent — safe to call multiple times.
  */
 export function initPostHog(): void {

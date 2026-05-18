@@ -8,7 +8,7 @@ from tests.conftest import TEST_USER_ID
 class TestInitAnalytics:
     def test_initializes_when_enabled(self, monkeypatch):
         monkeypatch.setenv("POSTHOG_ENABLED", "true")
-        monkeypatch.setenv("POSTHOG_API_KEY", "phc_test_dummy")
+        monkeypatch.setenv("POSTHOG_PROJECT_TOKEN", "phc_test_dummy")
         monkeypatch.setenv("POSTHOG_HOST", "https://us.i.posthog.com")
 
         import analytics
@@ -22,7 +22,7 @@ class TestInitAnalytics:
 
     def test_no_op_when_disabled(self, monkeypatch):
         monkeypatch.setenv("POSTHOG_ENABLED", "false")
-        monkeypatch.setenv("POSTHOG_API_KEY", "phc_test_dummy")
+        monkeypatch.setenv("POSTHOG_PROJECT_TOKEN", "phc_test_dummy")
 
         import analytics
 
@@ -35,7 +35,7 @@ class TestInitAnalytics:
 
     def test_init_is_idempotent(self, monkeypatch):
         monkeypatch.setenv("POSTHOG_ENABLED", "true")
-        monkeypatch.setenv("POSTHOG_API_KEY", "phc_test_dummy")
+        monkeypatch.setenv("POSTHOG_PROJECT_TOKEN", "phc_test_dummy")
 
         import analytics
 

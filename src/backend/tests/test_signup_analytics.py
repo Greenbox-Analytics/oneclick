@@ -44,8 +44,16 @@ def _mock_sb(profile_row: dict, subscription_rows: list | None = None):
         return chain
 
     sb.table.side_effect = table
-    # Auth admin lookup (used only when sending the welcome email; safe stub).
-    sb.auth.admin.get_user_by_id.return_value = MagicMock(user=MagicMock(email=profile_row.get("email")))
+    # Auth admin lookup — handler reads BOTH email AND created_at from this
+    # (profiles in this schema doesn't store either). The test passes email
+    # + created_at via `profile_row` keys for convenience; we stash them on
+    # the auth.users mock so the handler picks them up correctly.
+    sb.auth.admin.get_user_by_id.return_value = MagicMock(
+        user=MagicMock(
+            email=profile_row.get("email"),
+            created_at=profile_row.get("created_at"),
+        )
+    )
     return sb
 
 

@@ -6,7 +6,7 @@ import { identifyUser } from "@/lib/posthog";
 const CACHE_KEY = "msanii.analytics_context.v1";
 const TTL_MS = 5 * 60 * 1000;
 
-interface AnalyticsContext {
+export interface AnalyticsContext {
   is_tester: boolean;
   is_admin: boolean; // server-derived (don't leak ADMIN_EMAILS into the JS bundle)
   plan: string; // "free" | "pro"
@@ -33,6 +33,21 @@ function readCache(userId: string): CacheEntry | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Read the cached analytics context for a user without triggering a fetch.
+ * Returns null when no cache exists yet (first login of the session) OR when
+ * the cache belongs to a different user. Useful for hooks that want to fast-
+ * path on `is_admin === false` to skip admin-only network calls.
+ *
+ * Does NOT respect TTL — returns whatever's there. Callers that need
+ * freshness should rely on useAnalyticsContext to refresh the cache.
+ */
+export function peekCachedAnalyticsContext(userId: string | undefined | null): AnalyticsContext | null {
+  if (!userId) return null;
+  const entry = readCache(userId);
+  return entry?.ctx ?? null;
 }
 
 function writeCache(entry: CacheEntry): void {

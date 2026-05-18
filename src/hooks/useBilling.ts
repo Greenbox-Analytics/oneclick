@@ -5,15 +5,26 @@ import { apiFetch, API_URL } from "@/lib/apiFetch";
  * Create a Stripe Checkout Session and return the URL to redirect the user to.
  * Pattern:
  *   const { mutateAsync: createCheckout } = useCreateCheckoutSession();
- *   const url = await createCheckout("monthly");
+ *   const url = await createCheckout({ plan: "monthly" });
  *   window.location.href = url;
+ *
+ * Optional `cancel_path` / `success_path` let callers route returns to a
+ * non-default page (e.g., onboarding). Backend whitelists to relative paths.
  */
+export interface CheckoutArgs {
+  plan: "monthly" | "annual";
+  cancel_path?: string;
+  success_path?: string;
+}
+
 export function useCreateCheckoutSession() {
-  return useMutation<string, Error, "monthly" | "annual">({
-    mutationFn: async (plan) => {
+  return useMutation<string, Error, CheckoutArgs | "monthly" | "annual">({
+    mutationFn: async (arg) => {
+      // Back-compat: callers can still pass just the plan string.
+      const body = typeof arg === "string" ? { plan: arg } : arg;
       const res = await apiFetch(`${API_URL}/billing/create-checkout-session`, {
         method: "POST",
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify(body),
       });
       return (res as { url: string }).url;
     },

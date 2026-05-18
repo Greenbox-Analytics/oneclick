@@ -99,7 +99,7 @@ Generate once per environment and stash in GSM. **Rotating these invalidates eve
 | Var | Default | Notes |
 |-----|---------|-------|
 | `ADMIN_EMAILS` | empty | Comma-separated email allowlist. Bootstraps admin access; additional admins managed via `/admin/users` UI. See [admin-roles.md](admin-roles.md) |
-| `BYPASS_PAYWALLS` | `false` in code, `true` in `.env.example` | When `true`, all users get Pro-shaped entitlements. Keep on during private beta; flip off when paywalls go live |
+| `BYPASS_PAYWALLS` | `false` (in code, `.env.example`, and `setup:secrets:dev`/`prod`) | When `true`, all users get Pro-shaped entitlements at runtime. Flip on locally only to demo the full-Pro UX; never in prod |
 
 ---
 
@@ -108,8 +108,8 @@ Generate once per environment and stash in GSM. **Rotating these invalidates eve
 | Var | Source | Notes |
 |-----|--------|-------|
 | `POSTHOG_ENABLED` | — | Set to `"true"` only in prod/staging. Dev/test should leave unset/false so events don't pollute the project |
-| `POSTHOG_API_KEY` | PostHog → Project Settings → Project API Key | `phc_...`. Used by backend |
-| `VITE_POSTHOG_API_KEY` | Same value | Used by frontend (safe to ship to browser — it's the public Project key, not the personal key) |
+| `POSTHOG_PROJECT_TOKEN` | PostHog → Project Settings → Project API Key | `phc_...`. Used by backend |
+| `VITE_POSTHOG_PROJECT_TOKEN` | Same value | Used by frontend (safe to ship to browser — it's the public Project key, not the personal key) |
 | `POSTHOG_HOST` | Default `https://us.i.posthog.com` | Set to `https://eu.i.posthog.com` for EU cloud, or your self-hosted URL |
 | `VITE_POSTHOG_HOST` | Same | Frontend mirror |
 | `VITE_POSTHOG_DASHBOARD_URL` | Default `https://us.posthog.com` | For the "View Analytics" link in `/admin/users` |

@@ -11,8 +11,8 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from auth import get_current_user_id
-from subscriptions.admin_auth import is_env_admin, require_admin
+from auth import get_current_user_email, get_current_user_id
+from subscriptions.admin_auth import is_env_admin, is_user_admin, require_admin
 from subscriptions.admin_service import AdminService
 from subscriptions.models import OverridePayload
 from subscriptions.service import EntitlementsService
@@ -41,8 +41,26 @@ def _get_admin_service() -> AdminService:
 
 
 @router.get("/me")
-async def admin_me(email: str = Depends(require_admin)) -> dict:
-    return {"email": email, "isAdmin": True}
+async def admin_me(
+    user_email: str = Depends(get_current_user_email),
+    user_id: str = Depends(get_current_user_id),
+) -> dict:
+    """Status check — returns whether the caller is an admin.
+
+    Unlike the other endpoints in this router, this one does NOT raise 403
+    for non-admins. It's a yes/no probe used by the frontend to decide
+    whether to render admin UI; surfacing it as 403 produces console noise
+    for every non-admin user on every load. Returning 200 + `isAdmin: false`
+    gives the frontend the same information without the noise.
+
+    Admin status is computed server-side from ADMIN_EMAILS (GSM-injected env)
+    OR profiles.is_admin (DB-managed). The list itself is never leaked to
+    the client — only the boolean result.
+    """
+    from main import get_supabase_client
+
+    is_admin = is_user_admin(get_supabase_client(), user_email, user_id)
+    return {"email": user_email, "isAdmin": is_admin}
 
 
 @router.get("/users")

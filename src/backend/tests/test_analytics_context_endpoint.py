@@ -5,28 +5,40 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from auth import get_current_user_id
+from auth import get_current_user_email, get_current_user_id
 from main import app
 
 TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
+TEST_EMAIL = "tester@example.com"
 
 
-def _override_user(user_id: str = TEST_USER_ID):
+def _override_user(user_id: str = TEST_USER_ID, email: str = TEST_EMAIL):
     app.dependency_overrides[get_current_user_id] = lambda: user_id
+    app.dependency_overrides[get_current_user_email] = lambda: email
 
 
 def _clear_overrides():
     app.dependency_overrides.clear()
 
 
-def _mock_supabase_chain(tier_overrides_rows=None, profile_row=None, subscription_rows=None):
+def _mock_supabase_chain(
+    tier_overrides_rows=None,
+    profile_row=None,
+    subscription_rows=None,
+    auth_created_at: str | None = "2026-01-01T00:00:00+00:00",
+):
     """Build a minimal Supabase client mock for the analytics-context handler.
 
-    Handler runs three reads:
-      1. tier_overrides (.eq().like().execute()) -> list  -> is_tester
-      2. profiles (.eq().single().execute()) -> row -> role, email, created_at
-         AND (.eq().limit().execute()) -> list -> is_admin check
-      3. subscriptions (.eq().execute()) -> list -> plan (from .tier)
+    Reads the handler now makes:
+      1. tier_overrides (.eq().like().execute())              -> is_tester
+      2. profiles (.eq().maybe_single().execute())            -> role (tolerant — None if column missing)
+         AND (.eq().limit().execute())                        -> is_admin check (profiles.is_admin)
+      3. subscriptions (.eq().execute())                      -> plan (from .tier)
+      4. auth.admin.get_user_by_id(user_id)                   -> signed_up_at (auth.users.created_at)
+
+    `profile_row` populates the `.maybe_single()` result; `.role` is the only
+    field the handler reads from it (created_at + email come from auth.users,
+    not profiles, in this schema).
     """
     tier_exec = MagicMock(data=tier_overrides_rows or [])
     profile_exec = MagicMock(data=profile_row or {})
@@ -35,10 +47,10 @@ def _mock_supabase_chain(tier_overrides_rows=None, profile_row=None, subscriptio
     def table(name):
         chain = MagicMock()
         if name == "tier_overrides":
-            # Handler now uses: .table().select().eq().like().execute()
             chain.select.return_value.eq.return_value.like.return_value.execute.return_value = tier_exec
         elif name == "profiles":
-            chain.select.return_value.eq.return_value.single.return_value.execute.return_value = profile_exec
+            # Tolerant role read: maybe_single() (no exception on missing row)
+            chain.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = profile_exec
             # is_user_admin → is_db_admin → profiles.select("is_admin").eq().limit(1).execute()
             chain.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
         elif name == "subscriptions":
@@ -47,6 +59,11 @@ def _mock_supabase_chain(tier_overrides_rows=None, profile_row=None, subscriptio
 
     client = MagicMock()
     client.table.side_effect = table
+
+    # auth.admin.get_user_by_id(user_id) → returns a user object with .created_at
+    auth_user = MagicMock()
+    auth_user.user = MagicMock(created_at=auth_created_at)
+    client.auth.admin.get_user_by_id = MagicMock(return_value=auth_user)
     return client
 
 
@@ -65,8 +82,9 @@ def test_is_tester_true_when_active_grant(monkeypatch):
     monkeypatch.delenv("ADMIN_EMAILS", raising=False)
     sb = _mock_supabase_chain(
         tier_overrides_rows=[{"reason": "tester", "granted_at": granted, "expires_at": future}],
-        profile_row={"role": "artist", "email": "tester@example.com", "created_at": "2026-01-01T00:00:00+00:00"},
+        profile_row={"role": "artist"},
         subscription_rows=[{"tier": "free"}],
+        auth_created_at="2026-01-01T00:00:00+00:00",
     )
     monkeypatch.setattr("main.get_supabase_client", lambda: sb)
 
@@ -87,10 +105,11 @@ def test_is_tester_true_when_active_grant(monkeypatch):
 
 
 def test_is_admin_true_when_email_in_admin_emails(monkeypatch):
-    _override_user()
+    # Override with the JWT email we want is_user_admin() to see.
+    _override_user(email="boss@example.com")
     monkeypatch.setenv("ADMIN_EMAILS", "boss@example.com, other@example.com")
     sb = _mock_supabase_chain(
-        profile_row={"role": "manager", "email": "boss@example.com", "created_at": "2026-01-01T00:00:00+00:00"},
+        profile_row={"role": "manager"},
         subscription_rows=[{"tier": "pro"}],
     )
     monkeypatch.setattr("main.get_supabase_client", lambda: sb)
@@ -102,13 +121,14 @@ def test_is_admin_true_when_email_in_admin_emails(monkeypatch):
     body = resp.json()
     assert body["is_admin"] is True
     assert body["plan"] == "pro"
+    assert body["email"] == "boss@example.com"  # echoes the JWT email
 
 
 def test_is_admin_false_when_email_not_in_admin_emails(monkeypatch):
-    _override_user()
+    _override_user(email="other@example.com")
     monkeypatch.setenv("ADMIN_EMAILS", "boss@example.com")
     sb = _mock_supabase_chain(
-        profile_row={"role": "artist", "email": "other@example.com", "created_at": "2026-01-01T00:00:00+00:00"},
+        profile_row={"role": "artist"},
         subscription_rows=[{"tier": "free"}],
     )
     monkeypatch.setattr("main.get_supabase_client", lambda: sb)
@@ -125,7 +145,7 @@ def test_is_tester_false_when_grant_expired(monkeypatch):
     past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     sb = _mock_supabase_chain(
         tier_overrides_rows=[{"reason": "tester", "granted_at": past, "expires_at": past}],
-        profile_row={"role": "artist", "email": "x@y.z", "created_at": past},
+        profile_row={"role": "artist"},
         subscription_rows=[{"tier": "free"}],
     )
     monkeypatch.setattr("main.get_supabase_client", lambda: sb)
@@ -141,7 +161,7 @@ def test_is_tester_false_when_no_override(monkeypatch):
     _override_user()
     sb = _mock_supabase_chain(
         tier_overrides_rows=[],
-        profile_row={"role": "manager", "email": "p@q.r", "created_at": "2025-12-01T00:00:00+00:00"},
+        profile_row={"role": "manager"},
         subscription_rows=[{"tier": "pro"}],
     )
     monkeypatch.setattr("main.get_supabase_client", lambda: sb)
@@ -160,7 +180,7 @@ def test_is_tester_false_when_no_override(monkeypatch):
 def test_plan_defaults_to_free_when_no_subscriptions_row(monkeypatch):
     _override_user()
     sb = _mock_supabase_chain(
-        profile_row={"role": "artist", "email": "n@new.com", "created_at": "2026-05-01T00:00:00+00:00"},
+        profile_row={"role": "artist"},
         subscription_rows=[],
     )
     monkeypatch.setattr("main.get_supabase_client", lambda: sb)
@@ -176,7 +196,7 @@ def test_endpoint_does_not_call_identify(monkeypatch):
     """GETs must be side-effect-free — verify identify() is never called."""
     _override_user()
     sb = _mock_supabase_chain(
-        profile_row={"role": "artist", "email": "a@b.c", "created_at": "2026-01-01T00:00:00+00:00"},
+        profile_row={"role": "artist"},
         subscription_rows=[{"tier": "free"}],
     )
     monkeypatch.setattr("main.get_supabase_client", lambda: sb)

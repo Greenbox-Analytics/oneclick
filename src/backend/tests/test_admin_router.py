@@ -85,14 +85,25 @@ class TestAdminMe:
         assert body["email"] == ADMIN_EMAIL
         assert body["isAdmin"] is True
 
-    def test_returns_403_for_non_admin(self, non_admin_client):
+    def test_returns_200_with_isAdmin_false_for_non_admin(self, non_admin_client):
+        """/admin/me is a status probe — non-admins get 200 + isAdmin: false,
+        NOT a 403. The 403 produced console noise for every non-admin user on
+        every page load. Other admin endpoints (grant, override, list_users)
+        still 403 — only this status check is open."""
         resp = non_admin_client.get("/admin/me")
-        assert resp.status_code == 403
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["isAdmin"] is False
 
-    def test_returns_500_when_admin_emails_unset(self, admin_client, monkeypatch):
+    def test_returns_isAdmin_false_when_admin_emails_unset(self, admin_client, monkeypatch):
+        """Operator misconfig (no admins) → /admin/me returns isAdmin: false.
+        Fail-loud-on-misconfig is still in effect for protected admin actions
+        (those raise 500 via require_admin); /admin/me itself is now a
+        non-blocking status probe."""
         monkeypatch.setenv("ADMIN_EMAILS", "")
         resp = admin_client.get("/admin/me")
-        assert resp.status_code == 500
+        assert resp.status_code == 200
+        assert resp.json()["isAdmin"] is False
 
     def test_email_match_is_case_insensitive(self, admin_client, monkeypatch):
         monkeypatch.setenv("ADMIN_EMAILS", ADMIN_EMAIL.upper())
@@ -153,8 +164,10 @@ class TestRequireAdminDbPath:
         assert r.status_code == 200
         assert r.json() == {"email": DB_ADMIN_EMAIL, "isAdmin": True}
 
-    def test_non_admin_with_empty_env_returns_500_when_no_db_admin(self, mock_supabase, monkeypatch):
-        """Empty env + no DB admin = operator misconfig -> 500."""
+    def test_non_admin_with_empty_env_via_admin_me_returns_isAdmin_false(self, mock_supabase, monkeypatch):
+        """/admin/me is a status probe → returns isAdmin: false even when env
+        is empty + no DB admin (the operator-misconfig 500 still fires for
+        protected actions like /admin/users — see TestNonAdminBlocked)."""
         from fastapi.testclient import TestClient
 
         import main
@@ -183,10 +196,14 @@ class TestRequireAdminDbPath:
             r = tc.get("/admin/me")
         main.app.dependency_overrides.clear()
 
-        assert r.status_code == 500
+        assert r.status_code == 200
+        assert r.json()["isAdmin"] is False
 
-    def test_non_admin_with_env_configured_returns_403(self, mock_supabase, monkeypatch):
-        """Env IS configured but caller isn't admin via either path -> 403."""
+    def test_non_admin_with_env_configured_via_admin_me_returns_isAdmin_false(
+        self, mock_supabase, monkeypatch
+    ):
+        """Env configured, caller not admin via either path → /admin/me
+        returns isAdmin: false (200). Other admin endpoints still 403."""
         from fastapi.testclient import TestClient
 
         import main
@@ -215,7 +232,16 @@ class TestRequireAdminDbPath:
             r = tc.get("/admin/me")
         main.app.dependency_overrides.clear()
 
-        assert r.status_code == 403
+        assert r.status_code == 200
+        assert r.json()["isAdmin"] is False
+
+        # And the protected endpoints DO still 403:
+        main.app.dependency_overrides[get_current_user_email] = _email
+        main.app.dependency_overrides[get_current_user_id] = _uid
+        with TestClient(main.app) as tc:
+            r2 = tc.get("/admin/users")
+        main.app.dependency_overrides.clear()
+        assert r2.status_code == 403
 
     def test_env_admin_works_even_when_db_lookup_fails(self, mock_supabase, monkeypatch):
         """If profiles lookup raises, env-admin path still works."""
@@ -621,10 +647,13 @@ class TestPromoteDemote:
 
 
 class TestNonAdminBlocked:
-    """Parameterized: every /admin/* route returns 403 for non-admin."""
+    """Parameterized: every protected /admin/* route returns 403 for non-admin.
+
+    NOTE: /admin/me is intentionally EXCLUDED — it's a status probe that
+    returns 200 + isAdmin:false for non-admins (see TestAdminMe). All other
+    admin endpoints still enforce 403 via require_admin."""
 
     ROUTES = [
-        ("GET", "/admin/me"),
         ("GET", "/admin/users"),
         ("GET", f"/admin/users/{TEST_USER_ID}"),
         ("POST", f"/admin/users/{TEST_USER_ID}/grant"),

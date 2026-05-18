@@ -15,7 +15,7 @@ _initialized = False
 
 def _set_posthog_config() -> None:
     """Set posthog module-level config. Separated so tests can patch."""
-    posthog.api_key = os.environ["POSTHOG_API_KEY"]
+    posthog.api_key = os.environ["POSTHOG_PROJECT_TOKEN"]
     posthog.host = os.environ.get("POSTHOG_HOST", "https://us.i.posthog.com")
 
 

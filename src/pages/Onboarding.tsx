@@ -1,31 +1,48 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Music } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { useCreateCheckoutSession } from "@/hooks/useBilling";
 import OnboardingProgress from "@/components/onboarding/OnboardingProgress";
 import StepWelcome from "@/components/onboarding/StepWelcome";
 import StepName from "@/components/onboarding/StepName";
 import StepPreferences from "@/components/onboarding/StepPreferences";
+import StepPlan from "@/components/onboarding/StepPlan";
 import StepReady from "@/components/onboarding/StepReady";
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 // Map step index to display name for analytics
 const STEP_NAMES = {
   0: "welcome",
   1: "name",
   2: "preferences",
-  3: "ready",
+  3: "plan",
+  4: "ready",
 } as const;
 
 const Onboarding = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const { captureOnboardingStepCompleted, captureOnboardingFinished } = useAnalytics();
+  const { mutateAsync: createCheckout } = useCreateCheckoutSession();
   const [currentStep, setCurrentStep] = useState(0);
   const [checkingStatus, setCheckingStatus] = useState(true);
+
+  // Returning from a cancelled Stripe Checkout — show toast, jump back to plan step.
+  // Profile was already saved before the redirect, so this is just resuming UI flow.
+  useEffect(() => {
+    if (searchParams.get("upgrade") === "cancelled") {
+      toast.info("Checkout cancelled — you're on the Free plan. Upgrade anytime from Billing.");
+      setCurrentStep(3);
+      searchParams.delete("upgrade");
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const [formData, setFormData] = useState({
     firstName: "",
@@ -92,21 +109,13 @@ const Onboarding = () => {
     setCurrentStep(stepIndex + 1);
   };
 
-  const handleFinish = () => {
-    if (!user) return;
-
-    // Fire events for the final step
-    const stepName = STEP_NAMES[3];
-    captureOnboardingStepCompleted(stepName);
-    captureOnboardingFinished();
-
-    // Navigate immediately — optimistic UI. The user sees the dashboard
-    // instantly while the profile upsert runs in the background.
-    navigate("/dashboard", { replace: true, state: { fromOnboarding: true } });
-
-    // Fire-and-forget: persist profile in the background
+  /** Persist the onboarding profile. Awaited so callers can sequence Stripe
+   * checkout AFTER the row is committed — otherwise a cancelled checkout
+   * could strand the user with `onboarding_completed = false`. */
+  const persistProfile = async (): Promise<{ error: Error | null }> => {
+    if (!user) return { error: new Error("Not authenticated") };
     const fullName = `${formData.firstName} ${formData.lastName}`.trim();
-    supabase.from("profiles").upsert({
+    const { error } = await supabase.from("profiles").upsert({
       id: user.id,
       first_name: formData.firstName,
       last_name: formData.lastName,
@@ -116,11 +125,62 @@ const Onboarding = () => {
       company: formData.company || null,
       onboarding_completed: true,
       updated_at: new Date().toISOString(),
-    }).then(({ error }) => {
-      if (error) {
-        console.error("Background profile save failed:", error);
-      }
     });
+    return { error: error ? new Error(error.message) : null };
+  };
+
+  const handleFinish = () => {
+    if (!user) return;
+
+    // Fire events for the final step (after the plan step — index 4)
+    const stepName = STEP_NAMES[4];
+    captureOnboardingStepCompleted(stepName);
+    captureOnboardingFinished();
+
+    // Navigate immediately — optimistic UI. The user sees the dashboard
+    // instantly while the profile upsert runs in the background.
+    navigate("/dashboard", { replace: true, state: { fromOnboarding: true } });
+
+    // Fire-and-forget: persist profile in the background
+    persistProfile().then(({ error }) => {
+      if (error) console.error("Background profile save failed:", error);
+    });
+  };
+
+  /** Free path from the plan step — save profile + skip Stripe. */
+  const handleChooseFree = async () => {
+    captureOnboardingStepCompleted(STEP_NAMES[3]);
+    // Save before advancing so the ready step's optimistic navigation isn't
+    // the only chance the profile gets persisted.
+    const { error } = await persistProfile();
+    if (error) {
+      toast.error("Couldn't save your profile — please retry");
+      return;
+    }
+    setCurrentStep(4);
+  };
+
+  /** Pro path — save profile, then redirect to Stripe Checkout.
+   * Profile is saved FIRST so a cancelled checkout returns the user to a
+   * fully-onboarded state (they just stay on the Free plan). */
+  const handleChoosePro = async (plan: "monthly" | "annual") => {
+    captureOnboardingStepCompleted(STEP_NAMES[3]);
+    const { error } = await persistProfile();
+    if (error) {
+      toast.error("Couldn't save your profile — please retry");
+      return;
+    }
+    try {
+      const url = await createCheckout({
+        plan,
+        cancel_path: "/onboarding?upgrade=cancelled",
+        // success_path stays default → /subscription?stripe_session_id=...&welcome=true
+      });
+      window.location.href = url;
+    } catch (e) {
+      toast.error("Couldn't start checkout — please try again from Billing");
+      console.error("createCheckout failed:", e);
+    }
   };
 
   if (checkingStatus) {
@@ -173,6 +233,13 @@ const Onboarding = () => {
           />
         )}
         {currentStep === 3 && (
+          <StepPlan
+            onChooseFree={handleChooseFree}
+            onChoosePro={handleChoosePro}
+            onBack={() => setCurrentStep(2)}
+          />
+        )}
+        {currentStep === 4 && (
           <StepReady
             preferredName={formData.preferredName}
             firstName={formData.firstName}

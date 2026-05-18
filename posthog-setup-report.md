@@ -6,7 +6,7 @@ The wizard has completed a deep integration of PostHog analytics into the Msanii
 ## Environment setup
 
 Three environment variables were written to `.env`:
-- `POSTHOG_API_KEY` — PostHog project token
+- `POSTHOG_PROJECT_TOKEN` — PostHog project token
 - `POSTHOG_HOST` — `https://us.i.posthog.com`
 - `POSTHOG_ENABLED` — `true`
 

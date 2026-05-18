@@ -18,12 +18,16 @@ def _get_supabase() -> Client:
     return get_supabase_client()
 
 
-def _fire_signup_analytics(db: Client, user_id: str, profile_row: dict) -> None:
+def _fire_signup_analytics(db: Client, user_id: str, email: str, profile_row: dict) -> None:
     """Fire signup_completed + identify exactly once on first welcome.
 
     Called only when welcome_email_sent_at transitions from null → now. Looks
     up `plan`, `is_admin`, and `is_tester` so the PostHog person profile is
     seeded with the full property set the dashboards depend on.
+
+    `email` must be passed by the caller (resolved via auth.admin.get_user_by_id)
+    because profiles.email does not exist — email lives only on auth.users.
+    See migration 20260329000000_create_rights_registry.sql line 400.
 
     Uses direct imports of analytics and admin helpers so test monkeypatching
     (`users.router.analytics_capture`) works and analytics stays disabled
@@ -50,7 +54,7 @@ def _fire_signup_analytics(db: Client, user_id: str, profile_row: dict) -> None:
         is_tester = False
 
     try:
-        is_admin = is_user_admin(db, profile_row.get("email"), user_id)
+        is_admin = is_user_admin(db, email, user_id)
     except Exception as exc:
         print(f"Warning: signup analytics — admin lookup failed: {exc}")
         is_admin = False
@@ -59,7 +63,7 @@ def _fire_signup_analytics(db: Client, user_id: str, profile_row: dict) -> None:
     analytics_identify(
         user_id,
         {
-            "email": profile_row.get("email"),
+            "email": email,
             "signed_up_at": profile_row.get("created_at"),
             "plan": plan,
             "role": profile_row.get("role"),
@@ -79,9 +83,16 @@ async def send_welcome(user_id: str = Depends(get_current_user_id)):
     """
     db = _get_supabase()
 
+    # NOTE on profiles columns: profiles does NOT store email (see migration
+    # 20260329000000_create_rights_registry.sql line 400) and does NOT store
+    # created_at in some environments (the schema has updated_at only). The
+    # `role` column is also conditional — see the IF EXISTS guard in
+    # 20260420000000_rename_industry_to_role.sql. Read only the columns we
+    # know are universal here; resolve email + created_at from auth.users
+    # below; tolerate role missing.
     profile = (
         db.table("profiles")
-        .select("welcome_email_sent_at, first_name, given_name, full_name, email, role, created_at")
+        .select("welcome_email_sent_at, first_name, given_name, full_name")
         .eq("id", user_id)
         .maybe_single()
         .execute()
@@ -91,10 +102,14 @@ async def send_welcome(user_id: str = Depends(get_current_user_id)):
     if profile.data.get("welcome_email_sent_at"):
         return {"sent": False, "reason": "already_sent"}
 
-    # Fetch the verified email from auth.users via the service-role admin client.
+    # Fetch the verified email + signup timestamp from auth.users via the
+    # service-role admin client (canonical source for both).
     try:
         auth_user = db.auth.admin.get_user_by_id(user_id)
         recipient_email = auth_user.user.email if auth_user and auth_user.user else None
+        signed_up_at = getattr(auth_user.user, "created_at", None) if auth_user and auth_user.user else None
+        if hasattr(signed_up_at, "isoformat"):
+            signed_up_at = signed_up_at.isoformat()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not resolve user email: {exc}") from exc
 
@@ -103,6 +118,17 @@ async def send_welcome(user_id: str = Depends(get_current_user_id)):
 
     p = profile.data
     first_name = p.get("first_name") or p.get("given_name") or ((p.get("full_name") or "").split(" ", 1)[0] or None)
+
+    # Tolerant role read — column may not exist in this env.
+    try:
+        role_res = db.table("profiles").select("role").eq("id", user_id).maybe_single().execute()
+        role = (role_res.data or {}).get("role") if role_res else None
+    except Exception:
+        role = None
+    # Stash on `p` so _fire_signup_analytics can read it from the dict (keeps
+    # signature stable with `created_at` also coming from p).
+    p["role"] = role
+    p["created_at"] = signed_up_at
 
     result = send_welcome_email(recipient_email, first_name)
     if result is None:
@@ -113,6 +139,6 @@ async def send_welcome(user_id: str = Depends(get_current_user_id)):
 
     # Fire signup analytics exactly once per user — gated by the same
     # welcome_email_sent_at column we just transitioned from null → now.
-    _fire_signup_analytics(db, user_id, p)
+    _fire_signup_analytics(db, user_id, recipient_email, p)
 
     return {"sent": True}

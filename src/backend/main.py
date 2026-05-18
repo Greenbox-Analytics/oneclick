@@ -24,7 +24,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from analytics import capture as analytics_capture
 from analytics import init_analytics
-from auth import get_current_user_id
+from auth import get_current_user_email, get_current_user_id
 from middleware.analytics_middleware import AnalyticsMiddleware
 from pagination import PaginatedResponse, paginate_query
 from subscriptions.admin_auth import is_active_tester_row, is_user_admin
@@ -139,6 +139,11 @@ ALLOWED_ORIGINS = [
     origin.strip().rstrip("/") for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")
 ]
 
+# Middleware order matters: Starlette's add_middleware inserts at the front of
+# the chain, so the LAST add_middleware call becomes the OUTERMOST. CORS must be
+# outermost among user middleware so that 4xx/known-exception responses get
+# Access-Control-Allow-Origin headers attached.
+app.add_middleware(AnalyticsMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -146,7 +151,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(AnalyticsMiddleware)
+
+
+# CORS-on-500 fallback. Starlette's ServerErrorMiddleware sits OUTSIDE user
+# middleware, so an unhandled exception escapes the CORS layer and produces
+# a 500 without Access-Control-Allow-Origin — the browser then shows a CORS
+# error instead of the real 500 in DevTools, masking the actual bug. Adding
+# an Exception handler keeps the response inside user middleware so CORS
+# headers get attached. Pair this with backend logging (already in place via
+# AnalyticsMiddleware's request_failed event) so the real traceback is still
+# captured server-side.
+import logging as _logging
+import traceback as _traceback
+
+from fastapi import Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+_uncaught_logger = _logging.getLogger("uvicorn.error")
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: _Request, exc: Exception):
+    _uncaught_logger.error(
+        "Unhandled %s on %s %s: %s\n%s",
+        type(exc).__name__, request.method, request.url.path, exc,
+        _traceback.format_exc(),
+    )
+    origin = request.headers.get("origin")
+    cors_headers: dict[str, str] = {}
+    if origin and (origin in ALLOWED_ORIGINS or "*" in ALLOWED_ORIGINS):
+        cors_headers["Access-Control-Allow-Origin"] = origin
+        cors_headers["Access-Control-Allow-Credentials"] = "true"
+        cors_headers["Vary"] = "Origin"
+    return _JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "error_type": type(exc).__name__},
+        headers=cors_headers,
+    )
 
 # Initialize Supabase Client (lazy initialization to avoid startup failures)
 supabase: Client = None
@@ -444,12 +485,51 @@ class AnalyticsContext(BaseModel):
     tester_expires_at: str | None
 
 
+def _read_profile_role(sb, user_id: str) -> str | None:
+    """Return profiles.role for the user, or None if the column doesn't exist
+    in this environment.
+
+    Reason: the `industry → role` rename migration is wrapped in IF EXISTS
+    (see 20260420000000_rename_industry_to_role.sql) — environments that
+    never had `industry` added via the Supabase dashboard also don't have
+    `role`. Tolerate that gracefully instead of 500-ing the whole endpoint.
+    """
+    try:
+        res = sb.table("profiles").select("role").eq("id", user_id).maybe_single().execute()
+        return (res.data or {}).get("role") if res else None
+    except Exception:
+        return None
+
+
+def _read_auth_signed_up_at(sb, user_id: str) -> str | None:
+    """Return auth.users.created_at for the user via the Supabase admin client.
+
+    profiles.created_at doesn't exist in some environments; the canonical
+    signup timestamp lives on auth.users.created_at and is always present.
+    """
+    try:
+        res = sb.auth.admin.get_user_by_id(user_id)
+        created_at = getattr(res.user, "created_at", None) if res and res.user else None
+        # auth.admin returns a datetime; serialize for the JSON response.
+        return created_at.isoformat() if hasattr(created_at, "isoformat") else created_at
+    except Exception:
+        return None
+
+
 @app.get("/me/analytics-context", response_model=AnalyticsContext)
-async def get_analytics_context(user_id: str = Depends(get_current_user_id)):
+async def get_analytics_context(
+    user_id: str = Depends(get_current_user_id),
+    user_email: str = Depends(get_current_user_email),
+):
     """Pure read — returns identity properties for client-side PostHog identify().
 
     Does NOT call analytics.identify(): GETs stay idempotent. The client owns
     identify() and server-side identify only fires from explicit mutation handlers.
+
+    Source-of-truth per field (profiles is intentionally minimal in this schema):
+      email         <- JWT (auth.users)
+      signed_up_at  <- auth.users.created_at (profiles doesn't have created_at)
+      role          <- profiles.role IF the column exists in this env (else None)
     """
     sb = get_supabase_client()
 
@@ -462,20 +542,17 @@ async def get_analytics_context(user_id: str = Depends(get_current_user_id)):
     )
     active_tester_row = next((r for r in (overrides.data or []) if is_active_tester_row(r)), None)
 
-    profile_res = sb.table("profiles").select("role, email, created_at").eq("id", user_id).single().execute()
-    profile = profile_res.data or {}
-
     sub_res = sb.table("subscriptions").select("tier").eq("user_id", user_id).execute()
     sub_rows = sub_res.data or []
     plan = sub_rows[0]["tier"] if sub_rows else "free"
 
     return AnalyticsContext(
         is_tester=active_tester_row is not None,
-        is_admin=is_user_admin(sb, profile.get("email"), user_id),
+        is_admin=is_user_admin(sb, user_email, user_id),
         plan=plan,
-        role=profile.get("role"),
-        email=profile.get("email"),
-        signed_up_at=profile.get("created_at"),
+        role=_read_profile_role(sb, user_id),
+        email=user_email,
+        signed_up_at=_read_auth_signed_up_at(sb, user_id),
         tester_granted_at=active_tester_row.get("granted_at") if active_tester_row else None,
         tester_expires_at=active_tester_row.get("expires_at") if active_tester_row else None,
     )

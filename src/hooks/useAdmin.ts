@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
+import { peekCachedAnalyticsContext } from "@/hooks/useAnalyticsContext";
 import { ApiError, API_URL, apiFetch } from "@/lib/apiFetch";
 
 // ---------------------------------------------------------------------------
@@ -8,6 +9,23 @@ import { ApiError, API_URL, apiFetch } from "@/lib/apiFetch";
 
 export function useIsAdmin(): { isAdmin: boolean; loading: boolean } {
   const { user } = useAuth();
+
+  // Fast-path: if the cached analytics context (populated by
+  // useAnalyticsContext, server-derived) says the user is NOT an admin, skip
+  // the /admin/me call entirely. This silences the inevitable 403 in DevTools
+  // for the 99% of users who aren't admins.
+  //
+  // Cache is per-user (peekCachedAnalyticsContext checks user_id internally).
+  // If no cache exists yet (first sign-in of the session), fall through to
+  // the real /admin/me call — useAnalyticsContext will populate the cache on
+  // its own fetch and subsequent loads will fast-path correctly.
+  //
+  // For users who ARE admins, the cache says is_admin=true so we proceed to
+  // /admin/me to get the full admin response (and to verify against the
+  // canonical source — we don't trust the cache for granting admin access,
+  // only for denying it).
+  const cachedCtx = peekCachedAnalyticsContext(user?.id);
+  const skipAdminCall = cachedCtx !== null && cachedCtx.is_admin === false;
 
   const query = useQuery({
     queryKey: ["admin", "me", user?.id],
@@ -27,11 +45,14 @@ export function useIsAdmin(): { isAdmin: boolean; loading: boolean } {
         return { email: "", isAdmin: false };
       }
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && !skipAdminCall,
     staleTime: 5 * 60_000,
     retry: false,
   });
 
+  if (skipAdminCall) {
+    return { isAdmin: false, loading: false };
+  }
   if (query.isLoading) {
     return { isAdmin: false, loading: true };
   }

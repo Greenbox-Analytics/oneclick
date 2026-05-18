@@ -20,6 +20,7 @@ import { useOnboardingStatus } from "@/hooks/useOnboardingStatus";
 import { useWalkthrough } from "@/hooks/useWalkthrough";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
+import { UpgradeBanner } from "@/components/billing/UpgradeBanner";
 
 // Tool registry for Recently Used
 const TOOL_REGISTRY: Record<string, { icon: typeof Calculator; label: string }> = {
@@ -191,26 +192,27 @@ const Dashboard = () => {
       <PageHeader
         showBack={false}
         actions={
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-10 w-10 rounded-full bg-primary hover:bg-primary/90">
-                  <Avatar className="h-10 w-10">
-                    <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || ""} />
-                    <AvatarFallback className="bg-primary text-primary-foreground">{getInitials()}</AvatarFallback>
-                  </Avatar>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56" align="end" forceMount>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate("/docs")}
+            title="Documentation"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <BookOpen className="w-4 h-4" />
+          </Button>
+        }
+        userMenu={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="relative h-10 w-10 rounded-full bg-primary hover:bg-primary/90">
+                <Avatar className="h-10 w-10">
+                  <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || ""} />
+                  <AvatarFallback className="bg-primary text-primary-foreground">{getInitials()}</AvatarFallback>
+                </Avatar>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-56" align="end" forceMount>
                 <DropdownMenuLabel className="font-normal">
                   <div className="flex flex-col space-y-1">
                     <p className="text-sm font-medium leading-none">{profile?.full_name || "User"}</p>
@@ -239,13 +241,13 @@ const Dashboard = () => {
                   <LogOut className="mr-2 h-4 w-4" />
                   <span>Log out</span>
                 </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
+            </DropdownMenuContent>
+          </DropdownMenu>
         }
       />
 
       <main className="container mx-auto px-4 py-8">
+        <UpgradeBanner />
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-foreground mb-1">Dashboard</h2>
           <p className="text-lg text-foreground/80 mb-1">{greeting}</p>

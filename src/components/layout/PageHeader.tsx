@@ -1,7 +1,8 @@
 import { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Music } from "lucide-react";
+import { ArrowLeft, CreditCard, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { cn } from "@/lib/utils";
@@ -10,7 +11,12 @@ interface PageHeaderProps {
   title?: string;
   subtitle?: string;
   backTo?: string | (() => void);
+  /** Page-specific actions (docs link, search, etc.) — rendered first. */
   actions?: ReactNode;
+  /** The user/profile dropdown — rendered LAST, after the auto-injected
+   * billing icon. Use this slot (instead of stuffing the profile menu into
+   * `actions`) so the order stays consistent: actions → billing → profile. */
+  userMenu?: ReactNode;
   showLogo?: boolean;
   showBack?: boolean;
   className?: string;
@@ -21,12 +27,30 @@ export function PageHeader({
   subtitle,
   backTo,
   actions,
+  userMenu,
   showLogo = true,
   showBack = true,
   className,
 }: PageHeaderProps) {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const { user } = useAuth();
+
+  // Renders globally for authenticated users only — appears in the actions
+  // slot, positioned after page-specific actions (so it lands right of "docs"
+  // on pages that include the docs icon there, and left of any profile
+  // dropdown that lives further right).
+  const billingButton = user ? (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => navigate("/subscription")}
+      title="Billing & subscription"
+      className="text-muted-foreground hover:text-foreground"
+    >
+      <CreditCard className="w-4 h-4" />
+    </Button>
+  ) : null;
 
   const handleBack = () => {
     if (typeof backTo === "function") backTo();
@@ -59,7 +83,13 @@ export function PageHeader({
               </div>
             ) : null}
           </div>
-          {actions && <div className="flex items-center gap-1 shrink-0">{actions}</div>}
+          {(actions || billingButton || userMenu) && (
+            <div className="flex items-center gap-1 shrink-0">
+              {actions}
+              {billingButton}
+              {userMenu}
+            </div>
+          )}
         </div>
       </header>
     );
@@ -100,7 +130,13 @@ export function PageHeader({
             </div>
           )}
         </div>
-        {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+        {(actions || billingButton || userMenu) && (
+          <div className="flex items-center gap-2 shrink-0">
+            {actions}
+            {billingButton}
+            {userMenu}
+          </div>
+        )}
       </div>
     </header>
   );
