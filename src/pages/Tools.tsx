@@ -1,12 +1,13 @@
 import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calculator, ArrowRight, ArrowLeft, Bot, FileText, Shield, BookOpen } from "lucide-react";
+import { Calculator, ArrowRight, Bot, FileText, Shield, BookOpen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { TOOL_REGISTRY, type ToolId } from "@/lib/analytics-tools";
+import { useAuth } from "@/contexts/AuthContext";
 
 const ROUTE_FOR_TOOL: Partial<Record<ToolId, string>> = {
   oneclick: "/tools/oneclick",
@@ -46,31 +47,27 @@ const TOOL_CARDS = TOOL_REGISTRY.filter((t) => t.category === "tool").map((t) =>
 
 const Tools = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const handleNavigate = useCallback((route: string, label: string) => {
-    trackToolUsage(label, route);
+    trackToolUsage(label, route, user?.id);
     navigate(route);
-  }, [navigate]);
+  }, [navigate, user?.id]);
 
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
+        backTo="/dashboard"
         actions={
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/dashboard")}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Dashboard
-            </Button>
-          </>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate("/docs")}
+            title="Documentation"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <BookOpen className="w-4 h-4" />
+          </Button>
         }
       />
 

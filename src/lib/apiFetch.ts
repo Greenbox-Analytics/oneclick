@@ -56,5 +56,12 @@ export async function apiFetch<T>(
     const body = await res.json().catch(() => ({}));
     throw new ApiError(body.detail || `Request failed: ${res.status}`, res.status);
   }
+  // 204 No Content (and 205 Reset Content) MUST NOT have a body — calling
+  // res.json() on these throws SyntaxError, which surfaces as a false-failure
+  // toast even though the underlying request succeeded. Hand back undefined
+  // so DELETE-style mutations can resolve cleanly.
+  if (res.status === 204 || res.status === 205) {
+    return undefined as T;
+  }
   return res.json();
 }

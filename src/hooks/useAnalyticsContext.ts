@@ -66,6 +66,21 @@ function clearCache(): void {
   }
 }
 
+/**
+ * Force-refresh the cached analytics context. Call after a successful Stripe
+ * checkout so the cached `plan: "free"` is replaced with `plan: "pro"` before
+ * any consumer (e.g. the dashboard UpgradeBanner) re-renders against the
+ * stale value. Safe to call without an active mount of useAnalyticsContext.
+ */
+export async function refreshAnalyticsContext(
+  userId: string,
+  authEmail: string | null | undefined,
+): Promise<void> {
+  clearCache();
+  const controller = new AbortController();
+  await fetchAndIdentify(userId, authEmail, controller.signal);
+}
+
 async function fetchAndIdentify(
   userId: string,
   authEmail: string | null | undefined,

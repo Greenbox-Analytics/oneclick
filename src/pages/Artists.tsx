@@ -123,6 +123,7 @@ const Artists = () => {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
+        backTo="/dashboard"
         actions={
           <>
             <Button
@@ -135,9 +136,6 @@ const Artists = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/dashboard")}>
-              Back to Dashboard
-            </Button>
           </>
         }
       />

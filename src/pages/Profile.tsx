@@ -148,6 +148,7 @@ const Profile = () => {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
+        backTo="/dashboard"
         actions={
           <>
             <ToolHelpButton onClick={() => walkthrough.replay()} />
@@ -159,9 +160,6 @@ const Profile = () => {
               className="text-muted-foreground hover:text-foreground"
             >
               <BookOpen className="w-4 h-4" />
-            </Button>
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/dashboard")}>
-              Back to Dashboard
             </Button>
           </>
         }

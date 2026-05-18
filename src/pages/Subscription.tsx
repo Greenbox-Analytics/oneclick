@@ -19,6 +19,7 @@ import { useProjectsList } from "@/hooks/useProjectsList";
 import { useBoards } from "@/hooks/useBoards";
 import { useCreateCheckoutSession, useCreatePortalSession } from "@/hooks/useBilling";
 import { useAnalytics, type Plan } from "@/hooks/useAnalytics";
+import { peekCachedAnalyticsContext, refreshAnalyticsContext } from "@/hooks/useAnalyticsContext";
 
 // IMPORTANT: hook return shapes (verified against actual files):
 //   useArtistsList()  → { artists, isLoading }
@@ -123,9 +124,13 @@ const Subscription = () => {
   const isPro = ent?.tier === "pro";
   const hasStripeSubscription = Boolean(ent?.subscription?.stripeSubscriptionId);
   const isProViaOverride = isPro && !hasStripeSubscription;
-
-  // Suppress unused-var lint warning — user is consumed by useEntitlements indirectly
-  void user;
+  // Tester status comes from /me/analytics-context (filters tier_overrides
+  // by reason LIKE 'tester%'). Cached value is good enough here — if a tester
+  // grant was issued just now, the user will see it after the next refresh
+  // or sign-in.
+  const analyticsCtx = user?.id ? peekCachedAnalyticsContext(user.id) : null;
+  const isTester = analyticsCtx?.is_tester === true;
+  const testerExpiresAt = analyticsCtx?.tester_expires_at ?? null;
 
   const artistsCount = artists?.length ?? 0;
   const projectsCount = projects?.length ?? 0;
@@ -151,6 +156,12 @@ const Subscription = () => {
         checkoutCompletedFiredRef.current = true;
         const completedPlan = (ent?.subscription?.planPeriod as Plan | undefined) ?? "monthly";
         captureCheckoutCompleted(completedPlan);
+      }
+      // Refresh the analytics-context cache so the dashboard UpgradeBanner
+      // (which reads from the 5-min localStorage cache) doesn't keep showing
+      // "you're on Free" for up to 5 minutes after upgrade.
+      if (user?.id) {
+        void refreshAnalyticsContext(user.id, user.email);
       }
       setSearchParams({});
       toast.success("Welcome to Pro! Your subscription is active.");
@@ -263,8 +274,25 @@ const Subscription = () => {
           </div>
         )}
 
-        {/* Override-only Pro banner */}
-        {isProViaOverride && (
+        {/* Override-only Pro banner — distinguishes tester grants from generic admin grants */}
+        {isProViaOverride && isTester && (
+          <div className="mb-6 rounded-lg border border-primary/30 bg-primary/5 p-4">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-primary" />
+              <div className="font-medium text-sm">Beta tester access</div>
+            </div>
+            <div className="text-sm text-muted-foreground mt-1">
+              You have full Pro access as a beta tester
+              {testerExpiresAt ? ` until ${formatPeriodEnd(testerExpiresAt)}` : " (no expiration set)"}.
+              Thanks for helping us shape Msanii! For questions or feedback,{" "}
+              <a href="mailto:tech@greenboxanalytics.ca" className="underline">
+                contact us
+              </a>
+              .
+            </div>
+          </div>
+        )}
+        {isProViaOverride && !isTester && (
           <div className="mb-6 rounded-lg border border-border bg-card p-4">
             <div className="font-medium text-sm">Pro access granted by admin</div>
             <div className="text-sm text-muted-foreground mt-1">
@@ -313,6 +341,7 @@ const Subscription = () => {
             <div className="flex items-center gap-3 mb-1">
               <h2 className="text-xl font-semibold">{isPro ? "Pro" : "Free"} plan</h2>
               {isPro && <Badge>Pro</Badge>}
+              {isTester && <Badge variant="secondary">Tester</Badge>}
               {ent.degraded && (
                 <Badge variant="outline" className="text-xs">
                   Account state temporarily unavailable

@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, CreditCard, Shield, type LucideIcon } from "lucide-react";
+import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, CreditCard, Shield, Home, type LucideIcon } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
@@ -57,9 +57,18 @@ interface RecentTool {
   timestamp: number;
 }
 
-function getRecentTools(): RecentTool[] {
+// Per-user scoping prevents one signed-in user from seeing another user's
+// most-recent-tools after a session swap on the same browser.
+function recentToolsKey(userId: string | null | undefined): string | null {
+  if (!userId) return null;
+  return `msanii_recent_tools.${userId}`;
+}
+
+function getRecentTools(userId: string | null | undefined): RecentTool[] {
+  const key = recentToolsKey(userId);
+  if (!key) return [];
   try {
-    const raw = localStorage.getItem("msanii_recent_tools");
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     return JSON.parse(raw) as RecentTool[];
   } catch {
@@ -67,10 +76,12 @@ function getRecentTools(): RecentTool[] {
   }
 }
 
-export function trackToolUsage(name: string, route: string) {
-  const tools = getRecentTools().filter((t) => t.route !== route);
+export function trackToolUsage(name: string, route: string, userId: string | null | undefined) {
+  const key = recentToolsKey(userId);
+  if (!key) return;
+  const tools = getRecentTools(userId).filter((t) => t.route !== route);
   tools.unshift({ route, name, timestamp: Date.now() });
-  localStorage.setItem("msanii_recent_tools", JSON.stringify(tools.slice(0, 10)));
+  localStorage.setItem(key, JSON.stringify(tools.slice(0, 10)));
 }
 
 const Dashboard = () => {
@@ -84,7 +95,7 @@ const Dashboard = () => {
     first_name: string | null;
   } | null>(null);
   const [now, setNow] = useState(new Date());
-  const [recentTools, setRecentTools] = useState<RecentTool[]>(() => getRecentTools());
+  const [recentTools, setRecentTools] = useState<RecentTool[]>([]);
   const location = useLocation();
   const { settings } = useWorkspaceSettings();
   const { walkthroughCompleted, loading: onboardingLoading } = useOnboardingStatus();
@@ -181,11 +192,15 @@ const Dashboard = () => {
     return `Welcome back, ${name}!`;
   }, [profile, user]);
 
+  useEffect(() => {
+    setRecentTools(getRecentTools(user?.id));
+  }, [user?.id]);
+
   const handleNavigate = useCallback((route: string, label: string) => {
-    trackToolUsage(label, route);
-    setRecentTools(getRecentTools());
+    trackToolUsage(label, route, user?.id);
+    setRecentTools(getRecentTools(user?.id));
     navigate(route);
-  }, [navigate]);
+  }, [navigate, user?.id]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -237,6 +252,10 @@ const Dashboard = () => {
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/")}>
+                  <Home className="mr-2 h-4 w-4" />
+                  <span>View landing page</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={async () => { await signOut(); navigate("/"); }}>
                   <LogOut className="mr-2 h-4 w-4" />
                   <span>Log out</span>
