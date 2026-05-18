@@ -42,6 +42,8 @@ If a skill plausibly applies, invoke it — don't rationalize skipping it.
 
 **Email:** Resend for transactional emails (invitations, notifications)
 
+**Analytics:** PostHog — `posthog-python` (backend, `src/backend/analytics.py`) and `posthog-js` (frontend, `src/lib/posthog.ts`). See the PostHog section below for events and dashboards.
+
 ## Commands
 
 ```bash
@@ -222,6 +224,68 @@ Admin access is granted two ways:
 2. **DB-managed:** `profiles.is_admin = true` grants admin access. Toggled by other admins via `/admin/users` → "Promote to admin" / "Demote".
 
 Self-demote and env-admin demote are blocked at the backend. To revoke an env admin, remove them from `ADMIN_EMAILS` and redeploy. The single source of truth for "is this user an admin?" is `is_user_admin(supabase, email, user_id)` in `src/backend/subscriptions/admin_auth.py`.
+
+## Analytics & PostHog
+
+Product analytics live in a single PostHog project (`https://us.posthog.com`, project id `427173`, "Default project"). Dev and prod backends both emit to it — be aware when reading numbers.
+
+### Wrappers
+
+| Layer | File | Purpose |
+|---|---|---|
+| Backend | `src/backend/analytics.py` | Thin `posthog-python` wrapper. `capture()`/`identify()` are no-ops unless `POSTHOG_ENABLED=true` is set in env. |
+| Backend middleware | `src/backend/middleware/analytics_middleware.py` | Fires `request_completed` / `request_failed` for every API call. Excludes `/static`, `/docs`, `/redoc`, `/openapi.json`, `/health`. |
+| Frontend | `src/lib/posthog.ts` | `posthog-js` init — autocapture off, session recording off, person profiles `identified_only`. Captures `$pageview` / `$pageleave`. |
+| Frontend hook | `src/hooks/useAnalyticsContext.ts` | Pulls `/me/analytics-context` and `identify()`s the user with plan/role/tester/admin properties. Cached in localStorage. |
+
+### Event taxonomy
+
+The canonical "a tool was used" signal is `tool_used` with `properties.tool ∈ {zoe, oneclick, splitsheet}`. Registry events are separate (`work_created`, `registry_work_registered`, `registry_collaborator_invited`).
+
+| Event | Fired in | Notes |
+|---|---|---|
+| `tool_used` | `main.py` (zoe, oneclick), `splitsheet/router.py` | `properties.tool` distinguishes which tool. |
+| `zoe_query_submitted` / `zoe_response_received` / `zoe_query_failed` | `main.py` | Step events for the Zoe funnel. |
+| `oneclick_calc_started` / `oneclick_calc_completed` / `oneclick_calc_failed` | `main.py` | Step events for the OneClick funnel. |
+| `splitsheet_generated` | `splitsheet/router.py` | Fired after PDF/DOCX is built. |
+| `work_created` / `work_submitted_for_registration` / `registry_work_registered` / `registry_collaborator_invited` | `registry/router.py` | Registry lifecycle. |
+| `contract_uploaded` | `main.py` | Includes `file_size`. |
+| `checkout_started` / `billing_portal_opened` | `subscriptions/billing_router.py` | Stripe entry points. |
+| `subscription_activated` / `subscription_canceled` / `payment_failed` | `subscriptions/stripe_events.py` | Stripe webhook outcomes. |
+| `request_completed` / `request_failed` | Middleware | Every API request — useful for traffic, noisy for tool counts. |
+
+When adding a new tool or feature, follow the existing pattern: emit a step event when work starts (e.g. `<tool>_started`) and a completion event when it succeeds. `tool_used` may be redundant if you already have a step event — prefer one or the other consistently.
+
+### Dashboards
+
+| Dashboard | Path | Purpose |
+|---|---|---|
+| Analytics basics (wizard-built) | `/dashboard/1593101` | Subscription funnel, churn, monthly active users, registry activity. |
+| Tool Usage — per tool + comparative | `/dashboard/1597175` | Per-tool counts, drop-off funnels, stacked comparative, unique users, weekly line. Built by Claude. |
+
+Admin-facing in-app analytics: `GET /admin/analytics/summary` (`src/backend/admin/analytics_router.py`) returns per-tool opens/completions/last_used via HogQL — used by the admin dashboard.
+
+### Environment variables
+
+| Var | Backend / Frontend | Purpose |
+|---|---|---|
+| `POSTHOG_ENABLED` | Backend | Must be `"true"` for `capture()` to actually emit. Defaults to off. |
+| `POSTHOG_PROJECT_TOKEN` | Backend | `phc_…` ingest token (also the SDK key). |
+| `POSTHOG_HOST` | Backend | `https://us.i.posthog.com`. |
+| `POSTHOG_PERSONAL_API_KEY` | Backend (scripts only) | `phx_…` for the dashboard setup script and ad-hoc PostHog REST calls. NOT for ingest. |
+| `POSTHOG_PROJECT_ID` | Backend (scripts only) | Numeric project id (`427173`) used by the REST API. |
+| `VITE_POSTHOG_PROJECT_TOKEN` | Frontend | Same `phc_…` token, exposed to the browser. |
+| `VITE_POSTHOG_HOST` | Frontend | `https://us.i.posthog.com`. |
+| `VITE_POSTHOG_DASHBOARD_URL` | Frontend | Base URL for "Open in PostHog" links in admin UI. |
+
+### Dashboard setup script
+
+`src/backend/scripts/posthog_setup_dashboard.py` is an idempotent script that creates/maintains cohorts, insights, and dashboards in PostHog. State file is `scripts/.posthog_dashboard_state.{env}.json` — it maps logical names → entity IDs so the UI can rename things without breaking the script. Run with `--adopt` once to seed state from existing entities.
+
+### Known caveats
+
+- **Single PostHog project across dev + prod.** Both `deploy-backend.yml` and `deploy-backend-dev.yml` set `POSTHOG_ENABLED=true` and share the same `POSTHOG_PROJECT_TOKEN`. Dev traffic is mixed in with prod traffic — filter or tag events to separate (see the proposed `environment` property work).
+- **Tests can leak.** `src/backend/tests/conftest.py` does NOT pin `POSTHOG_ENABLED=false`. If a developer's shell or `.env` has it enabled, pytest runs will fire real events. Treat any test that hits a tool endpoint as a potential source of dashboard noise until conftest is hardened.
 
 ## Database Conventions
 

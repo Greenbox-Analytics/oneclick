@@ -8,6 +8,13 @@ Provides:
 - client fixture: FastAPI TestClient with auth override and mocked Supabase
 """
 
+import os
+
+# Pin PostHog off before any module that imports analytics gets a chance to
+# initialize it. Belt-and-suspenders against a developer's local .env leaking
+# POSTHOG_ENABLED=true into pytest and polluting the shared PostHog project.
+os.environ["POSTHOG_ENABLED"] = "false"
+
 from unittest.mock import MagicMock
 
 import pytest

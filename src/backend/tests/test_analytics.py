@@ -52,13 +52,28 @@ class TestCapture:
         import analytics
 
         monkeypatch.setattr(analytics, "_initialized", True)
+        monkeypatch.delenv("APP_ENV", raising=False)
 
         with patch("posthog.capture") as m:
             analytics.capture(TEST_USER_ID, "tool_used", {"tool": "zoe"})
             m.assert_called_once_with(
                 distinct_id=TEST_USER_ID,
                 event="tool_used",
-                properties={"tool": "zoe"},
+                properties={"tool": "zoe", "environment": "local"},
+            )
+
+    def test_capture_uses_app_env_when_set(self, monkeypatch):
+        import analytics
+
+        monkeypatch.setattr(analytics, "_initialized", True)
+        monkeypatch.setenv("APP_ENV", "prod")
+
+        with patch("posthog.capture") as m:
+            analytics.capture(TEST_USER_ID, "tool_used", {"tool": "zoe"})
+            m.assert_called_once_with(
+                distinct_id=TEST_USER_ID,
+                event="tool_used",
+                properties={"tool": "zoe", "environment": "prod"},
             )
 
     def test_no_op_when_disabled(self, monkeypatch):

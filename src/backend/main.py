@@ -174,7 +174,10 @@ _uncaught_logger = _logging.getLogger("uvicorn.error")
 async def _unhandled_exception_handler(request: _Request, exc: Exception):
     _uncaught_logger.error(
         "Unhandled %s on %s %s: %s\n%s",
-        type(exc).__name__, request.method, request.url.path, exc,
+        type(exc).__name__,
+        request.method,
+        request.url.path,
+        exc,
         _traceback.format_exc(),
     )
     origin = request.headers.get("origin")
@@ -188,6 +191,7 @@ async def _unhandled_exception_handler(request: _Request, exc: Exception):
         content={"detail": "Internal server error", "error_type": type(exc).__name__},
         headers=cors_headers,
     )
+
 
 # Initialize Supabase Client (lazy initialization to avoid startup failures)
 supabase: Client = None

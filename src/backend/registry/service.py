@@ -28,6 +28,7 @@ def _resolve_auth_email(db: Client, user_id: str) -> str | None:
         logger.warning("Failed to resolve auth email for user_id=%s: %s", user_id, exc)
         return None
 
+
 # ============================================================
 # Works
 # ============================================================

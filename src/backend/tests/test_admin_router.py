@@ -199,9 +199,7 @@ class TestRequireAdminDbPath:
         assert r.status_code == 200
         assert r.json()["isAdmin"] is False
 
-    def test_non_admin_with_env_configured_via_admin_me_returns_isAdmin_false(
-        self, mock_supabase, monkeypatch
-    ):
+    def test_non_admin_with_env_configured_via_admin_me_returns_isAdmin_false(self, mock_supabase, monkeypatch):
         """Env configured, caller not admin via either path → /admin/me
         returns isAdmin: false (200). Other admin endpoints still 403."""
         from fastapi.testclient import TestClient
