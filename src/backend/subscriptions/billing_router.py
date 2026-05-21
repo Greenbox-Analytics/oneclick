@@ -104,7 +104,7 @@ async def webhook(request: Request):
     """Receive Stripe webhook events.
 
     Flow:
-    1. Verify signature (400 on failure)
+    1. Verify signature (400 on failure) to ensure request is from Stripe
     2. INSERT event_id into stripe_events (idempotency; conflict → {duplicate: true})
     3. Dispatch to handler (500 on failure + delete idempotency row so Stripe retries)
     4. Return 200 on success
