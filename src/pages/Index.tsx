@@ -129,8 +129,8 @@ const Index = () => {
         <div className="container mx-auto px-4 py-16 md:py-24">
           <div className="max-w-3xl mx-auto text-center">
             <h1 className="text-5xl md:text-6xl font-bold text-foreground mb-6 tracking-tight">
-              Artist Management
-              <span className="block text-primary mt-2">Simplified</span>
+              Simplifying the
+              <span className="block text-primary mt-2">Music Business</span>
             </h1>
             <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
               Streamline your workflow with powerful tools built for music professionals.
