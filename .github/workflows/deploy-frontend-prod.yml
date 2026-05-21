@@ -9,7 +9,10 @@ on:
 env:
   VERCEL_TOKEN: ${{ secrets.VERCEL_PROD_TOKEN }}
   VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  # IMPORTANT: this is the PROD Vercel project ID, separate from VERCEL_PROJECT_ID
+  # which points at the dev project. Dev frontend deploys via Vercel's own
+  # GitHub integration; this workflow handles the prod project explicitly.
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROD_PROJECT_ID }}
 
 jobs:
   deploy:
