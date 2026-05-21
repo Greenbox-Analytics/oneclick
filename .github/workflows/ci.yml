@@ -20,8 +20,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Poetry
+        # poetry-plugin-export is required for the requirements.txt sync check
+        # below. In Poetry 2.x `poetry export` was moved out of core into this
+        # plugin, so it must be installed alongside poetry.
         run: |
-          pip install poetry
+          pip install poetry poetry-plugin-export
           poetry config virtualenvs.in-project true
       - name: Cache Poetry virtualenv
         uses: actions/cache@v4
