@@ -173,4 +173,3 @@ def send_rich_invitation_email(
     except Exception as e:
         print(f"Warning: Failed to send invitation email: {e}")
         return None
-    

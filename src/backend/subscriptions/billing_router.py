@@ -12,6 +12,7 @@ from auth import get_current_user_email, get_current_user_id
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
+
 class CreateCheckoutRequest(BaseModel):
     plan: str  # "monthly" | "annual"
     # Optional return paths so different flows (onboarding, pricing page, etc.)
