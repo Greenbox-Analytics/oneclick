@@ -49,14 +49,11 @@ def is_env_tester(email: str | None) -> bool:
 
 
 def is_active_tester_row(row: dict) -> bool:
-    """Match AdminService.list_tester_grants() predicate:
-    reason LIKE 'tester%' AND reason != 'tester_revoked' AND
-    (expires_at IS NULL OR expires_at > now()).
-
-    The 'tester_revoked' sentinel is a sticky marker written by
-    AdminService.revoke_tester_grant so /me/bootstrap-tester won't
-    auto-re-grant for users in TESTER_EMAILS after admin revoke."""
-    reason = row.get("reason") or ""
+    """True if `row` is an active tester grant — reason starts with `tester`
+    (case-insensitive), is not the sticky `tester_revoked` marker, and the
+    grant has not expired. Mirrors list_tester_grants' SQL filter.
+    """
+    reason = (row.get("reason") or "").lower()
     if not reason.startswith("tester"):
         return False
     if reason == "tester_revoked":

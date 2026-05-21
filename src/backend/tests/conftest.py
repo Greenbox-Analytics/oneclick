@@ -166,7 +166,12 @@ _DEFAULT_USAGE_ROW = {
     "updated_at": "2026-05-09T00:00:00+00:00",
 }
 
-_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+# Includes 'profiles' because EntitlementsService.get_for_user now calls
+# is_db_admin(supabase, user_id) which reads from the profiles table — tests
+# that route subscription-related lookups through this set should also include
+# profiles so the admin short-circuit lookup doesn't fall through to whatever
+# domain builder the test installed.
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
 
 def _default_table_side_effect(name):
@@ -184,6 +189,13 @@ def _default_table_side_effect(name):
         b.execute.return_value = MagicMock(data=[], count=0)
     elif name == "usage_counters":
         b.execute.return_value = MagicMock(data=[_DEFAULT_USAGE_ROW], count=1)
+    elif name == "profiles":
+        # Default to non-admin so EntitlementsService.is_db_admin short-circuit
+        # is bypassed and tests see normal Pro-tier entitlements (via the
+        # subscriptions/tier_entitlements rows above) rather than the admin
+        # implicit-Pro shape. Tests that specifically need admin behaviour
+        # should override profiles to {"is_admin": True}.
+        b.execute.return_value = MagicMock(data=[], count=0)
     return b
 
 

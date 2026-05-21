@@ -20,16 +20,17 @@ logger = logging.getLogger(__name__)
 
 def _normalize_tester_reason(raw: str | None) -> str:
     """Ensure tester-grant reasons satisfy the `LIKE 'tester%'` convention used
-    by list_tester_grants and is_active_tester_row. If the admin's custom
-    reason already starts with `tester` (case-insensitive), keep it as-is to
-    preserve their note. Otherwise wrap it: `tester (whatever they typed)`.
-    Empty input becomes the bare `tester` default.
+    by list_tester_grants and is_active_tester_row. Forces the leading `tester`
+    prefix to lowercase so case-sensitive SQL LIKE matches; preserves any
+    admin-typed suffix as-is. Empty input becomes the bare `tester` default.
     """
     r = (raw or "").strip()
     if not r:
         return "tester"
     if r.lower().startswith("tester"):
-        return r
+        # Force the leading 'tester' prefix to lowercase. Preserves the rest
+        # (case + spacing) for admin readability.
+        return "tester" + r[6:]
     return f"tester ({r})"
 
 
@@ -231,7 +232,7 @@ class AdminService:
         Filters expired rows in Python (expires_at < now) rather than
         composing a Supabase OR filter. Suitable for small admin-facing lists.
         """
-        res = self.supabase.table("tier_overrides").select("*").like("reason", "tester%").execute()
+        res = self.supabase.table("tier_overrides").select("*").ilike("reason", "tester%").execute()
         now = datetime.now(UTC).isoformat()
         active = [
             row

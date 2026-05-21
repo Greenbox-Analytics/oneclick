@@ -14,7 +14,13 @@ from tests.conftest import _DEFAULT_USAGE_ROW, _PRO_SUB_ROW, _PRO_TIER_ROW, _SUB
 
 
 def _pro_sub_builder(name):
-    """Return a builder with Pro subscription data for subscription/entitlements tables."""
+    """Return a builder with Pro subscription data for subscription/entitlements tables.
+
+    Includes 'profiles' (with is_admin=False default) because
+    EntitlementsService.get_for_user now checks is_db_admin via the profiles
+    table — without this branch the lookup would fall through to the test's
+    domain builders and either crash or skew the sequence index.
+    """
     b = BoardMockBuilder([])
     if name == "subscriptions":
         b._data = [_PRO_SUB_ROW]
@@ -24,6 +30,8 @@ def _pro_sub_builder(name):
         b._data = []
     elif name == "usage_counters":
         b._data = [_DEFAULT_USAGE_ROW]
+    elif name == "profiles":
+        b._data = []  # is_db_admin returns False on empty result
     b._count = len(b._data)
     return b
 

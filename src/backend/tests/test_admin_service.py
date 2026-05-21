@@ -484,7 +484,8 @@ class TestTesterGrants:
 
     def test_create_tester_grant_normalizes_reason(self):
         """`reason` must always satisfy LIKE 'tester%' so list_tester_grants
-        returns the row. Empty → 'tester'. Already-prefixed → kept. Custom →
+        returns the row. Empty → 'tester'. Already-prefixed (case-insensitive)
+        → leading 'tester' forced to lowercase, suffix preserved. Custom →
         wrapped as 'tester (whatever)'."""
         from subscriptions.admin_service import _normalize_tester_reason
 
@@ -493,7 +494,9 @@ class TestTesterGrants:
         assert _normalize_tester_reason("   ") == "tester"
         assert _normalize_tester_reason("tester") == "tester"
         assert _normalize_tester_reason("tester_qa") == "tester_qa"
-        assert _normalize_tester_reason("Tester special") == "Tester special"  # case-insensitive prefix check
+        # Leading 'tester' prefix is forced to lowercase so SQL LIKE 'tester%'
+        # matches; the rest of the string is preserved.
+        assert _normalize_tester_reason("Tester special") == "tester special"
         assert _normalize_tester_reason("beta access") == "tester (beta access)"
         assert _normalize_tester_reason("Internal QA") == "tester (Internal QA)"
 
@@ -616,6 +619,74 @@ class TestTesterGrants:
         assert "u1" in user_ids
         assert "u2" in user_ids
         assert "u3" not in user_ids  # revoked row excluded
+
+    def test_list_uses_ilike_so_capital_T_rows_surface(self):
+        """A row with reason='Tester' (legacy / weird casing) should still
+        appear in the active tester list. This is the bug that hid Yash's grant."""
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        rows = [
+            {"user_id": "u1", "reason": "Tester", "expires_at": None, "granted_at": "2026-01-01T00:00:00Z"},
+            {"user_id": "u2", "reason": "tester_env", "expires_at": None, "granted_at": "2026-01-01T00:00:00Z"},
+        ]
+        sb = MagicMock()
+        captured_filter = {}
+
+        def _table(name):
+            b = MockQueryBuilder()
+            original_ilike = b.ilike
+
+            def _capture_ilike(col, pat):
+                captured_filter["col"] = col
+                captured_filter["pat"] = pat
+                return original_ilike(col, pat)
+
+            b.ilike = _capture_ilike
+            b.execute.return_value = MagicMock(data=rows if name == "tier_overrides" else [])
+            return b
+
+        sb.table.side_effect = _table
+        sb.auth.admin.get_user_by_id.return_value = MagicMock(user=MagicMock(email="x@y.com", id="x"))
+
+        svc = AdminService(sb, EntitlementsService(sb))
+        result = svc.list_tester_grants()
+        assert captured_filter == {"col": "reason", "pat": "tester%"}
+        user_ids = [r["user_id"] for r in result]
+        assert "u1" in user_ids  # 'Tester' must appear via ILIKE
+        assert "u2" in user_ids
+
+
+class TestNormalizeTesterReason:
+    def test_empty_input_returns_bare_tester(self):
+        from subscriptions.admin_service import _normalize_tester_reason
+
+        assert _normalize_tester_reason(None) == "tester"
+        assert _normalize_tester_reason("") == "tester"
+        assert _normalize_tester_reason("   ") == "tester"
+
+    def test_lowercase_prefix_unchanged(self):
+        from subscriptions.admin_service import _normalize_tester_reason
+
+        assert _normalize_tester_reason("tester") == "tester"
+        assert _normalize_tester_reason("tester_qa") == "tester_qa"
+        assert _normalize_tester_reason("tester (Yash)") == "tester (Yash)"
+
+    def test_uppercase_prefix_forced_to_lowercase(self):
+        from subscriptions.admin_service import _normalize_tester_reason
+
+        # Capital T case-insensitively matches, but we force the prefix to
+        # lowercase so SQL LIKE 'tester%' filter still finds it. Suffix is
+        # preserved with original casing.
+        assert _normalize_tester_reason("Tester") == "tester"
+        assert _normalize_tester_reason("Tester QA") == "tester QA"
+        assert _normalize_tester_reason("TESTER_qa") == "tester_qa"
+
+    def test_non_tester_input_wrapped(self):
+        from subscriptions.admin_service import _normalize_tester_reason
+
+        assert _normalize_tester_reason("beta access") == "tester (beta access)"
+        assert _normalize_tester_reason("Internal QA") == "tester (Internal QA)"
 
 
 class TestGetUserDetail:

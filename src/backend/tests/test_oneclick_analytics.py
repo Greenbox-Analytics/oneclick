@@ -39,7 +39,7 @@ SAMPLE_PAYMENTS = [
     },
 ]
 
-_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
 
 def _builder(data: list):
