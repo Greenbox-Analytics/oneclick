@@ -22,7 +22,7 @@ const Index = () => {
     {
       icon: Users,
       title: "Artist Profiles",
-      description: "Comprehensive artist management with detailed profiles, contact info, and portfolio tracking.",
+      description: "Manage detailed artist profiles with contact info, contracts, and portfolio tracking.",
     },
     {
       icon: FolderOpen,
