@@ -137,3 +137,31 @@ def test_returns_unavailable_when_posthog_query_fails(monkeypatch):
     assert resp2.status_code == 200
     assert resp2.json()["available"] is False
     _clear_overrides()
+
+
+def test_query_builders_include_env_and_date_filter():
+    """Every HogQL builder must filter to dev/prod and date >= cutoff."""
+    from admin.analytics_router import (
+        _ENV_DATE_FILTER,
+        _build_active_users_query,
+        _build_sparkline_query,
+        _build_summary_query,
+        _build_total_users_query,
+    )
+
+    builders_with_events = [
+        _build_summary_query(7, "all"),
+        _build_summary_query(None, "testers"),
+        _build_active_users_query(30, "all"),
+        _build_sparkline_query(7, "testers"),
+    ]
+    for sql in builders_with_events:
+        # Assert the exact constant, not a substring — catches typos like `proprties.`
+        assert _ENV_DATE_FILTER in sql, f"missing exact env+date filter in: {sql}"
+        # Also verify the property access uses the existing `properties.<key>` pattern
+        assert "properties.environment" in sql
+
+    # _build_total_users_query targets the persons table, not events — env/date filter
+    # not applicable. Sanity-check it does NOT contain the predicate (would be wrong).
+    persons_sql = _build_total_users_query("all")
+    assert "environment" not in persons_sql

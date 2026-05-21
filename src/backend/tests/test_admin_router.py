@@ -578,11 +578,23 @@ class TestTesterGrantEndpoints:
         assert body["expires_at"] == "2027-01-01T00:00:00+00:00"
 
     def test_delete_returns_204(self, admin_client, mock_supabase):
-        builders = {}
+        """DELETE /admin/tester-grants/{id} returns 204 and writes a sticky
+        'tester_revoked' marker via UPSERT (not a hard DELETE) so that
+        /me/bootstrap-tester won't auto-re-grant on next sign-in for users
+        in TESTER_EMAILS."""
+        captured = {}
 
         def _table(name):
             b = MockQueryBuilder()
-            builders[name] = b
+            if name == "tier_overrides":
+                original_upsert = b.upsert
+
+                def _capture_upsert(payload, *a, **kw):
+                    captured["payload"] = payload
+                    captured["on_conflict"] = kw.get("on_conflict")
+                    return original_upsert(payload, *a, **kw)
+
+                b.upsert = _capture_upsert
             return b
 
         mock_supabase.table.side_effect = _table
@@ -590,8 +602,9 @@ class TestTesterGrantEndpoints:
         resp = admin_client.delete(f"/admin/tester-grants/{TEST_USER_ID}")
         assert resp.status_code == 204
         assert resp.content == b""
-        b = builders["tier_overrides"]
-        b.delete.return_value.eq.assert_called_with("user_id", TEST_USER_ID)
+        assert captured["payload"]["user_id"] == TEST_USER_ID
+        assert captured["payload"]["reason"] == "tester_revoked"
+        assert captured["on_conflict"] == "user_id"
 
 
 class TestPromoteDemote:
@@ -644,6 +657,61 @@ class TestPromoteDemote:
         assert r.status_code == 403
 
 
+class TestRecalcStorage:
+    """POST /admin/users/{id}/recalc-storage endpoint."""
+
+    def test_recalc_returns_freshly_computed_total(self, admin_client, mock_supabase):
+        """Endpoint calls recalc_user_storage RPC, then re-reads usage_counters
+        and returns the freshly-computed total."""
+
+        # mock_supabase.rpc(...).execute() — the default MagicMock chain is fine
+        # (returns MagicMock). We just need the table read to return our value.
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "usage_counters":
+                b.execute.return_value = MagicMock(data=[{"total_storage_bytes": 123456}], count=1)
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = admin_client.post(f"/admin/users/{TEST_USER_ID}/recalc-storage")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {"user_id": TEST_USER_ID, "total_storage_bytes": 123456}
+
+        # And the RPC was actually called with the right shape.
+        mock_supabase.rpc.assert_any_call("recalc_user_storage", {"p_user_id": TEST_USER_ID})
+
+    def test_recalc_returns_zero_when_no_usage_row(self, admin_client, mock_supabase):
+        """If the re-read returns no rows (edge case — counter row truly absent),
+        the endpoint responds with total=0 rather than crashing on rows[0]."""
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "usage_counters":
+                b.execute.return_value = MagicMock(data=[], count=0)
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = admin_client.post(f"/admin/users/{TEST_USER_ID}/recalc-storage")
+        assert resp.status_code == 200
+        assert resp.json() == {"user_id": TEST_USER_ID, "total_storage_bytes": 0}
+
+    def test_recalc_rpc_failure_returns_500(self, admin_client, mock_supabase):
+        """RPC failures bubble up as 500 — the caller needs to know the recalc
+        didn't happen, not see a stale total."""
+        mock_supabase.rpc.return_value.execute.side_effect = RuntimeError("rpc down")
+
+        resp = admin_client.post(f"/admin/users/{TEST_USER_ID}/recalc-storage")
+        assert resp.status_code == 500
+        assert "Recalc failed" in resp.json()["detail"]
+
+    def test_recalc_non_admin_blocked(self, non_admin_client):
+        resp = non_admin_client.post(f"/admin/users/{TEST_USER_ID}/recalc-storage")
+        assert resp.status_code == 403
+
+
 class TestNonAdminBlocked:
     """Parameterized: every protected /admin/* route returns 403 for non-admin.
 
@@ -656,6 +724,7 @@ class TestNonAdminBlocked:
         ("GET", f"/admin/users/{TEST_USER_ID}"),
         ("POST", f"/admin/users/{TEST_USER_ID}/grant"),
         ("POST", f"/admin/users/{TEST_USER_ID}/revoke"),
+        ("POST", f"/admin/users/{TEST_USER_ID}/recalc-storage"),
         ("POST", f"/admin/users/{TEST_USER_ID}/override"),
         ("DELETE", f"/admin/users/{TEST_USER_ID}/override"),
         ("GET", "/admin/pro-requests"),

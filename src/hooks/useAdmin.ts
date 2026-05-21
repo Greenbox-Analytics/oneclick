@@ -86,14 +86,15 @@ export interface AdminUsersResponse {
 export function useAdminUsers(
   search: string,
   page: number,
+  perPage: number = 25,
 ): UseQueryResult<AdminUsersResponse> {
   return useQuery({
-    queryKey: ["admin", "users", { search, page }],
+    queryKey: ["admin", "users", { search, page, perPage }],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
       params.set("page", String(page));
-      params.set("per_page", "25");
+      params.set("per_page", String(perPage));
       return apiFetch<AdminUsersResponse>(`${API_URL}/admin/users?${params.toString()}`);
     },
     staleTime: 30_000,
@@ -167,7 +168,16 @@ export function useAdminMutations() {
     onSuccess: (_data, userId) => invalidateUser(userId),
   });
 
-  return { grantPro, revokePro, applyOverride, clearOverride, promoteAdmin, demoteAdmin };
+  const recalcStorage = useMutation({
+    mutationFn: async (userId: string) =>
+      apiFetch<{ user_id: string; total_storage_bytes: number }>(
+        `${API_URL}/admin/users/${userId}/recalc-storage`,
+        { method: "POST" },
+      ),
+    onSuccess: (_data, userId) => invalidateUser(userId),
+  });
+
+  return { grantPro, revokePro, applyOverride, clearOverride, promoteAdmin, demoteAdmin, recalcStorage };
 }
 
 // ---------------------------------------------------------------------------

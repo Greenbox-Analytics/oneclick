@@ -9,6 +9,8 @@ export interface TesterGrant {
   user_id: string;
   expires_at: string | null;
   reason: string | null;
+  email: string | null;
+  name: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,13 @@
 """FastAPI router for admin operations. All endpoints depend on require_admin."""
 
+import logging
 import sys
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, EmailStr
+
+logger = logging.getLogger(__name__)
 
 # Ensure backend dir is in path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -142,6 +145,36 @@ async def demote_user(
         )
     _get_admin_service().demote_user(user_id)
     return {"ok": True}
+
+
+@router.post("/users/{user_id}/recalc-storage")
+async def recalc_user_storage(
+    user_id: str,
+    _admin: str = Depends(require_admin),
+):
+    """Recompute usage_counters.total_storage_bytes from scratch for `user_id`.
+
+    Calls the Postgres function `recalc_user_storage(p_user_id uuid)` which sums
+    file_size across project_files + audio_files joined through projects/artists.
+    Useful when the storage trigger has drifted (e.g. user predates the trigger,
+    or a manual DB edit bypassed the trigger).
+
+    Returns the freshly-computed total.
+    """
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    try:
+        sb.rpc("recalc_user_storage", {"p_user_id": user_id}).execute()
+    except Exception as e:
+        logger.warning("recalc_user_storage RPC failed for %s: %s", user_id, e)
+        raise HTTPException(status_code=500, detail=f"Recalc failed: {e}")
+
+    # Re-read so the caller (frontend) can show the new value without a separate fetch.
+    res = sb.table("usage_counters").select("total_storage_bytes").eq("user_id", user_id).execute()
+    rows = res.data or []
+    total = int(rows[0]["total_storage_bytes"]) if rows else 0
+    return {"user_id": user_id, "total_storage_bytes": total}
 
 
 @router.post("/users/{user_id}/override")

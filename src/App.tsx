@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { AdminProtectedRoute } from "@/components/AdminProtectedRoute";
 import { usePageTimer } from "@/hooks/usePageTimer";
 import { useAdminPosthogTag } from "@/hooks/useAdminPosthogTag";
+import { TesterBanner } from "@/components/tester/TesterBanner";
 
 // Eager — small, needed on initial load
 import Index from "./pages/Index";
@@ -70,6 +71,7 @@ const App = () => (
         <BrowserRouter>
           <PageTimer />
           <AuthProvider>
+            <TesterBanner />
             <AdminPosthogTagger />
             <Suspense fallback={<PageLoader />}>
           <Routes>

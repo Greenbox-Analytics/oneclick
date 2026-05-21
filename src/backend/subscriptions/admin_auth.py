@@ -30,11 +30,36 @@ def env_admin_emails() -> set[str]:
     return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
+def env_tester_emails() -> set[str]:
+    """Lowercased, whitespace-stripped set of tester emails from TESTER_EMAILS env.
+
+    Used by /me/bootstrap-tester to auto-create a tier_overrides row for any
+    user whose signup email matches the allowlist — avoids the manual admin
+    grant for known beta testers.
+    """
+    raw = os.getenv("TESTER_EMAILS", "")
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def is_env_tester(email: str | None) -> bool:
+    """True if *email* is in the TESTER_EMAILS env-var allowlist."""
+    if not email:
+        return False
+    return email.strip().lower() in env_tester_emails()
+
+
 def is_active_tester_row(row: dict) -> bool:
     """Match AdminService.list_tester_grants() predicate:
-    reason LIKE 'tester%' AND (expires_at IS NULL OR expires_at > now())."""
+    reason LIKE 'tester%' AND reason != 'tester_revoked' AND
+    (expires_at IS NULL OR expires_at > now()).
+
+    The 'tester_revoked' sentinel is a sticky marker written by
+    AdminService.revoke_tester_grant so /me/bootstrap-tester won't
+    auto-re-grant for users in TESTER_EMAILS after admin revoke."""
     reason = row.get("reason") or ""
     if not reason.startswith("tester"):
+        return False
+    if reason == "tester_revoked":
         return False
     expires_at = row.get("expires_at")
     if expires_at is None:

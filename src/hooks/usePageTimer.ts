@@ -20,7 +20,7 @@ export function usePageTimer(): void {
     const prevPath = currentPathRef.current;
     if (prevPath !== pathname) {
       const duration_ms = Math.round(now - enteredAtRef.current);
-      capture("page_time_spent", { path: prevPath, duration_ms });
+      capture("page_time_spent", { $pathname: prevPath, duration_ms });
       enteredAtRef.current = now;
       currentPathRef.current = pathname;
     }
@@ -33,7 +33,7 @@ export function usePageTimer(): void {
       const duration_ms = Math.round(now - enteredAtRef.current);
       if (duration_ms > 100) {
         // Skip noise from immediate hide-on-open (e.g., bot prefetches)
-        capture("page_time_spent", { path: currentPathRef.current, duration_ms });
+        capture("page_time_spent", { $pathname: currentPathRef.current, duration_ms });
       }
       // Reset so a subsequent visibilitychange→visible doesn't double-count
       enteredAtRef.current = now;

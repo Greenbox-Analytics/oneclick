@@ -2,6 +2,7 @@ import posthog from "posthog-js";
 
 const API_KEY = import.meta.env.VITE_POSTHOG_PROJECT_TOKEN as string | undefined;
 const HOST = (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ?? "https://us.i.posthog.com";
+const APP_ENV = (import.meta.env.VITE_APP_ENV as string | undefined) ?? "local";
 
 let initialized = false;
 
@@ -21,6 +22,15 @@ export function initPostHog(): void {
     disable_session_recording: true, // privacy-forward default for beta v1
     persistence: "localStorage+cookie",
     person_profiles: "identified_only", // create person profiles only after identify()
+    // posthog-js fires the initial $pageview synchronously during init() when
+    // capture_pageview is true. Register the environment super-property inside
+    // `loaded` so it's attached BEFORE that first event — registering after
+    // init() returns would miss the initial pageview. Dashboards filter on
+    // environment ∈ {dev, prod}; unset VITE_APP_ENV defaults to "local"
+    // (fail closed).
+    loaded: (ph) => {
+      ph.register({ environment: APP_ENV });
+    },
   });
 
   initialized = true;

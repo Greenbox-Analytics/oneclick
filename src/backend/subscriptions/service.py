@@ -137,6 +137,11 @@ class EntitlementsService:
         if not res.data:
             return None
         ovr = res.data[0]
+        # `tester_revoked` is a sticky marker that prevents bootstrap-tester from
+        # auto-re-granting; functionally it's NOT an override (all caps are null).
+        # Treat as absent so has_overrides=False and the user reverts to tier defaults.
+        if ovr.get("reason") == "tester_revoked":
+            return None
         expires_at = _parse_iso(ovr.get("expires_at"))
         if expires_at is not None and expires_at < datetime.now(UTC):
             return None
@@ -157,6 +162,16 @@ class EntitlementsService:
             },
             on_conflict="user_id",
         ).execute()
+        # Defensive backfill: this is the first read after a counter row was missing.
+        # If the user predates the storage trigger (or the row was deleted), they
+        # may have project_files / audio_files that aren't reflected in
+        # total_storage_bytes. Run the recompute Postgres function once. Best-effort.
+        try:
+            self.supabase.rpc("recalc_user_storage", {"p_user_id": user_id}).execute()
+        except Exception as e:
+            import logging
+
+            logging.warning("recalc_user_storage backfill failed for %s: %s", user_id, e)
         res = self.supabase.table("usage_counters").select("*").eq("user_id", user_id).execute()
         return (
             res.data[0]

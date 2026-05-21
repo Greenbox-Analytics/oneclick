@@ -18,6 +18,21 @@ from subscriptions.service import EntitlementsService
 logger = logging.getLogger(__name__)
 
 
+def _normalize_tester_reason(raw: str | None) -> str:
+    """Ensure tester-grant reasons satisfy the `LIKE 'tester%'` convention used
+    by list_tester_grants and is_active_tester_row. If the admin's custom
+    reason already starts with `tester` (case-insensitive), keep it as-is to
+    preserve their note. Otherwise wrap it: `tester (whatever they typed)`.
+    Empty input becomes the bare `tester` default.
+    """
+    r = (raw or "").strip()
+    if not r:
+        return "tester"
+    if r.lower().startswith("tester"):
+        return r
+    return f"tester ({r})"
+
+
 class AdminService:
     def __init__(self, supabase: Client, entitlements_service: EntitlementsService):
         self.supabase = supabase
@@ -37,11 +52,29 @@ class AdminService:
         The auth admin API doesn't expose a true total count; we return `has_more`
         based on whether this page filled per_page.
         """
-        auth_users = self.supabase.auth.admin.list_users(page=page, per_page=per_page)
-
         if search:
-            search_lower = search.lower()
-            auth_users = [u for u in auth_users if search_lower in (getattr(u, "email", "") or "").lower()]
+            # Server-side search via SECURITY DEFINER RPC — see migration
+            # 20260520000000_admin_search_users_by_email.sql. Avoids paginating
+            # through every auth page when looking for a specific email substring.
+            rpc_res = self.supabase.rpc(
+                "admin_search_users_by_email",
+                {"p_search": search, "p_limit": per_page},
+            ).execute()
+            rpc_rows = rpc_res.data or []
+
+            # Adapt RPC rows to the same shape downstream code expects from
+            # auth.admin.list_users() — objects with .id, .email, .created_at attrs.
+            class _RpcUser:
+                __slots__ = ("id", "email", "created_at")
+
+                def __init__(self, row):
+                    self.id = row.get("id")
+                    self.email = row.get("email")
+                    self.created_at = row.get("created_at")
+
+            auth_users = [_RpcUser(r) for r in rpc_rows]
+        else:
+            auth_users = self.supabase.auth.admin.list_users(page=page, per_page=per_page)
 
         if not auth_users:
             return {"users": [], "page": page, "per_page": per_page, "has_more": False}
@@ -51,8 +84,12 @@ class AdminService:
         subs_res = self.supabase.table("subscriptions").select("user_id, tier").in_("user_id", user_ids).execute()
         subs_by_uid = {row["user_id"]: row for row in (subs_res.data or [])}
 
-        overrides_res = self.supabase.table("tier_overrides").select("user_id").in_("user_id", user_ids).execute()
-        override_uids = {row["user_id"] for row in (overrides_res.data or [])}
+        # Fetch reason so we can exclude `tester_revoked` markers — they're not
+        # real overrides (see _read_override in service.py for the same logic).
+        overrides_res = (
+            self.supabase.table("tier_overrides").select("user_id, reason").in_("user_id", user_ids).execute()
+        )
+        override_uids = {row["user_id"] for row in (overrides_res.data or []) if row.get("reason") != "tester_revoked"}
 
         # Bulk fetch profiles.is_admin for these user_ids (no N+1)
         profiles_res = self.supabase.table("profiles").select("id, is_admin").in_("id", user_ids).execute()
@@ -119,6 +156,10 @@ class AdminService:
 
         ovr_res = self.supabase.table("tier_overrides").select("*").eq("user_id", user_id).execute()
         override = ovr_res.data[0] if ovr_res.data else None
+        # `tester_revoked` is a marker, not a real override — hide it from the
+        # admin's OverrideEditor pre-fill so the form doesn't show stale fields.
+        if override and override.get("reason") == "tester_revoked":
+            override = None
 
         return {"user": user, "entitlements": ent.to_dict(), "override": override}
 
@@ -183,14 +224,55 @@ class AdminService:
     # ------------------------------------------------------------------
 
     def list_tester_grants(self) -> list[dict]:
-        """Returns active tier_overrides rows where reason LIKE 'tester%'.
+        """Returns active tier_overrides rows where reason LIKE 'tester%',
+        enriched with the user's `email` (from auth.users) and `name`
+        (from profiles.full_name).
 
         Filters expired rows in Python (expires_at < now) rather than
         composing a Supabase OR filter. Suitable for small admin-facing lists.
         """
         res = self.supabase.table("tier_overrides").select("*").like("reason", "tester%").execute()
         now = datetime.now(UTC).isoformat()
-        return [row for row in (res.data or []) if row.get("expires_at") is None or row["expires_at"] > now]
+        active = [
+            row
+            for row in (res.data or [])
+            if row.get("reason") != "tester_revoked" and (row.get("expires_at") is None or row["expires_at"] > now)
+        ]
+        if not active:
+            return []
+
+        user_ids = [row["user_id"] for row in active if row.get("user_id")]
+
+        # Email comes from auth.users (profiles doesn't store email).
+        # Per-user lookup avoids list_users() pagination edge cases — tester
+        # grants are always a small list so N round-trips is acceptable.
+        email_by_id: dict[str, str] = {}
+        for uid in user_ids:
+            try:
+                resp = self.supabase.auth.admin.get_user_by_id(uid)
+                # supabase-py wraps the user in `.user` (object with `.email` attribute)
+                u = getattr(resp, "user", resp)
+                email = getattr(u, "email", None) or ""
+                if email:
+                    email_by_id[uid] = email
+            except Exception as e:
+                logger.warning("list_tester_grants: get_user_by_id failed for %s: %s", uid, e)
+
+        # Name comes from profiles.full_name (may be null for unfinished onboarding).
+        name_by_id: dict[str, str] = {}
+        try:
+            profs = self.supabase.table("profiles").select("id, full_name").in_("id", user_ids).execute()
+            for p in profs.data or []:
+                if p.get("id"):
+                    name_by_id[p["id"]] = p.get("full_name") or ""
+        except Exception as e:
+            logger.warning("list_tester_grants: profiles lookup failed: %s", e)
+
+        for row in active:
+            uid = row.get("user_id")
+            row["email"] = email_by_id.get(uid) or None
+            row["name"] = name_by_id.get(uid) or None
+        return active
 
     def create_tester_grant(
         self,
@@ -209,6 +291,7 @@ class AdminService:
         user = matched[0]
         user_id = getattr(user, "id", None)
 
+        normalized_reason = _normalize_tester_reason(reason)
         payload = {
             "user_id": user_id,
             "max_artists": -1,
@@ -221,7 +304,7 @@ class AdminService:
             "oneclick_enabled": True,
             "registry_enabled": True,
             "integrations_allowed": ["google_drive", "slack", "notion"],
-            "reason": reason,
+            "reason": normalized_reason,
             "expires_at": expires_at,
             "granted_at": datetime.now(UTC).isoformat(),
         }
@@ -237,11 +320,33 @@ class AdminService:
             )
         except Exception as e:
             logger.warning("analytics identify on tester-grant create failed: %s", e)
-        return {"user_id": user_id, "email": email, "expires_at": expires_at, "reason": reason}
+        return {"user_id": user_id, "email": email, "expires_at": expires_at, "reason": normalized_reason}
 
     def revoke_tester_grant(self, user_id: str) -> None:
-        """DELETE the tier_overrides row for user_id."""
-        self.supabase.table("tier_overrides").delete().eq("user_id", user_id).execute()
+        """Mark the tier_overrides row as 'tester_revoked' so bootstrap-tester
+        won't auto-re-grant on next sign-in (for users in TESTER_EMAILS env).
+
+        All caps and feature flags are nulled — the user reverts to tier defaults
+        (free, in the absence of a different non-tester override). The row stays
+        as a sticky marker; admin re-grant via create_tester_grant overwrites it.
+        """
+        payload = {
+            "user_id": user_id,
+            "max_artists": None,
+            "max_projects": None,
+            "max_tasks": None,
+            "max_storage_bytes": None,
+            "max_split_sheets_per_month": None,
+            "max_oneclick_runs_per_month": None,
+            "zoe_enabled": None,
+            "oneclick_enabled": None,
+            "registry_enabled": None,
+            "integrations_allowed": None,
+            "reason": "tester_revoked",
+            "expires_at": None,
+            "granted_at": datetime.now(UTC).isoformat(),
+        }
+        self.supabase.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
         try:
             analytics_identify(
                 user_id,

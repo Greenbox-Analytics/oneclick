@@ -5,6 +5,15 @@ import { identifyUser } from "@/lib/posthog";
 
 const CACHE_KEY = "msanii.analytics_context.v1";
 const TTL_MS = 5 * 60 * 1000;
+const CONTEXT_UPDATED_EVENT = "msanii:analytics-context-updated";
+
+/**
+ * Window event fired immediately after the analytics-context cache is
+ * (over)written. Reactive subscribers (e.g. useTesterStatus) listen for this
+ * to re-render the instant the bootstrap POST refreshes the cache — no page
+ * reload required. NOT fired on clearCache (anti-flicker — see comment there).
+ */
+export const ANALYTICS_CONTEXT_UPDATED_EVENT = CONTEXT_UPDATED_EVENT;
 
 export interface AnalyticsContext {
   is_tester: boolean;
@@ -56,6 +65,11 @@ function writeCache(entry: CacheEntry): void {
   } catch {
     /* localStorage may be unavailable / full; ignore */
   }
+  try {
+    window.dispatchEvent(new Event(CONTEXT_UPDATED_EVENT));
+  } catch {
+    /* SSR / no-window environments — ignore */
+  }
 }
 
 function clearCache(): void {
@@ -64,6 +78,15 @@ function clearCache(): void {
   } catch {
     /* ignore */
   }
+  // INTENTIONALLY no dispatch here. clearCache is called from two places:
+  //   1) Sign-out — AuthContext re-renders with user=null, making
+  //      useTesterStatus's userId undefined and forcing isTester=false on
+  //      the next render. The banner hides correctly without our event.
+  //   2) Inside refreshAnalyticsContext, immediately before the new fetch.
+  //      Firing here would briefly publish "no tester" (peek returns null),
+  //      flicker the banner off, then writeCache would flicker it back on.
+  //      Skip the intermediate event; writeCache is the only authoritative
+  //      "context updated" signal.
 }
 
 /**

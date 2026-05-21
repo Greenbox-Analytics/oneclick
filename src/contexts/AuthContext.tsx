@@ -3,7 +3,7 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { apiFetch, API_URL } from '@/lib/apiFetch';
 import { identifyUser, resetUser } from '@/lib/posthog';
-import { useAnalyticsContext } from '@/hooks/useAnalyticsContext';
+import { useAnalyticsContext, refreshAnalyticsContext } from '@/hooks/useAnalyticsContext';
 
 const AnalyticsIdentifyEffect = () => {
   useAnalyticsContext();
@@ -56,6 +56,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         apiFetch(`${API_URL}/users/welcome`, { method: 'POST' }).catch((err) => {
           console.warn('Welcome email trigger failed:', err);
         });
+
+        // Auto-grant tester from TESTER_EMAILS allowlist (backend idempotent).
+        // On a fresh grant, bust the analytics-context cache so the banner sees
+        // is_tester=true without waiting for the next focus.
+        apiFetch<{ granted: boolean }>(`${API_URL}/me/bootstrap-tester`, { method: 'POST' })
+          .then((res) => {
+            if (res?.granted && session.user) {
+              refreshAnalyticsContext(session.user.id, session.user.email).catch((err) => {
+                console.warn('Analytics context refresh after tester grant failed:', err);
+              });
+            }
+          })
+          .catch((err) => {
+            console.warn('Bootstrap tester check failed:', err);
+          });
       }
 
       // SP-Analytics: identify/reset PostHog distinct_id

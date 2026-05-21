@@ -10,6 +10,16 @@ import os
 
 import posthog
 
+# Cutoff date below which dashboards and HogQL queries should not consider events.
+# Set on 2026-05-19 when environment tagging + filtering was rolled out. Events
+# before this date are mostly local-dev pollution from the shared PostHog project.
+POSTHOG_DATA_CUTOFF = "2026-05-19"
+
+# Environments whose events should appear in dashboards / admin analytics. Local
+# dev events still ingest (tagged environment=local) but are excluded from every
+# visualization.
+ENV_FILTER_VALUES = ("dev", "prod")
+
 _initialized = False
 
 

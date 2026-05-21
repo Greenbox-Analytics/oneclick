@@ -277,15 +277,32 @@ Admin-facing in-app analytics: `GET /admin/analytics/summary` (`src/backend/admi
 | `VITE_POSTHOG_PROJECT_TOKEN` | Frontend | Same `phc_…` token, exposed to the browser. |
 | `VITE_POSTHOG_HOST` | Frontend | `https://us.i.posthog.com`. |
 | `VITE_POSTHOG_DASHBOARD_URL` | Frontend | Base URL for "Open in PostHog" links in admin UI. |
+| `VITE_APP_ENV` | Frontend | `local` (default) / `dev` / `prod`. Registered as PostHog super-property `environment` on every browser event. Dashboards filter on this. |
 
 ### Dashboard setup script
 
 `src/backend/scripts/posthog_setup_dashboard.py` is an idempotent script that creates/maintains cohorts, insights, and dashboards in PostHog. State file is `scripts/.posthog_dashboard_state.{env}.json` — it maps logical names → entity IDs so the UI can rename things without breaking the script. Run with `--adopt` once to seed state from existing entities.
 
+### Dashboard backfill script
+
+`src/backend/scripts/posthog_apply_env_filter.py` is a one-time backfill that walks insights on a given dashboard and PATCHes the env + date filter into each one's filter tree. Idempotent; supports `--dry-run`. Use after deploying the env-tagging change to clean up pre-existing dashboards (e.g. `1593101`, `1597175`) that weren't built via the setup script.
+
+```bash
+# Dry-run first — inspects each insight and prints the proposed mutation diff.
+# Query-based insights (insight.query non-null) are skipped with a WARNING because
+# their filter trees live under query.source.properties, not filters.properties.
+poetry run python -m scripts.posthog_apply_env_filter \
+    --dashboard-id 1593101 --dashboard-id 1597175 --dry-run
+
+# Apply for real
+poetry run python -m scripts.posthog_apply_env_filter \
+    --dashboard-id 1593101 --dashboard-id 1597175
+```
+
 ### Known caveats
 
-- **Single PostHog project across dev + prod.** Both `deploy-backend.yml` and `deploy-backend-dev.yml` set `POSTHOG_ENABLED=true` and share the same `POSTHOG_PROJECT_TOKEN`. Dev traffic is mixed in with prod traffic — filter or tag events to separate (see the proposed `environment` property work).
-- **Tests can leak.** `src/backend/tests/conftest.py` does NOT pin `POSTHOG_ENABLED=false`. If a developer's shell or `.env` has it enabled, pytest runs will fire real events. Treat any test that hits a tool endpoint as a potential source of dashboard noise until conftest is hardened.
+- **Single PostHog project across dev + prod.** Both `deploy-backend.yml` and `deploy-backend-dev.yml` set `POSTHOG_ENABLED=true` and share the same `POSTHOG_PROJECT_TOKEN`. Dev traffic is mixed in with prod traffic — separated via the `environment` event property (`local` / `dev` / `prod`). Backend tags via `APP_ENV`, frontend tags via `VITE_APP_ENV`. The load-bearing exclusion is `environment IN ('dev', 'prod')` — applied in HogQL queries (`admin/analytics_router.py`) and as a property filter on insights. The `timestamp >= '2026-05-19'` clause is a hard floor in HogQL but a default-view boundary on insights (dashboard date pickers can override `date_from`). Events before the cutoff are mostly untagged local-dev pollution and are excluded by the env IN-list anyway.
+- **Test ingest leakage is partially mitigated.** `src/backend/tests/conftest.py` still does not pin `POSTHOG_ENABLED=false`. If a developer's shell has it enabled, pytest runs will still hit PostHog's ingest endpoint and burn quota. With env tagging in place, those leaked events tag as `environment=local` (assuming `APP_ENV` is unset in test env, which it is by default) and are excluded from every dashboard — so dashboard pollution from tests is now fixed. The remaining cost is ingest spend, not dirty data.
 
 ## Database Conventions
 

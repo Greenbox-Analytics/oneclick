@@ -16,6 +16,8 @@ from pathlib import Path
 
 import httpx
 
+from analytics import ENV_FILTER_VALUES, POSTHOG_DATA_CUTOFF
+
 STATE_DIR = Path(__file__).resolve().parent
 
 
@@ -208,6 +210,46 @@ def _api(host: str, project_id: str, key: str) -> dict:
     }
 
 
+def _with_env_filter(spec: dict) -> dict:
+    """Return a copy of an insight spec with env predicate + date_from injected under filters.
+
+    PostHog's documented insight shape nests date_from/properties/events under a
+    `filters` dict. We write our additions there. The pre-existing flat keys at
+    spec root (events, kind, breakdown) are untouched — reconciling those with
+    the documented shape is a separate concern (see line 91-93 of this file).
+
+    Idempotent: re-applying does not duplicate the environment predicate. Note
+    that de-dup is top-level only — manually-edited filter trees with nested
+    AND/OR groups containing `environment` predicates would not be detected.
+    """
+    out = {**spec}
+    existing_filters = dict(out.get("filters") or {})
+    existing_filters["date_from"] = POSTHOG_DATA_CUTOFF
+
+    existing_props = existing_filters.get("properties") or {"type": "AND", "values": []}
+    # Normalize: PostHog accepts both list and {type, values} shapes; coerce to tree.
+    # Use `or []` not default=[] — PostHog responses can have explicit nulls where
+    # `get("values", [])` returns None and `list(None)` raises.
+    if isinstance(existing_props, list):
+        values = list(existing_props)
+    else:
+        values = list(existing_props.get("values") or [])
+
+    # De-dup: drop any prior top-level environment predicate before re-adding.
+    values = [v for v in values if v.get("key") != "environment"]
+    values.append(
+        {
+            "key": "environment",
+            "value": list(ENV_FILTER_VALUES),
+            "operator": "exact",
+            "type": "event",
+        }
+    )
+    existing_filters["properties"] = {"type": "AND", "values": values}
+    out["filters"] = existing_filters
+    return out
+
+
 def _upsert(
     client: httpx.Client,
     api: dict,
@@ -248,7 +290,10 @@ def _adopt_by_name(client: httpx.Client, api: dict, resource: str, name: str) ->
 def run(env: str = "dev", adopt: bool = False) -> None:
     key = os.getenv("POSTHOG_PERSONAL_API_KEY")
     project_id = os.getenv("POSTHOG_PROJECT_ID")
-    host = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
+    # POSTHOG_HOST is the ingest host (us.i.posthog.com); REST/insights API
+    # lives on the app host (us.posthog.com). Translate like posthog_client.py.
+    ingest_host = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
+    host = os.environ.get("POSTHOG_API_HOST") or ingest_host.replace(".i.posthog.com", ".posthog.com")
     if not key or not project_id:
         print(
             "ERROR: POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID must be set",
@@ -263,6 +308,8 @@ def run(env: str = "dev", adopt: bool = False) -> None:
     with httpx.Client(timeout=60.0) as client:
         # Adopt path: discover existing entities by name and exit early.
         if adopt:
+            # Adopt records entity IDs only — env filter is applied on the
+            # upsert pass below (Pass 2), not here.
             for logical, spec in COHORTS.items():
                 if logical not in state["cohorts"]:
                     found = _adopt_by_name(client, api, "cohorts", spec["name"])
@@ -286,9 +333,9 @@ def run(env: str = "dev", adopt: bool = False) -> None:
         for logical, spec in COHORTS.items():
             _upsert(client, api, "cohorts", state["cohorts"], logical, spec)
 
-        # Pass 2: Insights
+        # Pass 2: Insights — inject env + date filter into every spec before upsert.
         for logical, spec in INSIGHTS.items():
-            _upsert(client, api, "insights", state["insights"], logical, spec)
+            _upsert(client, api, "insights", state["insights"], logical, _with_env_filter(spec))
 
         # Pass 3: Dashboards (shells)
         for logical, spec in DASHBOARDS.items():

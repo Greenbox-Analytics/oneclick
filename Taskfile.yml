@@ -277,6 +277,8 @@ tasks:
 
         start_section "LOCAL TESTING VARS & LOCAL ADMIN RIGHTS"
         try_gsm "ADMIN_EMAILS"
+        try_gsm "TESTER_EMAILS"
+        try_gsm_scoped "VITE_APP_ENV"
         try_literal "OPS_NOTIFICATION_EMAIL" "tech@greenboxanalytics.ca"
         try_literal "BYPASS_PAYWALLS" "{{.BYPASS_PAYWALLS}}"
         try_literal "FRONTEND_URL" "{{.FRONTEND_URL}}"

@@ -20,6 +20,7 @@ import { useBoards } from "@/hooks/useBoards";
 import { useCreateCheckoutSession, useCreatePortalSession } from "@/hooks/useBilling";
 import { useAnalytics, type Plan } from "@/hooks/useAnalytics";
 import { peekCachedAnalyticsContext, refreshAnalyticsContext } from "@/hooks/useAnalyticsContext";
+import { TesterBadge } from "@/components/tester/TesterBadge";
 
 // IMPORTANT: hook return shapes (verified against actual files):
 //   useArtistsList()  → { artists, isLoading }
@@ -275,7 +276,7 @@ const Subscription = () => {
         )}
 
         {/* Override-only Pro banner — distinguishes tester grants from generic admin grants */}
-        {isProViaOverride && isTester && (
+        {isTester && (
           <div className="mb-6 rounded-lg border border-primary/30 bg-primary/5 p-4">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-primary" />
@@ -307,7 +308,7 @@ const Subscription = () => {
         )}
 
         {/* Subscribe CTA for Free users */}
-        {!isPro && (
+        {!isPro && !isTester && (
           <Card className="p-8 mb-6">
             <h2 className="text-xl font-semibold mb-2">Upgrade to Pro</h2>
             <p className="text-sm text-muted-foreground mb-6">
@@ -339,9 +340,13 @@ const Subscription = () => {
         <Card className="p-6 mb-8 flex items-center justify-between">
           <div>
             <div className="flex items-center gap-3 mb-1">
-              <h2 className="text-xl font-semibold">{isPro ? "Pro" : "Free"} plan</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-semibold">
+                  {isTester ? "Beta Tester" : isPro ? "Pro" : "Free"} plan
+                </h2>
+                <TesterBadge />
+              </div>
               {isPro && <Badge>Pro</Badge>}
-              {isTester && <Badge variant="secondary">Tester</Badge>}
               {ent.degraded && (
                 <Badge variant="outline" className="text-xs">
                   Account state temporarily unavailable

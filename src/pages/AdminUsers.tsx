@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Music, Search } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import {
   useAdminUsers,
@@ -23,6 +24,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { AnalyticsSummaryCard } from "@/components/admin/AnalyticsSummaryCard";
+import { BehaviorAnalyticsCard } from "@/components/admin/BehaviorAnalyticsCard";
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -42,6 +44,93 @@ const TesterGrantsPanel = () => {
   const [email, setEmail] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [reason, setReason] = useState("");
+
+  // Autocomplete: search existing users by email as the admin types.
+  //
+  // - useDeferredValue lets React keep the input snappy while the network
+  //   request and downstream render lag behind a tick or two (Vercel rule
+  //   rerender-use-deferred-value). The React Query call is keyed by the
+  //   deferred value, so it doesn't re-fetch on every keystroke when the user
+  //   is typing fast.
+  // - 2-char minimum avoids a noisy first-keystroke fetch returning every user.
+  // - React Query caches by {search, page} for 30s, so backtracking is free.
+  const emailQuery = email.trim();
+  const deferredQuery = useDeferredValue(emailQuery);
+  const suggestionsQuery = useAdminUsers(deferredQuery, 1, 10);
+  const showSuggestions = deferredQuery.length >= 2;
+  const suggestions = showSuggestions ? (suggestionsQuery.data?.users ?? []) : [];
+
+  // Dropdown UI state.
+  const [isOpen, setIsOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Reset the highlight when the suggestion set changes. Primitive dep
+  // (length) per Vercel rule rerender-dependencies — referencing the array
+  // would refire every render.
+  useEffect(() => {
+    setHighlightedIndex(suggestions.length > 0 ? 0 : -1);
+  }, [suggestions.length]);
+
+  // Single document-level mousedown listener while the dropdown is open;
+  // cleaned up on close so we don't leak listeners across re-renders.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [isOpen]);
+
+  // Keep the highlighted item visible when arrowing past the viewport edge.
+  useEffect(() => {
+    if (highlightedIndex < 0 || !listRef.current) return;
+    const item = listRef.current.children[highlightedIndex] as HTMLElement | undefined;
+    item?.scrollIntoView({ block: "nearest" });
+  }, [highlightedIndex]);
+
+  const handleSelect = (selectedEmail: string) => {
+    setEmail(selectedEmail);
+    setIsOpen(false);
+    setHighlightedIndex(-1);
+  };
+
+  const handleEmailKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!isOpen) {
+      if (e.key === "ArrowDown" && suggestions.length > 0) {
+        e.preventDefault();
+        setIsOpen(true);
+        setHighlightedIndex(0);
+      }
+      return;
+    }
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setHighlightedIndex((i) => Math.min(i + 1, suggestions.length - 1));
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setHighlightedIndex((i) => Math.max(i - 1, 0));
+        break;
+      case "Enter": {
+        const picked = suggestions[highlightedIndex]?.email;
+        if (picked) {
+          e.preventDefault();
+          handleSelect(picked);
+        }
+        break;
+      }
+      case "Escape":
+        e.preventDefault();
+        setIsOpen(false);
+        break;
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,14 +172,74 @@ const TesterGrantsPanel = () => {
       <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 mb-6">
         <label className="text-xs flex-1 min-w-[200px]">
           Email (required)
-          <Input
-            type="email"
-            required
-            placeholder="user@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1"
-          />
+          <div ref={containerRef} className="relative mt-1">
+            <Input
+              type="email"
+              required
+              placeholder="user@example.com"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setIsOpen(true);
+              }}
+              onFocus={() => setIsOpen(true)}
+              onKeyDown={handleEmailKeyDown}
+              autoComplete="off"
+              role="combobox"
+              aria-expanded={isOpen && suggestions.length > 0}
+              aria-controls="tester-email-suggestions"
+              aria-activedescendant={
+                highlightedIndex >= 0 ? `tester-suggestion-${highlightedIndex}` : undefined
+              }
+            />
+            {isOpen && showSuggestions && (
+              <div
+                id="tester-email-suggestions"
+                role="listbox"
+                ref={listRef}
+                className="absolute z-50 mt-1 w-full max-h-60 overflow-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+              >
+                {suggestionsQuery.isLoading && suggestions.length === 0 && (
+                  <div className="px-3 py-2 text-xs text-muted-foreground">Searching…</div>
+                )}
+                {!suggestionsQuery.isLoading && suggestions.length === 0 && (
+                  <div className="px-3 py-2 text-xs text-muted-foreground">No matches</div>
+                )}
+                {suggestions.map((u, i) =>
+                  u.email ? (
+                    <button
+                      type="button"
+                      key={u.id}
+                      id={`tester-suggestion-${i}`}
+                      role="option"
+                      aria-selected={i === highlightedIndex}
+                      onMouseDown={(e) => {
+                        // mousedown (not click) so we beat the document mousedown
+                        // close-on-outside handler — by the time click fires the
+                        // dropdown would already be closed.
+                        e.preventDefault();
+                        handleSelect(u.email!);
+                      }}
+                      onMouseEnter={() => setHighlightedIndex(i)}
+                      className={cn(
+                        "w-full text-left px-3 py-2 text-sm flex flex-col gap-0.5",
+                        i === highlightedIndex
+                          ? "bg-accent text-accent-foreground"
+                          : "hover:bg-accent/60",
+                      )}
+                    >
+                      <span className="font-medium">{u.email}</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {u.tier === "pro" ? "Pro" : "Free"}
+                        {u.is_admin || u.is_env_admin ? " · Admin" : ""}
+                        {u.has_override ? " · Override" : ""}
+                      </span>
+                    </button>
+                  ) : null,
+                )}
+              </div>
+            )}
+          </div>
         </label>
         <label className="text-xs w-40">
           Expires (optional)
@@ -121,7 +270,7 @@ const TesterGrantsPanel = () => {
       <table className="w-full text-sm">
         <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
           <tr>
-            <th className="px-3 py-2 font-medium">User ID</th>
+            <th className="px-3 py-2 font-medium">User</th>
             <th className="px-3 py-2 font-medium">Expires</th>
             <th className="px-3 py-2 font-medium text-right">Actions</th>
           </tr>
@@ -143,7 +292,15 @@ const TesterGrantsPanel = () => {
           )}
           {grantsQuery.data?.map((grant) => (
             <tr key={grant.user_id} className="border-t border-border hover:bg-muted/30">
-              <td className="px-3 py-2 font-mono text-xs">{grant.user_id}</td>
+              <td className="px-3 py-2">
+                <div className="font-medium">{grant.name || grant.email || grant.user_id}</div>
+                {grant.name && grant.email && (
+                  <div className="text-xs text-muted-foreground">{grant.email}</div>
+                )}
+                {!grant.name && !grant.email && (
+                  <div className="text-xs text-muted-foreground font-mono">{grant.user_id}</div>
+                )}
+              </td>
               <td className="px-3 py-2 text-muted-foreground">
                 {grant.expires_at ? grant.expires_at.split("T")[0] : "Never"}
               </td>
@@ -206,6 +363,8 @@ const AdminUsers = () => {
         </div>
 
         <AnalyticsSummaryCard />
+
+        <BehaviorAnalyticsCard />
 
         <TesterGrantsPanel />
 
@@ -314,7 +473,7 @@ interface SheetProps {
 
 const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
   const detailQuery = useEntitlementsForUser(userId);
-  const { grantPro, revokePro, clearOverride, promoteAdmin, demoteAdmin } = useAdminMutations();
+  const { grantPro, revokePro, clearOverride, promoteAdmin, demoteAdmin, recalcStorage } = useAdminMutations();
   const [overrideOpen, setOverrideOpen] = useState(false);
   const { user: currentUser } = useAuth();
   const { captureAdminUserPromoted, captureAdminUserDemoted } = useAnalytics();
@@ -366,6 +525,16 @@ const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
       await demoteAdmin.mutateAsync(userId);
       captureAdminUserDemoted(userId);
       toast.success("Demoted from admin");
+    } catch (e) {
+      toast.error(`Failed: ${(e as Error).message}`);
+    }
+  };
+
+  const handleRecalcStorage = async () => {
+    if (!userId) return;
+    try {
+      const res = await recalcStorage.mutateAsync(userId);
+      toast.success(`Storage recalculated: ${formatBytes(res.total_storage_bytes)}`);
     } catch (e) {
       toast.error(`Failed: ${(e as Error).message}`);
     }
@@ -474,7 +643,18 @@ const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
             <section>
               <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Current usage</div>
               <div className="space-y-1 text-sm">
-                <div>Storage: <span className="font-medium">{formatBytes(data.entitlements.usage.totalStorageBytes)}</span></div>
+                <div className="flex items-center gap-2">
+                  <span>Storage: <span className="font-medium">{formatBytes(data.entitlements.usage.totalStorageBytes)}</span></span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
+                    onClick={handleRecalcStorage}
+                    disabled={recalcStorage.isPending}
+                  >
+                    {recalcStorage.isPending ? "..." : "Recalculate"}
+                  </Button>
+                </div>
                 <div>Split sheets this period: <span className="font-medium">{data.entitlements.usage.splitSheetsThisPeriod}</span></div>
                 <div>Zoe queries this period: <span className="font-medium">{data.entitlements.usage.zoeQueriesThisPeriod}</span></div>
                 <div>OneClick runs this period: <span className="font-medium">{data.entitlements.usage.oneclickRunsThisPeriod}</span></div>
@@ -509,6 +689,11 @@ interface OverrideEditorProps {
 const numToInput = (v: number | null | undefined): string =>
   v === null || v === undefined ? "" : String(v);
 
+// Same as numToInput but also treats -1 (the "unlimited" sentinel) as empty,
+// since unlimited is represented by a separate checkbox in the UI.
+const numToInputOrEmpty = (v: number | null | undefined): string =>
+  v === null || v === undefined || v === -1 ? "" : String(v);
+
 // Normalize a tri-state bool override field to the select's value.
 const boolToSelect = (v: boolean | null | undefined): "" | "true" | "false" =>
   v === null || v === undefined ? "" : v ? "true" : "false";
@@ -530,17 +715,26 @@ const OverrideEditor = ({ userId, currentOverride, onDone }: OverrideEditorProps
   // "Clear override" (full row delete) and re-apply with only the fields they
   // want to keep. Helper text below the form makes this explicit.
 
-  // Caps (numbers — null/undefined → empty string)
-  const [maxArtists, setMaxArtists] = useState(numToInput(currentOverride?.max_artists));
-  const [maxProjects, setMaxProjects] = useState(numToInput(currentOverride?.max_projects));
-  const [maxTasks, setMaxTasks] = useState(numToInput(currentOverride?.max_tasks));
+  // Caps (numbers — null/undefined → empty string; -1 → empty since unlimited
+  // is represented by the separate checkbox)
+  const [maxArtists, setMaxArtists] = useState(numToInputOrEmpty(currentOverride?.max_artists));
+  const [maxProjects, setMaxProjects] = useState(numToInputOrEmpty(currentOverride?.max_projects));
+  const [maxTasks, setMaxTasks] = useState(numToInputOrEmpty(currentOverride?.max_tasks));
   // Storage stored as bytes in DB; admin enters GB for ergonomics
   const [maxStorageGb, setMaxStorageGb] = useState(
-    currentOverride?.max_storage_bytes != null
+    currentOverride?.max_storage_bytes != null && currentOverride.max_storage_bytes !== -1
       ? String(currentOverride.max_storage_bytes / (1024 * 1024 * 1024))
       : "",
   );
-  const [maxSplitSheets, setMaxSplitSheets] = useState(numToInput(currentOverride?.max_split_sheets_per_month));
+  const [maxSplitSheets, setMaxSplitSheets] = useState(numToInputOrEmpty(currentOverride?.max_split_sheets_per_month));
+
+  // "Unlimited" flags — when true, the corresponding input is disabled and -1
+  // is sent on submit. Pre-fill from currentOverride: -1 → unlimited checked.
+  const [maxArtistsUnlimited, setMaxArtistsUnlimited] = useState(currentOverride?.max_artists === -1);
+  const [maxProjectsUnlimited, setMaxProjectsUnlimited] = useState(currentOverride?.max_projects === -1);
+  const [maxTasksUnlimited, setMaxTasksUnlimited] = useState(currentOverride?.max_tasks === -1);
+  const [maxStorageUnlimited, setMaxStorageUnlimited] = useState(currentOverride?.max_storage_bytes === -1);
+  const [maxSplitSheetsUnlimited, setMaxSplitSheetsUnlimited] = useState(currentOverride?.max_split_sheets_per_month === -1);
 
   // Feature flags (tri-state)
   const [zoe, setZoe] = useState(boolToSelect(currentOverride?.zoe_enabled));
@@ -567,13 +761,22 @@ const OverrideEditor = ({ userId, currentOverride, onDone }: OverrideEditorProps
   const handleSubmit = async () => {
     const payload: OverridePayloadInput = {};
 
-    // Caps — only include if input is non-empty (means admin wants to set/update)
-    if (maxArtists.trim() !== "") payload.max_artists = parseInt(maxArtists, 10);
-    if (maxProjects.trim() !== "") payload.max_projects = parseInt(maxProjects, 10);
-    if (maxTasks.trim() !== "") payload.max_tasks = parseInt(maxTasks, 10);
-    if (maxStorageGb.trim() !== "")
+    // Caps — Unlimited flag wins; otherwise parse the number input if non-empty.
+    if (maxArtistsUnlimited) payload.max_artists = -1;
+    else if (maxArtists.trim() !== "") payload.max_artists = parseInt(maxArtists, 10);
+
+    if (maxProjectsUnlimited) payload.max_projects = -1;
+    else if (maxProjects.trim() !== "") payload.max_projects = parseInt(maxProjects, 10);
+
+    if (maxTasksUnlimited) payload.max_tasks = -1;
+    else if (maxTasks.trim() !== "") payload.max_tasks = parseInt(maxTasks, 10);
+
+    if (maxStorageUnlimited) payload.max_storage_bytes = -1;
+    else if (maxStorageGb.trim() !== "")
       payload.max_storage_bytes = Math.round(parseFloat(maxStorageGb) * 1024 * 1024 * 1024);
-    if (maxSplitSheets.trim() !== "") payload.max_split_sheets_per_month = parseInt(maxSplitSheets, 10);
+
+    if (maxSplitSheetsUnlimited) payload.max_split_sheets_per_month = -1;
+    else if (maxSplitSheets.trim() !== "") payload.max_split_sheets_per_month = parseInt(maxSplitSheets, 10);
 
     // Feature toggles
     if (zoe) payload.zoe_enabled = zoe === "true";
@@ -607,28 +810,112 @@ const OverrideEditor = ({ userId, currentOverride, onDone }: OverrideEditorProps
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <label className="text-xs">
-          Max artists
-          <Input type="number" value={maxArtists} onChange={(e) => setMaxArtists(e.target.value)} placeholder="—" />
-        </label>
-        <label className="text-xs">
-          Max projects
-          <Input type="number" value={maxProjects} onChange={(e) => setMaxProjects(e.target.value)} placeholder="—" />
-        </label>
-        <label className="text-xs">
-          Max tasks
-          <Input type="number" value={maxTasks} onChange={(e) => setMaxTasks(e.target.value)} placeholder="—" />
-        </label>
-        <label className="text-xs">
-          Max storage (GB)
-          <Input type="number" step="0.1" value={maxStorageGb}
-                 onChange={(e) => setMaxStorageGb(e.target.value)} placeholder="—" />
-        </label>
-        <label className="text-xs">
-          Max split sheets / month
-          <Input type="number" value={maxSplitSheets}
-                 onChange={(e) => setMaxSplitSheets(e.target.value)} placeholder="—" />
-        </label>
+        <div className="text-xs space-y-1">
+          <label className="block">
+            Max artists
+            <Input
+              type="number"
+              value={maxArtists}
+              onChange={(e) => setMaxArtists(e.target.value)}
+              placeholder="—"
+              disabled={maxArtistsUnlimited}
+              className={maxArtistsUnlimited ? "opacity-50" : ""}
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={maxArtistsUnlimited}
+              onChange={(e) => setMaxArtistsUnlimited(e.target.checked)}
+            />
+            Unlimited
+          </label>
+        </div>
+        <div className="text-xs space-y-1">
+          <label className="block">
+            Max projects
+            <Input
+              type="number"
+              value={maxProjects}
+              onChange={(e) => setMaxProjects(e.target.value)}
+              placeholder="—"
+              disabled={maxProjectsUnlimited}
+              className={maxProjectsUnlimited ? "opacity-50" : ""}
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={maxProjectsUnlimited}
+              onChange={(e) => setMaxProjectsUnlimited(e.target.checked)}
+            />
+            Unlimited
+          </label>
+        </div>
+        <div className="text-xs space-y-1">
+          <label className="block">
+            Max tasks
+            <Input
+              type="number"
+              value={maxTasks}
+              onChange={(e) => setMaxTasks(e.target.value)}
+              placeholder="—"
+              disabled={maxTasksUnlimited}
+              className={maxTasksUnlimited ? "opacity-50" : ""}
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={maxTasksUnlimited}
+              onChange={(e) => setMaxTasksUnlimited(e.target.checked)}
+            />
+            Unlimited
+          </label>
+        </div>
+        <div className="text-xs space-y-1">
+          <label className="block">
+            Max storage (GB)
+            <Input
+              type="number"
+              step="0.1"
+              value={maxStorageGb}
+              onChange={(e) => setMaxStorageGb(e.target.value)}
+              placeholder="—"
+              disabled={maxStorageUnlimited}
+              className={maxStorageUnlimited ? "opacity-50" : ""}
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={maxStorageUnlimited}
+              onChange={(e) => setMaxStorageUnlimited(e.target.checked)}
+            />
+            Unlimited
+          </label>
+        </div>
+        <div className="text-xs space-y-1">
+          <label className="block">
+            Max split sheets / month
+            <Input
+              type="number"
+              value={maxSplitSheets}
+              onChange={(e) => setMaxSplitSheets(e.target.value)}
+              placeholder="—"
+              disabled={maxSplitSheetsUnlimited}
+              className={maxSplitSheetsUnlimited ? "opacity-50" : ""}
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={maxSplitSheetsUnlimited}
+              onChange={(e) => setMaxSplitSheetsUnlimited(e.target.checked)}
+            />
+            Unlimited
+          </label>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3">

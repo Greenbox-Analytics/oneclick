@@ -168,6 +168,7 @@ from fastapi import Request as _Request
 from fastapi.responses import JSONResponse as _JSONResponse
 
 _uncaught_logger = _logging.getLogger("uvicorn.error")
+logger = _logging.getLogger(__name__)
 
 
 @app.exception_handler(Exception)
@@ -560,6 +561,76 @@ async def get_analytics_context(
         tester_granted_at=active_tester_row.get("granted_at") if active_tester_row else None,
         tester_expires_at=active_tester_row.get("expires_at") if active_tester_row else None,
     )
+
+
+@app.post("/me/bootstrap-tester")
+async def bootstrap_tester(
+    user_id: str = Depends(get_current_user_id),
+    user_email: str = Depends(get_current_user_email),
+):
+    """Auto-grant tester `tier_overrides` row if caller's email is in TESTER_EMAILS.
+
+    Called on every SIGNED_IN event from the frontend (see AuthContext). Idempotent:
+    - skips when email not in TESTER_EMAILS (returns reason=not_in_allowlist)
+    - skips when user already has any active tester row (returns reason=already_tester)
+    - grants reason='tester_env' on first call to distinguish from manual admin grants
+
+    Mirrors AdminService.create_tester_grant's payload exactly so feature gating is identical.
+    """
+    from datetime import UTC, datetime
+
+    from analytics import identify as analytics_identify
+    from subscriptions.admin_auth import is_active_tester_row, is_env_tester
+
+    if not is_env_tester(user_email):
+        return {"granted": False, "reason": "not_in_allowlist"}
+
+    sb = get_supabase_client()
+    existing = (
+        sb.table("tier_overrides")
+        .select("reason, expires_at, granted_at")
+        .eq("user_id", user_id)
+        .like("reason", "tester%")
+        .execute()
+    )
+    rows = existing.data or []
+    if any(r.get("reason") == "tester_revoked" for r in rows):
+        return {"granted": False, "reason": "revoked"}
+    if any(is_active_tester_row(r) for r in rows):
+        return {"granted": False, "reason": "already_tester"}
+
+    granted_at = datetime.now(UTC).isoformat()
+    payload = {
+        "user_id": user_id,
+        "max_artists": -1,
+        "max_projects": -1,
+        "max_tasks": -1,
+        "max_storage_bytes": -1,
+        "max_split_sheets_per_month": -1,
+        "max_oneclick_runs_per_month": -1,
+        "zoe_enabled": True,
+        "oneclick_enabled": True,
+        "registry_enabled": True,
+        "integrations_allowed": ["google_drive", "slack", "notion"],
+        "reason": "tester_env",
+        "expires_at": None,
+        "granted_at": granted_at,
+    }
+    sb.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
+
+    try:
+        analytics_identify(
+            user_id,
+            {
+                "is_tester": True,
+                "tester_granted_at": granted_at,
+                "tester_expires_at": None,
+            },
+        )
+    except Exception as exc:
+        logger.warning("analytics identify on bootstrap-tester failed: %s", exc)
+
+    return {"granted": True, "source": "env"}
 
 
 @app.get("/artists")

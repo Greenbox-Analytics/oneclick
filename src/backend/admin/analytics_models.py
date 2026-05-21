@@ -29,3 +29,36 @@ class AnalyticsSummary(BaseModel):
     per_tool: list[ToolRow]
     sparkline: list[SparklinePoint]
     reason: str | None = None  # set when available=False
+
+
+class PageRow(BaseModel):
+    path: str
+    views: int
+    unique_visitors: int
+    avg_dwell_ms: int
+    bounce_rate: float  # fraction of views with dwell < 10s
+
+
+class PageFlowEdge(BaseModel):
+    from_path: str
+    to_path: str
+    count: int
+
+
+class DailyVisitorPoint(BaseModel):
+    date: str
+    views: int
+    unique_visitors: int
+
+
+class BehaviorSummary(BaseModel):
+    available: bool
+    window: str
+    cohort: str
+    total_pageviews: int = 0
+    unique_visitors: int = 0
+    pageviews_per_visitor: float = 0.0  # window-level avg, NOT per-session (we don't track sessions)
+    top_pages: list[PageRow] = []
+    daily_visitors: list[DailyVisitorPoint] = []
+    top_flows: list[PageFlowEdge] = []
+    reason: str | None = None

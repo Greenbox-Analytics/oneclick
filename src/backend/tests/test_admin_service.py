@@ -278,6 +278,82 @@ class TestListUsers:
         assert result["per_page"] == 25
         assert result["has_more"] is False
 
+    def test_list_users_with_search_calls_rpc(self):
+        """When search is non-empty, list_users must call the
+        admin_search_users_by_email RPC and NOT the paginated auth admin API.
+
+        Regression guard for the original bug: the old impl fetched a single
+        page of auth.admin.list_users() and filtered in Python, silently
+        missing any matching user past the first page.
+        """
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        sb = MagicMock()
+
+        # RPC returns one matching row in the dict shape Supabase emits.
+        rpc_builder = MagicMock()
+        rpc_builder.execute.return_value = MagicMock(
+            data=[
+                {
+                    "id": TEST_USER_ID,
+                    "email": "match@example.com",
+                    "created_at": "2026-05-01T00:00:00+00:00",
+                },
+            ]
+        )
+        sb.rpc.return_value = rpc_builder
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name in ("subscriptions", "tier_overrides", "profiles"):
+                b.execute.return_value = MagicMock(data=[], count=0)
+            return b
+
+        sb.table.side_effect = _table
+
+        svc = AdminService(sb, EntitlementsService(sb))
+        result = svc.list_users(search="match", page=1, per_page=25)
+
+        # RPC called with the right name + params
+        sb.rpc.assert_called_once_with(
+            "admin_search_users_by_email",
+            {"p_search": "match", "p_limit": 25},
+        )
+        # The paginated auth admin API must NOT have been called on the search path
+        sb.auth.admin.list_users.assert_not_called()
+
+        # Result is built from the RPC row
+        assert len(result["users"]) == 1
+        assert result["users"][0]["id"] == TEST_USER_ID
+        assert result["users"][0]["email"] == "match@example.com"
+
+    def test_list_users_without_search_uses_paginated_admin_api(self):
+        """When search is empty, the existing auth.admin.list_users(page=, per_page=)
+        path is used and the RPC is NOT called."""
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        sb = MagicMock()
+
+        sb.auth.admin.list_users.return_value = [
+            MagicMock(id=TEST_USER_ID, email="test@example.com", created_at="2026-05-01T00:00:00+00:00"),
+        ]
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name in ("subscriptions", "tier_overrides", "profiles"):
+                b.execute.return_value = MagicMock(data=[], count=0)
+            return b
+
+        sb.table.side_effect = _table
+
+        svc = AdminService(sb, EntitlementsService(sb))
+        svc.list_users(search="", page=2, per_page=25)
+
+        sb.auth.admin.list_users.assert_called_once_with(page=2, per_page=25)
+        sb.rpc.assert_not_called()
+
 
 class TestTesterGrants:
     def test_list_returns_only_tester_grants_active(self):
@@ -303,6 +379,62 @@ class TestTesterGrants:
         # Only the active tester row should survive the expiry filter
         assert len(result) == 1
         assert result[0]["user_id"] == "uid-1"
+
+    def test_list_enriches_with_email_and_name(self):
+        """list_tester_grants should populate email (auth.users) and name
+        (profiles.full_name) on every active row. Rows without a matching
+        profile row should still have email populated and name=None."""
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        # Two active tester rows for two distinct users.
+        tester_rows = [
+            {"user_id": "uid-1", "reason": "tester", "expires_at": None, "granted_at": "2026-05-01T00:00:00+00:00"},
+            {
+                "user_id": "uid-2",
+                "reason": "tester-beta",
+                "expires_at": None,
+                "granted_at": "2026-05-02T00:00:00+00:00",
+            },
+        ]
+        # Only uid-1 has a profile row with full_name.
+        profile_rows = [{"id": "uid-1", "full_name": "Alice Tester"}]
+
+        sb = MagicMock()
+
+        email_by_id = {
+            "uid-1": "alice@example.com",
+            "uid-2": "bob@example.com",
+        }
+
+        def _get_user_by_id(uid):
+            user_obj = MagicMock()
+            user_obj.email = email_by_id.get(uid, "")
+            user_obj.id = uid
+            resp = MagicMock()
+            resp.user = user_obj
+            return resp
+
+        sb.auth.admin.get_user_by_id.side_effect = _get_user_by_id
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "tier_overrides":
+                b.execute.return_value = MagicMock(data=tester_rows, count=len(tester_rows))
+            elif name == "profiles":
+                b.execute.return_value = MagicMock(data=profile_rows, count=len(profile_rows))
+            return b
+
+        sb.table.side_effect = _table
+        svc = AdminService(sb, EntitlementsService(sb))
+
+        result = svc.list_tester_grants()
+        by_uid = {row["user_id"]: row for row in result}
+        assert len(result) == 2
+        assert by_uid["uid-1"]["email"] == "alice@example.com"
+        assert by_uid["uid-1"]["name"] == "Alice Tester"
+        assert by_uid["uid-2"]["email"] == "bob@example.com"
+        assert by_uid["uid-2"]["name"] is None
 
     def test_create_full_pro_override(self):
         from subscriptions.admin_service import AdminService
@@ -350,6 +482,54 @@ class TestTesterGrants:
         assert result["user_id"] == "uid-10"
         assert result["email"] == "tester@example.com"
 
+    def test_create_tester_grant_normalizes_reason(self):
+        """`reason` must always satisfy LIKE 'tester%' so list_tester_grants
+        returns the row. Empty → 'tester'. Already-prefixed → kept. Custom →
+        wrapped as 'tester (whatever)'."""
+        from subscriptions.admin_service import _normalize_tester_reason
+
+        assert _normalize_tester_reason(None) == "tester"
+        assert _normalize_tester_reason("") == "tester"
+        assert _normalize_tester_reason("   ") == "tester"
+        assert _normalize_tester_reason("tester") == "tester"
+        assert _normalize_tester_reason("tester_qa") == "tester_qa"
+        assert _normalize_tester_reason("Tester special") == "Tester special"  # case-insensitive prefix check
+        assert _normalize_tester_reason("beta access") == "tester (beta access)"
+        assert _normalize_tester_reason("Internal QA") == "tester (Internal QA)"
+
+    def test_create_tester_grant_persists_normalized_reason(self):
+        """End-to-end: a custom reason like 'beta access' should be wrapped to
+        'tester (beta access)' in both the upserted payload AND the returned dict,
+        so list_tester_grants (which filters by LIKE 'tester%') sees the row."""
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        captured = {}
+        sb = MagicMock()
+        sb.auth.admin.list_users.return_value = [
+            MagicMock(id="uid-11", email="custom@example.com"),
+        ]
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "tier_overrides":
+                original = b.upsert
+
+                def _capture(payload, *a, **kw):
+                    captured["payload"] = payload
+                    return original(payload, *a, **kw)
+
+                b.upsert = _capture
+            return b
+
+        sb.table.side_effect = _table
+        svc = AdminService(sb, EntitlementsService(sb))
+
+        result = svc.create_tester_grant(email="custom@example.com", reason="beta access")
+
+        assert captured["payload"]["reason"] == "tester (beta access)"
+        assert result["reason"] == "tester (beta access)"
+
     def test_create_user_not_found_raises(self):
         import pytest
 
@@ -363,24 +543,79 @@ class TestTesterGrants:
         with pytest.raises(ValueError, match="User not found"):
             svc.create_tester_grant(email="nobody@example.com")
 
-    def test_revoke_deletes_by_user_id(self):
+    def test_revoke_writes_sticky_marker_not_delete(self):
+        """revoke_tester_grant should UPSERT with reason='tester_revoked' and null caps,
+        NOT delete the row. This prevents bootstrap-tester from re-creating the grant
+        on the next sign-in for users in TESTER_EMAILS."""
         from subscriptions.admin_service import AdminService
         from subscriptions.service import EntitlementsService
+        from tests.conftest import TEST_USER_ID
 
-        builders = {}
+        captured = {}
         sb = MagicMock()
 
         def _table(name):
             b = MockQueryBuilder()
-            builders[name] = b
+            if name == "tier_overrides":
+                original_upsert = b.upsert
+                original_delete = b.delete
+
+                def _capture_upsert(payload, *a, **kw):
+                    captured["upsert_payload"] = payload
+                    captured["upsert_on_conflict"] = kw.get("on_conflict")
+                    return original_upsert(payload, *a, **kw)
+
+                def _capture_delete():
+                    captured["delete_called"] = True
+                    return original_delete()
+
+                b.upsert = _capture_upsert
+                b.delete = _capture_delete
             return b
 
         sb.table.side_effect = _table
         svc = AdminService(sb, EntitlementsService(sb))
 
-        svc.revoke_tester_grant("uid-99")
-        b = builders["tier_overrides"]
-        b.delete.return_value.eq.assert_called_with("user_id", "uid-99")
+        svc.revoke_tester_grant(TEST_USER_ID)
+
+        # Must have done an upsert, not a delete
+        assert "upsert_payload" in captured
+        assert captured.get("delete_called") is not True
+        assert captured["upsert_payload"]["reason"] == "tester_revoked"
+        assert captured["upsert_payload"]["user_id"] == TEST_USER_ID
+        assert captured["upsert_payload"]["max_artists"] is None
+        assert captured["upsert_payload"]["max_oneclick_runs_per_month"] is None
+        assert captured["upsert_payload"]["zoe_enabled"] is None
+        assert captured["upsert_on_conflict"] == "user_id"
+
+    def test_list_excludes_revoked_rows(self):
+        """list_tester_grants should NOT return rows where reason='tester_revoked'."""
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        rows = [
+            {"user_id": "u1", "reason": "tester", "expires_at": None, "granted_at": "2026-01-01T00:00:00Z"},
+            {"user_id": "u2", "reason": "tester_env", "expires_at": None, "granted_at": "2026-01-01T00:00:00Z"},
+            {"user_id": "u3", "reason": "tester_revoked", "expires_at": None, "granted_at": "2026-01-01T00:00:00Z"},
+        ]
+        sb = MagicMock()
+
+        def _table(name):
+            b = MockQueryBuilder()
+            b.execute.return_value = MagicMock(data=rows if name == "tier_overrides" else [])
+            return b
+
+        sb.table.side_effect = _table
+
+        # Skip the email/name enrichment — irrelevant to this test
+        sb.auth.admin.get_user_by_id.return_value = MagicMock(user=MagicMock(email="x@y.com", id="x"))
+
+        svc = AdminService(sb, EntitlementsService(sb))
+        result = svc.list_tester_grants()
+        user_ids = [r["user_id"] for r in result]
+        assert "u1" in user_ids
+        assert "u2" in user_ids
+        assert "u3" not in user_ids  # revoked row excluded
 
 
 class TestGetUserDetail:
