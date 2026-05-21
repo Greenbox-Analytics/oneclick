@@ -87,6 +87,34 @@ class EntitlementsService:
         usage_row = self._maybe_rollover_period(user_id, usage_row)
 
         caps, features, has_overrides = self._merge(tier_row, override)
+
+        # Admin = implicit Pro. Admins (profiles.is_admin=True) get unlimited
+        # caps + all features regardless of subscription tier or override state.
+        # Cleaner than maintaining a synthetic 'admin' tier_overrides row that
+        # would drift if admin status is later revoked.
+        #
+        # Trade-off: env-only admins (ADMIN_EMAILS users whose profiles.is_admin
+        # is false) won't get this implicit upgrade — they can use the self-grant
+        # Pro button if needed. Most admins are DB admins via the /admin/users
+        # promote flow, which sets profiles.is_admin=True.
+        from subscriptions.admin_auth import is_db_admin  # local: same package, avoid circular at import time
+
+        if is_db_admin(self.supabase, user_id):
+            caps = Caps(
+                max_artists=-1,
+                max_projects=-1,
+                max_tasks=-1,
+                max_storage_bytes=-1,
+                max_split_sheets_per_month=-1,
+                max_oneclick_runs_per_month=-1,
+            )
+            features = Features(
+                zoe_enabled=True,
+                oneclick_enabled=True,
+                registry_enabled=True,
+                integrations_allowed=["google_drive", "slack", "notion"],
+            )
+
         usage = Usage(
             total_storage_bytes=usage_row.get("total_storage_bytes", 0),
             split_sheets_this_period=usage_row.get("split_sheets_this_period", 0),

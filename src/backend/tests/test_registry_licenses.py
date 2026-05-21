@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
 
-_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
 
 def _sub_wrap(fn):

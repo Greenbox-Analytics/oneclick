@@ -1025,3 +1025,114 @@ class TestBypassPaywalls:
         assert ent.caps.max_artists == 3
         assert ent.features.zoe_enabled is False
         assert ent.features.registry_enabled is False
+
+
+def _wire_supabase(rows_by_table: dict[str, list[dict]]):
+    """Local wire helper supporting profiles lookups for the admin short-circuit
+    tests. Mirrors _make_supabase_with_rows but explicit about the table fixture
+    format used by TestAdminImplicitPro."""
+    mock = MagicMock()
+
+    def _table(name):
+        b = MockQueryBuilder()
+        b.execute.return_value = MagicMock(
+            data=rows_by_table.get(name, []),
+            count=len(rows_by_table.get(name, [])),
+        )
+        return b
+
+    mock.table.side_effect = _table
+    return mock
+
+
+class TestAdminImplicitPro:
+    def test_admin_gets_unlimited_caps_and_all_features(self):
+        """profiles.is_admin=True → entitlements come back with caps=-1
+        and all feature flags True, even with no Stripe sub and no override."""
+        from subscriptions.service import EntitlementsService
+
+        sb = _wire_supabase(
+            {
+                "subscriptions": [{"user_id": "admin-uid", "tier": "free", "status": "active"}],
+                "tier_entitlements": [
+                    {
+                        "tier": "free",
+                        "max_artists": 1,
+                        "max_projects": 1,
+                        "max_tasks": 10,
+                        "max_storage_bytes": 100000000,
+                        "max_split_sheets_per_month": 1,
+                        "max_oneclick_runs_per_month": 1,
+                        "zoe_enabled": False,
+                        "oneclick_enabled": False,
+                        "registry_enabled": False,
+                        "integrations_allowed": [],
+                    }
+                ],
+                "tier_overrides": [],
+                "usage_counters": [
+                    {
+                        "user_id": "admin-uid",
+                        "total_storage_bytes": 0,
+                        "split_sheets_this_period": 0,
+                        "zoe_queries_this_period": 0,
+                        "oneclick_runs_this_period": 0,
+                        "period_start": "2026-01-01T00:00:00Z",
+                        "period_end": "2026-12-31T00:00:00Z",
+                    }
+                ],
+                "profiles": [{"id": "admin-uid", "is_admin": True}],
+            }
+        )
+        svc = EntitlementsService(sb)
+        ent = svc.get_for_user("admin-uid")
+
+        assert ent.caps.max_artists == -1
+        assert ent.caps.max_oneclick_runs_per_month == -1
+        assert ent.features.zoe_enabled is True
+        assert ent.features.oneclick_enabled is True
+        assert ent.features.registry_enabled is True
+        assert "google_drive" in ent.features.integrations_allowed
+
+    def test_non_admin_user_keeps_tier_caps(self):
+        """Sanity: non-admin free user is unaffected by the admin short-circuit."""
+        from subscriptions.service import EntitlementsService
+
+        sb = _wire_supabase(
+            {
+                "subscriptions": [{"user_id": "user-uid", "tier": "free", "status": "active"}],
+                "tier_entitlements": [
+                    {
+                        "tier": "free",
+                        "max_artists": 1,
+                        "max_projects": 1,
+                        "max_tasks": 10,
+                        "max_storage_bytes": 100000000,
+                        "max_split_sheets_per_month": 1,
+                        "max_oneclick_runs_per_month": 1,
+                        "zoe_enabled": False,
+                        "oneclick_enabled": False,
+                        "registry_enabled": False,
+                        "integrations_allowed": [],
+                    }
+                ],
+                "tier_overrides": [],
+                "usage_counters": [
+                    {
+                        "user_id": "user-uid",
+                        "total_storage_bytes": 0,
+                        "split_sheets_this_period": 0,
+                        "zoe_queries_this_period": 0,
+                        "oneclick_runs_this_period": 0,
+                        "period_start": "2026-01-01T00:00:00Z",
+                        "period_end": "2026-12-31T00:00:00Z",
+                    }
+                ],
+                "profiles": [{"id": "user-uid", "is_admin": False}],
+            }
+        )
+        svc = EntitlementsService(sb)
+        ent = svc.get_for_user("user-uid")
+
+        assert ent.caps.max_artists == 1  # free tier limit, not unlimited
+        assert ent.features.zoe_enabled is False

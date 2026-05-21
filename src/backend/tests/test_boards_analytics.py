@@ -19,7 +19,7 @@ from tests.test_boards import (
     _sequence_side_effect_mixed,
 )
 
-_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
 OLD_COLUMN_ID = "col-old-0000-0000-0000-000000000001"
 NEW_COLUMN_ID = "col-new-0000-0000-0000-000000000001"

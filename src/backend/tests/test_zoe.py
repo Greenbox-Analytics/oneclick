@@ -37,7 +37,7 @@ def _builder(data: list):
     return b
 
 
-_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
 
 def _sub_builder(data: list):

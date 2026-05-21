@@ -21,6 +21,7 @@ import { useCreateCheckoutSession, useCreatePortalSession } from "@/hooks/useBil
 import { useAnalytics, type Plan } from "@/hooks/useAnalytics";
 import { peekCachedAnalyticsContext, refreshAnalyticsContext } from "@/hooks/useAnalyticsContext";
 import { TesterBadge } from "@/components/tester/TesterBadge";
+import { AdminBadge } from "@/components/admin/AdminBadge";
 
 // IMPORTANT: hook return shapes (verified against actual files):
 //   useArtistsList()  → { artists, isLoading }
@@ -345,6 +346,7 @@ const Subscription = () => {
                   {isTester ? "Beta Tester" : isPro ? "Pro" : "Free"} plan
                 </h2>
                 <TesterBadge />
+                <AdminBadge />
               </div>
               {isPro && <Badge>Pro</Badge>}
               {ent.degraded && (
