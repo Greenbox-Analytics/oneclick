@@ -45,11 +45,24 @@ task install
 
 ### 3. Configure Environment Variables
 
+You have two options:
+
+**A. Pull from Google Secret Manager (recommended for teammates):**
+
+```bash
+gcloud auth login --update-adc        # one-time
+task setup:secrets:dev                # merge dev secrets from GSM into .env
+```
+
+This pulls dev-flavored secrets (Stripe test keys, dev PostHog) from GSM and merges them into your `.env`. Additive only — any values you've already set locally are preserved. See [docs/secrets.md](docs/secrets.md) for the full catalog and [Task Commands](#secret-management) below for the other variants (prod, reset).
+
+**B. Manual setup (no GCP access):**
+
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and fill in:
+Edit `.env` and fill in at minimum:
 - **Supabase (required):**
   - `VITE_SUPABASE_URL` — Project URL from Supabase Dashboard → Settings → API
   - `VITE_SUPABASE_ANON_KEY` — Anon/public key (same page)
@@ -57,7 +70,9 @@ Edit `.env` and fill in:
   - `DATABASE_PW` — Database password (Settings → Database)
 - **Backend:** `VITE_BACKEND_API_URL` (default: `http://localhost:8000`)
 - **OpenAI:** `OPENAI_API_KEY` (for Zoe contract analysis)
-- **Integrations (optional):** Google Drive and Slack OAuth credentials — see `.env.example` for details
+- **Integrations (optional):** Google Drive, Slack, Notion OAuth credentials — see `.env.example` sections
+
+For the full variable catalog (required vs optional, where to source each), see [docs/secrets.md](docs/secrets.md).
 
 ### 4. Run the Project
 
@@ -98,12 +113,32 @@ poetry run uvicorn main:app --port 8000
 | Command | Description |
 |---------|-------------|
 | `task install` | Install all dependencies (Poetry + npm) |
+| `task setup` | Install dependencies + pull dev secrets from GSM |
 | `task test` | Run all backend tests |
 | `task lint` | Run all linters (ruff + ESLint) |
 | `task lint:backend` | Run ruff lint + format check |
 | `task lint:frontend` | Run ESLint |
 | `task format` | Auto-fix formatting (ruff + ESLint) |
+| `task dev` | Start both backend (port 8000) and frontend (port 8080) dev servers |
 | `task ci` | Full CI pipeline locally (lint + test + build) |
+| `task --list-all` | Show every task with its description |
+
+#### Secret Management
+
+These pull secrets from Google Secret Manager (GSM) into your local `.env`. Requires `gcloud auth login --update-adc` once.
+
+| Command | Behavior |
+|---------|----------|
+| `task setup:secrets:dev` | **Merge** dev-flavored secrets (Stripe test keys, `BYPASS_PAYWALLS=false`) into `.env`. Existing live values are preserved; missing/commented/empty keys get filled. Safe to re-run. |
+| `task setup:secrets:prod` | Same as above, but PROD-flavored (Stripe LIVE keys). Prompts for confirmation. Never run a local dev server with prod Stripe keys against prod data. |
+| `task setup:secrets:reset:dev` | **Destructive.** Backs up `.env` → `.env.backup`, deletes `.env`, refills with dev secrets. Use for a clean slate. |
+| `task setup:secrets:reset:prod` | Same as above, but PROD-flavored. Prompts for confirmation. |
+
+The merge tasks treat a key as "live" if `.env` has an uncommented, non-empty value (`KEY=value` or `KEY = value`). Commented-out (`# KEY=...`), empty (`KEY=`), or missing keys get filled from GSM. The Taskfile's `SHARED_SECRETS` list (in `_setup:secrets:internal`) controls which keys are pulled.
+
+To pull a single key after a GSM update: comment out or delete that one line in `.env`, then `task setup:secrets:dev`.
+
+See [docs/secrets.md](docs/secrets.md) for the full secrets catalog.
 
 ## Authentication
 
@@ -192,7 +227,7 @@ oneclick/
 │   ├── backend/               # FastAPI server (Python, Poetry, Docker)
 │   │   ├── main.py            # App entry, all routers mounted here
 │   │   ├── boards/            # Kanban board management
-│   │   ├── integrations/      # Google Drive, Slack, Notion, Monday.com
+│   │   ├── integrations/      # Google Drive, Slack, Notion
 │   │   ├── oneclick/          # Royalty calculator + PDF share
 │   │   ├── registry/          # Rights registry
 │   │   ├── splitsheet/        # Split sheet generator

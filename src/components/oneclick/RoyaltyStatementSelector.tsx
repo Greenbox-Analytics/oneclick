@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, FileText, X, Receipt, Folder, Loader2, Search, Plus, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface Project {
   id: string;
@@ -74,6 +76,16 @@ const RoyaltyStatementSelector = ({
   setSelectedExistingRoyaltyStatement,
   fetchProjectFilesForValidation,
 }: RoyaltyStatementSelectorProps) => {
+  const { captureOneClickStatementSelected } = useAnalytics();
+  // Fire `oneclick_statement_selected` once per page-instance.
+  const statementSelectedFiredRef = useRef(false);
+  const fireStatementSelectedOnce = () => {
+    if (!statementSelectedFiredRef.current) {
+      captureOneClickStatementSelected();
+      statementSelectedFiredRef.current = true;
+    }
+  };
+
   const handleRoyaltyStatementFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -94,6 +106,7 @@ const RoyaltyStatementSelector = ({
       showPersistentDuplicateToast(`Duplicate file name blocked: ${file.name}`);
     } else {
       setRoyaltyStatementFile(file);
+      fireStatementSelectedOnce();
     }
 
     e.target.value = "";
@@ -104,7 +117,12 @@ const RoyaltyStatementSelector = ({
   };
 
   const handleToggleExistingRoyaltyStatement = (fileId: string) => {
-    setSelectedExistingRoyaltyStatement(prev => prev === fileId ? null : fileId);
+    setSelectedExistingRoyaltyStatement(prev => {
+      const next = prev === fileId ? null : fileId;
+      // Only fire when actually selecting, not when toggling off.
+      if (next !== null && next !== prev) fireStatementSelectedOnce();
+      return next;
+    });
   };
 
   return (

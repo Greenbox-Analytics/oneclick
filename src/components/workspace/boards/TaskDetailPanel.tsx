@@ -17,6 +17,9 @@ import { TaskFields } from "./TaskFields";
 import { TaskLabels } from "./TaskLabels";
 import { TaskSubtasks } from "./TaskSubtasks";
 import type { BoardTaskDetail } from "@/types/integrations";
+import { useGatedAction } from "@/hooks/useGatedAction";
+import { useEntitlements } from "@/hooks/useEntitlements";
+import { apiFetch, API_URL } from "@/lib/apiFetch";
 
 interface TaskDetailPanelProps {
   taskId: string | null;
@@ -41,6 +44,10 @@ export function TaskDetailPanel({
   );
   const { columns, tasks: allBoardTasks, updateTask, deleteTask, createTask } = useBoards();
   const { parents } = useParentTasks();
+
+  const { data: ent } = useEntitlements();
+  const taskCap = ent?.caps.maxTasks ?? 0;
+  const currentTaskCount = allBoardTasks.length;
   const { artists } = useArtistsList();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -106,9 +113,39 @@ export function TaskDetailPanel({
     [taskId, updateTask, isCreateMode]
   );
 
+  type CreateTaskVars = {
+    column_id?: string;
+    title: string;
+    description?: string;
+    priority?: string;
+    start_date?: string;
+    due_date?: string;
+    color?: string;
+    artist_ids?: string[];
+    project_ids?: string[];
+    contract_ids?: string[];
+    labels?: string[];
+  };
+
+  const { mutate: gatedCreateTask, isPending: isCreatingTask, paywallElement: taskPaywallElement } = useGatedAction<unknown, CreateTaskVars>({
+    mutationFn: async (vars) => {
+      return apiFetch(`${API_URL}/boards/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(vars),
+      });
+    },
+    onSuccess: () => {
+      onClose();
+    },
+    resource: "task",
+    currentCount: currentTaskCount,
+    cap: taskCap,
+  });
+
   const handleSaveNewTask = () => {
     if (!title.trim()) return;
-    createTask({
+    gatedCreateTask({
       column_id: createColumnId,
       title: title.trim(),
       description: description || undefined,
@@ -121,7 +158,6 @@ export function TaskDetailPanel({
       contract_ids: selectedContractIds.length > 0 ? selectedContractIds : undefined,
       labels: labels.length > 0 ? labels : undefined,
     });
-    onClose();
   };
 
   const handleDelete = () => {
@@ -150,6 +186,7 @@ export function TaskDetailPanel({
     : task;
 
   return (
+    <>
     <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()} modal={false}>
       <SheetContent side="right" className="w-full sm:w-[500px] sm:max-w-[500px] overflow-y-auto">
         {!isCreateMode && (isLoading || !task) ? (
@@ -258,7 +295,8 @@ export function TaskDetailPanel({
 
               {isCreateMode ? (
                 <div className="flex gap-2">
-                  <Button onClick={handleSaveNewTask} disabled={!title.trim()} className="flex-1">
+                  <Button onClick={handleSaveNewTask} disabled={!title.trim() || isCreatingTask} className="flex-1">
+                    {isCreatingTask ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
                     Save
                   </Button>
                   <Button variant="outline" onClick={onClose}>
@@ -281,5 +319,7 @@ export function TaskDetailPanel({
         )}
       </SheetContent>
     </Sheet>
+    {taskPaywallElement}
+    </>
   );
 }

@@ -42,6 +42,8 @@ If a skill plausibly applies, invoke it — don't rationalize skipping it.
 
 **Email:** Resend for transactional emails (invitations, notifications)
 
+**Analytics:** PostHog — `posthog-python` (backend, `src/backend/analytics.py`) and `posthog-js` (frontend, `src/lib/posthog.ts`). See the PostHog section below for events and dashboards.
+
 ## Commands
 
 ```bash
@@ -103,8 +105,7 @@ src/
 │   │   ├── connections_router.py  # GET /integrations/connections (list user's connections)
 │   │   ├── google_drive/   # OAuth, file browse, import/export, PDF upload
 │   │   ├── slack/          # OAuth, channels, Block Kit notifications, webhook (@mentions)
-│   │   ├── notion/         # OAuth, database listing, bidirectional task sync
-│   │   └── monday/         # OAuth, board listing, bidirectional task sync
+│   │   └── notion/         # OAuth, database listing, bidirectional task sync
 │   ├── oneclick/           # Royalty calculation tool + PDF share to Drive/Slack
 │   ├── registry/           # Rights registry (works, stakes, collaborators, licensing, PDF)
 │   ├── splitsheet/         # Split sheet PDF/DOCX generator
@@ -160,7 +161,6 @@ All routers are mounted in `src/backend/main.py`:
 | `/integrations/google-drive` | Google Drive | OAuth, file browse, import/export, PDF upload |
 | `/integrations/slack` | Slack | OAuth, channels, notification settings, webhook |
 | `/integrations/notion` | Notion | OAuth, database listing, task sync |
-| `/integrations/monday` | Monday.com | OAuth, board listing, task sync |
 | `/boards` | Boards | Kanban board CRUD |
 | `/settings` | Settings | Workspace settings |
 | `/splitsheet` | Split Sheet | PDF/DOCX generation |
@@ -216,6 +216,93 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 - **OneClick** reads contracts from portfolio, works, and artist profiles for royalty analysis
 - **Zoe** analyzes contracts tied to works (including shared works where user is a collaborator)
 - Both tools are standalone but read from the shared data model
+
+### Admin Roles
+
+Admin access is granted two ways:
+1. **Bootstrap:** Emails in the `ADMIN_EMAILS` env var are always admins. Used to seed the first admin(s); store in GSM in prod.
+2. **DB-managed:** `profiles.is_admin = true` grants admin access. Toggled by other admins via `/admin/users` → "Promote to admin" / "Demote".
+
+Self-demote and env-admin demote are blocked at the backend. To revoke an env admin, remove them from `ADMIN_EMAILS` and redeploy. The single source of truth for "is this user an admin?" is `is_user_admin(supabase, email, user_id)` in `src/backend/subscriptions/admin_auth.py`.
+
+## Analytics & PostHog
+
+Product analytics live in a single PostHog project (`https://us.posthog.com`, project id `427173`, "Default project"). Dev and prod backends both emit to it — be aware when reading numbers.
+
+### Wrappers
+
+| Layer | File | Purpose |
+|---|---|---|
+| Backend | `src/backend/analytics.py` | Thin `posthog-python` wrapper. `capture()`/`identify()` are no-ops unless `POSTHOG_ENABLED=true` is set in env. |
+| Backend middleware | `src/backend/middleware/analytics_middleware.py` | Fires `request_completed` / `request_failed` for every API call. Excludes `/static`, `/docs`, `/redoc`, `/openapi.json`, `/health`. |
+| Frontend | `src/lib/posthog.ts` | `posthog-js` init — autocapture off, session recording off, person profiles `identified_only`. Captures `$pageview` / `$pageleave`. |
+| Frontend hook | `src/hooks/useAnalyticsContext.ts` | Pulls `/me/analytics-context` and `identify()`s the user with plan/role/tester/admin properties. Cached in localStorage. |
+
+### Event taxonomy
+
+The canonical "a tool was used" signal is `tool_used` with `properties.tool ∈ {zoe, oneclick, splitsheet}`. Registry events are separate (`work_created`, `registry_work_registered`, `registry_collaborator_invited`).
+
+| Event | Fired in | Notes |
+|---|---|---|
+| `tool_used` | `main.py` (zoe, oneclick), `splitsheet/router.py` | `properties.tool` distinguishes which tool. |
+| `zoe_query_submitted` / `zoe_response_received` / `zoe_query_failed` | `main.py` | Step events for the Zoe funnel. |
+| `oneclick_calc_started` / `oneclick_calc_completed` / `oneclick_calc_failed` | `main.py` | Step events for the OneClick funnel. |
+| `splitsheet_generated` | `splitsheet/router.py` | Fired after PDF/DOCX is built. |
+| `work_created` / `work_submitted_for_registration` / `registry_work_registered` / `registry_collaborator_invited` | `registry/router.py` | Registry lifecycle. |
+| `contract_uploaded` | `main.py` | Includes `file_size`. |
+| `checkout_started` / `billing_portal_opened` | `subscriptions/billing_router.py` | Stripe entry points. |
+| `subscription_activated` / `subscription_canceled` / `payment_failed` | `subscriptions/stripe_events.py` | Stripe webhook outcomes. |
+| `request_completed` / `request_failed` | Middleware | Every API request — useful for traffic, noisy for tool counts. |
+
+When adding a new tool or feature, follow the existing pattern: emit a step event when work starts (e.g. `<tool>_started`) and a completion event when it succeeds. `tool_used` may be redundant if you already have a step event — prefer one or the other consistently.
+
+### Dashboards
+
+| Dashboard | Path | Purpose |
+|---|---|---|
+| Analytics basics (wizard-built) | `/dashboard/1593101` | Subscription funnel, churn, monthly active users, registry activity. |
+| Tool Usage — per tool + comparative | `/dashboard/1597175` | Per-tool counts, drop-off funnels, stacked comparative, unique users, weekly line. Built by Claude. |
+
+Admin-facing in-app analytics: `GET /admin/analytics/summary` (`src/backend/admin/analytics_router.py`) returns per-tool opens/completions/last_used via HogQL — used by the admin dashboard.
+
+### Environment variables
+
+| Var | Backend / Frontend | Purpose |
+|---|---|---|
+| `POSTHOG_ENABLED` | Backend | Must be `"true"` for `capture()` to actually emit. Defaults to off. |
+| `POSTHOG_PROJECT_TOKEN` | Backend | `phc_…` ingest token (also the SDK key). |
+| `POSTHOG_HOST` | Backend | `https://us.i.posthog.com`. |
+| `POSTHOG_PERSONAL_API_KEY` | Backend (scripts only) | `phx_…` for the dashboard setup script and ad-hoc PostHog REST calls. NOT for ingest. |
+| `POSTHOG_PROJECT_ID` | Backend (scripts only) | Numeric project id (`427173`) used by the REST API. |
+| `VITE_POSTHOG_PROJECT_TOKEN` | Frontend | Same `phc_…` token, exposed to the browser. |
+| `VITE_POSTHOG_HOST` | Frontend | `https://us.i.posthog.com`. |
+| `VITE_POSTHOG_DASHBOARD_URL` | Frontend | Base URL for "Open in PostHog" links in admin UI. |
+| `VITE_APP_ENV` | Frontend | `local` (default) / `dev` / `prod`. Registered as PostHog super-property `environment` on every browser event. Dashboards filter on this. |
+
+### Dashboard setup script
+
+`src/backend/scripts/posthog_setup_dashboard.py` is an idempotent script that creates/maintains cohorts, insights, and dashboards in PostHog. State file is `scripts/.posthog_dashboard_state.{env}.json` — it maps logical names → entity IDs so the UI can rename things without breaking the script. Run with `--adopt` once to seed state from existing entities.
+
+### Dashboard backfill script
+
+`src/backend/scripts/posthog_apply_env_filter.py` is a one-time backfill that walks insights on a given dashboard and PATCHes the env + date filter into each one's filter tree. Idempotent; supports `--dry-run`. Use after deploying the env-tagging change to clean up pre-existing dashboards (e.g. `1593101`, `1597175`) that weren't built via the setup script.
+
+```bash
+# Dry-run first — inspects each insight and prints the proposed mutation diff.
+# Query-based insights (insight.query non-null) are skipped with a WARNING because
+# their filter trees live under query.source.properties, not filters.properties.
+poetry run python -m scripts.posthog_apply_env_filter \
+    --dashboard-id 1593101 --dashboard-id 1597175 --dry-run
+
+# Apply for real
+poetry run python -m scripts.posthog_apply_env_filter \
+    --dashboard-id 1593101 --dashboard-id 1597175
+```
+
+### Known caveats
+
+- **Single PostHog project across dev + prod.** Both `deploy-backend.yml` and `deploy-backend-dev.yml` set `POSTHOG_ENABLED=true` and share the same `POSTHOG_PROJECT_TOKEN`. Dev traffic is mixed in with prod traffic — separated via the `environment` event property (`local` / `dev` / `prod`). Backend tags via `APP_ENV`, frontend tags via `VITE_APP_ENV`. The load-bearing exclusion is `environment IN ('dev', 'prod')` — applied in HogQL queries (`admin/analytics_router.py`) and as a property filter on insights. The `timestamp >= '2026-05-19'` clause is a hard floor in HogQL but a default-view boundary on insights (dashboard date pickers can override `date_from`). Events before the cutoff are mostly untagged local-dev pollution and are excluded by the env IN-list anyway.
+- **Test ingest leakage is partially mitigated.** `src/backend/tests/conftest.py` still does not pin `POSTHOG_ENABLED=false`. If a developer's shell has it enabled, pytest runs will still hit PostHog's ingest endpoint and burn quota. With env tagging in place, those leaked events tag as `environment=local` (assuming `APP_ENV` is unset in test env, which it is by default) and are excluded from every dashboard — so dashboard pollution from tests is now fixed. The remaining cost is ingest spend, not dirty data.
 
 ## Database Conventions
 

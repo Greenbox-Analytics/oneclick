@@ -9,7 +9,7 @@ Acceptance criteria:
 import json
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import MockQueryBuilder
+from tests.conftest import MockQueryBuilder, _default_table_side_effect
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -63,6 +63,16 @@ def _builder(data: list):
     return b
 
 
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_table(name: str, data_for_others: list):
+    """Route subscription tables to the Pro default; all others get *data_for_others*."""
+    if name in _SUBSCRIPTION_TABLES:
+        return _default_table_side_effect(name)
+    return _builder(data_for_others)
+
+
 def _sse_events(raw: bytes) -> list[dict]:
     """Parse raw SSE bytes into a list of parsed JSON event dicts."""
     events = []
@@ -91,8 +101,8 @@ class TestOneclickCalculateRoyaltiesStream:
         }
 
         # Wire statement file download
-        mock_supabase.table.side_effect = lambda name: _builder(
-            [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
         )
         mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
@@ -133,7 +143,7 @@ class TestOneclickCalculateRoyaltiesStream:
 
     def test_stream_returns_error_event_when_no_contracts_specified(self, client, mock_supabase):
         """GET /oneclick/calculate-royalties-stream streams error when no contracts given."""
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = lambda name: _sub_table(name, [])
 
         with patch("main.calculate_royalty_payments", return_value=[]):
             response = client.get(
@@ -151,7 +161,7 @@ class TestOneclickCalculateRoyaltiesStream:
 
     def test_stream_returns_error_event_when_statement_not_found(self, client, mock_supabase):
         """GET /oneclick/calculate-royalties-stream streams error when statement file absent."""
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = lambda name: _sub_table(name, [])
 
         with patch("main.calculate_royalty_payments", return_value=[]):
             response = client.get(
@@ -169,8 +179,8 @@ class TestOneclickCalculateRoyaltiesStream:
 
     def test_stream_returns_error_event_when_payments_empty(self, client, mock_supabase):
         """GET /oneclick/calculate-royalties-stream streams error when no payments calculated."""
-        mock_supabase.table.side_effect = lambda name: _builder(
-            [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
         )
         mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
@@ -206,6 +216,8 @@ class TestOneclickCalculateRoyaltiesStream:
         ]
 
         def _side_effect(name):
+            if name in _SUBSCRIPTION_TABLES:
+                return _default_table_side_effect(name)
             data = sequences[call_idx[0]] if call_idx[0] < len(sequences) else []
             call_idx[0] += 1
             return _builder(data)
@@ -231,8 +243,8 @@ class TestOneclickCalculateRoyaltiesStream:
 
     def test_stream_force_recalculate_bypasses_cache(self, client, mock_supabase):
         """GET /oneclick/calculate-royalties-stream with force_recalculate=true skips cache."""
-        mock_supabase.table.side_effect = lambda name: _builder(
-            [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
         )
         mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
@@ -267,8 +279,8 @@ class TestOneclickCalculateRoyalties:
             **overrides,
         }
 
-        mock_supabase.table.side_effect = lambda name: _builder(
-            [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
         )
         mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
@@ -314,7 +326,7 @@ class TestOneclickCalculateRoyalties:
             "royalty_statement_file_id": STATEMENT_FILE_ID,
             # no contract_id or contract_ids
         }
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = lambda name: _sub_table(name, [])
 
         with patch("main.calculate_royalty_payments", return_value=[]):
             response = client.post("/oneclick/calculate-royalties", json=payload)
@@ -328,7 +340,7 @@ class TestOneclickCalculateRoyalties:
             "royalty_statement_file_id": STATEMENT_FILE_ID,
             "contract_ids": [CONTRACT_ID],
         }
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = lambda name: _sub_table(name, [])
 
         with patch("main.calculate_royalty_payments", return_value=[]):
             response = client.post("/oneclick/calculate-royalties", json=payload)
@@ -342,8 +354,8 @@ class TestOneclickCalculateRoyalties:
             "royalty_statement_file_id": STATEMENT_FILE_ID,
             "contract_id": CONTRACT_ID,  # singular form
         }
-        mock_supabase.table.side_effect = lambda name: _builder(
-            [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
         )
         mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
@@ -546,3 +558,39 @@ class TestOneclickConfirm:
 
         assert response.status_code == 200
         assert response.json()["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# SP3: Feature gate — OneClick
+# ---------------------------------------------------------------------------
+
+
+class TestOneClickGated:
+    """POST /oneclick/calculate-royalties with a Free user returns 402."""
+
+    def test_free_user_returns_402(self, client, monkeypatch):
+        """Free user → POST /oneclick/calculate-royalties returns 402."""
+        from unittest.mock import MagicMock
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(
+            allowed=False,
+            reason="OneClick is a Pro feature.",
+            upgrade_required=True,
+        )
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        resp = client.post(
+            "/oneclick/calculate-royalties",
+            json={
+                "project_id": PROJECT_ID,
+                "royalty_statement_file_id": STATEMENT_FILE_ID,
+                "contract_ids": [CONTRACT_ID],
+            },
+        )
+        assert resp.status_code == 402
+        detail = resp.json()["detail"].lower()
+        assert "oneclick" in detail or "one click" in detail

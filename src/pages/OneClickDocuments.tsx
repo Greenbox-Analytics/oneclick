@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
@@ -49,8 +50,22 @@ const OneClickDocuments = () => {
   const [contractTabValue, setContractTabValue] = useState<string>("upload");
   const [royaltyStatementTabValue, setRoyaltyStatementTabValue] = useState<string>("upload");
   const [newRoyaltyStatementProjectId, setNewRoyaltyStatementProjectId] = useState<string>("");
-  const [artistName, setArtistName] = useState<string>("");
-  const [isLoadingArtist, setIsLoadingArtist] = useState(true);
+  // Artist name fetched via React Query so the result is cached across
+  // remounts. Without this, navigating away from /tools/oneclick/.../documents
+  // and back would re-fetch and (worse) re-trigger a full-page loader that
+  // hid any in-progress calculation UI. Cache key includes artistId so a
+  // different artist re-fetches correctly.
+  const artistQuery = useQuery({
+    queryKey: ["artist-name", artistId],
+    queryFn: async (): Promise<string> => {
+      const data = await apiFetch<Artist[]>(`${API_URL}/artists`);
+      return data.find((a) => a.id === artistId)?.name ?? "";
+    },
+    enabled: !!artistId && !!user,
+    staleTime: 5 * 60_000, // 5 min — artist names rarely change mid-session
+  });
+  const artistName = artistQuery.data ?? "";
+  const isLoadingArtist = artistQuery.isLoading;
   const [isLoadingProjectFiles, setIsLoadingProjectFiles] = useState(false);
   const [calculationProgress, setCalculationProgress] = useState(0);
   const [calculationStage, setCalculationStage] = useState("");
@@ -106,21 +121,9 @@ const OneClickDocuments = () => {
     return data;
   };
 
-  useEffect(() => {
-    if (artistId && user) {
-      setIsLoadingArtist(true);
-      apiFetch<Artist[]>(`${API_URL}/artists`)
-        .then((data: Artist[]) => {
-          const artist = data.find(a => a.id === artistId);
-          if (artist) setArtistName(artist.name);
-          setIsLoadingArtist(false);
-        })
-        .catch(err => {
-          console.error("Error fetching artist:", err);
-          setIsLoadingArtist(false);
-        });
-    }
-  }, [artistId, user]);
+  // (artist fetch moved to the useQuery above so its result persists across
+  // remounts. Navigating away during a calculation and back no longer triggers
+  // a full-page reload of the artist name.)
 
   useEffect(() => {
     if (artistId) {
@@ -433,38 +436,11 @@ const OneClickDocuments = () => {
       ? existingRoyaltyStatements.find(s => s.id === selectedExistingRoyaltyStatement)?.file_name ?? null
       : null);
 
-  if (isLoadingArtist) {
-    return (
-      <div className="min-h-screen bg-background">
-        <PageHeader
-          showBack={false}
-          actions={
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => navigate("/docs")}
-                title="Documentation"
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <BookOpen className="w-4 h-4" />
-              </Button>
-              <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools/oneclick")}>
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back to Artist Selection
-              </Button>
-            </>
-          }
-        />
-        <main className="container mx-auto px-4 py-8 max-w-4xl">
-          <div className="flex flex-col items-center justify-center min-h-[60vh]">
-            <Loader2 className="animate-spin h-16 w-16 text-primary mb-4" />
-            <p className="text-lg text-muted-foreground">Loading artist information...</p>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  // (Removed the full-page "Loading artist information..." gate that blocked
+  // the whole route while the artist name was in-flight. It hid in-progress
+  // calculation UI on every remount. Render the page content immediately; the
+  // header shows an inline skeleton in place of the name while the React
+  // Query fetch resolves.)
 
   return (
     <div className="min-h-screen bg-background">
@@ -493,8 +469,13 @@ const OneClickDocuments = () => {
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-foreground mb-2">OneClick Royalty Calculator</h2>
-          <p className="text-muted-foreground">
-            Upload documents for {artistName || "Artist"}
+          <p className="text-muted-foreground flex items-center gap-2">
+            Upload documents for{" "}
+            {isLoadingArtist ? (
+              <span className="inline-block h-4 w-32 rounded bg-muted animate-pulse" aria-label="Loading artist name" />
+            ) : (
+              <span>{artistName || "Artist"}</span>
+            )}
           </p>
         </div>
 

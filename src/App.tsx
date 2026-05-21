@@ -8,6 +8,10 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { AdminProtectedRoute } from "@/components/AdminProtectedRoute";
+import { usePageTimer } from "@/hooks/usePageTimer";
+import { useAdminPosthogTag } from "@/hooks/useAdminPosthogTag";
+import { TesterBanner } from "@/components/tester/TesterBanner";
 
 // Eager — small, needed on initial load
 import Index from "./pages/Index";
@@ -35,6 +39,9 @@ const WorkDetail = lazy(() => import("./pages/WorkDetail"));
 const InviteClaim = lazy(() => import("./pages/InviteClaim"));
 const ProjectDetail = lazy(() => import("./pages/ProjectDetail"));
 const ConfirmEmail = lazy(() => import("./pages/ConfirmEmail"));
+const Pricing = lazy(() => import("./pages/Pricing"));
+const Subscription = lazy(() => import("./pages/Subscription"));
+const AdminUsers = lazy(() => import("./pages/AdminUsers"));
 
 const queryClient = new QueryClient();
 
@@ -44,6 +51,16 @@ const PageLoader = () => (
   </div>
 );
 
+function PageTimer() {
+  usePageTimer();
+  return null;
+}
+
+function AdminPosthogTagger() {
+  useAdminPosthogTag();
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider>
@@ -52,7 +69,10 @@ const App = () => (
         <Sonner />
         <ThemeToggle />
         <BrowserRouter>
+          <PageTimer />
           <AuthProvider>
+            <TesterBanner />
+            <AdminPosthogTagger />
             <Suspense fallback={<PageLoader />}>
           <Routes>
             <Route path="/" element={<Index />} />
@@ -139,6 +159,14 @@ const App = () => (
               }
             />
             <Route
+              path="/subscription"
+              element={
+                <ProtectedRoute>
+                  <Subscription />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/workspace"
               element={
                 <ProtectedRoute>
@@ -179,10 +207,21 @@ const App = () => (
               }
             />
             <Route path="/docs" element={<Documentation />} />
+            <Route path="/pricing" element={<Pricing />} />
             <Route path="/tools/registry" element={<ProtectedRoute><Registry /></ProtectedRoute>} />
             <Route path="/tools/registry/invite/:token" element={<ProtectedRoute><InviteClaim /></ProtectedRoute>} />
             <Route path="/tools/registry/:workId" element={<ProtectedRoute><WorkDetail /></ProtectedRoute>} />
             <Route path="/projects/:projectId" element={<ProtectedRoute><ProjectDetail /></ProtectedRoute>} />
+            <Route
+              path="/admin/users"
+              element={
+                <ProtectedRoute>
+                  <AdminProtectedRoute>
+                    <AdminUsers />
+                  </AdminProtectedRoute>
+                </ProtectedRoute>
+              }
+            />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

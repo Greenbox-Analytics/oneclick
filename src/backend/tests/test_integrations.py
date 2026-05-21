@@ -410,3 +410,66 @@ class TestOneClickShare:
         body = response.json()
         assert body["success"] is True
         assert body["target"] == "slack"
+
+
+# ============================================================
+# SP3 Integration OAuth gating
+# ============================================================
+
+
+class TestIntegrationGated:
+    """SP3: Free users cannot start OAuth for Slack/Notion; Drive is ungated."""
+
+    def _denied_service(self, name: str):
+        from subscriptions.models import CheckResult
+
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(
+            allowed=False,
+            reason=f"{name.capitalize()} integration is a Pro feature.",
+            upgrade_required=True,
+        )
+        return svc
+
+    def test_slack_oauth_start_free_returns_402(self, client, monkeypatch):
+        """Free user -> GET /integrations/slack/auth returns 402."""
+        from subscriptions import enforcement
+
+        monkeypatch.setattr(enforcement, "_service", lambda: self._denied_service("slack"))
+
+        resp = client.get("/integrations/slack/auth")
+        assert resp.status_code == 402
+        detail = resp.json()["detail"].lower()
+        assert "slack" in detail or "integration" in detail or "pro" in detail
+
+    def test_notion_oauth_start_free_returns_402(self, client, monkeypatch):
+        """Free user -> GET /integrations/notion/auth returns 402."""
+        from subscriptions import enforcement
+
+        monkeypatch.setattr(enforcement, "_service", lambda: self._denied_service("notion"))
+
+        resp = client.get("/integrations/notion/auth")
+        assert resp.status_code == 402
+        detail = resp.json()["detail"].lower()
+        assert "notion" in detail or "integration" in detail or "pro" in detail
+
+    @patch("integrations.google_drive.router.build_auth_url")
+    def test_drive_oauth_start_free_succeeds(self, mock_build, client, monkeypatch):
+        """Drive OAuth start is NOT gated — should succeed regardless of tier."""
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        # Simulate a Free user where USE_INTEGRATION is denied —
+        # Drive should never call gated_feature so this should NOT cause a 402.
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(allowed=False, reason="Pro feature.", upgrade_required=True)
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        mock_build.return_value = "https://accounts.google.com/o/oauth2/v2/auth?test=1"
+
+        resp = client.get("/integrations/google-drive/auth")
+        assert resp.status_code != 402, (
+            "Drive OAuth start should not be gated; got 402. "
+            "Check that google_drive/router.py does NOT call gated_feature."
+        )
+        assert resp.status_code == 200

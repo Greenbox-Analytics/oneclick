@@ -11,6 +11,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from integrations.oauth import (
     FRONTEND_URL,
@@ -20,6 +21,8 @@ from integrations.oauth import (
     store_connection,
     verify_oauth_state,
 )
+from subscriptions.enforcement import gated_feature
+from subscriptions.models import Action
 
 router = APIRouter()
 
@@ -38,6 +41,7 @@ class NotionSyncConfig(BaseModel):
 @router.get("/auth")
 async def initiate_auth(user_id: str = Depends(get_current_user_id)):
     """Start Notion OAuth flow."""
+    gated_feature(user_id, Action.USE_INTEGRATION, name="notion")
     auth_url = build_auth_url("notion", user_id)
     return {"auth_url": auth_url}
 
@@ -55,9 +59,24 @@ async def oauth_callback(code: str, state: str):
     try:
         tokens = await exchange_code_for_tokens("notion", code)
     except Exception as e:
+        analytics_capture(
+            user_id,
+            "integration_connect_failed",
+            {"tool": "notion", "error_code": type(e).__name__},
+        )
         raise HTTPException(status_code=400, detail=f"Token exchange failed: {str(e)}")
 
-    await store_connection(_get_supabase(), user_id, "notion", tokens)
+    try:
+        await store_connection(_get_supabase(), user_id, "notion", tokens)
+    except Exception as e:
+        analytics_capture(
+            user_id,
+            "integration_connect_failed",
+            {"tool": "notion", "error_code": type(e).__name__},
+        )
+        raise
+
+    analytics_capture(user_id, "integration_connected", {"tool": "notion"})
     return RedirectResponse(url=f"{FRONTEND_URL}/workspace?connected=notion")
 
 
@@ -91,6 +110,11 @@ async def sync_tasks(body: NotionSyncConfig, user_id: str = Depends(get_current_
     from integrations.notion.service import sync_tasks_with_notion
 
     result = await sync_tasks_with_notion(token, _get_supabase(), user_id, body.database_id)
+    analytics_capture(
+        user_id,
+        "integration_used",
+        {"tool": "notion", "action": "task_synced"},
+    )
     return result
 
 

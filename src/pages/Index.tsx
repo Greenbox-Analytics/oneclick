@@ -1,8 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Music, FolderOpen, TrendingUp, Shield, FileText, Users, BookOpen, User, LogOut } from "lucide-react";
+import { Music, FolderOpen, TrendingUp, Shield, FileText, Users, BookOpen, User, LogOut, CreditCard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useIsAdmin } from "@/hooks/useAdmin";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,12 +16,13 @@ import {
 const Index = () => {
   const navigate = useNavigate();
   const { user, loading, signOut } = useAuth();
+  const { isAdmin } = useIsAdmin();
 
   const features = [
     {
       icon: Users,
       title: "Artist Profiles",
-      description: "Comprehensive artist management with detailed profiles, contact info, and portfolio tracking.",
+      description: "Manage detailed artist profiles with contact info, contracts, and portfolio tracking.",
     },
     {
       icon: FolderOpen,
@@ -66,6 +68,9 @@ const Index = () => {
             
             {/* Navigation Buttons */}
             <div className="flex items-center gap-3">
+              <Button variant="ghost" onClick={() => navigate("/pricing")}>
+                Pricing
+              </Button>
               <Button variant="ghost" onClick={() => navigate("/docs")}>
                 Docs
               </Button>
@@ -91,6 +96,16 @@ const Index = () => {
                         <User className="mr-2 h-4 w-4" />
                         <span>Profile Settings</span>
                       </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => navigate("/subscription")}>
+                        <CreditCard className="mr-2 h-4 w-4" />
+                        <span>Subscriptions</span>
+                      </DropdownMenuItem>
+                      {isAdmin && (
+                        <DropdownMenuItem onClick={() => navigate("/admin/users")}>
+                          <Shield className="mr-2 h-4 w-4" />
+                          <span>Admin</span>
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={async () => { await signOut(); navigate("/"); }}>
                         <LogOut className="mr-2 h-4 w-4" />
@@ -114,8 +129,8 @@ const Index = () => {
         <div className="container mx-auto px-4 py-16 md:py-24">
           <div className="max-w-3xl mx-auto text-center">
             <h1 className="text-5xl md:text-6xl font-bold text-foreground mb-6 tracking-tight">
-              Artist Management
-              <span className="block text-primary mt-2">Simplified</span>
+              Simplifying the
+              <span className="block text-primary mt-2">Music Business</span>
             </h1>
             <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
               Streamline your workflow with powerful tools built for music professionals.

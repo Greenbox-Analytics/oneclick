@@ -28,6 +28,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Detect OneClick changes
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            oneclick:
+              - 'src/backend/oneclick/**'
+
       - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
         with:
@@ -55,13 +63,25 @@ jobs:
           docker push ${{ env.IMAGE_NAME }}:latest
 
       - name: Clear conflicting env-var/secret types
+        # Cloud Run errors if a key is set as both env-var and secret simultaneously.
+        # List EVERY key that this deploy will (re)set, so we can flip back and forth
+        # safely between env-var-typed and secret-typed values without manual cleanup.
         run: |
           gcloud run services update ${{ env.SERVICE_NAME }} \
             --region ${{ env.REGION }} \
-            --remove-secrets ALLOWED_ORIGINS,VITE_FRONTEND_URL,VITE_BACKEND_API_URL \
-            --remove-env-vars INTEGRATION_ENCRYPTION_KEY,INTEGRATION_OAUTH_STATE_SECRET,GOOGLE_DRIVE_CLIENT_ID,GOOGLE_DRIVE_CLIENT_SECRET 2>/dev/null || true
+            --remove-secrets ALLOWED_ORIGINS,VITE_FRONTEND_URL,VITE_BACKEND_API_URL,FRONTEND_URL,BYPASS_PAYWALLS,POSTHOG_ENABLED,POSTHOG_HOST,APP_ENV,OPS_NOTIFICATION_EMAIL \
+            --remove-env-vars INTEGRATION_ENCRYPTION_KEY,INTEGRATION_OAUTH_STATE_SECRET,GOOGLE_DRIVE_CLIENT_ID,GOOGLE_DRIVE_CLIENT_SECRET,SLACK_CLIENT_ID,SLACK_CLIENT_SECRET,NOTION_CLIENT_ID,NOTION_CLIENT_SECRET,CREDENTIALS_AES_KEY,OPENAI_API_KEY,OPENAI_LLM_MODEL,OPENAI_LLM_MODEL_LARGE,RESEND_API_KEY,RESEND_FROM_EMAIL,ADMIN_EMAILS,TESTER_EMAILS,VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY,VITE_SUPABASE_SECRET_KEY,STRIPE_SECRET_KEY,STRIPE_WEBHOOK_SECRET,STRIPE_PRICE_MONTHLY,STRIPE_PRICE_ANNUAL,POSTHOG_PROJECT_TOKEN,POSTHOG_PERSONAL_API_KEY,POSTHOG_PROJECT_ID 2>/dev/null || true
 
       - name: Deploy to Cloud Run
+        # Two flags split runtime config:
+        #   --update-env-vars : non-secret config (URLs, toggles, model names).
+        #                       Env-specific URLs come from GH secrets; toggles are literals.
+        #   --update-secrets  : everything pulled from GSM at deploy time.
+        #                       Most secrets reuse the same GSM name across dev+prod
+        #                       (single Supabase/PostHog project, shared Stripe price IDs).
+        #                       Only env-divergent secrets — STRIPE_SECRET_KEY,
+        #                       STRIPE_WEBHOOK_SECRET — use _DEV/_PROD suffixed GSM names
+        #                       so the Cloud Run env var name stays unsuffixed.
         run: |
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image ${{ env.IMAGE_NAME }}:${{ github.sha }} \
@@ -74,8 +94,8 @@ jobs:
             --timeout 300 \
             --max-instances 10 \
             --min-instances 0 \
-            --update-env-vars "^@^ALLOWED_ORIGINS=${{ secrets.DEV_ALLOWED_ORIGINS }}@VITE_FRONTEND_URL=${{ secrets.DEV_FRONTEND_URL }}@VITE_BACKEND_API_URL=${{ secrets.DEV_BACKEND_API_URL }}" \
-            --update-secrets VITE_SUPABASE_URL=VITE_SUPABASE_URL:latest,VITE_SUPABASE_SECRET_KEY=VITE_SUPABASE_SECRET_KEY:latest,INTEGRATION_ENCRYPTION_KEY=INTEGRATION_ENCRYPTION_KEY:latest,INTEGRATION_OAUTH_STATE_SECRET=INTEGRATION_OAUTH_STATE_SECRET:latest,GOOGLE_DRIVE_CLIENT_ID=GOOGLE_DRIVE_CLIENT_ID:latest,GOOGLE_DRIVE_CLIENT_SECRET=GOOGLE_DRIVE_CLIENT_SECRET:latest
+            --update-env-vars "^||^ALLOWED_ORIGINS=${{ secrets.DEV_ALLOWED_ORIGINS }}||VITE_FRONTEND_URL=${{ secrets.DEV_FRONTEND_URL }}||VITE_BACKEND_API_URL=${{ secrets.DEV_BACKEND_API_URL }}||FRONTEND_URL=${{ secrets.DEV_FRONTEND_URL }}||BYPASS_PAYWALLS=true||POSTHOG_ENABLED=true||POSTHOG_HOST=https://us.i.posthog.com||APP_ENV=dev||OPS_NOTIFICATION_EMAIL=tech@greenboxanalytics.ca" \
+            --update-secrets VITE_SUPABASE_URL=VITE_SUPABASE_URL:latest,VITE_SUPABASE_ANON_KEY=VITE_SUPABASE_ANON_KEY:latest,VITE_SUPABASE_SECRET_KEY=VITE_SUPABASE_SECRET_KEY:latest,INTEGRATION_ENCRYPTION_KEY=INTEGRATION_ENCRYPTION_KEY:latest,INTEGRATION_OAUTH_STATE_SECRET=INTEGRATION_OAUTH_STATE_SECRET:latest,CREDENTIALS_AES_KEY=CREDENTIALS_AES_KEY:latest,GOOGLE_DRIVE_CLIENT_ID=GOOGLE_DRIVE_CLIENT_ID:latest,GOOGLE_DRIVE_CLIENT_SECRET=GOOGLE_DRIVE_CLIENT_SECRET:latest,SLACK_CLIENT_ID=SLACK_CLIENT_ID:latest,SLACK_CLIENT_SECRET=SLACK_CLIENT_SECRET:latest,NOTION_CLIENT_ID=NOTION_CLIENT_ID:latest,NOTION_CLIENT_SECRET=NOTION_CLIENT_SECRET:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,OPENAI_LLM_MODEL=OPENAI_LLM_MODEL:latest,OPENAI_LLM_MODEL_LARGE=OPENAI_LLM_MODEL_LARGE:latest,RESEND_API_KEY=RESEND_API_KEY:latest,RESEND_FROM_EMAIL=RESEND_FROM_EMAIL:latest,ADMIN_EMAILS=ADMIN_EMAILS:latest,TESTER_EMAILS=TESTER_EMAILS:latest,STRIPE_PRICE_MONTHLY=STRIPE_PRICE_MONTHLY:latest,STRIPE_PRICE_ANNUAL=STRIPE_PRICE_ANNUAL:latest,POSTHOG_PROJECT_TOKEN=POSTHOG_PROJECT_TOKEN:latest,POSTHOG_PERSONAL_API_KEY=POSTHOG_PERSONAL_API_KEY:latest,POSTHOG_PROJECT_ID=POSTHOG_PROJECT_ID:latest,STRIPE_SECRET_KEY=STRIPE_SECRET_KEY_DEV:latest,STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET_DEV:latest
 
       - name: Get Cloud Run URL
         id: get-url
@@ -92,3 +112,24 @@ jobs:
           echo "🌐 Service URL: ${{ steps.get-url.outputs.url }}"
           echo "📦 Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
           echo "🏷️ Commit: ${{ github.sha }}"
+
+      - name: Fetch Supabase secrets from GSM (only when wiping)
+        id: gsm
+        if: steps.changes.outputs.oneclick == 'true'
+        uses: google-github-actions/get-secretmanager-secrets@v2
+        with:
+          secrets: |
+            supabase_url:${{ secrets.GCP_PROJECT_ID }}/VITE_SUPABASE_URL
+            supabase_secret_key:${{ secrets.GCP_PROJECT_ID }}/VITE_SUPABASE_SECRET_KEY
+
+      - name: Clear OneClick cache (when oneclick code changed)
+        if: steps.changes.outputs.oneclick == 'true'
+        timeout-minutes: 5
+        env:
+          VITE_SUPABASE_URL: ${{ steps.gsm.outputs.supabase_url }}
+          VITE_SUPABASE_SECRET_KEY: ${{ steps.gsm.outputs.supabase_secret_key }}
+        run: |
+          cd src/backend
+          pipx install poetry==1.8.4
+          poetry install --no-interaction --no-root --only main
+          poetry run python scripts/clear_oneclick_cache.py --yes

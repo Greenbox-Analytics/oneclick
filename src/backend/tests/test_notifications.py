@@ -8,7 +8,21 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_wrap(fn):
+    """Wrap a table side-effect function to route subscription tables through the Pro default."""
+
+    def _wrapped(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
+        return fn(name)
+
+    return _wrapped
+
 
 NOTIFICATION_ID = "11111111-aaaa-0000-0000-000000000001"
 WORK_ID = "aaaaaaaa-0000-0000-0000-000000000001"
@@ -37,7 +51,7 @@ def test_list_notifications_returns_notifications_key(client, mock_supabase):
     """GET /registry/notifications returns {"notifications": [...]}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTIFICATION], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notifications")
 
@@ -51,7 +65,7 @@ def test_list_notifications_empty(client, mock_supabase):
     """GET /registry/notifications returns empty list when no notifications exist."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[], count=0)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notifications")
 
@@ -63,7 +77,7 @@ def test_list_notifications_with_items(client, mock_supabase):
     """GET /registry/notifications returns notifications from Supabase."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTIFICATION], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notifications")
 
@@ -79,7 +93,7 @@ def test_list_notifications_unread_only_filter(client, mock_supabase):
     """GET /registry/notifications?unread_only=true filters to unread notifications."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTIFICATION], count=1)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notifications?unread_only=true")
 
@@ -96,7 +110,7 @@ def test_list_notifications_unread_only_false_returns_all(client, mock_supabase)
     all_notifications = [SAMPLE_NOTIFICATION, READ_NOTIFICATION]
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=all_notifications, count=2)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notifications?unread_only=false")
 
@@ -115,7 +129,7 @@ def test_list_notifications_multiple_types(client, mock_supabase):
     }
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_NOTIFICATION, notif_invite], count=2)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.get("/registry/notifications")
 
@@ -136,7 +150,7 @@ def test_mark_notification_read_success(client, mock_supabase):
     """POST /registry/notifications/{id}/read returns {"ok": True}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[READ_NOTIFICATION])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post(f"/registry/notifications/{NOTIFICATION_ID}/read")
 
@@ -148,7 +162,7 @@ def test_mark_notification_read_always_returns_ok(client, mock_supabase):
     """POST /registry/notifications/{id}/read returns {"ok": True} even if not found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post(f"/registry/notifications/{NOTIFICATION_ID}/read")
 
@@ -161,7 +175,7 @@ def test_mark_notification_read_different_id(client, mock_supabase):
     other_id = "33333333-aaaa-0000-0000-000000000001"
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[{**READ_NOTIFICATION, "id": other_id}])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post(f"/registry/notifications/{other_id}/read")
 
@@ -178,7 +192,7 @@ def test_mark_all_notifications_read_success(client, mock_supabase):
     """POST /registry/notifications/read-all returns {"ok": True}."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[READ_NOTIFICATION])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post("/registry/notifications/read-all")
 
@@ -190,7 +204,7 @@ def test_mark_all_notifications_read_no_notifications(client, mock_supabase):
     """POST /registry/notifications/read-all returns {"ok": True} when no notifications exist."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post("/registry/notifications/read-all")
 
@@ -203,7 +217,7 @@ def test_mark_all_notifications_read_bulk(client, mock_supabase):
     many_read = [{**READ_NOTIFICATION, "id": f"notif-{i}"} for i in range(5)]
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=many_read)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
     response = client.post("/registry/notifications/read-all")
 

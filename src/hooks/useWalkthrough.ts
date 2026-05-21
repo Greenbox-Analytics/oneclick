@@ -32,7 +32,7 @@ export const WALKTHROUGH_STEPS: WalkthroughStep[] = [
     targetSelector: '[data-walkthrough="workspace"]',
     title: "Workspace",
     description:
-      "Organize tasks on Kanban boards with monthly iterations. Connect Google Drive, Slack, Notion, and Monday.com to keep everything in sync.",
+      "Organize tasks on Kanban boards with monthly iterations. Connect Google Drive, Slack, and Notion to keep everything in sync.",
     placement: "bottom",
   },
   {
@@ -66,7 +66,8 @@ export const useWalkthrough = (): UseWalkthroughReturn => {
       .from("profiles")
       .update({ walkthrough_completed: true, updated_at: new Date().toISOString() })
       .eq("id", user.id);
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const start = useCallback(() => {
     setCurrentStepIndex(0);

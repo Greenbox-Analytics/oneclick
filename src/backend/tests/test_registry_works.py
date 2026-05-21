@@ -10,7 +10,9 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
 
 WORK_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 ARTIST_ID = "bbbbbbbb-0000-0000-0000-000000000001"
@@ -149,6 +151,8 @@ def test_create_work_success(client, mock_supabase):
     work_builder.execute.return_value = MagicMock(data=[SAMPLE_WORK])
 
     def table_side_effect(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
         if name == "artists":
             return artist_builder
         return work_builder
@@ -174,7 +178,9 @@ def test_create_work_artist_not_found_returns_500(client, mock_supabase):
     artist_builder = MockQueryBuilder()
     artist_builder.execute.return_value = MagicMock(data=None)
 
-    mock_supabase.table.side_effect = lambda name: artist_builder
+    mock_supabase.table.side_effect = lambda name: (
+        _default_table_side_effect(name) if name in _SUBSCRIPTION_TABLES else artist_builder
+    )
 
     payload = {
         "artist_id": ARTIST_ID,
@@ -199,6 +205,8 @@ def test_create_work_with_optional_fields(client, mock_supabase):
     work_builder.execute.return_value = MagicMock(data=[work_with_extras])
 
     def table_side_effect(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
         if name == "artists":
             return artist_builder
         return work_builder
@@ -238,6 +246,8 @@ def test_update_work_success(client, mock_supabase):
     call_count = [0]
 
     def table_side_effect(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
         if name == "works_registry":
             call_count[0] += 1
             if call_count[0] == 1:
@@ -259,7 +269,9 @@ def test_update_work_not_found(client, mock_supabase):
     """PUT /registry/works/{work_id} returns 404 when work not found."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=None)
-    mock_supabase.table.side_effect = lambda name: builder
+    mock_supabase.table.side_effect = lambda name: (
+        _default_table_side_effect(name) if name in _SUBSCRIPTION_TABLES else builder
+    )
 
     payload = {"title": "Updated Title"}
     response = client.put(f"/registry/works/{WORK_ID}", json=payload)
@@ -288,6 +300,8 @@ def test_delete_work_success(client, mock_supabase):
     call_count = [0]
 
     def table_side_effect(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
         if name == "registry_collaborators":
             return collab_builder
         call_count[0] += 1
@@ -317,6 +331,8 @@ def test_delete_work_always_returns_ok(client, mock_supabase):
     call_count = [0]
 
     def table_side_effect(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
         if name == "registry_collaborators":
             return collab_builder
         call_count[0] += 1
@@ -330,3 +346,38 @@ def test_delete_work_always_returns_ok(client, mock_supabase):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# SP3: Feature gate — Registry
+# ---------------------------------------------------------------------------
+
+
+class TestRegistryGated:
+    """POST /registry/works with a Free user returns 402."""
+
+    def test_free_user_create_work_returns_402(self, client, monkeypatch):
+        """Free user → POST /registry/works returns 402."""
+        from unittest.mock import MagicMock
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        svc = MagicMock()
+        svc.can.return_value = CheckResult(
+            allowed=False,
+            reason="Registry is a Pro feature.",
+            upgrade_required=True,
+        )
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        resp = client.post(
+            "/registry/works",
+            json={
+                "artist_id": ARTIST_ID,
+                "project_id": PROJECT_ID,
+                "title": "Gate Test Track",
+            },
+        )
+        assert resp.status_code == 402
+        assert "registry" in resp.json()["detail"].lower()

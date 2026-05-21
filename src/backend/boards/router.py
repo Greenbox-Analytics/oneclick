@@ -10,6 +10,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from boards import service
 from boards.models import (
@@ -21,6 +22,7 @@ from boards.models import (
     TaskCreate,
     TaskUpdate,
 )
+from subscriptions.enforcement import gated_create
 
 router = APIRouter()
 
@@ -108,6 +110,7 @@ async def create_parent(body: ParentTaskCreate, user_id: str = Depends(get_curre
     task = await service.create_parent_task(_get_supabase(), user_id, data)
     if not task:
         raise HTTPException(status_code=500, detail="Failed to create parent task")
+    analytics_capture(user_id, "board_created", {"tool": "boards"})
     return task
 
 
@@ -171,6 +174,11 @@ async def list_tasks(
 @router.post("/tasks")
 async def create_task(body: TaskCreate, user_id: str = Depends(get_current_user_id)):
     """Create a new task."""
+    # Gate: count user's existing board tasks
+    count_res = _get_supabase().table("board_tasks").select("id", count="exact").eq("user_id", user_id).execute()
+    task_count = count_res.count or 0
+    gated_create(user_id, "task", current_count=task_count)
+
     data = body.model_dump(exclude_none=True)
     if data.get("due_date"):
         data["due_date"] = str(data["due_date"])
@@ -179,6 +187,7 @@ async def create_task(body: TaskCreate, user_id: str = Depends(get_current_user_
     task = await service.create_task(_get_supabase(), user_id, data)
     if not task:
         raise HTTPException(status_code=500, detail="Failed to create task")
+    analytics_capture(user_id, "task_created", {"tool": "boards", "source": "manual"})
     return task
 
 
@@ -199,9 +208,44 @@ async def update_task(task_id: str, body: TaskUpdate, user_id: str = Depends(get
         data["due_date"] = str(data["due_date"])
     if data.get("start_date"):
         data["start_date"] = str(data["start_date"])
-    task = await service.update_task(_get_supabase(), user_id, task_id, data)
+
+    # Read existing column_id BEFORE the update so we can detect column changes
+    # for analytics (task_status_changed / task_completed).
+    supabase = _get_supabase()
+    old_column_id = None
+    try:
+        existing = supabase.table("board_tasks").select("column_id").eq("id", task_id).single().execute()
+        if existing and existing.data:
+            old_column_id = existing.data.get("column_id")
+    except Exception:
+        # If pre-read fails we still try the update; analytics is best-effort.
+        old_column_id = None
+
+    task = await service.update_task(supabase, user_id, task_id, data)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Detect column transition for analytics.
+    new_column_id = data.get("column_id") if "column_id" in data else old_column_id
+    if new_column_id and new_column_id != old_column_id:
+        analytics_capture(
+            user_id,
+            "task_status_changed",
+            {
+                "tool": "boards",
+                "from_column_id": old_column_id,
+                "to_column_id": new_column_id,
+            },
+        )
+        # Check if the new column means the task is "done".
+        try:
+            col_result = supabase.table("board_columns").select("title").eq("id", new_column_id).single().execute()
+            new_title = (col_result.data or {}).get("title") or ""
+            if new_title.strip().lower() == "done":
+                analytics_capture(user_id, "task_completed", {"tool": "boards"})
+        except Exception:
+            pass
+
     return task
 
 

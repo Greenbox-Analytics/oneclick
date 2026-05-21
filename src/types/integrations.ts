@@ -1,4 +1,4 @@
-export type IntegrationProvider = "google_drive" | "slack" | "notion" | "monday";
+export type IntegrationProvider = "google_drive" | "slack" | "notion";
 
 export type ConnectionStatus = "active" | "expired" | "revoked" | "disconnected";
 
@@ -114,15 +114,6 @@ export interface NotionDatabase {
   id: string;
   title: string;
   url: string;
-}
-
-// Monday types
-export interface MondayBoard {
-  id: string;
-  name: string;
-  state: string;
-  kind: string;
-  columns: { id: string; title: string; type: string }[];
 }
 
 export interface WorkspaceSettings {

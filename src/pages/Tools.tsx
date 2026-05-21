@@ -1,47 +1,73 @@
 import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calculator, ArrowRight, ArrowLeft, Bot, FileText, Shield, BookOpen } from "lucide-react";
+import { Calculator, ArrowRight, Bot, FileText, Shield, BookOpen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { TOOL_REGISTRY, type ToolId } from "@/lib/analytics-tools";
+import { useAuth } from "@/contexts/AuthContext";
 
-// Hoisted to module scope (rendering-hoist-jsx, rerender-no-inline-components)
-const TOOL_CARDS: { route: string; label: string; icon: LucideIcon; desc: string; comingSoon?: boolean }[] = [
-  { route: "/tools/oneclick", label: "OneClick", icon: Calculator, desc: "Calculate royalty splits and manage contracts for your artists in one click." },
-  { route: "/tools/zoe", label: "Zoe", icon: Bot, desc: "Ask questions about your contracts and get AI-powered answers with source citations." },
-  { route: "/tools/split-sheet", label: "Split Sheet", icon: FileText, desc: "Generate professional split sheet agreements to document royalty ownership for your music." },
-  { route: "/tools/registry", label: "Rights Registry", icon: Shield, desc: "Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents.", comingSoon: true },
-];
+const ROUTE_FOR_TOOL: Partial<Record<ToolId, string>> = {
+  oneclick: "/tools/oneclick",
+  zoe: "/tools/zoe",
+  splitsheet: "/tools/split-sheet",
+  registry: "/tools/registry",
+};
+
+const ICON_FOR_TOOL: Partial<Record<ToolId, LucideIcon>> = {
+  oneclick: Calculator,
+  zoe: Bot,
+  splitsheet: FileText,
+  registry: Shield,
+};
+
+const DESC_FOR_TOOL: Partial<Record<ToolId, string>> = {
+  oneclick: "Calculate royalty splits and manage contracts for your artists in one click.",
+  zoe: "Ask questions about your contracts and get AI-powered answers with source citations.",
+  splitsheet: "Generate professional split sheet agreements to document royalty ownership for your music.",
+  registry: "Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents.",
+};
+
+// `comingSoon` was hardcoded on Registry — preserve that behavior here.
+// Keeping the toggle external to TOOL_REGISTRY because "coming soon" is a UI
+// concern, not a tracking concern (the spec keeps Registry tracking active).
+const COMING_SOON: Partial<Record<ToolId, boolean>> = {
+  registry: true,
+};
+
+const TOOL_CARDS = TOOL_REGISTRY.filter((t) => t.category === "tool").map((t) => ({
+  route: ROUTE_FOR_TOOL[t.id]!,
+  label: t.label,
+  icon: ICON_FOR_TOOL[t.id]!,
+  desc: DESC_FOR_TOOL[t.id]!,
+  comingSoon: COMING_SOON[t.id] ?? false,
+}));
 
 const Tools = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const handleNavigate = useCallback((route: string, label: string) => {
-    trackToolUsage(label, route);
+    trackToolUsage(label, route, user?.id);
     navigate(route);
-  }, [navigate]);
+  }, [navigate, user?.id]);
 
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
+        backTo="/dashboard"
         actions={
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/dashboard")}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Dashboard
-            </Button>
-          </>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate("/docs")}
+            title="Documentation"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <BookOpen className="w-4 h-4" />
+          </Button>
         }
       />
 

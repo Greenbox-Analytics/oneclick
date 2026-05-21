@@ -8,7 +8,21 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+
+_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters"})
+
+
+def _sub_wrap(fn):
+    """Wrap a table side-effect function to route subscription tables through the Pro default."""
+
+    def _wrapped(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _default_table_side_effect(name)
+        return fn(name)
+
+    return _wrapped
+
 
 COLLAB_USER_ID = "00000000-0000-0000-0000-000000000002"
 ARTIST_ID = "aaaaaaaa-0000-0000-0000-000000000001"
@@ -58,7 +72,7 @@ class TestGetMyTeamCard:
         """Returns the current user's TeamCard."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=SAMPLE_TEAM_CARD)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get("/registry/teamcard")
 
@@ -71,7 +85,7 @@ class TestGetMyTeamCard:
         """Returns 404 when no TeamCard exists (onboarding not complete)."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=None)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get("/registry/teamcard")
 
@@ -93,7 +107,7 @@ class TestUpdateTeamCard:
 
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[updated])
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.put("/registry/teamcard", json={"bio": "Updated bio"})
 
@@ -105,7 +119,7 @@ class TestUpdateTeamCard:
         """Returns 404 when the TeamCard row does not exist."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.put("/registry/teamcard", json={"bio": "Updated bio"})
 
@@ -118,7 +132,7 @@ class TestUpdateTeamCard:
 
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[updated])
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.put(
             "/registry/teamcard",
@@ -140,7 +154,7 @@ class TestUpdateTeamCard:
         }
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[updated])
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.put(
             "/registry/teamcard",
@@ -192,7 +206,7 @@ class TestGetCollaboratorTeamCard:
             else:
                 return card_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/teamcard/{COLLAB_USER_ID}")
 
@@ -205,7 +219,7 @@ class TestGetCollaboratorTeamCard:
         link_builder = MockQueryBuilder()
         link_builder.execute.return_value = MagicMock(data=[])
 
-        mock_supabase.table.side_effect = lambda name: link_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: link_builder)
 
         response = client.get(f"/registry/teamcard/{COLLAB_USER_ID}")
 
@@ -230,7 +244,7 @@ class TestGetCollaboratorTeamCard:
             else:
                 return card_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/teamcard/{COLLAB_USER_ID}")
 
@@ -252,7 +266,7 @@ class TestListArtistsWithTeamCards:
         artists_builder.execute.return_value = MagicMock(data=[{**SAMPLE_ARTIST, "teamcard": None}])
 
         # No linked_user_ids resolved (teamcard will be None since no verified+linked)
-        mock_supabase.table.side_effect = lambda name: artists_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: artists_builder)
 
         response = client.get("/registry/artists/with-teamcards")
 
@@ -265,7 +279,7 @@ class TestListArtistsWithTeamCards:
         """Returns {"artists": []} when user has no artists."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get("/registry/artists/with-teamcards")
 
@@ -301,7 +315,7 @@ class TestListArtistsWithTeamCards:
             else:
                 return tc_builder  # team_cards table
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get("/registry/artists/with-teamcards")
 
@@ -327,7 +341,7 @@ class TestGetArtistWithTeamCard:
         artist_builder = MockQueryBuilder()
         artist_builder.execute.return_value = MagicMock(data=unlinked_artist)
 
-        mock_supabase.table.side_effect = lambda name: artist_builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: artist_builder)
 
         response = client.get(f"/registry/artists/{ARTIST_ID}/with-teamcard")
 
@@ -360,7 +374,7 @@ class TestGetArtistWithTeamCard:
             else:
                 return tc_builder
 
-        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/artists/{ARTIST_ID}/with-teamcard")
 
@@ -374,7 +388,7 @@ class TestGetArtistWithTeamCard:
         """Returns 404 when artist does not exist."""
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=None)
-        mock_supabase.table.side_effect = lambda name: builder
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
         response = client.get(f"/registry/artists/{ARTIST_ID}/with-teamcard")
 

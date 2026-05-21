@@ -1,7 +1,14 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { apiFetch, API_URL } from '@/lib/apiFetch';
+import { identifyUser, resetUser } from '@/lib/posthog';
+import { useAnalyticsContext, refreshAnalyticsContext } from '@/hooks/useAnalyticsContext';
+
+const AnalyticsIdentifyEffect = () => {
+  useAnalyticsContext();
+  return null;
+};
 
 interface AuthContextType {
   user: User | null;
@@ -49,10 +56,37 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         apiFetch(`${API_URL}/users/welcome`, { method: 'POST' }).catch((err) => {
           console.warn('Welcome email trigger failed:', err);
         });
+
+        // Auto-grant tester from TESTER_EMAILS allowlist (backend idempotent).
+        // On a fresh grant, bust the analytics-context cache so the banner sees
+        // is_tester=true without waiting for the next focus.
+        apiFetch<{ granted: boolean }>(`${API_URL}/me/bootstrap-tester`, { method: 'POST' })
+          .then((res) => {
+            if (res?.granted && session.user) {
+              refreshAnalyticsContext(session.user.id, session.user.email).catch((err) => {
+                console.warn('Analytics context refresh after tester grant failed:', err);
+              });
+            }
+          })
+          .catch((err) => {
+            console.warn('Bootstrap tester check failed:', err);
+          });
+      }
+
+      // SP-Analytics: identify/reset PostHog distinct_id
+      if (session?.user) {
+        identifyUser(session.user.id, {
+          email: session.user.email,
+        });
+      } else if (event === "SIGNED_OUT") {
+        resetUser();
       }
     });
 
     return () => subscription.unsubscribe();
+    // Subscribe ONCE on mount — re-subscribing on every render causes
+    // setUser/setSession to fire repeatedly with fresh object refs from
+    // getSession(), which trips every consumer hook that depends on `user`.
   }, []);
 
   const signIn = async (email: string, password: string) => {
@@ -92,15 +126,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (error) throw error;
   };
 
-  const value = {
-    user,
-    session,
-    loading,
-    signIn,
-    signUp,
-    signInWithGoogle,
-    signOut,
-  };
+  // Memoize so consumers don't re-render when AuthProvider re-renders for
+  // unrelated reasons. signIn/signUp/etc are stable closures over supabase.
+  const value = useMemo(
+    () => ({ user, session, loading, signIn, signUp, signInWithGoogle, signOut }),
+    [user, session, loading],
+  );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <AnalyticsIdentifyEffect />
+      {children}
+    </AuthContext.Provider>
+  );
 };

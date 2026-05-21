@@ -123,7 +123,8 @@ export function useZoeData() {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists");
       });
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   useEffect(() => {
     if (selectedArtist) {
@@ -433,7 +434,8 @@ export function useZoeData() {
       context: conversationContext,
       contractMarkdowns: Object.keys(markdowns).length > 0 ? markdowns : undefined,
     };
-  }, [user, selectedArtist, selectedProject, selectedContracts, sessionId, conversationContext, contractMarkdowns]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, selectedArtist, selectedProject, selectedContracts, sessionId, conversationContext, contractMarkdowns]);
 
   const handleSendResult = useCallback((result: {
     sessionId: string;

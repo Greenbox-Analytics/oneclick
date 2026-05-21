@@ -11,6 +11,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from registry import service, work_links_service
 from registry.models import (
@@ -30,6 +31,8 @@ from registry.models import (
     WorkCreate,
     WorkUpdate,
 )
+from subscriptions.enforcement import gated_feature
+from subscriptions.models import Action
 
 router = APIRouter()
 
@@ -94,17 +97,20 @@ async def get_work_full(work_id: str, user_id: str = Depends(get_current_user_id
 
 @router.post("/works")
 async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     if "release_date" in data and data["release_date"]:
         data["release_date"] = data["release_date"].isoformat()
     work = await service.create_work(_get_supabase(), user_id, data)
     if not work:
         raise HTTPException(status_code=500, detail="Failed to create work")
+    analytics_capture(user_id, "work_created", {"work_type": data.get("work_type", "unknown")})
     return work
 
 
 @router.put("/works/{work_id}")
 async def update_work(work_id: str, body: WorkUpdate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     if "release_date" in data and data["release_date"]:
         data["release_date"] = data["release_date"].isoformat()
@@ -116,15 +122,18 @@ async def update_work(work_id: str, body: WorkUpdate, user_id: str = Depends(get
 
 @router.delete("/works/{work_id}")
 async def delete_work(work_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     await service.delete_work(_get_supabase(), user_id, work_id)
     return {"ok": True}
 
 
 @router.post("/works/{work_id}/submit-for-approval")
 async def submit_for_approval(work_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     result, error = await service.submit_for_approval(_get_supabase(), user_id, work_id)
     if error:
         raise HTTPException(status_code=400, detail=error)
+    analytics_capture(user_id, "work_submitted_for_registration", {"work_id": work_id})
 
     # Re-send invitation emails to all collaborators
     renotify = (result or {}).pop("_renotify_collabs", [])
@@ -176,6 +185,7 @@ async def list_stakes(work_id: str = Query(...), user_id: str = Depends(get_curr
 
 @router.post("/stakes")
 async def create_stake(body: StakeCreate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     valid = await service.validate_stake_percentage(
         _get_supabase(), user_id, body.work_id, body.stake_type, body.percentage
     )
@@ -192,6 +202,7 @@ async def create_stake(body: StakeCreate, user_id: str = Depends(get_current_use
 
 @router.put("/stakes/{stake_id}")
 async def update_stake(stake_id: str, body: StakeUpdate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     if body.percentage is not None:
         existing = (
             _get_supabase()
@@ -224,6 +235,7 @@ async def update_stake(stake_id: str, body: StakeUpdate, user_id: str = Depends(
 
 @router.delete("/stakes/{stake_id}")
 async def delete_stake(stake_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     await service.delete_stake(_get_supabase(), user_id, stake_id)
     return {"ok": True}
 
@@ -241,6 +253,7 @@ async def list_licenses(work_id: str = Query(...), user_id: str = Depends(get_cu
 
 @router.post("/licenses")
 async def create_license(body: LicenseCreate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     for field in ("start_date", "end_date"):
         if field in data and data[field]:
@@ -253,6 +266,7 @@ async def create_license(body: LicenseCreate, user_id: str = Depends(get_current
 
 @router.put("/licenses/{license_id}")
 async def update_license(license_id: str, body: LicenseUpdate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     for field in ("start_date", "end_date"):
         if field in data and data[field]:
@@ -265,6 +279,7 @@ async def update_license(license_id: str, body: LicenseUpdate, user_id: str = De
 
 @router.delete("/licenses/{license_id}")
 async def delete_license(license_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     await service.delete_license(_get_supabase(), user_id, license_id)
     return {"ok": True}
 
@@ -282,6 +297,7 @@ async def list_agreements(work_id: str = Query(...), user_id: str = Depends(get_
 
 @router.post("/agreements")
 async def create_agreement(body: AgreementCreate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     if "effective_date" in data and data["effective_date"]:
         data["effective_date"] = data["effective_date"].isoformat()
@@ -322,6 +338,7 @@ async def list_collaborators(work_id: str = Query(...), user_id: str = Depends(g
 
 @router.post("/collaborators/invite")
 async def invite_collaborator(body: CollaboratorInvite, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     work = _get_supabase().table("works_registry").select("title").eq("id", body.work_id).single().execute()
     work_title = (work.data or {}).get("title") or "Untitled Work"
@@ -329,6 +346,12 @@ async def invite_collaborator(body: CollaboratorInvite, user_id: str = Depends(g
     collab = await service.invite_collaborator(_get_supabase(), user_id, data, work_title=work_title)
     if not collab:
         raise HTTPException(status_code=500, detail="Failed to invite collaborator")
+
+    analytics_capture(
+        user_id,
+        "registry_collaborator_invited",
+        {"tool": "registry", "role": data.get("role", "collaborator")},
+    )
 
     # Always send email
     from registry.emails import send_invitation_email
@@ -348,6 +371,7 @@ async def invite_collaborator(body: CollaboratorInvite, user_id: str = Depends(g
 
 @router.post("/collaborators/claim")
 async def claim_invitation(invite_token: str = Query(...), user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     collab, error = await service.claim_invitation(_get_supabase(), invite_token, user_id)
     if error == "expired":
         raise HTTPException(status_code=410, detail="Invitation expired — ask the project owner to resend")
@@ -358,6 +382,7 @@ async def claim_invitation(invite_token: str = Query(...), user_id: str = Depend
 
 @router.post("/collaborators/{collaborator_id}/confirm")
 async def confirm_stake(collaborator_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     collab = await service.confirm_stake(_get_supabase(), collaborator_id, user_id)
     if not collab:
         raise HTTPException(status_code=404, detail="Collaborator record not found")
@@ -367,6 +392,7 @@ async def confirm_stake(collaborator_id: str, user_id: str = Depends(get_current
 @router.post("/collaborators/{collaborator_id}/revoke")
 async def revoke_collaborator(collaborator_id: str, user_id: str = Depends(get_current_user_id)):
     """Revoke a collaborator invitation. Only the inviter can do this."""
+    gated_feature(user_id, Action.USE_REGISTRY)
     collab = await service.revoke_collaborator(_get_supabase(), user_id, collaborator_id)
     if not collab:
         raise HTTPException(status_code=404, detail="Collaborator record not found")
@@ -376,6 +402,7 @@ async def revoke_collaborator(collaborator_id: str, user_id: str = Depends(get_c
 @router.post("/collaborators/{collaborator_id}/resend")
 async def resend_invitation(collaborator_id: str, user_id: str = Depends(get_current_user_id)):
     """Resend an expired or pending invitation with a fresh token and 48h expiry."""
+    gated_feature(user_id, Action.USE_REGISTRY)
     collab, error = await service.resend_invitation(_get_supabase(), user_id, collaborator_id)
     if error == "not_found":
         raise HTTPException(status_code=404, detail="Collaborator record not found")
@@ -413,12 +440,14 @@ async def list_work_files(work_id: str, user_id: str = Depends(get_current_user_
 
 @router.post("/works/{work_id}/files")
 async def link_file(work_id: str, file_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     result = await work_links_service.link_file_to_work(_get_supabase(), work_id, file_id)
     return {"link": result}
 
 
 @router.delete("/works/{work_id}/files/{link_id}")
 async def unlink_file(work_id: str, link_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     return await work_links_service.unlink_file_from_work(_get_supabase(), link_id)
 
 
@@ -435,12 +464,14 @@ async def list_work_audio(work_id: str, user_id: str = Depends(get_current_user_
 
 @router.post("/works/{work_id}/audio")
 async def link_audio(work_id: str, audio_file_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     result = await work_links_service.link_audio_to_work(_get_supabase(), work_id, audio_file_id)
     return {"link": result}
 
 
 @router.delete("/works/{work_id}/audio/{link_id}")
 async def unlink_audio(work_id: str, link_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     return await work_links_service.unlink_audio_from_work(_get_supabase(), link_id)
 
 
@@ -451,6 +482,7 @@ async def unlink_audio(work_id: str, link_id: str, user_id: str = Depends(get_cu
 
 @router.post("/collaborators/invite-with-stakes")
 async def invite_with_stakes_endpoint(body: CollaboratorInviteWithStakes, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     try:
         result = await service.invite_with_stakes(_get_supabase(), user_id, body)
         # Send rich invite email
@@ -492,6 +524,7 @@ async def invite_with_stakes_endpoint(body: CollaboratorInviteWithStakes, user_i
 
 @router.post("/collaborators/{collaborator_id}/decline")
 async def decline_invitation_endpoint(collaborator_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     try:
         return await service.decline_invitation(_get_supabase(), user_id, collaborator_id)
     except PermissionError as e:
@@ -502,6 +535,7 @@ async def decline_invitation_endpoint(collaborator_id: str, user_id: str = Depen
 
 @router.post("/collaborators/{collaborator_id}/accept-from-dashboard")
 async def accept_from_dashboard_endpoint(collaborator_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     try:
         return await service.accept_from_dashboard(_get_supabase(), user_id, collaborator_id)
     except PermissionError as e:
@@ -531,6 +565,7 @@ async def get_my_team_card(user_id: str = Depends(get_current_user_id)):
 
 @router.put("/teamcard")
 async def update_team_card(body: TeamCardUpdate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     card = await service.update_team_card(_get_supabase(), user_id, data)
     if not card:
@@ -607,6 +642,7 @@ async def get_note(note_id: str, user_id: str = Depends(get_current_user_id)):
 
 @router.post("/notes")
 async def create_note(body: NoteCreate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     note = await service.create_note(_get_supabase(), user_id, data)
     if not note:
@@ -616,6 +652,7 @@ async def create_note(body: NoteCreate, user_id: str = Depends(get_current_user_
 
 @router.put("/notes/{note_id}")
 async def update_note(note_id: str, body: NoteUpdate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     note = await service.update_note(_get_supabase(), user_id, note_id, data)
     if not note:
@@ -625,6 +662,7 @@ async def update_note(note_id: str, body: NoteUpdate, user_id: str = Depends(get
 
 @router.delete("/notes/{note_id}")
 async def delete_note(note_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     await service.delete_note(_get_supabase(), user_id, note_id)
     return {"ok": True}
 
@@ -641,6 +679,7 @@ async def list_folders(
 
 @router.post("/folders")
 async def create_folder(body: FolderCreate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     folder = await service.create_folder(_get_supabase(), user_id, data)
     if not folder:
@@ -650,6 +689,7 @@ async def create_folder(body: FolderCreate, user_id: str = Depends(get_current_u
 
 @router.put("/folders/{folder_id}")
 async def update_folder(folder_id: str, body: FolderUpdate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     folder = await service.update_folder(_get_supabase(), user_id, folder_id, data)
     if not folder:
@@ -659,6 +699,7 @@ async def update_folder(folder_id: str, body: FolderUpdate, user_id: str = Depen
 
 @router.delete("/folders/{folder_id}")
 async def delete_folder(folder_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     await service.delete_folder(_get_supabase(), user_id, folder_id)
     return {"ok": True}
 
@@ -701,6 +742,7 @@ async def get_project_about(project_id: str, user_id: str = Depends(get_current_
 
 @router.put("/projects/{project_id}/about")
 async def update_project_about(project_id: str, body: ProjectAboutUpdate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     result = await service.update_project_about(_get_supabase(), user_id, project_id, body.about_content)
     if not result:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -720,11 +762,13 @@ async def list_notifications(user_id: str = Depends(get_current_user_id), unread
 
 @router.post("/notifications/{notification_id}/read")
 async def mark_read(notification_id: str, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     await service.mark_notification_read(_get_supabase(), user_id, notification_id)
     return {"ok": True}
 
 
 @router.post("/notifications/read-all")
 async def mark_all_read(user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
     await service.mark_all_notifications_read(_get_supabase(), user_id)
     return {"ok": True}

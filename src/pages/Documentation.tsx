@@ -707,7 +707,7 @@ const WorkspaceContent = () => (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FeatureCard icon={LayoutGrid} title="Kanban Boards" description="Drag-and-drop task boards with columns (To Do, In Progress, Done). Create tasks with titles, descriptions, due dates, and color coding." color="sky" />
         <FeatureCard icon={Zap} title="Calendar View" description="See tasks on a timeline. Track deadlines, release dates, and contract expiration dates at a glance." color="amber" />
-        <FeatureCard icon={Info} title="Integrations" description="Connect with Google Drive, Slack, Notion, and Monday.com for seamless workflow." color="blue" />
+        <FeatureCard icon={Info} title="Integrations" description="Connect with Google Drive, Slack, and Notion for seamless workflow." color="blue" />
         <FeatureCard icon={Settings} title="Settings" description="Configure timezone and time format (12h/24h). Preferences apply across Dashboard and Workspace." color="emerald" />
       </div>
     </div>

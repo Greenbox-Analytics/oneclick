@@ -10,7 +10,23 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import TEST_USER_ID
+from tests.conftest import _DEFAULT_USAGE_ROW, _PRO_SUB_ROW, _PRO_TIER_ROW, _SUBSCRIPTION_TABLES, TEST_USER_ID
+
+
+def _pro_sub_builder(name):
+    """Return a builder with Pro subscription data for subscription/entitlements tables."""
+    b = BoardMockBuilder([])
+    if name == "subscriptions":
+        b._data = [_PRO_SUB_ROW]
+    elif name == "tier_entitlements":
+        b._data = [_PRO_TIER_ROW]
+    elif name == "tier_overrides":
+        b._data = []
+    elif name == "usage_counters":
+        b._data = [_DEFAULT_USAGE_ROW]
+    b._count = len(b._data)
+    return b
+
 
 # ---------------------------------------------------------------------------
 # Shared constants
@@ -182,11 +198,15 @@ def _sequence_side_effect(sequences: list[list]) -> callable:
     """Return a side_effect function that returns builders from a pre-defined sequence.
 
     Each element of `sequences` is a data list for one table() call.
+    Subscription/entitlements tables are handled transparently with Pro data so the
+    subscription gate always passes in tests that aren't testing the gate.
     Once exhausted, returns empty builders.
     """
     idx = [0]
 
     def _side_effect(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _pro_sub_builder(name)
         data = sequences[idx[0]] if idx[0] < len(sequences) else []
         idx[0] += 1
         return _builder(data)
@@ -201,10 +221,14 @@ def _sequence_side_effect_mixed(steps: list) -> callable:
       - a list  -> BoardMockBuilder(data)
       - a dict  -> single-row builder (BoardMockBuilder where _is_single=True)
       - None    -> single-row builder returning None
+
+    Subscription/entitlements tables are handled transparently with Pro data.
     """
     idx = [0]
 
     def _side_effect(name):
+        if name in _SUBSCRIPTION_TABLES:
+            return _pro_sub_builder(name)
         step = steps[idx[0]] if idx[0] < len(steps) else []
         idx[0] += 1
         if isinstance(step, dict):
@@ -425,8 +449,8 @@ class TestListTasks:
 class TestCreateTask:
     def test_create_task_returns_task_with_id(self, client, mock_supabase):
         """POST /boards/tasks creates a task and returns it."""
-        # create_task: board_tasks insert -> junction tables (no artist_ids)
-        mock_supabase.table.side_effect = _sequence_side_effect([[SAMPLE_TASK], []])
+        # Sequence: 1) board_tasks count (gate) → empty/count=0, 2) board_tasks insert, 3) junction table
+        mock_supabase.table.side_effect = _sequence_side_effect([[], [SAMPLE_TASK], []])
 
         with patch("boards.service.events.emit"):
             response = client.post(
@@ -441,7 +465,8 @@ class TestCreateTask:
 
     def test_create_task_returns_500_when_insert_fails(self, client, mock_supabase):
         """POST /boards/tasks returns 500 when insert returns no data."""
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        # Sequence: 1) board_tasks count (gate) → empty, 2) board_tasks insert → empty → 500
+        mock_supabase.table.side_effect = _sequence_side_effect([[], []])
 
         with patch("boards.service.events.emit"):
             response = client.post(
@@ -454,7 +479,8 @@ class TestCreateTask:
     def test_create_task_with_due_date(self, client, mock_supabase):
         """POST /boards/tasks with due_date converts date to string."""
         task_with_date = {**SAMPLE_TASK, "due_date": "2026-04-30"}
-        mock_supabase.table.side_effect = _sequence_side_effect([[task_with_date], []])
+        # Sequence: 1) board_tasks count (gate), 2) board_tasks insert, 3) junction table
+        mock_supabase.table.side_effect = _sequence_side_effect([[], [task_with_date], []])
 
         with patch("boards.service.events.emit"):
             response = client.post(
@@ -466,9 +492,9 @@ class TestCreateTask:
 
     def test_create_task_with_artist_ids_calls_junction_table(self, client, mock_supabase):
         """POST /boards/tasks with artist_ids sets junction rows."""
-        # create_task: board_tasks insert, then board_task_artists delete + insert
+        # Sequence: 1) board_tasks count (gate), 2) board_tasks insert, 3-4) board_task_artists junction
         mock_supabase.table.side_effect = _sequence_side_effect(
-            [[SAMPLE_TASK], [{"artist_id": ARTIST_ID}], [{"artist_id": ARTIST_ID}]]
+            [[], [SAMPLE_TASK], [{"artist_id": ARTIST_ID}], [{"artist_id": ARTIST_ID}]]
         )
 
         with patch("boards.service.events.emit"):
@@ -525,10 +551,12 @@ class TestUpdateTask:
         updated_task = {**SAMPLE_TASK, "title": "Updated Title"}
 
         # update_task sequence:
-        # 1. board_columns -> single (for Done-column title check)
-        # 2. board_tasks -> list (update result)
+        # 1. board_tasks -> single (router pre-read of existing column_id for analytics)
+        # 2. board_columns -> single (for Done-column title check in service)
+        # 3. board_tasks -> list (update result)
         mock_supabase.table.side_effect = _sequence_side_effect_mixed(
             [
+                {"column_id": COLUMN_ID},  # router pre-read of existing task
                 {"id": COLUMN_ID, "title": "In Progress"},  # single for board_columns
                 [updated_task],  # board_tasks update result
             ]
@@ -545,10 +573,12 @@ class TestUpdateTask:
 
     def test_update_task_returns_404_when_not_found(self, client, mock_supabase):
         """PUT /boards/tasks/{task_id} returns 404 when task absent."""
-        # board_columns returns the column, board_tasks update returns empty
+        # 1. board_tasks router pre-read (existing column_id for analytics)
+        # 2. board_columns returns the column, 3. board_tasks update returns empty
         mock_supabase.table.side_effect = _sequence_side_effect_mixed(
             [
-                {"id": COLUMN_ID, "title": "To Do"},
+                {"column_id": COLUMN_ID},  # router pre-read
+                {"id": COLUMN_ID, "title": "To Do"},  # service done-check lookup
                 [],  # update returns empty -> task = {}
             ]
         )
@@ -814,3 +844,122 @@ class TestDeleteComment:
         response = client.delete(f"/boards/comments/{COMMENT_ID}")
 
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Subscription gate tests
+# ---------------------------------------------------------------------------
+
+
+class TestTaskCreateGated:
+    """POST /boards/tasks with a Free user at cap returns 402."""
+
+    def test_create_task_at_cap_full_count_path(self, client, mock_supabase):
+        """Full count-path test for task gate.
+
+        Catches count-query regressions (wrong table/filter/etc.) that the monkeypatch
+        test would miss. Free tier max_tasks=50; user has 50 tasks → 402.
+        """
+        FREE_TIER = {
+            "tier": "free",
+            "max_artists": 3,
+            "max_projects": 3,
+            "max_boards": -1,
+            "max_tasks": 50,
+            "max_storage_bytes": 1073741824,
+            "max_split_sheets_per_month": 5,
+            "max_oneclick_runs_per_month": 1,
+            "zoe_enabled": False,
+            "oneclick_enabled": True,
+            "registry_enabled": False,
+            "integrations_allowed": ["google_drive"],
+            "updated_at": "2026-05-09T00:00:00+00:00",
+        }
+        FREE_SUB = {
+            "id": "s1",
+            "user_id": TEST_USER_ID,
+            "tier": "free",
+            "status": "active",
+            "stripe_customer_id": None,
+            "stripe_subscription_id": None,
+            "stripe_price_id": None,
+            "current_period_start": None,
+            "current_period_end": None,
+            "cancel_at_period_end": False,
+            "canceled_at": None,
+            "created_at": "2026-05-01T00:00:00+00:00",
+            "updated_at": "2026-05-01T00:00:00+00:00",
+        }
+        ZERO_USAGE = {
+            "user_id": TEST_USER_ID,
+            "total_storage_bytes": 0,
+            "split_sheets_this_period": 0,
+            "zoe_queries_this_period": 0,
+            "oneclick_runs_this_period": 0,
+            "period_start": "2026-05-09T00:00:00+00:00",
+            "period_end": "2099-05-09T00:00:00+00:00",
+            "updated_at": "2026-05-09T00:00:00+00:00",
+        }
+
+        # Reset the EntitlementsService singleton so it is rebuilt with free-tier data
+        import subscriptions.deps as _sub_deps
+
+        _sub_deps._entitlements_service = None
+
+        def _table(name):
+            b = BoardMockBuilder([])
+            if name == "board_tasks":
+                b._data = [{"id": f"t{i}"} for i in range(50)]
+                b._count = 50
+            elif name == "subscriptions":
+                b._data = [FREE_SUB]
+                b._count = 1
+            elif name == "tier_entitlements":
+                b._data = [FREE_TIER]
+                b._count = 1
+            elif name == "tier_overrides":
+                b._data = []
+                b._count = 0
+            elif name == "usage_counters":
+                b._data = [ZERO_USAGE]
+                b._count = 1
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = client.post("/boards/tasks", json={"title": "Task 51", "column_id": "c1"})
+        assert resp.status_code == 402
+        assert "task" in resp.json()["detail"].lower()
+
+    def test_create_task_at_cap_returns_402(self, client, mock_supabase, monkeypatch):
+        """Free user at 50/50 tasks → POST /boards/tasks returns 402."""
+        from unittest.mock import MagicMock
+
+        from subscriptions import enforcement
+        from subscriptions.models import CheckResult
+
+        # Patch enforcement._service to return a service that denies CREATE_TASK
+        deny_result = CheckResult(
+            allowed=False,
+            reason="You've reached your limit of 50 tasks.",
+            upgrade_required=True,
+        )
+        svc = MagicMock()
+        svc.can.return_value = deny_result
+        monkeypatch.setattr(enforcement, "_service", lambda: svc)
+
+        # board_tasks table: count=50 at cap
+        def _table(name):
+            if name == "board_tasks":
+                b = BoardMockBuilder(data=[{"id": f"t{i}"} for i in range(50)], count=50)
+                return b
+            return _builder([])
+
+        mock_supabase.table.side_effect = _table
+
+        resp = client.post(
+            "/boards/tasks",
+            json={"title": "Task 51"},
+        )
+        assert resp.status_code == 402
+        assert "task" in resp.json()["detail"].lower()

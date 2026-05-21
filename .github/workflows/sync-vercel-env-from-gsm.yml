@@ -1,0 +1,79 @@
+name: Sync Vercel env vars from GSM
+
+# Manual-only. Run this whenever a Vercel-bound secret rotates in GSM.
+# After running, you must redeploy the frontend (Vercel env changes don't
+# auto-trigger a build).
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Vercel environment to sync (production, preview, development)"
+        type: choice
+        options: [production, preview, development]
+        default: production
+
+permissions:
+  contents: read
+  id-token: write  # for GCP Workload Identity Federation
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth to GCP (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Sync GSM → Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_PROD_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          TARGET: ${{ github.event.inputs.target }}
+        run: |
+          set -euo pipefail
+
+          # Map: Vercel env var name <- GSM secret name.
+          # Add rows here when a new VITE_ var should come from GSM.
+          # For env-divergent secrets (PostHog), choose the right suffix per Vercel env:
+          # production -> _PROD, preview/development -> _DEV.
+          declare -A MAPPING
+          if [[ "$TARGET" == "production" ]]; then
+            MAPPING[VITE_POSTHOG_PROJECT_TOKEN]=VITE_POSTHOG_PROJECT_TOKEN_PROD
+            MAPPING[VITE_POSTHOG_DASHBOARD_URL]=VITE_POSTHOG_DASHBOARD_URL_PROD
+            MAPPING[VITE_APP_ENV]=VITE_APP_ENV_PROD
+          else
+            MAPPING[VITE_POSTHOG_PROJECT_TOKEN]=VITE_POSTHOG_PROJECT_TOKEN_DEV
+            MAPPING[VITE_POSTHOG_DASHBOARD_URL]=VITE_POSTHOG_DASHBOARD_URL_DEV
+            MAPPING[VITE_APP_ENV]=VITE_APP_ENV_DEV
+          fi
+          # Shared secrets (same value across all envs):
+          MAPPING[VITE_SUPABASE_URL]=VITE_SUPABASE_URL
+          MAPPING[VITE_SUPABASE_ANON_KEY]=VITE_SUPABASE_ANON_KEY
+          MAPPING[VITE_POSTHOG_HOST]=VITE_POSTHOG_HOST
+
+          for vercel_name in "${!MAPPING[@]}"; do
+            gsm_name="${MAPPING[$vercel_name]}"
+            echo "Syncing $vercel_name <- gsm:$gsm_name ($TARGET)"
+            value=$(gcloud secrets versions access latest --secret="$gsm_name")
+            # vercel env add is not idempotent — remove existing first (ignore error
+            # if missing), then add.
+            vercel env rm "$vercel_name" "$TARGET" --yes --token="$VERCEL_TOKEN" 2>/dev/null || true
+            printf '%s' "$value" | vercel env add "$vercel_name" "$TARGET" --token="$VERCEL_TOKEN"
+          done
+
+          echo
+          echo "✅ Sync complete. Now redeploy the frontend for changes to take effect:"
+          echo "   gh workflow run deploy-frontend-prod.yml"

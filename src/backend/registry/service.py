@@ -1,11 +1,33 @@
 """Service layer for the Rights & Ownership Registry with collaboration, TeamCards, notes, and verification."""
 
 import hashlib
+import logging
 from datetime import UTC
 
 from supabase import Client
 
+from analytics import capture as analytics_capture
 from pagination import PaginatedResponse, paginate_query
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_auth_email(db: Client, user_id: str) -> str | None:
+    """Return the verified email for `user_id` from auth.users (Supabase).
+
+    `profiles` intentionally does NOT store email (see migration
+    20260329000000_create_rights_registry.sql line 400 — "Email sourced from
+    auth.users"). Use this helper anywhere we previously read
+    `profiles.email`. Returns None on lookup failure rather than raising
+    so callers can handle the not-found case explicitly.
+    """
+    try:
+        res = db.auth.admin.get_user_by_id(user_id)
+        return res.user.email if res and res.user else None
+    except Exception as exc:
+        logger.warning("Failed to resolve auth email for user_id=%s: %s", user_id, exc)
+        return None
+
 
 # ============================================================
 # Works
@@ -361,6 +383,17 @@ async def check_and_update_work_status(db: Client, work_id: str):
         return
     if all(c["status"] == "confirmed" for c in collabs.data):
         db.table("works_registry").update({"status": "registered"}).eq("id", work_id).execute()
+        try:
+            work_owner = db.table("works_registry").select("user_id").eq("id", work_id).single().execute()
+            owner_id = (work_owner.data or {}).get("user_id")
+            if owner_id:
+                analytics_capture(
+                    owner_id,
+                    "registry_work_registered",
+                    {"tool": "registry", "work_id": work_id},
+                )
+        except Exception as e:
+            logger.warning("registry_work_registered emit failed for work_id=%s: %s", work_id, e)
 
 
 async def resend_invitation(db: Client, user_id: str, collaborator_id: str):
@@ -549,8 +582,7 @@ async def decline_invitation(db: Client, user_id: str, collaborator_id: str):
     if not collab.data:
         raise ValueError("Collaborator not found")
 
-    profile = db.table("profiles").select("email").eq("id", user_id).maybe_single().execute()
-    user_email = profile.data["email"] if profile.data else None
+    user_email = _resolve_auth_email(db, user_id)
     if not user_email or user_email.lower() != collab.data["email"].lower():
         raise PermissionError("Email does not match invitation")
 
@@ -586,8 +618,7 @@ async def accept_from_dashboard(db: Client, user_id: str, collaborator_id: str):
     if not collab.data:
         raise ValueError("Collaborator not found")
 
-    profile = db.table("profiles").select("email").eq("id", user_id).maybe_single().execute()
-    user_email = profile.data["email"] if profile.data else None
+    user_email = _resolve_auth_email(db, user_id)
     if not user_email or user_email.lower() != collab.data["email"].lower():
         raise PermissionError("Email does not match invitation")
 
@@ -619,11 +650,11 @@ async def accept_from_dashboard(db: Client, user_id: str, collaborator_id: str):
 
 async def get_my_invites(db: Client, user_id: str):
     """Get invites for current user by email match (for Action Required tab)."""
-    profile = db.table("profiles").select("email").eq("id", user_id).maybe_single().execute()
-    if not profile.data or not profile.data.get("email"):
+    user_email = _resolve_auth_email(db, user_id)
+    if not user_email:
         return []
 
-    email = profile.data["email"].lower()
+    email = user_email.lower()
     result = (
         db.table("registry_collaborators")
         .select("*, works_registry(id, title, project_id, status)")
@@ -650,6 +681,17 @@ async def _check_auto_register(db: Client, work_id: str):
     all_confirmed = all(c["status"] == "confirmed" for c in collabs.data)
     if all_confirmed:
         db.table("works_registry").update({"status": "registered"}).eq("id", work_id).execute()
+        try:
+            work_owner = db.table("works_registry").select("user_id").eq("id", work_id).single().execute()
+            owner_id = (work_owner.data or {}).get("user_id")
+            if owner_id:
+                analytics_capture(
+                    owner_id,
+                    "registry_work_registered",
+                    {"tool": "registry", "work_id": work_id},
+                )
+        except Exception as e:
+            logger.warning("registry_work_registered emit failed for work_id=%s: %s", work_id, e)
 
 
 # ============================================================

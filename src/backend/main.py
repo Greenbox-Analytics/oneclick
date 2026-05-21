@@ -22,8 +22,12 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from auth import get_current_user_id
+from analytics import capture as analytics_capture
+from analytics import init_analytics
+from auth import get_current_user_email, get_current_user_id
+from middleware.analytics_middleware import AnalyticsMiddleware
 from pagination import PaginatedResponse, paginate_query
+from subscriptions.admin_auth import is_active_tester_row, is_user_admin
 from zoe_chatbot.contract_chatbot import ContractChatbot
 from zoe_chatbot.helpers import calculate_royalty_payments
 
@@ -31,13 +35,14 @@ from zoe_chatbot.helpers import calculate_royalty_payments
 load_dotenv()
 
 app = FastAPI()
+init_analytics()
 
 # --- Mount Integration & Board Routers ---
+from admin.analytics_router import router as admin_analytics_router
 from boards.router import router as boards_router
 from credentials.router import router as credentials_router
 from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
-from integrations.monday.router import router as monday_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from oneclick.share import router as oneclick_share_router
@@ -46,12 +51,15 @@ from projects.share_email import router as projects_share_email_router
 from registry.router import router as registry_router
 from settings.router import router as settings_router
 from splitsheet.router import router as splitsheet_router
+from subscriptions.admin_router import router as subscriptions_admin_router
+from subscriptions.billing_router import router as billing_router
+from subscriptions.pro_requests_router import router as pro_requests_router
+from subscriptions.router import router as subscriptions_router
 from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
 app.include_router(notion_router, prefix="/integrations/notion", tags=["Notion"])
-app.include_router(monday_router, prefix="/integrations/monday", tags=["Monday.com"])
 app.include_router(connections_router, prefix="/integrations", tags=["Integrations"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
 app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])
@@ -62,6 +70,11 @@ app.include_router(projects_share_email_router, prefix="/projects", tags=["Proje
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
+app.include_router(subscriptions_router, tags=["Entitlements"])
+app.include_router(subscriptions_admin_router, tags=["Admin"])
+app.include_router(pro_requests_router, tags=["Pro Requests"])
+app.include_router(billing_router)
+app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -126,6 +139,11 @@ ALLOWED_ORIGINS = [
     origin.strip().rstrip("/") for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080").split(",")
 ]
 
+# Middleware order matters: Starlette's add_middleware inserts at the front of
+# the chain, so the LAST add_middleware call becomes the OUTERMOST. CORS must be
+# outermost among user middleware so that 4xx/known-exception responses get
+# Access-Control-Allow-Origin headers attached.
+app.add_middleware(AnalyticsMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -133,6 +151,48 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# CORS-on-500 fallback. Starlette's ServerErrorMiddleware sits OUTSIDE user
+# middleware, so an unhandled exception escapes the CORS layer and produces
+# a 500 without Access-Control-Allow-Origin — the browser then shows a CORS
+# error instead of the real 500 in DevTools, masking the actual bug. Adding
+# an Exception handler keeps the response inside user middleware so CORS
+# headers get attached. Pair this with backend logging (already in place via
+# AnalyticsMiddleware's request_failed event) so the real traceback is still
+# captured server-side.
+import logging as _logging
+import traceback as _traceback
+
+from fastapi import Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+_uncaught_logger = _logging.getLogger("uvicorn.error")
+logger = _logging.getLogger(__name__)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: _Request, exc: Exception):
+    _uncaught_logger.error(
+        "Unhandled %s on %s %s: %s\n%s",
+        type(exc).__name__,
+        request.method,
+        request.url.path,
+        exc,
+        _traceback.format_exc(),
+    )
+    origin = request.headers.get("origin")
+    cors_headers: dict[str, str] = {}
+    if origin and (origin in ALLOWED_ORIGINS or "*" in ALLOWED_ORIGINS):
+        cors_headers["Access-Control-Allow-Origin"] = origin
+        cors_headers["Access-Control-Allow-Credentials"] = "true"
+        cors_headers["Vary"] = "Origin"
+    return _JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "error_type": type(exc).__name__},
+        headers=cors_headers,
+    )
+
 
 # Initialize Supabase Client (lazy initialization to avoid startup failures)
 supabase: Client = None
@@ -156,6 +216,14 @@ def get_supabase_client() -> Client:
 
 def normalize_file_name(file_name: str) -> str:
     return file_name.strip().lower()
+
+
+# SP3: singleton + accessor moved to subscriptions/deps.py to break the import
+# cycle with subscriptions/enforcement.py. Re-export here so SP1/SP2 callers
+# in this file (Zoe/OneClick increments, etc.) keep working unchanged.
+from subscriptions.deps import _get_entitlements_service  # noqa: I001
+from subscriptions.enforcement import gated_create, gated_feature, gated_upload
+from subscriptions.models import Action
 
 
 # --- Ownership verification helpers ---
@@ -297,6 +365,7 @@ class ZoeAskRequest(BaseModel):
     context: ConversationContext | None = None  # Conversation context for structured tracking
     source_preference: Literal["artist_profile", "contract_context", "conversation_history"] | None = None
     contract_markdowns: dict[str, str] | None = None  # Full contract markdown text keyed by contract_id
+    host_user_id: str | None = None  # SP3: project owner for host-wins resolution
 
 
 class ZoeQuickAction(BaseModel):
@@ -410,6 +479,160 @@ def health_check():
     return {"status": "healthy", "service": "msanii-backend", "version": "1.0.0"}
 
 
+class AnalyticsContext(BaseModel):
+    is_tester: bool
+    is_admin: bool
+    plan: Literal["free", "pro"]
+    role: str | None
+    email: str | None
+    signed_up_at: str | None
+    tester_granted_at: str | None
+    tester_expires_at: str | None
+
+
+def _read_profile_role(sb, user_id: str) -> str | None:
+    """Return profiles.role for the user, or None if the column doesn't exist
+    in this environment.
+
+    Reason: the `industry → role` rename migration is wrapped in IF EXISTS
+    (see 20260420000000_rename_industry_to_role.sql) — environments that
+    never had `industry` added via the Supabase dashboard also don't have
+    `role`. Tolerate that gracefully instead of 500-ing the whole endpoint.
+    """
+    try:
+        res = sb.table("profiles").select("role").eq("id", user_id).maybe_single().execute()
+        return (res.data or {}).get("role") if res else None
+    except Exception:
+        return None
+
+
+def _read_auth_signed_up_at(sb, user_id: str) -> str | None:
+    """Return auth.users.created_at for the user via the Supabase admin client.
+
+    profiles.created_at doesn't exist in some environments; the canonical
+    signup timestamp lives on auth.users.created_at and is always present.
+    """
+    try:
+        res = sb.auth.admin.get_user_by_id(user_id)
+        created_at = getattr(res.user, "created_at", None) if res and res.user else None
+        # auth.admin returns a datetime; serialize for the JSON response.
+        return created_at.isoformat() if hasattr(created_at, "isoformat") else created_at
+    except Exception:
+        return None
+
+
+@app.get("/me/analytics-context", response_model=AnalyticsContext)
+async def get_analytics_context(
+    user_id: str = Depends(get_current_user_id),
+    user_email: str = Depends(get_current_user_email),
+):
+    """Pure read — returns identity properties for client-side PostHog identify().
+
+    Does NOT call analytics.identify(): GETs stay idempotent. The client owns
+    identify() and server-side identify only fires from explicit mutation handlers.
+
+    Source-of-truth per field (profiles is intentionally minimal in this schema):
+      email         <- JWT (auth.users)
+      signed_up_at  <- auth.users.created_at (profiles doesn't have created_at)
+      role          <- profiles.role IF the column exists in this env (else None)
+    """
+    sb = get_supabase_client()
+
+    overrides = (
+        sb.table("tier_overrides")
+        .select("reason, granted_at, expires_at")
+        .eq("user_id", user_id)
+        .like("reason", "tester%")
+        .execute()
+    )
+    active_tester_row = next((r for r in (overrides.data or []) if is_active_tester_row(r)), None)
+
+    sub_res = sb.table("subscriptions").select("tier").eq("user_id", user_id).execute()
+    sub_rows = sub_res.data or []
+    plan = sub_rows[0]["tier"] if sub_rows else "free"
+
+    return AnalyticsContext(
+        is_tester=active_tester_row is not None,
+        is_admin=is_user_admin(sb, user_email, user_id),
+        plan=plan,
+        role=_read_profile_role(sb, user_id),
+        email=user_email,
+        signed_up_at=_read_auth_signed_up_at(sb, user_id),
+        tester_granted_at=active_tester_row.get("granted_at") if active_tester_row else None,
+        tester_expires_at=active_tester_row.get("expires_at") if active_tester_row else None,
+    )
+
+
+@app.post("/me/bootstrap-tester")
+async def bootstrap_tester(
+    user_id: str = Depends(get_current_user_id),
+    user_email: str = Depends(get_current_user_email),
+):
+    """Auto-grant tester `tier_overrides` row if caller's email is in TESTER_EMAILS.
+
+    Called on every SIGNED_IN event from the frontend (see AuthContext). Idempotent:
+    - skips when email not in TESTER_EMAILS (returns reason=not_in_allowlist)
+    - skips when user already has any active tester row (returns reason=already_tester)
+    - grants reason='tester_env' on first call to distinguish from manual admin grants
+
+    Mirrors AdminService.create_tester_grant's payload exactly so feature gating is identical.
+    """
+    from datetime import UTC, datetime
+
+    from analytics import identify as analytics_identify
+    from subscriptions.admin_auth import is_active_tester_row, is_env_tester
+
+    if not is_env_tester(user_email):
+        return {"granted": False, "reason": "not_in_allowlist"}
+
+    sb = get_supabase_client()
+    existing = (
+        sb.table("tier_overrides")
+        .select("reason, expires_at, granted_at")
+        .eq("user_id", user_id)
+        .like("reason", "tester%")
+        .execute()
+    )
+    rows = existing.data or []
+    if any(r.get("reason") == "tester_revoked" for r in rows):
+        return {"granted": False, "reason": "revoked"}
+    if any(is_active_tester_row(r) for r in rows):
+        return {"granted": False, "reason": "already_tester"}
+
+    granted_at = datetime.now(UTC).isoformat()
+    payload = {
+        "user_id": user_id,
+        "max_artists": -1,
+        "max_projects": -1,
+        "max_tasks": -1,
+        "max_storage_bytes": -1,
+        "max_split_sheets_per_month": -1,
+        "max_oneclick_runs_per_month": -1,
+        "zoe_enabled": True,
+        "oneclick_enabled": True,
+        "registry_enabled": True,
+        "integrations_allowed": ["google_drive", "slack", "notion"],
+        "reason": "tester_env",
+        "expires_at": None,
+        "granted_at": granted_at,
+    }
+    sb.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
+
+    try:
+        analytics_identify(
+            user_id,
+            {
+                "is_tester": True,
+                "tester_granted_at": granted_at,
+                "tester_expires_at": None,
+            },
+        )
+    except Exception as exc:
+        logger.warning("analytics identify on bootstrap-tester failed: %s", exc)
+
+    return {"granted": True, "source": "env"}
+
+
 @app.get("/artists")
 async def get_artists(
     user_id: str = Depends(get_current_user_id),
@@ -472,6 +695,22 @@ async def create_project(project: ProjectCreateRequest, user_id: str = Depends(g
     try:
         if not verify_user_owns_artist(user_id, project.artist_id):
             raise HTTPException(status_code=403, detail="Access denied")
+
+        # Gate: count user's existing projects across all their artists
+        artist_ids = get_user_artist_ids(user_id)
+        if artist_ids:
+            count_res = (
+                get_supabase_client()
+                .table("projects")
+                .select("id", count="exact")
+                .in_("artist_id", artist_ids)
+                .execute()
+            )
+            project_count = count_res.count or 0
+        else:
+            project_count = 0
+        gated_create(user_id, "project", current_count=project_count)
+
         res = (
             get_supabase_client()
             .table("projects")
@@ -598,6 +837,9 @@ async def upload_file(
 
         file_content = await file.read()
 
+        # ---- SP3: gate BEFORE Storage write ----
+        gated_upload(user_id, size=len(file_content), host_user_id=user_id)
+
         # Clean filename
         import re
 
@@ -644,8 +886,14 @@ async def upload_file(
             except Exception as cleanup_error:
                 print(f"Failed to cleanup uploaded file after DB error: {cleanup_error}")
 
-            error_message = str(db_error).lower()
-            if "duplicate" in error_message and "project_files" in error_message:
+            error_message = str(db_error)
+            is_trigger_reject = "Storage cap exceeded" in error_message or "23514" in error_message
+            if is_trigger_reject:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Upload would exceed your storage cap (concurrent upload race). Try again or upgrade to Pro.",
+                )
+            if "duplicate" in error_message.lower() and "project_files" in error_message.lower():
                 raise HTTPException(
                     status_code=409, detail=f'A file named "{file.filename}" already exists in this project.'
                 )
@@ -801,27 +1049,18 @@ class ContractDeleteResponse(BaseModel):
     message: str
 
 
-@app.post("/contracts/upload", response_model=ContractUploadResponse)
-async def upload_contract(
+async def _upload_contract_impl(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    project_id: str = Form(...),
-    user_id: str = Depends(get_current_user_id),
-):
-    """
-    Upload and process a contract PDF:
-    1. Save to Supabase Storage
-    2. Extract text and chunk into 300-600 tokens
-    3. Generate deterministic chunk IDs (SHA256 of content + metadata)
-    4. Embed and upsert to user's namespace in Pinecone
+    file: UploadFile,
+    file_content: bytes,
+    project_id: str,
+    user_id: str,
+) -> ContractUploadResponse:
+    """Core contract upload logic. Reusable by single + multi upload endpoints.
 
-    Args:
-        file: PDF file to upload
-        project_id: UUID of the project
-        user_id: UUID of the authenticated user
-
-    Returns:
-        Upload statistics and confirmation
+    Note: file_content is pre-read by the caller. The caller is also responsible
+    for running gated_upload(...) before calling this helper — the multi-upload
+    sums sizes across the batch and runs one gate for all files.
     """
     try:
         # Validate file type
@@ -843,9 +1082,6 @@ async def upload_contract(
             )
 
         _project_name = project_res.data[0]["name"]
-
-        # Read file content
-        file_content = await file.read()
 
         # Clean filename
         import re
@@ -881,8 +1117,14 @@ async def upload_contract(
             except Exception as cleanup_error:
                 print(f"Failed to cleanup uploaded contract after DB error: {cleanup_error}")
 
-            error_message = str(db_error).lower()
-            if "duplicate" in error_message and "project_files" in error_message:
+            error_message = str(db_error)
+            is_trigger_reject = "Storage cap exceeded" in error_message or "23514" in error_message
+            if is_trigger_reject:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Upload would exceed your storage cap (concurrent upload race). Try again or upgrade to Pro.",
+                )
+            if "duplicate" in error_message.lower() and "project_files" in error_message.lower():
                 raise HTTPException(
                     status_code=409, detail=f'A file named "{file.filename}" already exists in this project.'
                 )
@@ -931,6 +1173,7 @@ async def upload_contract(
         except Exception:
             pass
 
+        analytics_capture(user_id, "contract_uploaded", {"file_size": len(file_content)})
         return ContractUploadResponse(
             status="success",
             contract_id=contract_id,
@@ -946,9 +1189,39 @@ async def upload_contract(
         raise HTTPException(status_code=500, detail=f"Failed to upload contract: {str(e)}")
 
 
+@app.post("/contracts/upload", response_model=ContractUploadResponse)
+async def upload_contract(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    project_id: str = Form(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Upload and process a contract PDF:
+    1. Save to Supabase Storage
+    2. Extract text and chunk into 300-600 tokens
+    3. Generate deterministic chunk IDs (SHA256 of content + metadata)
+    4. Embed and upsert to user's namespace in Pinecone
+
+    Args:
+        file: PDF file to upload
+        project_id: UUID of the project
+        user_id: UUID of the authenticated user
+
+    Returns:
+        Upload statistics and confirmation
+    """
+    file_content = await file.read()
+    gated_upload(user_id, size=len(file_content), host_user_id=user_id)
+    return await _upload_contract_impl(background_tasks, file, file_content, project_id, user_id)
+
+
 @app.post("/contracts/upload-multiple")
 async def upload_multiple_contracts(
-    files: list[UploadFile] = File(...), project_id: str = Form(...), user_id: str = Depends(get_current_user_id)
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    project_id: str = Form(...),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     Upload and process multiple contract PDFs in one request
@@ -961,22 +1234,37 @@ async def upload_multiple_contracts(
     Returns:
         List of upload results for each file
     """
+    # ---- SP3: read all files upfront, gate with TOTAL batch size ----
+    file_contents: list[tuple[UploadFile, bytes]] = []
+    for file in files:
+        contents = await file.read()
+        file_contents.append((file, contents))
+
+    total_size = sum(len(c) for _, c in file_contents)
+    gated_upload(user_id, size=total_size, host_user_id=user_id)
+
+    # ---- Process each file individually using the shared helper ----
     results = []
 
-    for file in files:
+    for original_file, contents in file_contents:
         try:
-            # Process each file individually
-            result = await upload_contract(file, project_id, user_id)
+            result = await _upload_contract_impl(
+                background_tasks,
+                original_file,
+                contents,
+                project_id,
+                user_id,
+            )
             results.append(
                 {
-                    "filename": file.filename,
+                    "filename": original_file.filename,
                     "status": "success",
                     "contract_id": result.contract_id,
                     "total_chunks": result.total_chunks,
                 }
             )
         except Exception as e:
-            results.append({"filename": file.filename, "status": "error", "error": str(e)})
+            results.append({"filename": original_file.filename, "status": "error", "error": str(e)})
 
     return {
         "total_files": len(files),
@@ -1135,7 +1423,34 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
       complete — instant non-streamed response (tiers 1/2)
       error    — error during generation
     """
+    # SP3: gate Zoe feature; raises 402 for Free users without a Pro host.
+    gated_feature(user_id, Action.USE_ZOE, host_user_id=request.host_user_id)
+
+    # Step event: fire BEFORE any work begins so we capture even early failures.
+    import time as _time
+
+    _zoe_started_at = _time.perf_counter()
+    _query_text = request.query or ""
+    # ZoeAskRequest has no attachment field today; reserve for future and default False.
+    _has_attachment = bool(getattr(request, "attachment_id", None) or getattr(request, "file_id", None))
+    analytics_capture(
+        user_id,
+        "zoe_query_submitted",
+        {
+            "tool": "zoe",
+            "query_length": len(_query_text),
+            "has_attachment": _has_attachment,
+        },
+    )
+
     try:
+        # SP2: track per-period Zoe usage; best-effort, never blocks.
+        # NOTE: increment fires on connection-open, not completion. A client that
+        # opens-then-closes mid-stream still counts as a query. This is acceptable
+        # for a usage-display counter; if the counter ever becomes billing-relevant,
+        # move this call to the end of the streaming handler (after final yield).
+        _get_entitlements_service().increment_usage(user_id, "zoe_queries_this_period")
+        analytics_capture(user_id, "tool_used", {"tool": "zoe"})
         chatbot = get_zoe_chatbot()
         session_id = request.session_id or str(uuid.uuid4())
 
@@ -1171,6 +1486,9 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                 print(f"Warning: Could not fetch contract names: {e}")
 
         def generate():
+            import json as _json
+
+            source_count = 0
             try:
                 for event in chatbot.ask_stream(
                     query=request.query,
@@ -1185,17 +1503,49 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                     contract_markdowns=request.contract_markdowns,
                     contract_names=contract_names,
                 ):
+                    # Count sources events for the response_received step event.
+                    # Real chatbot yields SSE-formatted strings; tests may yield dicts.
+                    try:
+                        if isinstance(event, dict):
+                            payload = event
+                        elif isinstance(event, str) and event.startswith("data: "):
+                            payload = _json.loads(event[6:].strip())
+                        else:
+                            payload = None
+                        if isinstance(payload, dict) and payload.get("type") == "sources":
+                            source_count += len(payload.get("sources") or [])
+                    except (ValueError, TypeError):
+                        # Best-effort parsing; never block the stream on counter errors.
+                        pass
                     yield event
+
+                analytics_capture(
+                    user_id,
+                    "zoe_response_received",
+                    {
+                        "tool": "zoe",
+                        "duration_ms": int((_time.perf_counter() - _zoe_started_at) * 1000),
+                        "source_count": source_count,
+                    },
+                )
             except Exception as e:
                 print(f"[Stream] Error in Zoe streaming: {e}")
-                import json as _json
-
+                analytics_capture(
+                    user_id,
+                    "zoe_query_failed",
+                    {"tool": "zoe", "error_code": type(e).__name__},
+                )
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     except Exception as e:
         print(f"Error in Zoe streaming chatbot: {str(e)}")
+        analytics_capture(
+            user_id,
+            "zoe_query_failed",
+            {"tool": "zoe", "error_code": type(e).__name__},
+        )
         raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
 
 
@@ -1237,6 +1587,7 @@ class OneClickRoyaltyRequest(BaseModel):
     contract_ids: list[str] | None = None
     project_id: str
     royalty_statement_file_id: str
+    host_user_id: str | None = None  # SP3: project owner for host-wins resolution
 
 
 class RoyaltyPaymentResponse(BaseModel):
@@ -1344,6 +1695,7 @@ async def oneclick_calculate_royalties_stream(
     contract_id: str | None = None,
     contract_ids: list[str] | None = Query(None),
     force_recalculate: bool = False,
+    host_user_id: str | None = Query(None),
 ):
     """
     OneClick Royalty Calculation with Server-Sent Events (SSE) for real-time progress updates.
@@ -1362,10 +1714,24 @@ async def oneclick_calculate_royalties_stream(
         project_id: Project ID
         royalty_statement_file_id: Royalty Statement File ID
         force_recalculate: If True, bypass cache
+        host_user_id: Project owner user ID for host-wins resolution (SP3)
 
     Returns:
         SSE stream with progress updates and final results
     """
+    # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
+    gated_feature(user_id, Action.USE_ONECLICK, host_user_id=host_user_id)
+    # SP2: track per-period OneClick usage; best-effort, never blocks.
+    _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
+    analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
+
+    # Step-event instrumentation (Task 7 of PostHog dashboard plan).
+    # `_started`/`_completed` are paired so funnel volumes match (cache-hit
+    # path fires both together with cached=True, duration_ms=0).
+    import time as _time
+
+    _calc_started_at = _time.perf_counter()
+    _contract_count = len(contract_ids) if contract_ids else (1 if contract_id else 0)
 
     async def generate_progress():
         # Initialize paths to None for safe cleanup
@@ -1385,6 +1751,11 @@ async def oneclick_calculate_royalties_stream(
                 target_contract_ids = [contract_id]
 
             if not target_contract_ids:
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_failed",
+                    {"tool": "oneclick", "error_code": "ValidationError", "stage": "validation"},
+                )
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No contracts specified'})}\n\n"
                 return
 
@@ -1435,11 +1806,37 @@ async def oneclick_calculate_royalties_stream(
                                 # Add type field so frontend SSE handler recognizes it
                                 result["type"] = "complete"
 
+                                # Cache hit: fire paired _started + _completed so
+                                # the funnel sees the same volume on each step.
+                                analytics_capture(
+                                    user_id,
+                                    "oneclick_calc_started",
+                                    {"tool": "oneclick", "contract_count": _contract_count, "cached": True},
+                                )
+                                analytics_capture(
+                                    user_id,
+                                    "oneclick_calc_completed",
+                                    {
+                                        "tool": "oneclick",
+                                        "duration_ms": 0,
+                                        "contract_count": _contract_count,
+                                        "cached": True,
+                                    },
+                                )
+
                                 yield f"data: {json.dumps(result)}\n\n"
                                 return
 
                 except Exception as e:
                     print(f"Cache check failed (continuing to calculate): {e}")
+
+            # Cache miss (or force_recalculate) — fire `_started` AFTER the
+            # cache check so cache hits don't double-fire.
+            analytics_capture(
+                user_id,
+                "oneclick_calc_started",
+                {"tool": "oneclick", "contract_count": _contract_count, "cached": False},
+            )
 
             # Step 1: Download royalty statement
             yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
@@ -1448,6 +1845,11 @@ async def oneclick_calculate_royalties_stream(
                 get_supabase_client().table("project_files").select("*").eq("id", royalty_statement_file_id).execute()
             )
             if not statement_res.data:
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_failed",
+                    {"tool": "oneclick", "error_code": "ValidationError", "stage": "validation"},
+                )
                 yield f"data: {json.dumps({'type': 'error', 'message': 'Royalty statement file not found'})}\n\n"
                 return
 
@@ -1553,6 +1955,11 @@ async def oneclick_calculate_royalties_stream(
             await asyncio.sleep(0.3)
 
             if not payments or len(payments) == 0:
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_failed",
+                    {"tool": "oneclick", "error_code": "NoPaymentsCalculated", "stage": "calc"},
+                )
                 yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
                 return
 
@@ -1587,11 +1994,28 @@ async def oneclick_calculate_royalties_stream(
 
             yield f"data: {json.dumps(result)}\n\n"
 
+            _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
+            analytics_capture(
+                user_id,
+                "oneclick_calc_completed",
+                {
+                    "tool": "oneclick",
+                    "duration_ms": _duration_ms,
+                    "contract_count": _contract_count,
+                    "cached": False,
+                },
+            )
+
         except Exception as e:
             import traceback
 
             error_detail = str(e)
             traceback.print_exc()
+            analytics_capture(
+                user_id,
+                "oneclick_calc_failed",
+                {"tool": "oneclick", "error_code": type(e).__name__, "stage": "calc"},
+            )
             yield f"data: {json.dumps({'type': 'error', 'message': error_detail})}\n\n"
 
         finally:
@@ -1627,7 +2051,22 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
     Returns:
         Payment breakdown and Excel file URL
     """
+    # Step-event instrumentation (Task 7).
+    import time as _time
+
+    _calc_started_at = _time.perf_counter()
+    _contract_count = len(request.contract_ids) if request.contract_ids else (1 if request.contract_id else 0)
+
     try:
+        # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
+        gated_feature(user_id, Action.USE_ONECLICK, host_user_id=request.host_user_id)
+        # SP2: track per-period OneClick usage; best-effort, never blocks.
+        _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
+        analytics_capture(
+            user_id,
+            "oneclick_calc_started",
+            {"tool": "oneclick", "contract_count": _contract_count, "cached": False},
+        )
         print(f"\n{'=' * 80}")
         print("ONECLICK ROYALTY CALCULATION")
         print(f"{'=' * 80}")
@@ -1746,6 +2185,18 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
             print("CALCULATION COMPLETE")
             print(f"{'=' * 80}\n")
 
+            _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
+            analytics_capture(
+                user_id,
+                "oneclick_calc_completed",
+                {
+                    "tool": "oneclick",
+                    "duration_ms": _duration_ms,
+                    "contract_count": _contract_count,
+                    "cached": False,
+                },
+            )
+
             return OneClickRoyaltyResponse(
                 status="success",
                 total_payments=len(payments),
@@ -1768,6 +2219,11 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
         import traceback
 
         traceback.print_exc()
+        analytics_capture(
+            user_id,
+            "oneclick_calc_failed",
+            {"tool": "oneclick", "error_code": type(e).__name__, "stage": "calc"},
+        )
         raise HTTPException(status_code=500, detail=f"Failed to calculate royalties: {str(e)}")
 
 

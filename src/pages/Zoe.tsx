@@ -3,6 +3,8 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, Music, PanelLeftClose, PanelLeft, RefreshCw, BookOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
+import { RequireFeature } from "@/components/paywall/RequireFeature";
+import { useAnalytics } from "@/hooks/useAnalytics";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -100,6 +102,12 @@ const Zoe = () => {
     onComplete: () => markToolCompleted("zoe"),
   });
 
+  const { captureToolOpened } = useAnalytics();
+  useEffect(() => {
+    captureToolOpened("zoe");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!onboardingLoading && !statuses.zoe && walkthrough.phase === "idle") {
       const timer = setTimeout(() => walkthrough.startModal(), 500);
@@ -108,9 +116,10 @@ const Zoe = () => {
   }, [onboardingLoading, statuses.zoe]);
 
   return (
-    <div className="h-screen flex flex-col bg-background overflow-hidden">
-      {/* Header */}
-      <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 flex-shrink-0 z-10">
+    <RequireFeature feature="zoe">
+      <div className="h-screen flex flex-col bg-background overflow-hidden">
+        {/* Header */}
+        <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 flex-shrink-0 z-10">
         <div className="px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="md:hidden">
@@ -342,15 +351,16 @@ const Zoe = () => {
         onStartTour={walkthrough.startSpotlight}
         onSkip={walkthrough.skip}
       />
-      <WalkthroughProvider
-        isActive={walkthrough.phase === "spotlight"}
-        currentStep={walkthrough.currentStep}
-        currentStepIndex={walkthrough.visibleStepIndex}
-        totalSteps={walkthrough.totalSteps}
-        onNext={walkthrough.next}
-        onSkip={walkthrough.skip}
-      />
-    </div>
+        <WalkthroughProvider
+          isActive={walkthrough.phase === "spotlight"}
+          currentStep={walkthrough.currentStep}
+          currentStepIndex={walkthrough.visibleStepIndex}
+          totalSteps={walkthrough.totalSteps}
+          onNext={walkthrough.next}
+          onSkip={walkthrough.skip}
+        />
+      </div>
+    </RequireFeature>
   );
 };
 

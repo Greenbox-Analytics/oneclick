@@ -43,6 +43,7 @@ interface Artist {
 }
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useCanCreate } from "@/hooks/useEntitlements";
 
 const Artists = () => {
   const navigate = useNavigate();
@@ -75,6 +76,8 @@ const Artists = () => {
     },
     enabled: !!user?.id,
   });
+
+  const { allowed: canCreateArtist } = useCanCreate("artist", artists.length);
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
@@ -120,6 +123,7 @@ const Artists = () => {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
+        backTo="/dashboard"
         actions={
           <>
             <Button
@@ -132,9 +136,6 @@ const Artists = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/dashboard")}>
-              Back to Dashboard
-            </Button>
           </>
         }
       />
@@ -146,7 +147,7 @@ const Artists = () => {
             <p className="text-muted-foreground mb-3">Manage your artist roster</p>
             <div className="h-0.5 w-20 bg-gradient-to-r from-primary to-primary/0 rounded-full" />
           </div>
-          <Button data-walkthrough="artists-add" onClick={() => navigate("/artists/new")}>
+          <Button data-walkthrough="artists-add" onClick={() => navigate("/artists/new")} disabled={!canCreateArtist}>
             <Plus className="w-4 h-4 mr-2" />
             Add Artist
           </Button>
