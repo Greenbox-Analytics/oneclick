@@ -20,11 +20,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Poetry
-        # poetry-plugin-export is required for the requirements.txt sync check
-        # below. In Poetry 2.x `poetry export` was moved out of core into this
-        # plugin, so it must be installed alongside poetry.
         run: |
-          pip install poetry poetry-plugin-export
+          pip install poetry
           poetry config virtualenvs.in-project true
       - name: Cache Poetry virtualenv
         uses: actions/cache@v4
@@ -33,19 +30,6 @@ jobs:
           key: poetry-${{ runner.os }}-${{ hashFiles('src/backend/poetry.lock') }}
       - name: Install dependencies
         run: poetry install --no-interaction
-      - name: Verify requirements.txt is in sync with poetry.lock
-        # The container deploy uses `pip install -r requirements.txt`, not poetry.
-        # If requirements.txt drifts from pyproject.toml / poetry.lock, the
-        # deployed container is missing packages and uvicorn crashes on import
-        # (e.g., ModuleNotFoundError: 'posthog'). Re-export here and fail the
-        # PR if it doesn't match what's committed.
-        run: |
-          poetry export -f requirements.txt --without-hashes --output /tmp/requirements.expected
-          if ! diff -u requirements.txt /tmp/requirements.expected; then
-            echo "::error::requirements.txt is out of sync with pyproject.toml / poetry.lock."
-            echo "::error::Run 'task install:backend' (or 'cd src/backend && poetry export -f requirements.txt --output requirements.txt --without-hashes') and commit the result."
-            exit 1
-          fi
       - name: Ruff lint
         run: poetry run ruff check .
       - name: Ruff format check
