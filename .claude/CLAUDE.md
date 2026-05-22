@@ -321,7 +321,7 @@ poetry run python -m scripts.posthog_apply_env_filter \
 
 ## Backend Conventions
 
-- Backend is a separate Python project in `src/backend/` with its own `Dockerfile` and `requirements.txt`
+- Backend is a separate Python project in `src/backend/` with its own `Dockerfile`; deps are managed with Poetry (`pyproject.toml` + `poetry.lock`) and installed directly in the container — no `requirements.txt`
 - Backend deploys to Cloud Run on port 8080 (Docker), runs locally on port 8000
 - All endpoints accept `user_id` query param for RLS context
 
