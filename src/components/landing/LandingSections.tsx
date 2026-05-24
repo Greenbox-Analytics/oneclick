@@ -310,13 +310,28 @@ export function Hero({ primaryHref, primaryLabel }: HeroProps) {
 const HERO_PROOFS = ["Free tier available", "No credit card required", "Cancel anytime"];
 
 // ──────────────────────────────────────────────────────────────────────
-// Logo strip
+// Logo strip — infinite horizontal marquee of integration logos.
+// Pure CSS animation (no RAF) so it doesn't compete with the demos.
 // ──────────────────────────────────────────────────────────────────────
-const LOGO_STRIP = ["Spotify", "Apple Music", "SoundCloud", "Google Drive", "Slack", "Notion", "Atlassian", "Monday"];
+type LogoEntry = { name: string; src: string };
+
+const LOGOS: readonly LogoEntry[] = [
+  { name: "Spotify", src: "/spotify.svg" },
+  { name: "Apple Music", src: "/apple_music.png" },
+  { name: "SoundCloud", src: "/soundcloud.png" },
+  { name: "Google Drive", src: "/drive.webp" },
+  { name: "Slack", src: "/slack.png" },
+  { name: "Notion", src: "/Notion_app_logo.png" },
+  { name: "Atlassian", src: "/atlassian.png" },
+  { name: "Monday", src: "/mondaycom.png" },
+];
+
+// Doubled so the keyframes can translate -50% and loop seamlessly.
+const MARQUEE_LOGOS = [...LOGOS, ...LOGOS];
 
 export function LogoStrip() {
   return (
-    <section style={{ padding: "8px 32px 32px" }}>
+    <section style={{ padding: "8px 32px 40px" }}>
       <div style={{ maxWidth: 1080, margin: "0 auto" }}>
         <p
           style={{
@@ -326,26 +341,26 @@ export function LogoStrip() {
             textTransform: "uppercase",
             color: "var(--muted-fg)",
             fontWeight: 500,
-            margin: "0 0 24px",
+            margin: "0 0 28px",
           }}
         >
           Plugged into the tools you already use
         </p>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexWrap: "wrap",
-            gap: 24,
-            opacity: 0.6,
-          }}
-        >
-          {LOGO_STRIP.map((n) => (
-            <div key={n} style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.01em" }}>
-              {n}
-            </div>
-          ))}
+        <div className="lp-marquee" aria-label="Integrations">
+          <div className="lp-marquee-track">
+            {MARQUEE_LOGOS.map((logo, i) => (
+              <img
+                key={`${logo.name}-${i}`}
+                src={logo.src}
+                alt={logo.name}
+                className="lp-marquee-logo"
+                loading="eager"
+                decoding="async"
+                draggable={false}
+                aria-hidden={i >= LOGOS.length}
+              />
+            ))}
+          </div>
         </div>
       </div>
     </section>

@@ -181,6 +181,62 @@ All colors MUST be HSL.
   color: transparent;
 }
 
+/* Logo marquee — infinite horizontal scroll, CSS-only (no JS frame loop).
+   The track holds two copies of the logo list; translating it -50% lands
+   exactly on the start of the second copy, so the loop is seamless. */
+.landing-page .lp-marquee {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 80px,
+    #000 calc(100% - 80px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 80px,
+    #000 calc(100% - 80px),
+    transparent 100%
+  );
+}
+
+.landing-page .lp-marquee-track {
+  display: flex;
+  align-items: center;
+  gap: 72px;
+  width: max-content;
+  animation: lp-marquee-scroll 38s linear infinite;
+  will-change: transform;
+}
+
+.landing-page .lp-marquee:hover .lp-marquee-track {
+  animation-play-state: paused;
+}
+
+.landing-page .lp-marquee-logo {
+  height: 32px;
+  width: auto;
+  max-width: 140px;
+  object-fit: contain;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+@keyframes lp-marquee-scroll {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-page .lp-marquee-track {
+    animation: none;
+    /* Center the first half so the strip is still readable when motion is off. */
+    transform: translateX(0);
+  }
+}
+
 /* Landing-page responsive overrides — collapse multi-column grids on narrow viewports */
 @media (max-width: 900px) {
   .landing-page .lp-tool-row {
