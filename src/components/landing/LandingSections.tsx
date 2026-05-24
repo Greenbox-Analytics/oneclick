@@ -577,8 +577,7 @@ export function ToolsSection() {
 const ABOUT_STATS = [
   { v: "$4.2M", l: "royalties calculated" },
   { v: "120+", l: "artists onboarded" },
-  { v: "11", l: "integrations" },
-  { v: "2023", l: "founded in Toronto" },
+  { v: "11", l: "integrations" }
 ];
 
 export function AboutSection() {
