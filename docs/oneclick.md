@@ -231,6 +231,6 @@ curl -N "http://localhost:8000/oneclick/calculate-royalties-stream\
 
 ```bash
 cd src/backend
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
+poetry install
+poetry run uvicorn main:app --host 0.0.0.0 --port 8000
 ```

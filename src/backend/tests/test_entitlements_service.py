@@ -856,8 +856,8 @@ class TestIncrementUsage:
 
         sb = MagicMock()
         rpc_calls = []
-        sb.rpc.side_effect = lambda fn, args: rpc_calls.append((fn, args)) or MagicMock(
-            execute=MagicMock(return_value=MagicMock(data=None))
+        sb.rpc.side_effect = lambda fn, args: (
+            rpc_calls.append((fn, args)) or MagicMock(execute=MagicMock(return_value=MagicMock(data=None)))
         )
         svc = EntitlementsService(sb)
 

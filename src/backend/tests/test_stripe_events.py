@@ -42,7 +42,7 @@ def _subscription_event(
     obj.canceled_at = None if not cancel_at_period_end else 1700100000
     obj.current_period_start = current_period_start
     obj.current_period_end = current_period_end
-    obj.__getitem__ = lambda self, k: ({"items": {"data": [{"price": {"id": price_id}}]}}[k] if k == "items" else None)
+    obj.__getitem__ = lambda self, k: {"items": {"data": [{"price": {"id": price_id}}]}}[k] if k == "items" else None
     return e
 
 
