@@ -42,6 +42,9 @@ const ConfirmEmail = lazy(() => import("./pages/ConfirmEmail"));
 const Pricing = lazy(() => import("./pages/Pricing"));
 const Subscription = lazy(() => import("./pages/Subscription"));
 const AdminUsers = lazy(() => import("./pages/AdminUsers"));
+const Team = lazy(() => import("./pages/Team"));
+const Privacy = lazy(() => import("./pages/Privacy"));
+const Security = lazy(() => import("./pages/Security"));
 
 const queryClient = new QueryClient();
 
@@ -208,6 +211,9 @@ const App = () => (
             />
             <Route path="/docs" element={<Documentation />} />
             <Route path="/pricing" element={<Pricing />} />
+            <Route path="/team" element={<Team />} />
+            <Route path="/privacy" element={<Privacy />} />
+            <Route path="/security" element={<Security />} />
             <Route path="/tools/registry" element={<ProtectedRoute><Registry /></ProtectedRoute>} />
             <Route path="/tools/registry/invite/:token" element={<ProtectedRoute><InviteClaim /></ProtectedRoute>} />
             <Route path="/tools/registry/:workId" element={<ProtectedRoute><WorkDetail /></ProtectedRoute>} />

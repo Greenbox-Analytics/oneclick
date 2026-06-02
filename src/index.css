@@ -110,3 +110,228 @@ All colors MUST be HSL.
     @apply bg-background text-foreground;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Landing-page design scope. Tokens are literal hsl() values from    */
+/* the design — DO NOT alias to the global --primary/--card/--accent  */
+/* /--border tokens, as the names collide and create circular refs.   */
+/* ------------------------------------------------------------------ */
+.landing-page {
+  --bg: hsl(0 0% 100%);
+  --fg: hsl(150 30% 15%);
+  --card: hsl(0 0% 100%);
+  --muted-bg: hsl(150 15% 96%);
+  --muted-fg: hsl(150 10% 45%);
+  --primary: hsl(150 60% 20%);
+  --primary-fg: #ffffff;
+  --accent: hsl(150 50% 45%);
+  --accent-soft: hsl(150 50% 92%);
+  --border: hsl(150 15% 90%);
+  --border-strong: hsl(150 15% 82%);
+  --radius: 14px;
+  --radius-sm: 8px;
+  --radius-lg: 22px;
+  --shadow-sm: 0 1px 2px rgba(15, 38, 26, 0.04), 0 1px 1px rgba(15, 38, 26, 0.03);
+  --shadow-md: 0 8px 24px -8px rgba(15, 38, 26, 0.10), 0 2px 6px rgba(15, 38, 26, 0.04);
+  --shadow-lg: 0 30px 60px -20px rgba(15, 38, 26, 0.20), 0 10px 20px -10px rgba(15, 38, 26, 0.08);
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+
+.dark .landing-page {
+  --bg: hsl(220 13% 10%);
+  --fg: hsl(210 17% 90%);
+  --card: hsl(220 13% 12%);
+  --muted-bg: hsl(220 13% 14%);
+  --muted-fg: hsl(215 10% 60%);
+  --primary: hsl(150 50% 45%);
+  --primary-fg: #000000;
+  --accent: hsl(150 50% 50%);
+  --accent-soft: hsl(150 50% 18%);
+  --border: hsl(215 14% 18%);
+  --border-strong: hsl(215 14% 24%);
+  --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.18);
+  --shadow-lg: 0 30px 60px -20px rgba(0, 0, 0, 0.55), 0 10px 20px -10px rgba(0, 0, 0, 0.28);
+}
+
+.landing-page .mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+}
+.landing-page .tight { letter-spacing: -0.02em; }
+.landing-page .tighter { letter-spacing: -0.035em; }
+
+@keyframes lp-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes lp-blink {
+  50% { opacity: 0; }
+}
+@keyframes lp-pulse-ring {
+  0%   { transform: scale(0.96); opacity: 0.6; }
+  100% { transform: scale(1.4);  opacity: 0; }
+}
+
+/* Gradient italic text in the hero — needs -webkit-text-fill-color
+   to win against React's inline `color` rule and to render in Safari. */
+.landing-page .lp-hero-gradient {
+  background-image: linear-gradient(180deg, var(--primary), var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Logo marquee — infinite horizontal scroll, CSS-only (no JS frame loop).
+   The track holds two copies of the logo list; translating it -50% lands
+   exactly on the start of the second copy, so the loop is seamless. */
+.landing-page .lp-marquee {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 80px,
+    #000 calc(100% - 80px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 80px,
+    #000 calc(100% - 80px),
+    transparent 100%
+  );
+}
+
+.landing-page .lp-marquee-track {
+  display: flex;
+  align-items: center;
+  gap: 72px;
+  width: max-content;
+  animation: lp-marquee-scroll 38s linear infinite;
+  will-change: transform;
+}
+
+.landing-page .lp-marquee:hover .lp-marquee-track {
+  animation-play-state: paused;
+}
+
+.landing-page .lp-marquee-logo {
+  height: 32px;
+  width: auto;
+  max-width: 140px;
+  object-fit: contain;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+@keyframes lp-marquee-scroll {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-page .lp-marquee-track {
+    animation: none;
+    /* Center the first half so the strip is still readable when motion is off. */
+    transform: translateX(0);
+  }
+}
+
+/* Landing-page responsive overrides — collapse multi-column grids on narrow viewports */
+@media (max-width: 900px) {
+  .landing-page .lp-tool-row {
+    grid-template-columns: 1fr !important;
+    gap: 32px !important;
+    padding: 24px !important;
+  }
+  .landing-page .lp-tool-row > div:first-child,
+  .landing-page .lp-tool-row > div:last-child {
+    order: unset !important;
+  }
+  .landing-page .lp-about-grid {
+    grid-template-columns: 1fr !important;
+    gap: 32px !important;
+  }
+  .landing-page .lp-stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .landing-page .lp-cta {
+    grid-template-columns: 1fr !important;
+    padding: 48px 32px !important;
+  }
+  .landing-page .lp-footer-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 32px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .landing-page .lp-nav {
+    display: none !important;
+  }
+  .landing-page .lp-footer-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Team page */
+@media (max-width: 900px) {
+  .landing-page .lp-team-grid { grid-template-columns: 1fr !important; }
+  .landing-page .lp-mission-grid { grid-template-columns: 1fr !important; gap: 32px !important; }
+  .landing-page .lp-values-grid { grid-template-columns: 1fr !important; }
+}
+
+/* Long-form document pages (Privacy / Security) */
+.landing-page .doc { max-width: 760px; margin: 0 auto; padding: 0 32px; }
+.landing-page .doc h1 { font-size: clamp(40px, 6vw, 56px); line-height: 1.02; margin: 0; font-weight: 700; letter-spacing: -0.04em; }
+.landing-page .doc h2 { font-size: 24px; margin: 56px 0 12px; font-weight: 700; letter-spacing: -0.02em; }
+.landing-page .doc h3 { font-size: 16px; margin: 28px 0 8px; font-weight: 600; letter-spacing: -0.01em; }
+.landing-page .doc p,
+.landing-page .doc li { font-size: 16px; line-height: 1.65; color: var(--fg); }
+.landing-page .doc p,
+.landing-page .doc ul,
+.landing-page .doc ol { margin: 12px 0; }
+.landing-page .doc ul,
+.landing-page .doc ol { padding-left: 22px; }
+.landing-page .doc li { margin: 6px 0; }
+.landing-page .doc a { color: inherit; }
+.landing-page .doc strong { font-weight: 600; }
+.landing-page .doc .muted { color: var(--muted-fg); }
+.landing-page .doc .eyebrow { font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 0 0 18px; }
+.landing-page .doc .meta { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; color: var(--muted-fg); margin-top: 12px; }
+.landing-page .doc .toc {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 24px;
+  margin: 32px 0 48px; padding: 20px 24px;
+  background: var(--muted-bg); border-radius: var(--radius); border: 1px solid var(--border);
+}
+.landing-page .doc .toc a { font-size: 14px; color: var(--fg); text-decoration: none; padding: 4px 0; opacity: 0.8; }
+.landing-page .doc .toc a::before { content: '→ '; color: var(--accent); }
+.landing-page .doc .placeholder-note {
+  padding: 14px 18px;
+  background: color-mix(in srgb, #f59e0b 8%, var(--bg));
+  border: 1px solid color-mix(in srgb, #f59e0b 30%, var(--border));
+  border-radius: var(--radius); font-size: 13.5px; color: var(--fg); margin: 24px 0;
+}
+.landing-page .doc .placeholder-note strong { color: #92400e; }
+
+.landing-page .pillar-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 40px 0; }
+.landing-page .pillar { padding: 22px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+.landing-page .pillar h3 { margin: 0 0 8px; font-size: 15px; font-weight: 700; }
+.landing-page .pillar p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted-fg); }
+.landing-page .pillar .badge {
+  display: inline-block; padding: 3px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 12px;
+}
+
+.landing-page .subprocessor-table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
+.landing-page .subprocessor-table th,
+.landing-page .subprocessor-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.landing-page .subprocessor-table th { font-weight: 600; color: var(--muted-fg); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+.landing-page .subprocessor-table tr:last-child td { border-bottom: none; }
+
+@media (max-width: 640px) {
+  .landing-page .pillar-grid { grid-template-columns: 1fr; }
+  .landing-page .doc .toc { grid-template-columns: 1fr; }
+}
