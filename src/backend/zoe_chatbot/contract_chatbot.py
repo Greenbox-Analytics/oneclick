@@ -3765,13 +3765,7 @@ RULES:
         break the stream. Only filenames present in `contract_names` are kept
         (prevents the frontend from rendering an unresolvable, empty Sources list).
         """
-        has_markers = "[[PAGE " in (marked_context or "")
-        logger.info(
-            f"[PageJump] extract: answer_len={len(answer or '')} "
-            f"contracts={list((contract_names or {}).values())} has_markers={has_markers}"
-        )
-        if not answer or not contract_names or not has_markers:
-            logger.info("[PageJump] extract: SKIPPED (missing answer / contract_names / [[PAGE]] markers)")
+        if not answer or not contract_names or "[[PAGE " not in marked_context:
             return {}
         try:
             messages = [
@@ -3796,7 +3790,6 @@ RULES:
             # generous cap is almost entirely reasoning headroom; we only pay for tokens used.
             raw = "".join(self._stream_llm_completion(messages, 16000, model_override=DEFAULT_LLM_MODEL))
             citations = parse_page_citations(raw)
-            logger.info(f"[PageJump] extract: raw={raw!r} parsed_citations={citations}")
         except Exception as e:  # noqa: BLE001 — extraction is best-effort
             logger.warning(f"[Stream][FullDoc] Page citation extraction failed: {e}")
             return {}
@@ -3813,7 +3806,6 @@ RULES:
             if not label:
                 continue
             page_by_file.setdefault(label, c["page"])  # first cited page wins (single primary page)
-        logger.info(f"[PageJump] extract: page_by_file={page_by_file}")
         return page_by_file
 
     def _generate_answer_stream_full_doc(
@@ -3993,17 +3985,12 @@ Your answers should be:
             # finalized with page-less fallback chips; this upgrades them in place.
             # Isolated try/except: a failure here must NEVER fall through to the outer
             # `except` and yield an `error` event that clobbers the finalized answer.
-            logger.info(
-                f"[PageJump] post-done gate: empty_answer={empty_answer} is_fallback={is_fallback} "
-                f"ctx_has_markers={'[[PAGE ' in (full_doc_context or '')}"
-            )
             if not empty_answer and not is_fallback:
                 try:
                     page_by_file = self._extract_page_citations(answer, full_doc_context, contract_names)
                     if page_by_file:
                         names = list((contract_names or {}).values())
                         page_sources = [{"contract_file": n, "page_number": page_by_file.get(n)} for n in names]
-                        logger.info(f"[PageJump] EMITTING page-aware sources: {page_sources}")
                         yield self._sse_event(
                             "sources",
                             {

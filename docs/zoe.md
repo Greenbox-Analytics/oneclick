@@ -1,6 +1,6 @@
 # Zoe — AI Contract Analyst
 
-Zoe (`/tools/zoe`) is the AI-powered chatbot for analyzing music contracts. Upload a PDF, ask a question, and Zoe extracts royalty splits, payment terms, rights, and more — with source citations back to the original document.
+Zoe (`/tools/zoe`) is the AI-powered chatbot for analyzing music contracts. Upload a PDF, ask a question, and Zoe extracts royalty splits, payment terms, rights, and more — with source chips that open the **relevant page** of the original PDF.
 
 ---
 
@@ -20,6 +20,7 @@ Defined directly in `src/backend/main.py`.
 2. **Ask a question** — The frontend sends query + conversation context + cached contract markdowns to `/zoe/ask-stream`.
 3. **Smart retrieval** — If all selected contracts fit under ~100k tokens, the backend sends the full documents as context (best accuracy). If not, it falls back to semantic vector search via Pinecone, pulling only the most relevant chunks.
 4. **Streaming response** — The LLM streams its answer back via SSE. The frontend renders tokens in real-time with confidence scores, source citations, and extracted structured data.
+5. **Page-jump** — For contract answers, after the answer finishes, the backend makes one cheap follow-up call that maps the answer back to the contract **page** it drew from, then emits a second `sources` event so the source chip opens the PDF at that page. Best-effort/model-attributed (a sensible page, not an exact clause). Full mechanics in `src/backend/zoe_chatbot/CHATBOT.md` → "Contract Page-Jump".
 
 ## Frontend
 
@@ -33,9 +34,9 @@ Defined directly in `src/backend/main.py`.
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `ZoeChatMessages` | `src/components/zoe/ZoeChatMessages.tsx` | Streaming chat display + source citations |
+| `ZoeChatMessages` | `src/components/zoe/ZoeChatMessages.tsx` | Streaming chat display + source chips (open `ContractSlideOver` at the cited page) |
 | `ZoeInputBar` | `src/components/zoe/ZoeInputBar.tsx` | Message input + quick actions |
-| `ZoeDocumentPanel` | `src/components/zoe/ZoeDocumentPanel.tsx` | Contract/document selection sidebar |
+| `ContractSlideOver` | `src/components/zoe/ContractSlideOver.tsx` | Right-side PDF viewer; opens the contract at `#page=N` via a short-lived signed URL |
 
 ### Pages
 

@@ -40,6 +40,8 @@ User Query
         → Reference book retrieved (strict) and injected as labeled BACKGROUND
         → LLM generates a grounded answer; the contract always governs
         → Structured data extracted for context tracking
+        → After generation, the answer is attributed to a contract page so the
+          source chip can open the PDF there (see "Contract Page-Jump")
 ```
 
 ## Entry Points
@@ -69,6 +71,7 @@ User Query
 - The reference book is retrieved **strictly** (`search_reference(query, floor_count=0)`) and, if it clears threshold, appended as a clearly-labeled background block — *the user's contract always governs; the book never overrides it*.
 - LLM generates a grounded answer; structured data extracted post-generation (royalty splits, parties, payment terms, etc.).
 - Contract sources are not chunk-cited (the whole doc is in context). The reference book is injected as background only — the answer reads as general knowledge with **no page citations or source naming**; book passages still ride the `reference_sources` SSE field for observability (not user-shown).
+- The answer **prose** carries no page numbers, but after generation Zoe attributes the answer to a contract **page** so the source chip opens the PDF there — see **"Contract Page-Jump"** below.
 
 ## Artist Intent Detection & Disambiguation
 
@@ -101,6 +104,19 @@ Zoe is backed by a long-form music-business reference book ingested into a share
 - LLM is instructed to answer ONLY from the contract; the reference book is background only and never overrides it.
 - Extracted data (splits, terms, parties) stored in frontend context for follow-ups.
 - **No artist/project is required to ask a general question** — the frontend allows sending with nothing selected, and deselecting an artist back to none.
+
+## Contract Page-Jump (source chip → PDF page)
+
+Clicking the answer's **source chip** opens the original PDF at the page the answer drew from (browser-native `#page=N`). Attribution is best-effort and model-derived — a *sensible* page, not an exact clause (clause-exact highlighting is a future tier). The flow is all backend; the frontend and viewer were already wired.
+
+1. **Page markers at conversion.** `pdf_to_markdown` (`helpers.py`) prefixes each page with a `[[PAGE n]]` marker (1-based, from `pymupdf4llm(..., page_chunks=True)` — `metadata["page"]` is unreliable in the pinned version, so the list index drives `n`). Stored in `project_files.contract_markdown`.
+2. **Stale-cache healing.** `GET /contracts/{id}/markdown` re-converts when the cached markdown lacks markers (`markdown_has_page_markers`), so contracts cached before this feature gain pages on next use. (Open sessions heal on reload, not mid-session — the frontend reuses in-memory markdown.)
+3. **Leak-proof answer.** The answer model is fed a **marker-stripped** copy (`strip_page_markers`) so it can never echo a `[[PAGE n]]` marker into prose. The marked copy is reserved for extraction only.
+4. **Gated post-generation extraction.** *After* the `done` event (so the message finalizes instantly with page-less fallback chips), and only when the answer is non-empty and not a fallback, `_extract_page_citations` makes one cheap `DEFAULT_LLM_MODEL` call: it sends the **marked** contract + the answer and asks for JSON `[{contract, page}]`, parsed tolerantly by the module-level `parse_page_citations`. ⚠️ `DEFAULT_LLM_MODEL` is a **reasoning** model — `max_completion_tokens` caps *reasoning + output*, so the budget must be generous (a small cap is consumed entirely by reasoning → empty output).
+5. **Page-aware `sources` event.** A second `sources` SSE event is emitted with one entry per **selected** contract (`{contract_file, page_number}`), pages overlaid only on cited contracts (uncited → `page_number: null` → opens page 1). Built from `contract_names` so only known filenames are emitted (every chip stays resolvable on the frontend). The frontend overwrites the page-less fallback chips → upgrade in place. `reference_sources` is `[]` here (book cites already rode the first `sources` event; re-sending would double-count analytics `source_count`).
+6. **Viewer.** Chip → `ContractSlideOver` (`src/components/zoe/`) → `<iframe src={signedUrl}#page=N&view=FitH>` via a short-lived Supabase signed URL.
+
+**OneClick isolation:** markers are stripped (`strip_page_markers`) where OneClick builds its `contract_markdowns` (`main.py`), so the royalty parser and `nuance_adjuster`'s verbatim substring check never see them; royalty math is unaffected.
 
 ## Context Tracking
 
@@ -157,6 +173,7 @@ The backend tracks the last-used `contract_ids` per session (`InMemoryChatMessag
 | `token` | Each generated token | `content` (text fragment) |
 | `data` | After full answer generated | `extracted_data`, `confidence`, `answered_from` |
 | `done` | Stream complete | `answered_from` |
+| `sources` (again) | **After `done`**, contract mode only, when a page is attributed | Page-aware `sources[]` (`{contract_file, page_number}`, one per selected contract; `null` page = uncited). `reference_sources: []`. Upgrades the chips to page-jump — see "Contract Page-Jump". |
 | `complete` | Instant responses (Tier 1/2, disambiguation) | Full response object (no token streaming) |
 | `error` | Something went wrong | `message` |
 
