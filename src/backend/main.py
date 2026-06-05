@@ -1299,17 +1299,16 @@ async def get_contract_markdown(contract_id: str, user_id: str = Depends(get_cur
         record = res.data[0]
         markdown = record.get("contract_markdown")
 
-        if not markdown:
-            # Lazy migration: convert PDF to markdown and cache it
-            from zoe_chatbot.helpers import pdf_to_markdown
+        # Re-convert when empty OR cached before page markers existed (Tier 1 page-jump).
+        from zoe_chatbot.helpers import markdown_has_page_markers, pdf_to_markdown
 
+        if not markdown or not markdown_has_page_markers(markdown):
             file_data = get_supabase_client().storage.from_("project-files").download(record["file_path"])
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(file_data)
                 tmp_path = tmp.name
             try:
                 markdown = pdf_to_markdown(tmp_path)
-                # Cache for future requests
                 get_supabase_client().table("project_files").update({"contract_markdown": markdown}).eq(
                     "id", contract_id
                 ).execute()
@@ -1321,6 +1320,39 @@ async def get_contract_markdown(contract_id: str, user_id: str = Depends(get_cur
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get contract markdown: {str(e)}")
+
+
+@app.get("/contracts/{contract_id}/pdf-url")
+async def get_contract_pdf_url(contract_id: str, user_id: str = Depends(get_current_user_id)):
+    """Return a short-lived signed URL to the contract's original PDF for inline (iframe) viewing."""
+    try:
+        if not verify_user_owns_contract(user_id, contract_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        res = (
+            get_supabase_client()
+            .table("project_files")
+            .select("id, file_name, file_path")
+            .eq("id", contract_id)
+            .execute()
+        )
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Contract not found")
+
+        file_path = res.data[0].get("file_path")
+        if not file_path:
+            raise HTTPException(status_code=404, detail="Contract has no stored file")
+
+        signed = get_supabase_client().storage.from_("project-files").create_signed_url(file_path, 3600)
+        url = signed.get("signedURL") or signed.get("signedUrl") or ""
+        if not url:
+            raise HTTPException(status_code=500, detail="Could not create file URL")
+
+        return {"contract_id": contract_id, "file_name": res.data[0].get("file_name", ""), "url": url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get contract PDF URL: {str(e)}")
 
 
 @app.delete("/contracts/{contract_id}", response_model=ContractDeleteResponse)
@@ -1440,6 +1472,7 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
             "tool": "zoe",
             "query_length": len(_query_text),
             "has_attachment": _has_attachment,
+            "mode": "contract" if request.contract_ids else "general",
         },
     )
 
@@ -1450,7 +1483,9 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
         # for a usage-display counter; if the counter ever becomes billing-relevant,
         # move this call to the end of the streaming handler (after final yield).
         _get_entitlements_service().increment_usage(user_id, "zoe_queries_this_period")
-        analytics_capture(user_id, "tool_used", {"tool": "zoe"})
+        analytics_capture(
+            user_id, "tool_used", {"tool": "zoe", "mode": "contract" if request.contract_ids else "general"}
+        )
         chatbot = get_zoe_chatbot()
         session_id = request.session_id or str(uuid.uuid4())
 
@@ -1513,7 +1548,9 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                         else:
                             payload = None
                         if isinstance(payload, dict) and payload.get("type") == "sources":
-                            source_count += len(payload.get("sources") or [])
+                            source_count += len(payload.get("sources") or []) + len(
+                                payload.get("reference_sources") or []
+                            )
                     except (ValueError, TypeError):
                         # Best-effort parsing; never block the stream on counter errors.
                         pass
@@ -1526,6 +1563,7 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                         "tool": "zoe",
                         "duration_ms": int((_time.perf_counter() - _zoe_started_at) * 1000),
                         "source_count": source_count,
+                        "mode": "contract" if request.contract_ids else "general",
                     },
                 )
             except Exception as e:
@@ -1533,7 +1571,11 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                 analytics_capture(
                     user_id,
                     "zoe_query_failed",
-                    {"tool": "zoe", "error_code": type(e).__name__},
+                    {
+                        "tool": "zoe",
+                        "error_code": type(e).__name__,
+                        "mode": "contract" if request.contract_ids else "general",
+                    },
                 )
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
@@ -1544,7 +1586,7 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
         analytics_capture(
             user_id,
             "zoe_query_failed",
-            {"tool": "zoe", "error_code": type(e).__name__},
+            {"tool": "zoe", "error_code": type(e).__name__, "mode": "contract" if request.contract_ids else "general"},
         )
         raise HTTPException(status_code=500, detail=f"Zoe encountered an error: {str(e)}")
 
@@ -1902,7 +1944,9 @@ async def oneclick_calculate_royalties_stream(
                             finally:
                                 os.unlink(tmp_pdf_path)
                         if md:
-                            contract_markdowns[cid] = md
+                            from zoe_chatbot.helpers import strip_page_markers
+
+                            contract_markdowns[cid] = strip_page_markers(md)
                 except Exception as e:
                     print(f"Warning: Could not fetch markdown for contract {cid}: {e}")
 

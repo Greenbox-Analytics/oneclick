@@ -44,7 +44,7 @@ export function useZoeData() {
   const {
     messages, setMessages, isStreaming, error, setError,
     sendMessage, stopGeneration, retryLastMessage,
-    addSystemMessage, clearMessages, isAtLimit,
+    clearMessages, isAtLimit,
   } = useStreamingChat();
   const [inputMessage, setInputMessage] = useState("");
   const [sessionId, setSessionId] = useState<string>(
@@ -427,7 +427,7 @@ export function useZoeData() {
     }
     return {
       userId: user!.id,
-      artistId: selectedArtist,
+      artistId: selectedArtist || undefined,
       projectId: selectedProject || undefined,
       contractIds: selectedContracts.length > 0 ? selectedContracts : undefined,
       sessionId,
@@ -494,18 +494,6 @@ export function useZoeData() {
       setError("Please enter a message");
       return;
     }
-    if (!selectedArtist) {
-      setError("Please select an artist first");
-      return;
-    }
-    if (!selectedProject) {
-      toast({ title: "Please select a project first", variant: "destructive" });
-      return;
-    }
-    if (selectedContracts.length === 0) {
-      addSystemMessage("Please select the documents you'd like to discuss before asking a question.");
-      return;
-    }
     if (isAtLimit) {
       setShowReloadDialog(true);
       return;
@@ -514,41 +502,31 @@ export function useZoeData() {
     setInputMessage("");
     const result = await sendMessage(query, getChatParams());
     handleSendResult(result);
-  }, [inputMessage, user, selectedArtist, selectedProject, selectedContracts, isAtLimit, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
+  }, [inputMessage, user, isAtLimit, sendMessage, getChatParams, handleSendResult]);
 
   const handleQuickAction = useCallback(async (question: string) => {
-    if (!selectedArtist || !user) return;
-    if (!selectedProject) { toast({ title: "Please select a project first", variant: "destructive" }); return; }
-    if (selectedContracts.length === 0) {
-      addSystemMessage("Please select the documents you'd like to discuss before asking a question.");
-      return;
-    }
+    if (!user) return;
     if (isAtLimit) { setShowReloadDialog(true); return; }
     const result = await sendMessage(question, getChatParams());
     handleSendResult(result);
-  }, [selectedArtist, selectedProject, selectedContracts, user, isAtLimit, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
+  }, [user, isAtLimit, sendMessage, getChatParams, handleSendResult]);
 
   const handleAssistantQuickAction = useCallback(async (action: AssistantQuickAction) => {
     const queryToSend = action.query || inputMessage;
-    if (!queryToSend.trim() || !selectedArtist || !user) return;
-    if (!selectedProject) { toast({ title: "Please select a project first", variant: "destructive" }); return; }
-    if (selectedContracts.length === 0) {
-      addSystemMessage("Please select the documents you'd like to discuss before asking a question.");
-      return;
-    }
+    if (!queryToSend.trim() || !user) return;
     const result = await sendMessage(queryToSend, getChatParams(), {
       sourcePreference: action.source_preference,
       userDisplayMessage: action.label,
       silent: !!action.source_preference,
     });
     handleSendResult(result);
-  }, [inputMessage, selectedArtist, selectedProject, selectedContracts, user, sendMessage, getChatParams, handleSendResult, addSystemMessage]);
+  }, [inputMessage, user, sendMessage, getChatParams, handleSendResult]);
 
   const handleRetry = useCallback(async () => {
-    if (!selectedArtist || !user) return;
+    if (!user) return;
     const result = await retryLastMessage(getChatParams());
     if (result) handleSendResult(result);
-  }, [selectedArtist, user, retryLastMessage, getChatParams, handleSendResult]);
+  }, [user, retryLastMessage, getChatParams, handleSendResult]);
 
   const handleCopyMessage = useCallback((content: string, messageId: string) => {
     navigator.clipboard.writeText(content);
@@ -600,6 +578,7 @@ export function useZoeData() {
     artists,
     projects,
     contracts,
+    contractMarkdowns,
     selectedArtist,
     setSelectedArtist,
     selectedProject,

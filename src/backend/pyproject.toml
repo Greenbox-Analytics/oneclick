@@ -36,6 +36,8 @@ resend = "2.7.0"
 email-validator = "2.3.0"
 stripe = "^11.0"
 cachetools = "^5.5"
+pinecone = "^9.0.1"
+langchain-text-splitters = "^1.1.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"

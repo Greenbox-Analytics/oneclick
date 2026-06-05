@@ -19,45 +19,100 @@ def test_list_user_storage_paths_empty_user():
 
 
 def test_list_user_storage_paths_collects_project_and_audio_files():
+    """project_files attach via project_id; audio_files attach via folder_id
+    (audio_folders.artist_id). Schema mismatch was the source of the
+    `column audio_files.project_id does not exist` 502 in prod.
+    """
     sb = MagicMock()
+    tables = {
+        "artists": MagicMock(),
+        "projects": MagicMock(),
+        "project_files": MagicMock(),
+        "audio_folders": MagicMock(),
+        "audio_files": MagicMock(),
+    }
+    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["projects"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "p1"}]
+    tables["project_files"].select.return_value.in_.return_value.execute.return_value.data = [
+        {"file_path": "a1/p1/contracts/foo.pdf"},
+        {"file_path": "a1/p1/notes/bar.md"},
+    ]
+    tables["audio_folders"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "f1"}]
+    tables["audio_files"].select.return_value.in_.return_value.execute.return_value.data = [
+        {"file_path": "a1/f1/song.wav"},
+    ]
+    sb.table.side_effect = lambda name: tables[name]
 
-    def table_side_effect(name):
-        m = MagicMock()
-        if name == "artists":
-            m.select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
-        elif name == "projects":
-            m.select.return_value.in_.return_value.execute.return_value.data = [{"id": "p1"}]
-        elif name == "project_files":
-            m.select.return_value.in_.return_value.execute.return_value.data = [
-                {"file_path": "a1/p1/contracts/foo.pdf"},
-                {"file_path": "a1/p1/notes/bar.md"},
-            ]
-        elif name == "audio_files":
-            m.select.return_value.in_.return_value.execute.return_value.data = [
-                {"file_path": "a1/p1/audio/song.wav"},
-            ]
-        return m
-
-    sb.table.side_effect = table_side_effect
     paths = list_user_storage_paths(sb, "user-1")
+
     assert ("project-files", "a1/p1/contracts/foo.pdf") in paths
     assert ("project-files", "a1/p1/notes/bar.md") in paths
-    assert ("audio-files", "a1/p1/audio/song.wav") in paths
+    assert ("audio-files", "a1/f1/song.wav") in paths
     assert len(paths) == 3
 
+    # Schema assertions: audio path must go via audio_folders.artist_id → audio_files.folder_id.
+    tables["audio_folders"].select.return_value.in_.assert_called_with("artist_id", ["a1"])
+    tables["audio_files"].select.return_value.in_.assert_called_with("folder_id", ["f1"])
 
-def test_list_user_storage_paths_user_with_no_projects():
+
+def test_list_user_storage_paths_user_with_no_projects_still_walks_audio():
+    """Audio is artist-scoped, not project-scoped — absence of projects must
+    not short-circuit the audio walk.
+    """
     sb = MagicMock()
+    tables = {
+        "artists": MagicMock(),
+        "projects": MagicMock(),
+        "audio_folders": MagicMock(),
+        "audio_files": MagicMock(),
+    }
+    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["projects"].select.return_value.in_.return_value.execute.return_value.data = []
+    tables["audio_folders"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "f1"}]
+    tables["audio_files"].select.return_value.in_.return_value.execute.return_value.data = [
+        {"file_path": "a1/f1/song.wav"},
+    ]
+    sb.table.side_effect = lambda name: tables[name]
 
-    def table_side_effect(name):
-        m = MagicMock()
-        if name == "artists":
-            m.select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
-        elif name == "projects":
-            m.select.return_value.in_.return_value.execute.return_value.data = []
-        return m
+    paths = list_user_storage_paths(sb, "user-1")
+    assert paths == [("audio-files", "a1/f1/song.wav")]
 
-    sb.table.side_effect = table_side_effect
+
+def test_list_user_storage_paths_user_with_no_audio_folders():
+    """Project files exist but artist has no audio folders → audio_files is not queried."""
+    sb = MagicMock()
+    tables = {
+        "artists": MagicMock(),
+        "projects": MagicMock(),
+        "project_files": MagicMock(),
+        "audio_folders": MagicMock(),
+        "audio_files": MagicMock(),
+    }
+    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["projects"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "p1"}]
+    tables["project_files"].select.return_value.in_.return_value.execute.return_value.data = [
+        {"file_path": "a1/p1/foo.pdf"},
+    ]
+    tables["audio_folders"].select.return_value.in_.return_value.execute.return_value.data = []
+    sb.table.side_effect = lambda name: tables[name]
+
+    paths = list_user_storage_paths(sb, "user-1")
+    assert paths == [("project-files", "a1/p1/foo.pdf")]
+    tables["audio_files"].select.assert_not_called()
+
+
+def test_list_user_storage_paths_user_with_no_projects_or_audio():
+    sb = MagicMock()
+    tables = {
+        "artists": MagicMock(),
+        "projects": MagicMock(),
+        "audio_folders": MagicMock(),
+    }
+    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["projects"].select.return_value.in_.return_value.execute.return_value.data = []
+    tables["audio_folders"].select.return_value.in_.return_value.execute.return_value.data = []
+    sb.table.side_effect = lambda name: tables[name]
+
     paths = list_user_storage_paths(sb, "user-1")
     assert paths == []
 

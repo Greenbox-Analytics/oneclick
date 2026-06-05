@@ -25,6 +25,9 @@ import openpyxl
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from knowledge.reference_search import search_reference
+from oneclick.nuance_adjuster import audit_contract_basis, log_basis_finding
+
 from .contract_parser import STREAMING_EQUIVALENT_TERMS, ContractData, MusicContractParser
 from .helpers import find_matching_song, normalize_name, normalize_title, simplify_role
 
@@ -598,6 +601,21 @@ class RoyaltyCalculator:
         payments = self._calculate_payments_from_data(contract_data, song_totals)
         logger.info(f"⏱️  Step 3 took: {time.time() - t0:.2f}s")
 
+        # Step 4 (log-only): detect an explicit basis/deduction clause and record it for review.
+        # Does NOT change any payout. Never breaks the calc.
+        if full_text:
+            try:
+                types_present = [s.royalty_type for s in contract_data.royalty_shares]
+                finding = audit_contract_basis(
+                    full_text,
+                    types_present,
+                    openai_client=self.contract_parser.openai_client,
+                    search_fn=search_reference,
+                )
+                payments = log_basis_finding(payments, finding, contract_id=contract_id or "unknown", user_id=user_id)
+            except Exception as e:  # noqa: BLE001 — nuance logging must never break the payout calc
+                logger.warning(f"[NuanceAudit] skipped (detection/logging error): {e}")
+
         logger.info(f"\n✅ Total calculation process took: {time.time() - total_start:.2f}s")
 
         return payments
@@ -668,6 +686,7 @@ class RoyaltyCalculator:
 
         # Step 4: Calculate payments
         payments = self._calculate_payments_from_data(merged_data, song_totals)
+        logger.info("[NuanceAudit] multi-contract: basis-nuance detection deferred (v1 single-contract only)")
 
         return payments
 

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ArrowLeft, Upload, Trash2, ChevronDown, Plus, Loader2, FileText, FolderOpen, Users, GripVertical } from "lucide-react";
+import { ArrowLeft, Upload, Trash2, ChevronDown, Plus, Loader2, FileText, FolderOpen, Users, GripVertical, X } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -166,18 +166,31 @@ export function ZoeDocumentPanel({
                 <Users className="w-3.5 h-3.5" />
                 Artist
               </div>
-              <Select value={selectedArtist} onValueChange={onArtistChange}>
-                <SelectTrigger className="w-full bg-background">
-                  <SelectValue placeholder="Select artist..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {artists.map((artist) => (
-                    <SelectItem key={artist.id} value={artist.id}>
-                      {artist.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <Select value={selectedArtist} onValueChange={onArtistChange}>
+                  <SelectTrigger className="flex-1 bg-background">
+                    <SelectValue placeholder="Select artist..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {artists.map((artist) => (
+                      <SelectItem key={artist.id} value={artist.id}>
+                        {artist.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedArtist && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 flex-shrink-0 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear artist"
+                    onClick={() => onArtistChange("")}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
             </div>
 
             {/* Project Selection */}

@@ -1,0 +1,792 @@
+/*
+ * Zoe Chat — scoped design-system styles
+ * All selectors are prefixed with .zoe-chat so they don't leak into the app.
+ * CSS-variable tokens are set on .zoe-chat so they override the app theme locally.
+ */
+
+.zoe-chat {
+  /* Theme-following tokens (these reference DIFFERENTLY-named app tokens, so they're safe). */
+  --bg: hsl(var(--background));
+  --surface: hsl(var(--card));
+  --fg: hsl(var(--foreground));
+  --muted-fg: hsl(var(--muted-foreground));
+  --user-bubble: hsl(var(--secondary));
+  --user-fg: hsl(var(--secondary-foreground));
+  --answer-bg: hsl(var(--muted));
+
+  /* Brand greens + borders — hardcoded (a token can't reference the same-named app
+     token: `--primary: hsl(var(--primary))` is a self-reference and computes to
+     invalid, which silently drops every green accent). Light values here; dark below. */
+  --primary: hsl(150 60% 22%);
+  --primary-soft: hsl(150 45% 32%);
+  --accent: hsl(150 50% 42%);
+  --border: hsl(150 15% 90%);
+  --border-soft: hsl(150 14% 93%);
+  --answer-border: hsl(150 16% 91%);
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --maxw: 740px;
+
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Dark mode: brighter greens that read on a dark surface; green-tinted user bubble. */
+.dark .zoe-chat {
+  --primary: hsl(150 52% 50%);
+  --primary-soft: hsl(150 48% 60%);
+  --accent: hsl(150 55% 52%);
+  --border: hsl(215 14% 22%);
+  --border-soft: hsl(215 14% 18%);
+  --answer-border: hsl(215 14% 22%);
+  --user-bubble: hsl(150 30% 24%);
+  --user-fg: hsl(150 35% 92%);
+}
+.dark .zoe-chat .user-msg {
+  border-color: hsl(150 35% 34%);
+}
+/* Dark mode: the brand badge is a brighter green, so the music icon reads better black. */
+.dark .zoe-chat .brand-badge {
+  color: #000;
+}
+
+.zoe-chat.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  position: relative;
+}
+
+/* ---------- Header ---------- */
+.zoe-chat .topbar {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+  z-index: 10;
+}
+.zoe-chat .topbar-inner {
+  height: 60px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.zoe-chat .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.zoe-chat .topbar-back {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--accent);
+}
+.zoe-chat .topbar-back:hover {
+  background: hsl(var(--muted));
+  color: var(--fg);
+}
+.zoe-chat .topbar-back svg {
+  width: 18px;
+  height: 18px;
+}
+.zoe-chat .brand-link {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  border-radius: 8px;
+}
+.zoe-chat .brand-link:hover .brand-name {
+  color: var(--primary-soft);
+}
+.zoe-chat .brand-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--primary);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  flex-shrink: 0;
+}
+.zoe-chat .brand-badge svg {
+  width: 18px;
+  height: 18px;
+}
+.zoe-chat .brand-name {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.zoe-chat .brand-name span {
+  color: var(--primary-soft);
+  font-weight: 500;
+}
+
+.zoe-chat .topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.zoe-chat .ctx-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 11px;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--muted-fg);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.zoe-chat .ctx-pill:hover {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+}
+.zoe-chat .ctx-pill b,
+.zoe-chat .ctx-pill span {
+  white-space: nowrap;
+}
+.zoe-chat .ctx-pill b {
+  color: var(--primary-soft);
+  font-weight: 600;
+}
+.zoe-chat .ctx-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.zoe-chat .ctx-pill .live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  flex-shrink: 0;
+}
+
+.zoe-chat .btn-ghost {
+  height: 32px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: var(--surface);
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.zoe-chat .btn-ghost:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-color: var(--accent);
+}
+.zoe-chat .btn-ghost svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+/* ---------- Scroll / thread ---------- */
+.zoe-chat .scroll {
+  flex: 1;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+.zoe-chat .thread {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 34px 24px 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+/* user turn */
+.zoe-chat .turn-user {
+  display: flex;
+  justify-content: flex-end;
+}
+.zoe-chat .user-msg {
+  max-width: 80%;
+  background: var(--user-bubble);
+  color: var(--user-fg);
+  border: 1px solid color-mix(in srgb, var(--primary) 8%, var(--border));
+  padding: 13px 17px;
+  border-radius: 18px 18px 5px 18px;
+  font-size: 15.5px;
+  line-height: 1.55;
+  font-weight: 450;
+}
+
+/* assistant turn */
+.zoe-chat .turn-zoe {
+  display: flex;
+  flex-direction: column;
+}
+.zoe-chat .zoe-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 9px 2px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--primary-soft);
+}
+.zoe-chat .zoe-label::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.zoe-chat .answer {
+  background: var(--answer-bg);
+  border: 1px solid var(--answer-border);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+}
+
+/* ---------- Rich answer typography ---------- */
+.zoe-chat .answer > *:first-child { margin-top: 0; }
+.zoe-chat .answer > *:last-child { margin-bottom: 0; }
+.zoe-chat .answer p {
+  font-size: 15px;
+  line-height: 1.62;
+  margin: 0 0 12px;
+  color: hsl(var(--foreground));
+}
+.zoe-chat .answer h1,
+.zoe-chat .answer h2,
+.zoe-chat .answer h3 {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  color: var(--fg);
+  margin: 24px 0 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.zoe-chat .answer h1::before,
+.zoe-chat .answer h2::before,
+.zoe-chat .answer h3::before {
+  content: "";
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.zoe-chat .answer strong {
+  font-weight: 650;
+  color: var(--fg);
+}
+
+.zoe-chat .answer ul {
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zoe-chat .answer ul li {
+  position: relative;
+  padding-left: 20px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: hsl(var(--foreground));
+}
+.zoe-chat .answer ul li::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.zoe-chat .answer ul li b,
+.zoe-chat .answer ul li strong {
+  color: var(--fg);
+}
+
+.zoe-chat .answer ol {
+  margin: 0 0 14px;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zoe-chat .answer ol li {
+  font-size: 15px;
+  line-height: 1.55;
+  color: hsl(var(--foreground));
+}
+
+.zoe-chat .answer hr {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 20px 0;
+  border: 0;
+}
+
+/* split table — styled via the markdown table elements */
+.zoe-chat .answer table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4px 0 16px;
+  font-size: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  overflow: hidden;
+}
+.zoe-chat .answer table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+  padding: 10px 14px;
+  background: hsl(var(--muted));
+  border-bottom: 1px solid var(--border);
+}
+.zoe-chat .answer table th:last-child,
+.zoe-chat .answer table td:last-child {
+  text-align: right;
+}
+.zoe-chat .answer table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  color: hsl(var(--foreground));
+}
+.zoe-chat .answer table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* blockquote → callout style */
+.zoe-chat .answer blockquote {
+  display: flex;
+  gap: 11px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-left: none;
+  border-radius: 12px;
+  padding: 13px 15px;
+  margin: 4px 0 14px;
+}
+.zoe-chat .answer blockquote::before {
+  content: "";
+  flex-shrink: 0;
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+  background: var(--accent);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='%23000'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Ccircle%20cx='12'%20cy='12'%20r='10'/%3E%3Cpath%20d='M12%2016v-4M12%208h.01'/%3E%3C/svg%3E") no-repeat center / contain;
+  mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='%23000'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Ccircle%20cx='12'%20cy='12'%20r='10'/%3E%3Cpath%20d='M12%2016v-4M12%208h.01'/%3E%3C/svg%3E") no-repeat center / contain;
+}
+.zoe-chat .answer blockquote p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: hsl(var(--foreground));
+}
+
+/* sources block */
+.zoe-chat .sources {
+  margin-top: 16px;
+  padding-top: 15px;
+  border-top: 1px dashed var(--border);
+}
+.zoe-chat .sources-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+  margin-bottom: 9px;
+}
+.zoe-chat .source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.zoe-chat .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 27px;
+  padding: 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+.zoe-chat .chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.zoe-chat .chip svg {
+  width: 12px;
+  height: 12px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* answer actions */
+.zoe-chat .answer-actions {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0 0 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.zoe-chat .turn-zoe:hover .answer-actions {
+  opacity: 1;
+}
+.zoe-chat .act {
+  height: 28px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--muted-fg);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.zoe-chat .act:hover {
+  background: hsl(var(--muted));
+  color: var(--fg);
+}
+.zoe-chat .act svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ---------- Composer ---------- */
+.zoe-chat .composer-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 24px 22px;
+  background: linear-gradient(to top, var(--bg) 55%, transparent);
+  pointer-events: none;
+}
+.zoe-chat .composer {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  pointer-events: auto;
+}
+.zoe-chat .attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.zoe-chat .attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 6px 0 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+.zoe-chat .attach:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.zoe-chat .attach svg {
+  width: 12px;
+  height: 12px;
+  color: var(--muted-fg);
+}
+.zoe-chat .attach .x {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--muted-fg);
+  transition: background 0.1s;
+}
+.zoe-chat .attach .x:hover {
+  background: hsl(var(--muted));
+}
+
+.zoe-chat .input-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 8px;
+  box-shadow: 0 4px 20px -8px rgba(15, 38, 26, 0.12), 0 1px 2px rgba(15, 38, 26, 0.04);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.zoe-chat .input-box:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  box-shadow: 0 4px 24px -8px rgba(15, 38, 26, 0.16);
+}
+.zoe-chat .icon-btn {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--muted-fg);
+  transition: background 0.1s, color 0.1s;
+}
+.zoe-chat .icon-btn:hover {
+  background: hsl(var(--muted));
+  color: var(--fg);
+}
+.zoe-chat .icon-btn svg {
+  width: 19px;
+  height: 19px;
+}
+.zoe-chat .zoe-textarea {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--fg);
+  padding: 9px 2px;
+  max-height: 160px;
+}
+.zoe-chat .zoe-textarea::placeholder {
+  color: var(--muted-fg);
+}
+.zoe-chat .send {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 11px;
+  cursor: pointer;
+  background: var(--primary);
+  color: #fff;
+  transition: background 0.12s;
+}
+.zoe-chat .send:hover {
+  background: color-mix(in srgb, hsl(var(--primary)) 88%, black);
+}
+.zoe-chat .send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.zoe-chat .send.stop {
+  background: hsl(0 70% 45%);
+}
+.zoe-chat .send.stop:hover {
+  background: hsl(0 70% 38%);
+}
+.zoe-chat .send svg {
+  width: 17px;
+  height: 17px;
+}
+.zoe-chat .composer-note {
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--muted-fg);
+  margin: 9px 0 0;
+}
+
+/* system divider */
+.zoe-chat .turn-system {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.zoe-chat .turn-system-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.zoe-chat .turn-system-text {
+  font-size: 11px;
+  color: var(--muted-fg);
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+/* streaming cursor */
+.zoe-chat .cursor {
+  display: inline-block;
+  width: 2px;
+  height: 16px;
+  background: var(--fg);
+  opacity: 0.7;
+  animation: blink 0.9s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 1px;
+}
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* thinking indicator */
+.zoe-chat .thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--muted-fg);
+}
+.zoe-chat .thinking-dots span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: dotpulse 1.2s ease-in-out infinite;
+}
+.zoe-chat .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.zoe-chat .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dotpulse {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* empty state */
+.zoe-chat .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 64px 24px;
+  text-align: center;
+}
+.zoe-chat .empty-badge {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.zoe-chat .empty-badge svg {
+  width: 26px;
+  height: 26px;
+}
+.zoe-chat .empty-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 0;
+}
+.zoe-chat .empty-sub {
+  font-size: 14.5px;
+  color: var(--muted-fg);
+  max-width: 380px;
+  line-height: 1.55;
+  margin: 0;
+}
+.zoe-chat .empty-hint {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--muted-fg) 70%, transparent);
+  max-width: 360px;
+  line-height: 1.5;
+  margin: 0;
+}
+.zoe-chat .quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  max-width: 480px;
+}
+.zoe-chat .qa-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.zoe-chat .qa-btn:hover {
+  background: hsl(var(--muted));
+  border-color: color-mix(in srgb, var(--primary) 25%, var(--border));
+}
+
+/* scrollbar */
+.zoe-chat .scroll::-webkit-scrollbar { width: 10px; }
+.zoe-chat .scroll::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 10px; border: 3px solid var(--bg); }
+.zoe-chat .scroll::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, hsl(var(--border)) 70%, hsl(var(--muted-foreground))); }
+
+@media (max-width: 600px) {
+  .zoe-chat .user-msg { max-width: 88%; }
+  .zoe-chat .ctx-pill,
+  .zoe-chat .label-hide { display: none; }
+  .zoe-chat .thread { padding: 24px 16px 160px; }
+  .zoe-chat .composer-wrap { padding: 0 12px 16px; }
+}

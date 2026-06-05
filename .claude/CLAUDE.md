@@ -209,7 +209,7 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 ### File Management
 - Files stored in Supabase Storage (`project-files`, `audio-files` buckets)
 - Files linked to projects AND optionally to specific works (via `work_files` join table)
-- Audio files are project-scoped, linkable to works (via `work_audio_links`)
+- Audio files are artist-scoped via `audio_folders` (`audio_files.folder_id → audio_folders.artist_id`), and linkable to specific works via `work_audio_links`
 - SHA-256 content hash for deduplication on upload
 
 ### Tool Integration

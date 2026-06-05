@@ -1,13 +1,48 @@
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { AlertCircle, Send, Square, Paperclip, X } from "lucide-react";
+import { useRef, useEffect, useState } from "react";
+import { ZoeContextPopover } from "@/components/zoe/ZoeContextPopover";
+import { ContractSlideOver } from "@/components/zoe/ContractSlideOver";
+import type { Artist, Project, Contract } from "@/components/zoe/types";
 
-interface ContractInfo {
-  id: string;
-  file_name: string;
-}
+// Inline SVGs — exact mockup shapes
+
+const AttachIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+  </svg>
+);
+
+const SendIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M5 12h14M13 6l6 6-6 6" />
+  </svg>
+);
+
+const StopIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+  </svg>
+);
 
 interface ZoeInputBarProps {
   inputMessage: string;
@@ -18,124 +53,213 @@ interface ZoeInputBarProps {
   selectedArtist: string;
   selectedProject: string;
   selectedContracts: string[];
-  contracts: ContractInfo[];
+  contracts: Contract[];
+  contractMarkdowns: Record<string, string>;
   onDeselectContract: (id: string) => void;
   onSend: () => void;
   onStop: () => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
-  onUploadClick: () => void;
+  // Context popover props
+  artists: Artist[];
+  projects: Project[];
+  onArtistChange: (value: string) => void;
+  onProjectChange: (value: string) => void;
+  onSelectedContractsChange: (contracts: string[]) => void;
+  uploadModalOpen: boolean;
+  onUploadModalOpenChange: (open: boolean) => void;
+  onUploadComplete: () => void;
+  isCreateProjectOpen: boolean;
+  onCreateProjectOpenChange: (open: boolean) => void;
+  newProjectNameInput: string;
+  onNewProjectNameInputChange: (value: string) => void;
+  isCreatingProject: boolean;
+  onCreateProject: () => void;
 }
 
 export function ZoeInputBar({
   inputMessage,
   onInputChange,
-  error,
   isStreaming,
   isAtLimit,
-  selectedArtist,
   selectedProject,
   selectedContracts,
   contracts,
+  contractMarkdowns,
   onDeselectContract,
   onSend,
   onStop,
   onKeyDown,
-  onUploadClick,
+  // context popover
+  artists,
+  selectedArtist,
+  projects,
+  onArtistChange,
+  onProjectChange,
+  onSelectedContractsChange,
+  uploadModalOpen,
+  onUploadModalOpenChange,
+  onUploadComplete,
+  isCreateProjectOpen,
+  onCreateProjectOpenChange,
+  newProjectNameInput,
+  onNewProjectNameInputChange,
+  isCreatingProject,
+  onCreateProject,
 }: ZoeInputBarProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Slide-over for clicking attachment chips
+  const [slideOverOpen, setSlideOverOpen] = useState(false);
+  const [slideOverId, setSlideOverId] = useState<string | null>(null);
+  const [slideOverName, setSlideOverName] = useState<string | null>(null);
+
+  const openSlideOver = (id: string, name: string) => {
+    setSlideOverId(id);
+    setSlideOverName(name);
+    setSlideOverOpen(true);
+  };
+
+  // Auto-grow textarea
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+  }, [inputMessage]);
+
   const selectedContractInfos = selectedContracts
-    .map(id => contracts.find(c => c.id === id))
-    .filter((c): c is ContractInfo => c !== undefined);
+    .map((id) => contracts.find((c) => c.id === id))
+    .filter((c): c is Contract => c !== undefined);
+
+  const placeholder = isAtLimit
+    ? "Conversation limit reached. Please refresh the page."
+    : selectedContracts.length > 0
+    ? "Ask about your selected contracts…"
+    : "Ask a music-business question, or select an artist/contract for specific help…";
+
+  const noteText = isAtLimit
+    ? "Conversation limit reached. Please refresh the page to continue."
+    : selectedContracts.length > 0
+    ? `Answering from ${selectedContracts.length} selected contract${selectedContracts.length > 1 ? "s" : ""} · Zoe can be wrong — verify against the cited clauses.`
+    : "Answering from music-business knowledge · select contracts for advice specific to your deals";
 
   return (
-    <div className="border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex-shrink-0">
-      <div className="max-w-3xl mx-auto p-4">
-        {error && (
-          <Alert variant="destructive" className="mb-4">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {selectedContractInfos.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {selectedContractInfos.map(contract => (
-              <Badge
-                key={contract.id}
-                variant="secondary"
-                className="pl-2 pr-1 py-1 gap-1 text-xs font-normal max-w-[200px]"
-              >
-                <Paperclip className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate">{contract.file_name}</span>
-                <button
-                  onClick={() => onDeselectContract(contract.id)}
-                  className="ml-0.5 rounded-full p-0.5 hover:bg-muted-foreground/20 flex-shrink-0"
-                  title={`Remove ${contract.file_name}`}
+    <>
+      <div className="composer-wrap">
+        <div className="composer">
+          {/* Attachment chips */}
+          {selectedContractInfos.length > 0 && (
+            <div className="attachments">
+              {selectedContractInfos.map((c) => (
+                <span
+                  key={c.id}
+                  className="attach"
+                  onClick={() => openSlideOver(c.id, c.file_name)}
+                  title={`View ${c.file_name}`}
                 >
-                  <X className="w-3 h-3" />
-                </button>
-              </Badge>
-            ))}
-          </div>
-        )}
-
-        <div className="flex gap-2 items-center">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onUploadClick}
-            disabled={!selectedProject}
-            className="h-10 w-10 rounded-full flex-shrink-0 text-muted-foreground hover:text-foreground"
-            title="Upload contract"
-          >
-            <Paperclip className="w-5 h-5" />
-          </Button>
-          <Input
-            placeholder={
-              isAtLimit
-                ? "Conversation limit reached. Please refresh the page."
-                : !selectedArtist
-                  ? "Select an artist to start chatting..."
-                  : selectedProject
-                    ? "Ask about your contracts..."
-                    : "Select a project to ask about contracts..."
-            }
-            value={inputMessage}
-            onChange={(e) => onInputChange(e.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={!selectedArtist || isAtLimit}
-            className="flex-1 h-11 rounded-full px-4 bg-muted/50 border-muted"
-          />
-          {isStreaming ? (
-            <Button
-              onClick={onStop}
-              size="icon"
-              variant="destructive"
-              className="h-11 w-11 rounded-full flex-shrink-0"
-              title="Stop generating"
-            >
-              <Square className="w-4 h-4" />
-            </Button>
-          ) : (
-            <Button
-              onClick={onSend}
-              disabled={!selectedArtist || !inputMessage.trim() || isAtLimit}
-              size="icon"
-              className="h-11 w-11 rounded-full flex-shrink-0"
-            >
-              <Send className="w-4 h-4" />
-            </Button>
+                  <AttachIcon />
+                  <span
+                    style={{
+                      maxWidth: 180,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {c.file_name}
+                  </span>
+                  <span
+                    className="x"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeselectContract(c.id);
+                    }}
+                    title={`Remove ${c.file_name}`}
+                  >
+                    ✕
+                  </span>
+                </span>
+              ))}
+            </div>
           )}
-        </div>
 
-        <p className="text-[11px] text-center text-muted-foreground mt-2">
-          {isAtLimit
-            ? "Conversation limit reached. Please refresh the page to continue."
-            : selectedContracts.length > 0
-              ? `Answering based on ${selectedContracts.length} selected contract${selectedContracts.length > 1 ? 's' : ''}`
-              : "Select contracts from the sidebar to get started"}
-        </p>
+          {/* Input box */}
+          <div className="input-box">
+            {/* Attach / context button */}
+            <ZoeContextPopover
+              artists={artists}
+              selectedArtist={selectedArtist}
+              onArtistChange={onArtistChange}
+              projects={projects}
+              selectedProject={selectedProject}
+              onProjectChange={onProjectChange}
+              contracts={contracts}
+              selectedContracts={selectedContracts}
+              onSelectedContractsChange={onSelectedContractsChange}
+              uploadModalOpen={uploadModalOpen}
+              onUploadModalOpenChange={onUploadModalOpenChange}
+              onUploadComplete={onUploadComplete}
+              isCreateProjectOpen={isCreateProjectOpen}
+              onCreateProjectOpenChange={onCreateProjectOpenChange}
+              newProjectNameInput={newProjectNameInput}
+              onNewProjectNameInputChange={onNewProjectNameInputChange}
+              isCreatingProject={isCreatingProject}
+              onCreateProject={onCreateProject}
+            >
+              <button
+                className="icon-btn"
+                title="Select contracts"
+                type="button"
+                disabled={isAtLimit}
+              >
+                <AttachIcon />
+              </button>
+            </ZoeContextPopover>
+
+            <textarea
+              ref={textareaRef}
+              className="zoe-textarea"
+              rows={1}
+              placeholder={placeholder}
+              value={inputMessage}
+              onChange={(e) => onInputChange(e.target.value)}
+              onKeyDown={onKeyDown}
+              disabled={isAtLimit}
+            />
+
+            {isStreaming ? (
+              <button
+                className="send stop"
+                onClick={onStop}
+                title="Stop generating"
+                type="button"
+              >
+                <StopIcon />
+              </button>
+            ) : (
+              <button
+                className="send"
+                onClick={onSend}
+                disabled={!inputMessage.trim() || isAtLimit}
+                title="Send"
+                type="button"
+              >
+                <SendIcon />
+              </button>
+            )}
+          </div>
+
+          <p className="composer-note">{noteText}</p>
+        </div>
       </div>
-    </div>
+
+      {/* Slide-over for attachment chip clicks */}
+      <ContractSlideOver
+        open={slideOverOpen}
+        onOpenChange={setSlideOverOpen}
+        contractId={slideOverId}
+        contractName={slideOverName}
+      />
+    </>
   );
 }
