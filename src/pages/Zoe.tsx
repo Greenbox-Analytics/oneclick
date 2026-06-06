@@ -177,7 +177,7 @@ const Zoe = () => {
                 isCreatingProject={isCreatingProject}
                 onCreateProject={handleCreateProject}
               >
-                <button className="ctx-pill" title="Select context">
+                <button className="ctx-pill" title="Select context" data-walkthrough="zoe-context">
                   {hasContext ? (
                     <>
                       <span className="live" />

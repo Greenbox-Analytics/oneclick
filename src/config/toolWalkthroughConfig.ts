@@ -73,29 +73,21 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       icon: MessageSquare,
       title: "Zoe AI",
       description:
-        "Zoe is your AI-powered contract analyst. Select context, upload contracts, and ask questions. The chatbot answers questions based on the selected documents.",
+        "Zoe is your AI contract analyst. Ask any music-business question — or add your contracts and ask about your specific deal. Zoe cites her sources, so you can open the contract at the exact page.",
     },
     steps: [
       {
-        targetSelector: '[data-walkthrough="zoe-sidebar"]',
-        title: "Select Context",
+        targetSelector: '[data-walkthrough="zoe-context"]',
+        title: "Add Your Contracts",
         description:
-          "Start by selecting an artist, project, and the documents you want Zoe to analyze.",
-        placement: "right",
-      },
-      {
-        targetSelector: '[data-walkthrough="zoe-upload"]',
-        title: "Upload Contracts",
-        description:
-          "Upload PDF contracts here — Zoe will index them for analysis.",
+          "Click here to pick an artist, project, and the contracts you want Zoe to analyze — or upload a new PDF contract. This is also where you'll see what context is currently selected.",
         placement: "bottom",
-        skipIfMissing: true,
       },
       {
         targetSelector: '[data-walkthrough="zoe-chat"]',
         title: "Ask Anything",
         description:
-          "Ask Zoe anything about your contracts. She'll answer with source citations you can verify.",
+          "Type your question here. With no contract added, Zoe answers general music-business questions; add a contract and she answers about your deal — and cites sources you can click to open the contract at the exact page. The attach button (next to the box) is a quick way to add contracts without leaving the chat.",
         placement: "top",
       },
       {
