@@ -1592,11 +1592,12 @@ Given the user query and current state, return ONLY valid JSON with:
 }
 
 Rules:
-1) route="general" ONLY when the question asks about general music-industry concepts, definitions, or how things work in the industry broadly (e.g. "how are publishers paid royalties?", "what is a deficit vs a net-payable royalty?") and does NOT ask about the specific terms, parties, splits, dates, or details of the user's selected contract(s). When in ANY doubt, use "contract".
-2) Otherwise route="contract" — answer from the selected contract documents and conversation history.
-3) If the question can be answered from provided context/history, set answer_mode="context".
-4) If evidence likely needs contract retrieval, set answer_mode="retrieve".
-5) Return JSON only, no markdown or prose."""
+1) The user has selected contract(s), so questions about THEIR deal are the priority — emphasize "contract". Route="contract" whenever the answer depends on what the selected contract(s) actually say: their specific terms, parties, splits, percentages, dates, amounts, or obligations — or when the question refers to "this/my/the contract/deal/agreement", or is a follow-up that builds on a prior contract answer.
+2) Route="general" for clarification and concept questions whose answer does NOT depend on the specific contract: definitions and terminology (e.g. "what is a deficit vs a net-payable royalty?", "what does 'controlled composition' mean?"), how the industry works broadly (e.g. "how are publishers paid?"), what a clause or term type typically does, or whether something is standard/normal. These are answered from the music-business knowledge base, which is always available — do NOT force a general concept or clarification through the contract just because contracts are selected.
+3) Tiebreaker (lean contract): if a question could be read either way, ask "does the correct answer change depending on what THIS contract says?" If yes, use "contract". If it is a standalone concept that is the same regardless of the deal, use "general". When genuinely unsure, choose "contract".
+4) If the question can be answered from provided context/history, set answer_mode="context".
+5) If evidence likely needs contract retrieval, set answer_mode="retrieve".
+6) Return JSON only, no markdown or prose."""
 
         user_prompt = f"""User Query:\n{query}\n\nState:\n{routing_context}"""
 
