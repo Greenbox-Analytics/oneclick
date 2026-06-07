@@ -30,8 +30,9 @@ from typing import Any, Literal
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from knowledge.reference_search import search_reference
 from oneclick.helpers import normalize_name
-from zoe_chatbot.helpers import detect_and_extract_tables, linearize_table
+from zoe_chatbot.helpers import detect_and_extract_tables, linearize_table, strip_page_markers
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -51,7 +52,7 @@ class ConfidenceLevel(Enum):
 class RouteDecision:
     """Routing decision for the current turn."""
 
-    route: Literal["artist", "contract", "disambiguate"] = "contract"
+    route: Literal["artist", "contract", "disambiguate", "general"] = "contract"
     answer_mode: Literal["context", "retrieve"] = "retrieve"
     confidence: float = 0.0
     reason: str = "default_contract_retrieval"
@@ -520,6 +521,77 @@ _MUSIC_CONTEXT_PATH = os.path.join(os.path.dirname(__file__), "music_context.md"
 with open(_MUSIC_CONTEXT_PATH) as _f:
     MUSIC_INDUSTRY_CONTEXT = _f.read()
 del _f
+
+
+def parse_page_citations(raw: str) -> list[dict]:
+    """Extract `[{"contract": str, "page": int}]` from a model's JSON-ish output.
+
+    Tolerant of code fences and surrounding prose. Returns `[]` on any failure so
+    a bad extraction never affects the answer.
+    """
+    if not raw:
+        return []
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        contract = item.get("contract")
+        if not isinstance(contract, str) or not contract.strip():
+            continue
+        try:
+            page_int = int(item.get("page"))
+        except (TypeError, ValueError):
+            continue
+        if page_int < 1:
+            continue
+        out.append({"contract": contract.strip(), "page": page_int})
+    return out
+
+
+def build_labeled_context(processed_markdowns: dict, contract_names: dict | None) -> str:
+    """Concatenate contract markdown with plain `=== CONTRACT: <name> ===` headers, ordered by id.
+    NO per-turn selection marker here — keeping this block byte-stable lets a stable working set
+    reuse the OpenAI prompt-cache prefix even when the user flips which contract is selected."""
+    names = contract_names or {}
+    parts = []
+    for cid in sorted(processed_markdowns):
+        label = names.get(cid, cid)
+        parts.append(f"\n\n=== CONTRACT: {label} ===\n{processed_markdowns[cid]}\n")
+    return "".join(parts).strip()
+
+
+def build_selection_note(processed_ids: set, selected_ids: set, contract_names: dict | None) -> str:
+    """Per-turn (non-cached) note telling the model which of the shown contracts are selected.
+    Emitted whenever 2+ contracts are in context — disambiguates BOTH the co-selected multi-contract
+    case and the carried case. Empty for a single contract (unambiguous)."""
+    if len(processed_ids) < 2:
+        return ""
+    names = contract_names or {}
+    # Only name contracts actually present in the block — guards the fetch race where a selected
+    # contract's markdown hasn't loaded yet. Known narrow shape: if the selected contract is unloaded
+    # AND 2+ carried ones are present, sel_in_ctx is empty -> "CURRENTLY SELECTED: none"; left as-is.
+    sel_in_ctx = sorted(names.get(cid, cid) for cid in selected_ids if cid in processed_ids)
+    selected_labels = ", ".join(sel_in_ctx) or "none"
+    if processed_ids - selected_ids:  # carried (non-selected) contracts present
+        return (
+            f"The user's CURRENTLY SELECTED contract(s): {selected_labels}. Other contracts above are "
+            "carried from earlier in this conversation — use them ONLY if the user explicitly asks to "
+            "compare or refers back to them. If the user asks about a contract not shown above, ask them "
+            "to add it to their selection; do not guess its terms."
+        )
+    return (
+        f"The user has SELECTED these contract(s): {selected_labels}. Answer across all of them as the "
+        "user's question requires."
+    )
 
 
 class ContractChatbot:
@@ -1512,7 +1584,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
         system_prompt = """You are a routing planner for a music contract assistant.
 Given the user query and current state, return ONLY valid JSON with:
 {
-  "route": "contract",
+  "route": "contract" | "general",
   "answer_mode": "context" | "retrieve",
   "confidence": number between 0 and 1,
   "reason": "short_snake_case_reason",
@@ -1520,11 +1592,12 @@ Given the user query and current state, return ONLY valid JSON with:
 }
 
 Rules:
-1) route is always "contract" — all queries are answered from contract documents and conversation history.
-2) If the question can be answered from provided context/history, set answer_mode="context".
-3) If evidence likely needs contract retrieval, set answer_mode="retrieve".
-4) If selected contract exists and question is contract-specific, lean retrieve unless context clearly contains exact requested facts.
-5) Return JSON only, no markdown or prose."""
+1) The user has selected contract(s), so questions about THEIR deal are the priority — emphasize "contract". Route="contract" whenever the answer depends on what the selected contract(s) actually say: their specific terms, parties, splits, percentages, dates, amounts, or obligations — or when the question refers to "this/my/the contract/deal/agreement", or is a follow-up that builds on a prior contract answer.
+2) Route="general" for clarification and concept questions whose answer does NOT depend on the specific contract: definitions and terminology (e.g. "what is a deficit vs a net-payable royalty?", "what does 'controlled composition' mean?"), how the industry works broadly (e.g. "how are publishers paid?"), what a clause or term type typically does, or whether something is standard/normal. These are answered from the music-business knowledge base, which is always available — do NOT force a general concept or clarification through the contract just because contracts are selected.
+3) Tiebreaker (lean contract): if a question could be read either way, ask "does the correct answer change depending on what THIS contract says?" If yes, use "contract". If it is a standalone concept that is the same regardless of the deal, use "general". When genuinely unsure, choose "contract".
+4) If the question can be answered from provided context/history, set answer_mode="context".
+5) If evidence likely needs contract retrieval, set answer_mode="retrieve".
+6) Return JSON only, no markdown or prose."""
 
         user_prompt = f"""User Query:\n{query}\n\nState:\n{routing_context}"""
 
@@ -1532,7 +1605,7 @@ Rules:
             response = openai_client.chat.completions.create(
                 model=self.llm_model,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                max_completion_tokens=250,
+                max_completion_tokens=2000,  # reasoning models consume the budget before output; keep it generous
             )
 
             content = (response.choices[0].message.content or "").strip()
@@ -1546,8 +1619,9 @@ Rules:
             reason = parsed.get("reason", "llm_default")
             retrieval_reason = parsed.get("retrieval_reason", "general_retrieval")
 
-            # Always force contract route
-            route = "contract"
+            # Only "general" (book) or "contract" (selected docs) are valid here; default to contract.
+            if route not in {"contract", "general"}:
+                route = "contract"
             if answer_mode not in {"context", "retrieve"}:
                 answer_mode = "retrieve"
             confidence = max(0.0, min(1.0, confidence))
@@ -3502,9 +3576,15 @@ RULES:
                 return
             source_preference = None
 
-        # ── Routing decision (for search query refinement only) ──
+        # ── General music-business mode: no contracts selected → answer from the book ──
+        if not contract_ids:
+            logger.info("[Stream] No contracts selected — answering from reference book")
+            yield from self._general_knowledge_stream(query, session_id)
+            return
+
+        # ── Routing decision (general-vs-contract; also used for search query refinement) ──
         contract_id = contract_ids[0] if contract_ids and len(contract_ids) == 1 else None
-        _route_decision = self._llm_route_decision(
+        route_decision = self._llm_route_decision(
             query=query,
             artist_data=artist_data,
             context=context,
@@ -3513,8 +3593,18 @@ RULES:
             contract_id=contract_id,
         )
 
-        # ── Need a project for contract search ──
-        if not project_id:
+        # ── General music-business question (even with contracts selected) → answer from the book ──
+        # The contracts are background; a question about how the industry works broadly shouldn't be
+        # forced through contract-assist (which produces a "the contracts don't cover this" preamble).
+        if route_decision.route == "general":
+            logger.info("[Stream] Query classified as general music-business — answering from the reference book")
+            yield from self._general_knowledge_stream(query, session_id)
+            return
+
+        # ── Need a project ONLY when no contract markdown was provided ──
+        # (Selected contracts can span artists/projects, so project_id may be None even though the
+        # full contract text is supplied in contract_markdowns — go straight to the full-doc path then.)
+        if not project_id and not contract_markdowns:
             self._add_to_memory(session_id, "user", query)
             response = "To answer questions about contracts, I need you to select a project first. Please choose a project from the sidebar."
             self._add_to_memory(session_id, "assistant", response)
@@ -3578,12 +3668,12 @@ RULES:
             f"[Stream] Using full document context ({total_chars} chars, {len(contract_markdowns)} contract(s))"
         )
 
-        # Use larger model for multi-contract comparisons (2+ contracts)
-        multi_contract_model = DEFAULT_LLM_MODEL_LARGE if (contract_ids and len(contract_ids) >= 2) else None
+        # Larger model whenever 2+ full contracts are in context (selected OR carried) — cross-contract
+        # comparisons are usually over splits/royalty terms ("never approximate"), so spend the tokens.
+        effective_count = len(contract_markdowns)
+        multi_contract_model = DEFAULT_LLM_MODEL_LARGE if effective_count >= 2 else None
         if multi_contract_model:
-            logger.info(
-                f"[Stream] Multi-contract detected ({len(contract_ids)} contracts) — using {multi_contract_model}"
-            )
+            logger.info(f"[Stream] Multi-contract context ({effective_count} contracts) — using {multi_contract_model}")
 
         # Linearize tables for clearer LLM comprehension
         processed_markdowns = {}
@@ -3599,19 +3689,188 @@ RULES:
                 processed_markdowns[cid] = md
 
         # Build full document context with filenames as labels
-        full_doc_context = ""
-        for cid, md in processed_markdowns.items():
-            label = contract_names.get(cid, cid) if contract_names else cid
-            full_doc_context += f"\n\n=== CONTRACT: {label} ===\n{md}\n"
-        full_doc_context = full_doc_context.strip()
+        selected_set = set(contract_ids or [])
+        full_doc_context = build_labeled_context(processed_markdowns, contract_names)
+        selection_note = build_selection_note(set(processed_markdowns), selected_set, contract_names)
 
-        # Stream answer using full document
+        # Strict reference retrieval (floor_count=0): book is background only.
+        # A retrieval failure must NOT break the contract answer — fall back to no book context.
+        try:
+            reference_passages = search_reference(query, floor_count=0)
+        except Exception as e:
+            logger.warning(f"[Stream] Reference retrieval failed (skipping book context): {e}")
+            reference_passages = []
+        reference_context = "\n\n".join(p.text for p in reference_passages)
+
+        # Stream answer using full document (+ optional labeled reference)
         yield from self._generate_answer_stream_full_doc(
-            query, full_doc_context, session_id, model_override=multi_contract_model
+            query,
+            full_doc_context,
+            session_id,
+            model_override=multi_contract_model,
+            reference_context=reference_context,
+            reference_passages=reference_passages,
+            contract_names=contract_names,
+            selection_note=selection_note,
+            selected_ids=selected_set,
         )
 
+    def _general_knowledge_stream(self, query: str, session_id: str | None = None):
+        """Answer a general music-business question from the reference book.
+
+        The book is the answer source here (general-mode floor of 5). Conversation
+        context is read BEFORE adding the current turn to avoid double-appending it.
+        """
+        try:
+            try:
+                passages = search_reference(query, floor_count=5)
+            except Exception as e:
+                logger.warning(
+                    f"[Stream][GeneralMode] Reference retrieval failed (answering from general knowledge): {e}"
+                )
+                passages = []
+
+            reference_sources = [
+                {
+                    "book_title": p.book_title,
+                    "section": p.section_path,
+                    "pages": f"{p.page_start}-{p.page_end}",
+                    "score": p.score,
+                }
+                for p in passages
+            ]
+            # `sources` stays empty (contract-shaped consumer); book cites ride reference_sources.
+            yield self._sse_event(
+                "sources",
+                {
+                    "sources": [],
+                    "reference_sources": reference_sources,
+                    "highest_score": max((p.score for p in passages), default=0.0),
+                    "search_results_count": len(reference_sources),
+                },
+            )
+
+            if passages:
+                reference_context = "\n\n".join(p.text for p in passages)
+                # Topical guard is prompt-only by design for v1 (no post-filter on the stream).
+                system_prompt = (
+                    "You are a knowledgeable music-business assistant for the Msanii platform. Only answer "
+                    "questions about the music industry (deals, royalties, rights, publishing, management, etc.). "
+                    "If the question is not related to the music business, politely decline and redirect the user "
+                    "to ask something music-related. Use the BACKGROUND KNOWLEDGE below to answer accurately, but "
+                    "respond in your own words as a general knowledge base: do NOT cite page numbers and do NOT "
+                    "name or mention any book or source. Be concise — lead with a direct one- or two-sentence "
+                    "answer, then only the few most important points; avoid jargon and over-explaining.\n\n"
+                    f"BACKGROUND KNOWLEDGE:\n\n{reference_context}"
+                )
+            else:
+                # Topical guard is prompt-only by design for v1 (no post-filter on the stream).
+                system_prompt = (
+                    "You are a knowledgeable music-business assistant for the Msanii platform. Only answer "
+                    "questions about the music industry. If the question is not related to the music business, "
+                    "politely decline and redirect the user. Answer from general music-business knowledge; do NOT "
+                    "cite page numbers or name any source. Be concise — lead with a direct one- or two-sentence "
+                    "answer, then only the few most important points; avoid jargon."
+                )
+
+            # Read context BEFORE adding the current turn (prevents double-append).
+            history = self._get_conversation_context(session_id, max_turns=5)
+            self._add_to_memory(session_id, "user", query)
+
+            messages = [{"role": "system", "content": system_prompt}]
+            if history:
+                messages.extend(history)
+            messages.append({"role": "user", "content": query})
+
+            full_answer = ""
+            for token in self._stream_llm_completion(messages, 1500):
+                full_answer += token
+                yield self._sse_event("token", {"content": token})
+
+            answer = full_answer.strip()
+
+            if not answer:
+                answer = "I wasn't able to generate an answer. Please try rephrasing your question."
+                yield self._sse_event("token", {"content": answer})
+
+            self._add_to_memory(session_id, "assistant", answer)
+            yield self._sse_event(
+                "data",
+                {
+                    "confidence": "high" if passages else "low",
+                    "highest_score": max((p.score for p in passages), default=0.0),
+                    "answered_from": "reference_book" if passages else "general_knowledge",
+                },
+            )
+            yield self._sse_event("done", {"session_id": session_id})
+        except Exception as e:
+            logger.error(f"[Stream][GeneralMode] Error: {e}")
+            yield self._sse_event("error", {"message": str(e)})
+
+    def _extract_page_citations(
+        self, answer: str, marked_context: str, contract_names: dict | None, selected_ids=None
+    ) -> dict:
+        """Best-effort map of answer -> {known_filename: page} via a cheap second call.
+
+        Uses the MARKED contract copy. Returns `{}` on any failure — must never
+        break the stream. Only filenames present in `contract_names` are kept
+        (prevents the frontend from rendering an unresolvable, empty Sources list).
+        """
+        if not answer or not contract_names or "[[PAGE " not in marked_context:
+            return {}
+        try:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You map a contract analyst's ANSWER back to the page(s) of the CONTRACTS it "
+                        "relies on. The contract text contains [[PAGE n]] markers. Output ONLY a JSON "
+                        'array, no prose: [{"contract": "<filename shown after \'CONTRACT:\'>", '
+                        '"page": <int>}]. One entry per contract the answer actually draws from; omit a '
+                        "contract if unsure. Use the page from the nearest preceding [[PAGE n]] marker."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"CONTRACTS:\n{marked_context}\n\nANSWER:\n{answer}\n\nReturn the JSON array.",
+                },
+            ]
+            # gpt-5.x-mini is a reasoning model: max_completion_tokens caps reasoning + output
+            # (NOT the input/context window). A small budget (e.g. 300) is fully consumed by
+            # reasoning -> empty output. The actual output here is a tiny JSON array, so this
+            # generous cap is almost entirely reasoning headroom; we only pay for tokens used.
+            raw = "".join(self._stream_llm_completion(messages, 16000, model_override=DEFAULT_LLM_MODEL))
+            citations = parse_page_citations(raw)
+        except Exception as e:  # noqa: BLE001 — extraction is best-effort
+            logger.warning(f"[Stream][FullDoc] Page citation extraction failed: {e}")
+            return {}
+
+        # Ordered list (not a set) so the fuzzy fallback below resolves deterministically
+        # to the first selected contract, matching the order contracts were passed in.
+        sel_names = [contract_names[c] for c in (selected_ids or set()) if c in contract_names]
+        known = sel_names + [n for n in contract_names.values() if n not in sel_names]
+        page_by_file: dict = {}
+        for c in citations:
+            label = c["contract"]
+            if label not in known:
+                # tolerate minor filename variations (basename / typo, e.g. ".pdf" dropped); drop if unresolved
+                label = next((n for n in known if n == label or n in label or label in n), None)
+            if not label:
+                continue
+            page_by_file.setdefault(label, c["page"])  # first cited page wins (single primary page)
+        return page_by_file
+
     def _generate_answer_stream_full_doc(
-        self, query: str, full_doc_context: str, session_id: str | None = None, model_override: str | None = None
+        self,
+        query: str,
+        full_doc_context: str,
+        session_id: str | None = None,
+        model_override: str | None = None,
+        reference_context: str = "",
+        reference_passages: list | None = None,
+        contract_names: dict | None = None,
+        selection_note: str = "",
+        selected_ids: set | None = None,
     ):
         """
         Stream LLM answer using the full contract document as context.
@@ -3623,18 +3882,35 @@ RULES:
         3. user/assistant: conversation history
         4. user: current query
         """
-        # Yield empty sources (no chunk-based search was done)
-        yield self._sse_event("sources", {"sources": [], "highest_score": 1.0, "search_results_count": 0})
+        reference_passages = reference_passages or []
+        reference_sources = [
+            {
+                "book_title": p.book_title,
+                "section": p.section_path,
+                "pages": f"{p.page_start}-{p.page_end}",
+                "score": p.score,
+            }
+            for p in reference_passages
+        ]
+        yield self._sse_event(
+            "sources",
+            {
+                "sources": [],
+                "reference_sources": reference_sources,
+                "highest_score": 1.0,
+                "search_results_count": len(reference_sources),
+            },
+        )
 
         # --- Message 1: Static system prompt (cacheable prefix start) ---
         system_prompt = """You are a legal contract analyst specializing in music industry agreements.
 You have the COMPLETE contract document(s) provided as context. Use them to answer accurately.
 
 CRITICAL RULES:
-1. Answer ONLY the specific question asked - nothing more, nothing less
-2. Do NOT automatically add comparisons, summaries, or extra information unless explicitly requested
-3. Do NOT reference or compare to previous topics in the conversation unless the user asks for it
-4. Be precise and only include information that is explicitly stated in the document
+1. Answer the question from the CONTRACT first - that is the authoritative source
+2. Do NOT automatically add comparisons, summaries, or extra information unless explicitly requested. EXCEPTION: if a "BACKGROUND REFERENCE" message is provided AND it adds applicable general industry context the contract does not cover, you MAY append the brief supplemental section described in that message. If the contract fully answers the question, add nothing extra.
+3. Answer about the contract(s) the user currently has selected (named in the selection note when more than one contract is shown). Do not compare to or pull in contracts carried over from earlier in the conversation, or earlier conversation topics, unless the user explicitly asks.
+4. Be precise and only include contract information that is explicitly stated in the document
 5. If the answer is not in the document, say so clearly
 6. Do NOT suggest follow-up questions - the system handles this separately
 
@@ -3669,14 +3945,47 @@ Your answers should be:
         messages = [{"role": "system", "content": system_prompt}]
 
         # --- Message 2: Contract documents (cacheable — identical for same contracts) ---
+        # Answer model must NOT see page markers (leak-proofing). Keep the marked
+        # copy (full_doc_context) for the post-generation extraction call only.
+        answer_context = strip_page_markers(full_doc_context)
+
         messages.append(
-            {"role": "system", "content": f"Complete contract document(s) for reference:\n\n{full_doc_context}"}
+            {"role": "system", "content": f"Complete contract document(s) for reference:\n\n{answer_context}"}
         )
+
+        # --- Optional reference message: background ONLY, contract always governs ---
+        if reference_context:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "BACKGROUND REFERENCE (general music-business knowledge). This is BACKGROUND ONLY. The "
+                        "user's contract above always governs; never let this background override or add terms the "
+                        "contract does not contain. Do NOT cite page numbers or name a source.\n\n"
+                        "HOW TO USE IT:\n"
+                        "1. First answer the question directly from the CONTRACT.\n"
+                        "2. If the contract fully answers the question, STOP — add nothing from this background.\n"
+                        "3. ONLY if this background adds genuinely applicable general industry context the contract "
+                        "doesn't cover, append a short, clearly-separated supplemental section, in your own words, "
+                        "as 1-3 concise bullet points. Use this exact structure:\n\n"
+                        "[your contract-based answer]\n\n"
+                        "**Supplemental (general industry context):**\n"
+                        "- bullet 1\n"
+                        "- bullet 2\n\n"
+                        "Keep it to 1-3 short bullets. Never present background as if it were in the contract.\n\n"
+                        "BACKGROUND:\n\n" + reference_context
+                    ),
+                }
+            )
 
         # --- Messages 3+: Conversation history (varies per turn) ---
         conversation_history = self._get_conversation_context(session_id, max_turns=5)
         if conversation_history:
             messages.extend(conversation_history)
+
+        # --- Optional per-turn selection note (non-cached, disambiguates working set) ---
+        if selection_note:
+            messages.append({"role": "system", "content": selection_note})
 
         # --- Final message: Current query ---
         messages.append(
@@ -3696,8 +4005,9 @@ Your answers should be:
                 yield self._sse_event("token", {"content": token})
 
             answer = full_answer.strip()
+            empty_answer = not answer
 
-            if not answer:
+            if empty_answer:
                 answer = (
                     "I couldn't generate an answer from the contract document. Please try rephrasing your question."
                 )
@@ -3728,6 +4038,39 @@ Your answers should be:
                 self.memory.set_pending_suggestion(session_id, suggestion, context_hash)
 
             yield self._sse_event("done", {"session_id": session_id, "pending_suggestion": suggestion})
+
+            # Page-aware chips (approach A): gated, AFTER done so the message has already
+            # finalized with page-less fallback chips; this upgrades them in place.
+            # Isolated try/except: a failure here must NEVER fall through to the outer
+            # `except` and yield an `error` event that clobbers the finalized answer.
+            if not empty_answer and not is_fallback:
+                try:
+                    page_by_file = self._extract_page_citations(answer, full_doc_context, contract_names, selected_ids)
+                    if page_by_file:
+                        # Reverse map filename -> contract id (first id wins) so the chip can open the
+                        # PDF by its authoritative id instead of re-resolving the name client-side.
+                        name_to_id: dict = {}
+                        for cid, fname in contract_names.items():
+                            name_to_id.setdefault(fname, cid)
+                        sel_names = {contract_names.get(c) for c in (selected_ids or set()) if c in contract_names}
+                        names = [n for n in name_to_id if n in page_by_file or n in sel_names]
+                        page_sources = [
+                            {"contract_id": name_to_id[n], "contract_file": n, "page_number": page_by_file.get(n)}
+                            for n in names
+                        ]
+                        yield self._sse_event(
+                            "sources",
+                            {
+                                "sources": page_sources,
+                                # [] on purpose: book cites already rode the initial sources
+                                # event; re-sending double-counts the wrapper's source_count.
+                                "reference_sources": [],
+                                "highest_score": 1.0,
+                                "search_results_count": len(page_sources),
+                            },
+                        )
+                except Exception as e:  # noqa: BLE001 — a post-done failure must stay silent
+                    logger.warning(f"[Stream][FullDoc] Page-source emission failed post-done: {e}")
 
         except Exception as e:
             logger.error(f"[Stream][FullDoc] Error: {e}")

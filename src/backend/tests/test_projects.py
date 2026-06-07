@@ -55,6 +55,60 @@ def _make_two_table_router(artists_data, projects_data):
     return _router
 
 
+def _make_create_project_router(
+    *,
+    artists_data,
+    project_count=0,
+    duplicate_data=None,
+    inserted_project=PROJECT_RECORD,
+    member_insert_error=False,
+):
+    """Router for POST /projects.
+
+    `projects` table is queried three times, in order: gating count, duplicate-name
+    check, then insert. (A 4th `projects` call — a delete — happens only on the
+    owner-insert rollback path.) `project_members` is inserted once for the owner row.
+    Captures all builders on `_router.builders` so tests can assert insert/delete calls.
+    """
+    duplicate_data = duplicate_data or []
+    projects_calls = {"n": 0}
+    builders = {}
+
+    def _router(name):
+        builder = MockQueryBuilder()
+        builders.setdefault(name, []).append(builder)
+        if name == "artists":
+            builder.execute.return_value = MagicMock(data=artists_data, count=len(artists_data))
+        elif name == "projects":
+            projects_calls["n"] += 1
+            if projects_calls["n"] == 1:  # gating count
+                builder.execute.return_value = MagicMock(data=[], count=project_count)
+            elif projects_calls["n"] == 2:  # duplicate-name check — returns the artist's project name rows
+                builder.execute.return_value = MagicMock(data=duplicate_data, count=len(duplicate_data))
+            else:  # insert (3) — rollback delete (4) uses builder.delete, not execute
+                builder.execute.return_value = MagicMock(data=[inserted_project], count=1)
+        elif name == "project_members":
+            if member_insert_error:
+                builder.execute.side_effect = RuntimeError("member insert failed")
+            else:
+                builder.execute.return_value = MagicMock(
+                    data=[{"project_id": inserted_project["id"], "user_id": TEST_USER_ID, "role": "owner"}],
+                    count=1,
+                )
+        elif name == "subscriptions":
+            builder.execute.return_value = MagicMock(data=[_PRO_SUB_ROW], count=1)
+        elif name == "tier_entitlements":
+            builder.execute.return_value = MagicMock(data=[_PRO_TIER_ROW], count=1)
+        elif name == "tier_overrides":
+            builder.execute.return_value = MagicMock(data=[], count=0)
+        elif name == "usage_counters":
+            builder.execute.return_value = MagicMock(data=[_DEFAULT_USAGE_ROW], count=1)
+        return builder
+
+    _router.builders = builders
+    return _router
+
+
 # ---------------------------------------------------------------------------
 # GET /projects
 # ---------------------------------------------------------------------------
@@ -161,9 +215,9 @@ class TestCreateProject:
 
     def test_creates_project_successfully(self, client, mock_supabase):
         """Returns the created project when artist is owned by user."""
-        mock_supabase.table.side_effect = _make_two_table_router(
-            artists_data=[{"id": ARTIST_ID}],  # verify_user_owns_artist
-            projects_data=[PROJECT_RECORD],  # insert returns new record
+        mock_supabase.table.side_effect = _make_create_project_router(
+            artists_data=[{"id": ARTIST_ID}],
+            inserted_project=PROJECT_RECORD,
         )
 
         payload = {
@@ -182,15 +236,65 @@ class TestCreateProject:
     def test_creates_project_without_description(self, client, mock_supabase):
         """Description field is optional."""
         project_no_desc = {**PROJECT_RECORD, "description": None}
-        mock_supabase.table.side_effect = _make_two_table_router(
+        mock_supabase.table.side_effect = _make_create_project_router(
             artists_data=[{"id": ARTIST_ID}],
-            projects_data=[project_no_desc],
+            inserted_project=project_no_desc,
         )
 
         payload = {"artist_id": ARTIST_ID, "name": "Minimal Album"}
         response = client.post("/projects", json=payload)
 
         assert response.status_code == 200
+
+    def test_creates_owner_membership_row(self, client, mock_supabase):
+        """On success the creator is inserted into project_members as 'owner'."""
+        router = _make_create_project_router(artists_data=[{"id": ARTIST_ID}])
+        mock_supabase.table.side_effect = router
+
+        response = client.post("/projects", json={"artist_id": ARTIST_ID, "name": "Owner Test"})
+
+        assert response.status_code == 200
+        member_builders = router.builders.get("project_members", [])
+        assert len(member_builders) == 1, "owner row must be inserted exactly once"
+        member_builders[0].insert.assert_called_once()
+        payload = member_builders[0].insert.call_args.args[0]
+        assert payload["role"] == "owner"
+        assert payload["user_id"] == TEST_USER_ID
+        assert payload["project_id"] == PROJECT_RECORD["id"]
+
+    def test_duplicate_name_returns_409(self, client, mock_supabase):
+        """A case-insensitive duplicate name for the same artist returns 409 and does not insert."""
+        # Existing project stored as "test album"; the new request uses "Test Album" —
+        # the normalized (lower/stripped) comparison must still flag it as a duplicate.
+        router = _make_create_project_router(
+            artists_data=[{"id": ARTIST_ID}],
+            duplicate_data=[{"name": "test album"}],
+        )
+        mock_supabase.table.side_effect = router
+
+        response = client.post("/projects", json={"artist_id": ARTIST_ID, "name": "Test Album"})
+
+        assert response.status_code == 409
+        assert "already exists" in response.json()["detail"].lower()
+        # Insert must NOT have run: only the count + duplicate-check projects calls happened.
+        assert len(router.builders.get("projects", [])) == 2
+        assert "project_members" not in router.builders
+
+    def test_owner_insert_failure_rolls_back_project(self, client, mock_supabase):
+        """If the owner-membership insert fails, the project is deleted and 500 returned."""
+        router = _make_create_project_router(
+            artists_data=[{"id": ARTIST_ID}],
+            member_insert_error=True,
+        )
+        mock_supabase.table.side_effect = router
+
+        response = client.post("/projects", json={"artist_id": ARTIST_ID, "name": "Rollback Album"})
+
+        assert response.status_code == 500
+        # The orphaned project must be rolled back: a 4th projects call issues delete().
+        projects_builders = router.builders.get("projects", [])
+        assert len(projects_builders) == 4, "rollback delete must run on the projects table"
+        projects_builders[-1].delete.assert_called_once()
 
     def test_returns_403_when_artist_not_owned(self, client, mock_supabase):
         """Returns 403 when user does not own the target artist."""

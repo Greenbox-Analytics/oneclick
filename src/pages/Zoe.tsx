@@ -1,16 +1,11 @@
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { ArrowLeft, Music, PanelLeftClose, PanelLeft, RefreshCw, BookOpen } from "lucide-react";
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Badge } from "@/components/ui/badge";
+import { ArrowLeft } from "lucide-react";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
-import { useIsMobile } from "@/hooks/use-mobile";
 import { ZoeChatMessages } from "@/components/zoe/ZoeChatMessages";
 import { ZoeInputBar } from "@/components/zoe/ZoeInputBar";
-import { ZoeDocumentPanel } from "@/components/zoe/ZoeDocumentPanel";
+import { ZoeContextPopover } from "@/components/zoe/ZoeContextPopover";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,16 +22,45 @@ import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { useZoeData } from "@/hooks/useZoeData";
+import "@/components/zoe/zoe-chat.css";
+
+// ── Inline SVGs matching the mockup ──────────────────────────────────────
+
+const MusicBadgeIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M9 18V5l12-2v13" />
+    <circle cx="6" cy="18" r="3" />
+    <circle cx="18" cy="16" r="3" />
+  </svg>
+);
+
+const NewChatIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+    <path d="M21 3v5h-5" />
+  </svg>
+);
 
 const Zoe = () => {
-  const navigate = useNavigate();
-  const isMobile = useIsMobile();
-  const [mobileDocsOpen, setMobileDocsOpen] = useState(false);
-
   const {
     artists,
     projects,
     contracts,
+    knownContracts,
     selectedArtist,
     setSelectedArtist,
     selectedProject,
@@ -45,17 +69,16 @@ const Zoe = () => {
     setSelectedContracts,
     selectedArtistName,
     selectedProjectName,
-    sidebarOpen,
-    setSidebarOpen,
-    sidebarWidth,
-    isResizing,
-    sidebarRef,
     messagesEndRef,
-    contractsOpen,
-    setContractsOpen,
+    contractMarkdowns,
+    contextTree,
+    checkedArtistIds,
+    setCheckedArtistIds,
+    checkedProjectIds,
+    setCheckedProjectIds,
+    projectDocuments,
     messages,
     isStreaming,
-    error,
     isAtLimit,
     inputMessage,
     setInputMessage,
@@ -67,36 +90,22 @@ const Zoe = () => {
     newProjectNameInput,
     setNewProjectNameInput,
     isCreatingProject,
-    deleteDialogOpen,
-    setDeleteDialogOpen,
-    contractToDelete,
-    deleting,
     showReloadDialog,
     setShowReloadDialog,
-    sharedWorks,
-    isLoadingSharedWorks,
-    sharedWorksOpen,
-    setSharedWorksOpen,
-    selectedSharedWork,
-    setSelectedSharedWork,
-    sharedWorkFiles,
-    setSharedWorkFiles,
-    loadingWorkFiles,
     stopGeneration,
     handleNewConversation,
     handleUploadComplete,
     handleCreateProject,
-    handleDeleteClick,
-    handleDeleteConfirm,
     handleSendMessage,
     handleQuickAction,
     handleAssistantQuickAction,
     handleRetry,
     handleCopyMessage,
     handleKeyDown,
-    handleMouseDown,
+    error,
   } = useZoeData();
 
+  const navigate = useNavigate();
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
   const walkthrough = useToolWalkthrough(TOOL_CONFIGS.zoe, {
     onComplete: () => markToolCompleted("zoe"),
@@ -113,244 +122,169 @@ const Zoe = () => {
       const timer = setTimeout(() => walkthrough.startModal(), 500);
       return () => clearTimeout(timer);
     }
-  }, [onboardingLoading, statuses.zoe]);
+  }, [onboardingLoading, statuses.zoe]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Build the context pill label
+  const hasContext = !!selectedArtist;
+  const contractCount = selectedContracts.length;
 
   return (
     <RequireFeature feature="zoe">
-      <div className="h-screen flex flex-col bg-background overflow-hidden">
-        {/* Header */}
-        <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 flex-shrink-0 z-10">
-        <div className="px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="md:hidden">
-              <MobileNavSheet />
+      <div className="zoe-chat app">
+        {/* ── Topbar ─────────────────────────────────────────────────── */}
+        <header className="topbar">
+          <div className="topbar-inner">
+            {/* Brand + back */}
+            <div className="brand">
+              <button
+                className="topbar-back"
+                onClick={() => navigate("/dashboard")}
+                title="Back to dashboard"
+                aria-label="Back to dashboard"
+              >
+                <ArrowLeft />
+              </button>
+              <button className="brand-link" onClick={() => navigate("/dashboard")} title="Back to dashboard">
+                <div className="brand-badge">
+                  <MusicBadgeIcon />
+                </div>
+                <div className="brand-name">
+                  Zoe <span>· Contract Analyst</span>
+                </div>
+              </button>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => (isMobile ? setMobileDocsOpen(true) : setSidebarOpen(!sidebarOpen))}
-              className="h-9 w-9"
-              aria-label="Select contracts"
-              title="Select contracts"
-            >
-              {!isMobile && sidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeft className="h-5 w-5" />}
-            </Button>
-            <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate("/dashboard")}>
-              <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
-                <Music className="w-5 h-5 text-primary-foreground" />
-              </div>
-              <div className="hidden sm:block">
-                <h1 className="text-lg font-bold text-foreground leading-none">Zoe AI</h1>
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {selectedArtist && (
-              <Badge variant="secondary" className="hidden sm:flex items-center gap-1.5 text-xs">
-                <span className="max-w-[100px] truncate">{selectedArtistName}</span>
-                {selectedProject && (
-                  <>
-                    <span className="text-muted-foreground">•</span>
-                    <span className="max-w-[100px] truncate">{selectedProjectName}</span>
-                  </>
-                )}
-                {selectedContracts.length > 0 && (
-                  <>
-                    <span className="text-muted-foreground">•</span>
-                    <span>{selectedContracts.length} docs</span>
-                  </>
-                )}
-              </Badge>
-            )}
-            {messages.length > 0 && (
-              <Button data-walkthrough="zoe-newchat" variant="outline" onClick={handleNewConversation} size="sm" className="gap-2">
-                <RefreshCw className="w-4 h-4" />
-                <span className="hidden sm:inline">New Chat</span>
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
-            <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" onClick={() => navigate("/tools")} size="sm" className="gap-2 hidden md:inline-flex">
-              <ArrowLeft className="w-4 h-4" />
-              <span>Back to Tools</span>
-            </Button>
-          </div>
-        </div>
-      </header>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
-        {!isMobile && (
-          <ZoeDocumentPanel
-            sidebarRef={sidebarRef}
-            sidebarOpen={sidebarOpen}
-            sidebarWidth={sidebarWidth}
-            isResizing={isResizing}
-            onMouseDown={handleMouseDown}
-            artists={artists}
-            selectedArtist={selectedArtist}
-            onArtistChange={(v) => { setSelectedArtist(v); setSelectedProject(''); setSelectedContracts([]); }}
-            projects={projects}
-            selectedProject={selectedProject}
-            onProjectChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }}
-            contracts={contracts}
+            {/* Right controls */}
+            <div className="topbar-right">
+              {/* Context pill — opens the context popover */}
+              <ZoeContextPopover
+                contextTree={contextTree}
+                checkedArtistIds={checkedArtistIds}
+                setCheckedArtistIds={setCheckedArtistIds}
+                checkedProjectIds={checkedProjectIds}
+                setCheckedProjectIds={setCheckedProjectIds}
+                projectDocuments={projectDocuments}
+                knownContracts={knownContracts}
+                selectedContracts={selectedContracts}
+                onSelectedContractsChange={setSelectedContracts}
+                uploadModalOpen={uploadModalOpen}
+                onUploadModalOpenChange={setUploadModalOpen}
+                onUploadComplete={handleUploadComplete}
+              >
+                <button className="ctx-pill" title="Select context" data-walkthrough="zoe-context">
+                  {contractCount > 0 ? (
+                    <>
+                      <span className="live" />
+                      <span>
+                        <b>{contractCount}</b> contract{contractCount > 1 ? "s" : ""}
+                      </span>
+                      {checkedArtistIds.length > 1 && (
+                        <>
+                          <span className="ctx-dot" />
+                          <span>
+                            <b>{checkedArtistIds.length}</b> artists
+                          </span>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <span className="ctx-dot" />
+                      <span>Select contracts to compare</span>
+                    </>
+                  )}
+                </button>
+              </ZoeContextPopover>
+
+              {/* New chat — always visible, icon-only on mobile */}
+              <button
+                className="btn-ghost"
+                data-walkthrough="zoe-newchat"
+                onClick={handleNewConversation}
+                title="New chat"
+              >
+                <NewChatIcon />
+                <span className="label-hide">New chat</span>
+              </button>
+
+              {/* Help button */}
+              <ToolHelpButton onClick={walkthrough.replay} />
+            </div>
+          </div>
+        </header>
+
+        {/* ── Thread ─────────────────────────────────────────────────── */}
+        <ZoeChatMessages
+          messages={messages}
+          isStreaming={isStreaming}
+          selectedArtist={selectedArtist}
+          selectedProject={selectedProject}
+          selectedContracts={selectedContracts}
+          contracts={knownContracts}
+          contractMarkdowns={contractMarkdowns}
+          copiedMessageId={copiedMessageId}
+          messagesEndRef={messagesEndRef}
+          onQuickAction={handleQuickAction}
+          onAssistantQuickAction={handleAssistantQuickAction}
+          onRetry={handleRetry}
+          onCopyMessage={handleCopyMessage}
+        />
+
+        {/* ── Composer ───────────────────────────────────────────────── */}
+        <div data-walkthrough="zoe-chat">
+          <ZoeInputBar
+            inputMessage={inputMessage}
+            onInputChange={setInputMessage}
+            error={error}
+            isStreaming={isStreaming}
+            isAtLimit={isAtLimit}
             selectedContracts={selectedContracts}
+            knownContracts={knownContracts}
+            contractMarkdowns={contractMarkdowns}
+            onDeselectContract={(id) =>
+              setSelectedContracts((prev) => prev.filter((c) => c !== id))
+            }
+            onSend={handleSendMessage}
+            onStop={stopGeneration}
+            onKeyDown={handleKeyDown}
+            contextTree={contextTree}
+            checkedArtistIds={checkedArtistIds}
+            setCheckedArtistIds={setCheckedArtistIds}
+            checkedProjectIds={checkedProjectIds}
+            setCheckedProjectIds={setCheckedProjectIds}
+            projectDocuments={projectDocuments}
             onSelectedContractsChange={setSelectedContracts}
-            contractsOpen={contractsOpen}
-            onContractsOpenChange={setContractsOpen}
-            sharedWorks={sharedWorks}
-            isLoadingSharedWorks={isLoadingSharedWorks}
-            sharedWorksOpen={sharedWorksOpen}
-            onSharedWorksOpenChange={setSharedWorksOpen}
-            selectedSharedWork={selectedSharedWork}
-            onSelectedSharedWorkChange={setSelectedSharedWork}
-            sharedWorkFiles={sharedWorkFiles}
-            loadingWorkFiles={loadingWorkFiles}
-            onSharedWorkFilesReset={() => setSharedWorkFiles([])}
             uploadModalOpen={uploadModalOpen}
             onUploadModalOpenChange={setUploadModalOpen}
             onUploadComplete={handleUploadComplete}
-            isCreateProjectOpen={isCreateProjectOpen}
-            onCreateProjectOpenChange={setIsCreateProjectOpen}
-            newProjectNameInput={newProjectNameInput}
-            onNewProjectNameInputChange={setNewProjectNameInput}
-            isCreatingProject={isCreatingProject}
-            onCreateProject={handleCreateProject}
-            deleteDialogOpen={deleteDialogOpen}
-            onDeleteDialogOpenChange={setDeleteDialogOpen}
-            contractToDelete={contractToDelete}
-            deleting={deleting}
-            onDeleteClick={handleDeleteClick}
-            onDeleteConfirm={handleDeleteConfirm}
           />
-        )}
+        </div>
 
-        {/* Chat Area */}
-        <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          <ZoeChatMessages
-            messages={messages}
-            isStreaming={isStreaming}
-            selectedArtist={selectedArtist}
-            selectedProject={selectedProject}
-            selectedContracts={selectedContracts}
-            copiedMessageId={copiedMessageId}
-            messagesEndRef={messagesEndRef}
-            onQuickAction={handleQuickAction}
-            onAssistantQuickAction={handleAssistantQuickAction}
-            onRetry={handleRetry}
-            onCopyMessage={handleCopyMessage}
-            isMobile={isMobile}
-            onOpenSidebar={() => setMobileDocsOpen(true)}
-          />
-          <div data-walkthrough="zoe-chat">
-            <ZoeInputBar
-              inputMessage={inputMessage}
-              onInputChange={setInputMessage}
-              error={error}
-              isStreaming={isStreaming}
-              isAtLimit={isAtLimit}
-              selectedArtist={selectedArtist}
-              selectedProject={selectedProject}
-              selectedContracts={selectedContracts}
-              contracts={contracts}
-              onDeselectContract={(id) => setSelectedContracts(prev => prev.filter(c => c !== id))}
-              onSend={handleSendMessage}
-              onStop={stopGeneration}
-              onKeyDown={handleKeyDown}
-              onUploadClick={() => setUploadModalOpen(true)}
-            />
-          </div>
-        </main>
-      </div>
+        {/* ── Dialogs ────────────────────────────────────────────────── */}
+        <AlertDialog open={showReloadDialog} onOpenChange={setShowReloadDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Session Refresh Required</AlertDialogTitle>
+              <AlertDialogDescription>
+                {isAtLimit
+                  ? "You've reached the conversation limit. Please refresh the page to start a fresh session with Zoe."
+                  : "The conversation context was reset. Please reload the page to start a fresh session with Zoe."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogAction onClick={() => window.location.reload()}>
+                Refresh Page
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
-      {/* Mobile: Documents panel as a Sheet */}
-      {isMobile && (
-      <Sheet open={mobileDocsOpen} onOpenChange={setMobileDocsOpen}>
-        <SheetContent side="left" className="w-[90vw] max-w-md p-0 flex flex-col">
-          <SheetHeader className="px-4 py-3 border-b border-border text-left">
-            <SheetTitle>Select Contracts</SheetTitle>
-          </SheetHeader>
-          <div className="flex-1 overflow-hidden">
-            <ZoeDocumentPanel
-              variant="sheet"
-              sidebarRef={sidebarRef}
-              sidebarOpen
-              sidebarWidth={0}
-              isResizing={false}
-              onMouseDown={() => {}}
-              artists={artists}
-              selectedArtist={selectedArtist}
-              onArtistChange={(v) => { setSelectedArtist(v); setSelectedProject(''); setSelectedContracts([]); }}
-              projects={projects}
-              selectedProject={selectedProject}
-              onProjectChange={(v) => { setSelectedProject(v); setSelectedContracts([]); }}
-              contracts={contracts}
-              selectedContracts={selectedContracts}
-              onSelectedContractsChange={setSelectedContracts}
-              contractsOpen={contractsOpen}
-              onContractsOpenChange={setContractsOpen}
-              sharedWorks={sharedWorks}
-              isLoadingSharedWorks={isLoadingSharedWorks}
-              sharedWorksOpen={sharedWorksOpen}
-              onSharedWorksOpenChange={setSharedWorksOpen}
-              selectedSharedWork={selectedSharedWork}
-              onSelectedSharedWorkChange={setSelectedSharedWork}
-              sharedWorkFiles={sharedWorkFiles}
-              loadingWorkFiles={loadingWorkFiles}
-              onSharedWorkFilesReset={() => setSharedWorkFiles([])}
-              uploadModalOpen={uploadModalOpen}
-              onUploadModalOpenChange={setUploadModalOpen}
-              onUploadComplete={handleUploadComplete}
-              isCreateProjectOpen={isCreateProjectOpen}
-              onCreateProjectOpenChange={setIsCreateProjectOpen}
-              newProjectNameInput={newProjectNameInput}
-              onNewProjectNameInputChange={setNewProjectNameInput}
-              isCreatingProject={isCreatingProject}
-              onCreateProject={handleCreateProject}
-              deleteDialogOpen={deleteDialogOpen}
-              onDeleteDialogOpenChange={setDeleteDialogOpen}
-              contractToDelete={contractToDelete}
-              deleting={deleting}
-              onDeleteClick={handleDeleteClick}
-              onDeleteConfirm={handleDeleteConfirm}
-            />
-          </div>
-        </SheetContent>
-      </Sheet>
-      )}
-
-      <AlertDialog open={showReloadDialog} onOpenChange={setShowReloadDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Session Refresh Required</AlertDialogTitle>
-            <AlertDialogDescription>
-              {isAtLimit
-                ? "You've reached the conversation limit. Please refresh the page to start a fresh session with Zoe."
-                : "The conversation context was reset. Please reload the page to start a fresh session with Zoe."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogAction onClick={() => window.location.reload()}>
-              Refresh Page
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <ToolIntroModal
-        config={TOOL_CONFIGS.zoe}
-        isOpen={walkthrough.phase === "modal"}
-        onStartTour={walkthrough.startSpotlight}
-        onSkip={walkthrough.skip}
-      />
+        <ToolIntroModal
+          config={TOOL_CONFIGS.zoe}
+          isOpen={walkthrough.phase === "modal"}
+          onStartTour={walkthrough.startSpotlight}
+          onSkip={walkthrough.skip}
+        />
         <WalkthroughProvider
           isActive={walkthrough.phase === "spotlight"}
           currentStep={walkthrough.currentStep}

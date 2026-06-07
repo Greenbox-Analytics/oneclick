@@ -2,6 +2,8 @@
 
 OneClick is a royalty calculation tool that cross-references one or more contract files against a royalty statement to produce a per-song, per-party payment breakdown. Users select contracts and a royalty statement (from existing project files or by uploading new ones), trigger a streaming calculation, review the results, and optionally export or share the report.
 
+> **Calculation internals** — the parse → match → flat-percentage pipeline, net-payable column detection, the shared `contract_markdown` cache (page markers stripped for OneClick), and the log-only **contract-nuance detection** that consults the music-business reference namespace for reviewer context — are documented in `src/backend/oneclick/ONECLICK.md`.
+
 ---
 
 ## Backend Endpoints
@@ -234,3 +236,14 @@ cd src/backend
 poetry install
 poetry run uvicorn main:app --host 0.0.0.0 --port 8000
 ```
+
+### Run the test suite
+
+```bash
+cd src/backend && poetry run pytest \
+  tests/test_oneclick.py tests/test_oneclick_helpers.py \
+  tests/test_nuance_adjuster.py tests/test_oneclick_nuance_integration.py -v
+```
+
+The live reference-namespace smoke is skipped by default; enable it with
+`RUN_LIVE_REFERENCE_TESTS=1` (needs `PINECONE_API_KEY` + `OPENAI_API_KEY` and the book uploaded).

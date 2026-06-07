@@ -16,7 +16,7 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
-import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
 import CalculationResults from "@/components/oneclick/CalculationResults";
@@ -174,14 +174,17 @@ const OneClickDocuments = () => {
         const newProject = await apiFetch<Project>(`${API_URL}/projects`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ artist_id: artistId, name: newProjectNameInput, description: "Created via OneClick" })
+            body: JSON.stringify({ artist_id: artistId, name: newProjectNameInput })
         });
         setProjects([newProject, ...projects]);
         setNewContractProjectId(newProject.id);
         setNewRoyaltyStatementProjectId(newProject.id);
         setNewProjectNameInput(""); setIsCreateProjectOpen(false);
         toast.success("Project created successfully");
-    } catch (err) { console.error("Error creating project:", err); toast.error("Failed to create project"); }
+    } catch (err) {
+        console.error("Error creating project:", err);
+        toast.error(err instanceof ApiError ? err.message : "Failed to create project");
+    }
     finally { setIsCreatingProject(false); }
   };
 

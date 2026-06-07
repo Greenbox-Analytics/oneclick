@@ -19,31 +19,35 @@ logger = logging.getLogger(__name__)
 def list_user_storage_paths(supabase: Client, user_id: str) -> list[tuple[str, str]]:
     """Return [(bucket, path), ...] for every file owned by this user.
 
-    Walks artists → projects → project_files + audio_files. Storage rows do
-    not have FK cascades, so we must enumerate them explicitly before
-    deleting the auth user.
+    project_files are project-scoped (project_files.project_id → projects).
+    audio_files are artist-scoped via folders (audio_files.folder_id →
+    audio_folders.artist_id → artists), so the audio walk is independent
+    of whether the user has any projects. Storage rows do not have FK
+    cascades, so we must enumerate them explicitly before deleting the
+    auth user.
     """
     artists_res = supabase.table("artists").select("id").eq("user_id", user_id).execute()
     artist_ids = [a["id"] for a in (artists_res.data or [])]
     if not artist_ids:
         return []
 
-    projects_res = supabase.table("projects").select("id").in_("artist_id", artist_ids).execute()
-    project_ids = [p["id"] for p in (projects_res.data or [])]
-    if not project_ids:
-        return []
-
     paths: list[tuple[str, str]] = []
 
-    pf_res = supabase.table("project_files").select("file_path").in_("project_id", project_ids).execute()
-    for row in pf_res.data or []:
-        if row.get("file_path"):
-            paths.append(("project-files", row["file_path"]))
+    projects_res = supabase.table("projects").select("id").in_("artist_id", artist_ids).execute()
+    project_ids = [p["id"] for p in (projects_res.data or [])]
+    if project_ids:
+        pf_res = supabase.table("project_files").select("file_path").in_("project_id", project_ids).execute()
+        for row in pf_res.data or []:
+            if row.get("file_path"):
+                paths.append(("project-files", row["file_path"]))
 
-    af_res = supabase.table("audio_files").select("file_path").in_("project_id", project_ids).execute()
-    for row in af_res.data or []:
-        if row.get("file_path"):
-            paths.append(("audio-files", row["file_path"]))
+    folders_res = supabase.table("audio_folders").select("id").in_("artist_id", artist_ids).execute()
+    folder_ids = [f["id"] for f in (folders_res.data or [])]
+    if folder_ids:
+        af_res = supabase.table("audio_files").select("file_path").in_("folder_id", folder_ids).execute()
+        for row in af_res.data or []:
+            if row.get("file_path"):
+                paths.append(("audio-files", row["file_path"]))
 
     return paths
 
