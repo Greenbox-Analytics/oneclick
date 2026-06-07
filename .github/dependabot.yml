@@ -8,6 +8,16 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   # Python (pip) dependencies
   - package-ecosystem: "pip"
@@ -17,3 +27,13 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    groups:
+      pip-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+      pip-security:
+        applies-to: security-updates
+        patterns:
+          - "*"

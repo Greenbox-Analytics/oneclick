@@ -11,7 +11,7 @@ Convention: any `max_*` field set to -1 means "unlimited".
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -103,7 +103,7 @@ class Entitlements:
         }
 
 
-class Action(str, Enum):
+class Action(StrEnum):
     """Every action the entitlements layer can gate.
 
     Per-action context kwargs (passed to EntitlementsService.can(...)):
