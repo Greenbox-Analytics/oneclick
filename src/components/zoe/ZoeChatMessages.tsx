@@ -162,18 +162,23 @@ export function ZoeChatMessages({
               const isLast = idx === messages.length - 1;
               const isThinking = message.isStreaming && !message.content;
 
-              // Determine which selected contracts to show as sources for this message.
-              // Use message.sources if available, else show all selected contracts.
+              // Which contracts to show as sources for THIS message.
+              // Prefer backend-cited sources (with page jumps); otherwise fall back to the
+              // contracts pinned to this turn (message.contractIds) — NOT the live selection,
+              // so older messages keep their own contracts after the user switches selection.
               const sourcesToShow: { id: string; file_name: string; page?: number }[] = [];
               if (message.sources && message.sources.length > 0) {
                 for (const src of message.sources) {
-                  const c = contractByName[src.contract_file];
-                  if (c && !sourcesToShow.find((s) => s.id === c.id)) {
-                    sourcesToShow.push({ id: c.id, file_name: c.file_name, page: src.page_number });
+                  // Prefer the authoritative contract id from the backend; the page-jump endpoint
+                  // is by-id, so this avoids ever passing a filename as the id. Fall back to name
+                  // resolution only for older messages that predate contract_id in the payload.
+                  const id = src.contract_id || contractByName[src.contract_file]?.id;
+                  if (id && !sourcesToShow.find((s) => s.id === id)) {
+                    sourcesToShow.push({ id, file_name: src.contract_file, page: src.page_number });
                   }
                 }
-              } else if (!message.isStreaming && message.content && selectedContracts.length > 0) {
-                for (const id of selectedContracts) {
+              } else if (!message.isStreaming && message.content && message.contractIds?.length) {
+                for (const id of message.contractIds) {
                   const c = contracts.find((x) => x.id === id);
                   if (c) sourcesToShow.push({ id: c.id, file_name: c.file_name });
                 }

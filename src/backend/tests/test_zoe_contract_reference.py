@@ -126,6 +126,8 @@ def test_ask_stream_contract_path_survives_search_reference_failure():
         reference_context="",
         reference_passages=None,
         contract_names=None,
+        selection_note="",
+        selected_ids=None,
     ):
         captured["reference_passages"] = reference_passages
         captured["reference_context"] = reference_context

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useStreamingChat } from "@/hooks/useStreamingChat";
@@ -11,7 +11,33 @@ import type {
   ArtistDataExtracted, ExtractedContractData,
   ConversationContext,
 } from "@/components/zoe/types";
-import { apiFetch, getAuthHeaders, API_URL } from "@/lib/apiFetch";
+import { apiFetch, getAuthHeaders, API_URL, ApiError } from "@/lib/apiFetch";
+
+const WORKING_SET_BUDGET_CHARS = 250_000; // well under the backend's 370k hard cap
+
+export function pickWorkingSet(opts: {
+  selectedIds: string[];
+  recencyOrder: string[]; // most-recently-selected first
+  markdowns: Record<string, string>;
+  budgetChars?: number;
+}): Record<string, string> {
+  const budget = opts.budgetChars ?? WORKING_SET_BUDGET_CHARS;
+  const out: Record<string, string> = {};
+  let used = 0;
+  const add = (id: string, enforceBudget: boolean) => {
+    if (out[id]) return;
+    const md = opts.markdowns[id];
+    if (!md) return; // only contracts whose text we actually have
+    // Pinned (selected) contracts are added first with enforceBudget=false, so `used` can only
+    // exceed the budget via the user's own selection — carried contracts never cause overflow.
+    if (enforceBudget && used + md.length > budget) return;
+    out[id] = md;
+    used += md.length;
+  };
+  for (const id of opts.selectedIds) add(id, false); // pinned
+  for (const id of opts.recencyOrder) if (!opts.selectedIds.includes(id)) add(id, true);
+  return out;
+}
 
 export function useZoeData() {
   const { user } = useAuth();
@@ -28,6 +54,20 @@ export function useZoeData() {
 
   const [contractMarkdowns, setContractMarkdowns] = useState<Record<string, string>>({});
 
+  // ── Comparison-context tree: multi-select across artists/projects ──
+  const [contextTree, setContextTree] = useState<{
+    artists: { id: string; name: string; project_count: number }[];
+    projects: { id: string; name: string; artist_id: string; doc_count: number }[];
+  }>({ artists: [], projects: [] });
+  const [checkedArtistIds, setCheckedArtistIds] = useState<string[]>([]);
+  const [checkedProjectIds, setCheckedProjectIds] = useState<string[]>([]);
+  const [projectDocuments, setProjectDocuments] = useState<
+    Record<
+      string,
+      { id: string; file_name: string; project_id: string; folder_category?: string; page_count?: number | null }[]
+    >
+  >({});
+
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [newProjectNameInput, setNewProjectNameInput] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
@@ -38,6 +78,7 @@ export function useZoeData() {
   const [contractsOpen, setContractsOpen] = useState<boolean>(false);
   const prevContractsCountRef = useRef<number>(0);
   const prevSelectedContractsRef = useRef<string[]>([]);
+  const recencyRef = useRef<string[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -99,6 +140,9 @@ export function useZoeData() {
   const handleNewConversation = useCallback(() => {
     clearSession();
     clearMessages();
+    recencyRef.current = []; // fresh working set per conversation
+    setCheckedArtistIds([]);
+    setCheckedProjectIds([]);
     setSessionId(crypto.randomUUID());
     setConversationContext({
       session_id: crypto.randomUUID(),
@@ -149,8 +193,9 @@ export function useZoeData() {
           setContracts([]);
         });
     } else {
+      // No project in view → clear the BROWSE list only. The selection persists (it can span
+      // artists/projects for cross-contract comparison); use "Clear all" to reset it.
       setContracts([]);
-      setSelectedContracts([]);
     }
   };
 
@@ -287,8 +332,16 @@ export function useZoeData() {
         };
       });
     }
+    recencyRef.current = [
+      ...selectedContracts,
+      ...recencyRef.current.filter((id) => !selectedContracts.includes(id)),
+    ];
     prevSelectedContractsRef.current = selectedContracts;
   }, [selectedContracts, contracts]);
+
+  // NOTE: the working set is intentionally NOT reset on artist/project switch — carrying
+  // recently-discussed contracts across artists is what enables "compare to the previous
+  // contract" after switching. It IS reset on New Chat (see handleNewConversation).
 
   useEffect(() => {
     if (!user || selectedContracts.length === 0) return;
@@ -320,6 +373,48 @@ export function useZoeData() {
     };
     fetchMissing();
   }, [selectedContracts, user]);
+
+  // Comparison-context tree (artists + projects with counts).
+  const fetchContextTree = useCallback(async () => {
+    if (!user) return;
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_URL}/zoe/context-tree`, { headers });
+      if (res.ok) setContextTree(await res.json());
+    } catch (err) {
+      console.warn("Failed to fetch Zoe context tree:", err);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchContextTree();
+  }, [fetchContextTree]);
+
+  // Documents (with page counts) for newly-checked projects.
+  useEffect(() => {
+    if (!user) return;
+    const missing = checkedProjectIds.filter((pid) => !projectDocuments[pid]);
+    if (missing.length === 0) return;
+    (async () => {
+      const headers = await getAuthHeaders();
+      const results: Record<
+        string,
+        { id: string; file_name: string; project_id: string; folder_category?: string; page_count?: number | null }[]
+      > = {};
+      await Promise.all(
+        missing.map(async (pid) => {
+          try {
+            const res = await fetch(`${API_URL}/projects/${pid}/documents`, { headers });
+            if (res.ok) results[pid] = await res.json();
+          } catch (err) {
+            console.warn(`Failed to fetch documents for project ${pid}:`, err);
+          }
+        })
+      );
+      if (Object.keys(results).length > 0) setProjectDocuments((prev) => ({ ...prev, ...results }));
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkedProjectIds, projectDocuments, user]);
 
   useEffect(() => {
     if (!selectedSharedWork || !user) {
@@ -353,6 +448,14 @@ export function useZoeData() {
 
   const handleUploadComplete = () => {
     fetchContracts();
+    // Refresh the comparison-context panel: re-pull counts and drop cached docs for the
+    // upload target so the new file appears in its project's document list.
+    fetchContextTree();
+    setProjectDocuments((prev) => {
+      const next = { ...prev };
+      for (const pid of checkedProjectIds) delete next[pid];
+      return next;
+    });
   };
 
   const handleCreateProject = async () => {
@@ -365,7 +468,6 @@ export function useZoeData() {
             body: JSON.stringify({
                 artist_id: selectedArtist,
                 name: newProjectNameInput,
-                description: "Created via Zoe",
             })
         });
         setProjects([newProject, ...projects]);
@@ -380,7 +482,7 @@ export function useZoeData() {
         console.error("Error creating project:", err);
         toast({
           title: "Error",
-          description: "Failed to create project",
+          description: err instanceof ApiError ? err.message : "Failed to create project",
           variant: "destructive",
         });
     } finally {
@@ -419,12 +521,11 @@ export function useZoeData() {
   };
 
   const getChatParams = useCallback(() => {
-    const markdowns: Record<string, string> = {};
-    for (const cid of selectedContracts) {
-      if (contractMarkdowns[cid]) {
-        markdowns[cid] = contractMarkdowns[cid];
-      }
-    }
+    const markdowns = pickWorkingSet({
+      selectedIds: selectedContracts,
+      recencyOrder: recencyRef.current,
+      markdowns: contractMarkdowns,
+    });
     return {
       userId: user!.id,
       artistId: selectedArtist || undefined,
@@ -573,12 +674,35 @@ export function useZoeData() {
     };
   }, [isResizing]);
 
+  // Session-wide {id, file_name} for every contract discussed this conversation (across artists),
+  // merged with the current artist's list. Used to resolve source chips on older messages so they
+  // still render and page-jump after the user has switched to a different artist/project.
+  const knownContracts = useMemo(() => {
+    const byId = new Map(contracts.map((c) => [c.id, { id: c.id, file_name: c.file_name }]));
+    for (const docs of Object.values(projectDocuments)) {
+      for (const d of docs) if (!byId.has(d.id)) byId.set(d.id, { id: d.id, file_name: d.file_name });
+    }
+    for (const d of conversationContext.contracts_discussed) {
+      if (!byId.has(d.id)) byId.set(d.id, { id: d.id, file_name: d.name });
+    }
+    return Array.from(byId.values());
+  }, [contracts, projectDocuments, conversationContext.contracts_discussed]);
+
   return {
     user,
     artists,
     projects,
     contracts,
+    knownContracts,
     contractMarkdowns,
+    // Comparison-context tree (multi-select)
+    contextTree,
+    checkedArtistIds,
+    setCheckedArtistIds,
+    checkedProjectIds,
+    setCheckedProjectIds,
+    projectDocuments,
+    refreshContextTree: fetchContextTree,
     selectedArtist,
     setSelectedArtist,
     selectedProject,

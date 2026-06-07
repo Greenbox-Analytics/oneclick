@@ -15,6 +15,7 @@ export interface AssistantQuickAction {
 }
 
 export interface MessageSource {
+  contract_id?: string;
   contract_file: string;
   page_number?: number;
   score: number;
@@ -29,6 +30,9 @@ export interface Message {
   content: string;
   confidence?: string;
   sources?: MessageSource[];
+  /** Contract IDs that were in context when this message was sent — pins the source
+   *  chips to this turn so they don't re-attach to a later contract selection. */
+  contractIds?: string[];
   timestamp: string;
   showQuickActions?: boolean;
   quickActions?: AssistantQuickAction[];
@@ -194,6 +198,9 @@ export function useStreamingChat() {
         id: assistantId,
         role: "assistant",
         content: "",
+        // Snapshot the contracts active for THIS turn so the source chips stay pinned
+        // to it even after the user switches contract selection.
+        contractIds: params.contractIds ?? [],
         timestamp: new Date().toISOString(),
         isStreaming: true,
       };

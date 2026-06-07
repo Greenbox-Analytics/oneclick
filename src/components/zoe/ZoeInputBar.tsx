@@ -1,7 +1,6 @@
 import { useRef, useEffect, useState } from "react";
 import { ZoeContextPopover } from "@/components/zoe/ZoeContextPopover";
 import { ContractSlideOver } from "@/components/zoe/ContractSlideOver";
-import type { Artist, Project, Contract } from "@/components/zoe/types";
 
 // Inline SVGs — exact mockup shapes
 
@@ -50,30 +49,31 @@ interface ZoeInputBarProps {
   error: string;
   isStreaming: boolean;
   isAtLimit: boolean;
-  selectedArtist: string;
-  selectedProject: string;
   selectedContracts: string[];
-  contracts: Contract[];
+  /** Session-wide {id, file_name} so selected contracts from other artists still render as chips. */
+  knownContracts: { id: string; file_name: string }[];
   contractMarkdowns: Record<string, string>;
   onDeselectContract: (id: string) => void;
   onSend: () => void;
   onStop: () => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
-  // Context popover props
-  artists: Artist[];
-  projects: Project[];
-  onArtistChange: (value: string) => void;
-  onProjectChange: (value: string) => void;
+  // Comparison-context popover props
+  contextTree: {
+    artists: { id: string; name: string; project_count: number }[];
+    projects: { id: string; name: string; artist_id: string; doc_count: number }[];
+  };
+  checkedArtistIds: string[];
+  setCheckedArtistIds: (updater: string[] | ((prev: string[]) => string[])) => void;
+  checkedProjectIds: string[];
+  setCheckedProjectIds: (updater: string[] | ((prev: string[]) => string[])) => void;
+  projectDocuments: Record<
+    string,
+    { id: string; file_name: string; project_id: string; folder_category?: string; page_count?: number | null }[]
+  >;
   onSelectedContractsChange: (contracts: string[]) => void;
   uploadModalOpen: boolean;
   onUploadModalOpenChange: (open: boolean) => void;
   onUploadComplete: () => void;
-  isCreateProjectOpen: boolean;
-  onCreateProjectOpenChange: (open: boolean) => void;
-  newProjectNameInput: string;
-  onNewProjectNameInputChange: (value: string) => void;
-  isCreatingProject: boolean;
-  onCreateProject: () => void;
 }
 
 export function ZoeInputBar({
@@ -81,30 +81,23 @@ export function ZoeInputBar({
   onInputChange,
   isStreaming,
   isAtLimit,
-  selectedProject,
   selectedContracts,
-  contracts,
-  contractMarkdowns,
+  knownContracts,
   onDeselectContract,
   onSend,
   onStop,
   onKeyDown,
-  // context popover
-  artists,
-  selectedArtist,
-  projects,
-  onArtistChange,
-  onProjectChange,
+  // comparison-context popover
+  contextTree,
+  checkedArtistIds,
+  setCheckedArtistIds,
+  checkedProjectIds,
+  setCheckedProjectIds,
+  projectDocuments,
   onSelectedContractsChange,
   uploadModalOpen,
   onUploadModalOpenChange,
   onUploadComplete,
-  isCreateProjectOpen,
-  onCreateProjectOpenChange,
-  newProjectNameInput,
-  onNewProjectNameInputChange,
-  isCreatingProject,
-  onCreateProject,
 }: ZoeInputBarProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -127,9 +120,10 @@ export function ZoeInputBar({
     ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
   }, [inputMessage]);
 
+  // Resolve from the session-wide map so selected contracts from OTHER artists still render as chips.
   const selectedContractInfos = selectedContracts
-    .map((id) => contracts.find((c) => c.id === id))
-    .filter((c): c is Contract => c !== undefined);
+    .map((id) => knownContracts.find((c) => c.id === id))
+    .filter((c): c is { id: string; file_name: string } => c !== undefined);
 
   const placeholder = isAtLimit
     ? "Conversation limit reached. Please refresh the page."
@@ -187,24 +181,18 @@ export function ZoeInputBar({
           <div className="input-box">
             {/* Attach / context button */}
             <ZoeContextPopover
-              artists={artists}
-              selectedArtist={selectedArtist}
-              onArtistChange={onArtistChange}
-              projects={projects}
-              selectedProject={selectedProject}
-              onProjectChange={onProjectChange}
-              contracts={contracts}
+              contextTree={contextTree}
+              checkedArtistIds={checkedArtistIds}
+              setCheckedArtistIds={setCheckedArtistIds}
+              checkedProjectIds={checkedProjectIds}
+              setCheckedProjectIds={setCheckedProjectIds}
+              projectDocuments={projectDocuments}
+              knownContracts={knownContracts}
               selectedContracts={selectedContracts}
               onSelectedContractsChange={onSelectedContractsChange}
               uploadModalOpen={uploadModalOpen}
               onUploadModalOpenChange={onUploadModalOpenChange}
               onUploadComplete={onUploadComplete}
-              isCreateProjectOpen={isCreateProjectOpen}
-              onCreateProjectOpenChange={onCreateProjectOpenChange}
-              newProjectNameInput={newProjectNameInput}
-              onNewProjectNameInputChange={onNewProjectNameInputChange}
-              isCreatingProject={isCreatingProject}
-              onCreateProject={onCreateProject}
             >
               <button
                 className="icon-btn"

@@ -1,253 +1,322 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { Plus, X, Loader2, Users, FolderOpen, FileText } from "lucide-react";
-import type { Artist, Project, Contract } from "@/components/zoe/types";
+import { Search } from "lucide-react";
 import { ContractUploadModal } from "@/components/ContractUploadModal";
+
+interface CtxArtist {
+  id: string;
+  name: string;
+  project_count: number;
+}
+interface CtxProject {
+  id: string;
+  name: string;
+  artist_id: string;
+  doc_count: number;
+}
+interface CtxDoc {
+  id: string;
+  file_name: string;
+  project_id: string;
+  folder_category?: string;
+  page_count?: number | null;
+}
 
 interface ZoeContextPopoverProps {
   children: React.ReactNode;
-  artists: Artist[];
-  selectedArtist: string;
-  onArtistChange: (value: string) => void;
-  projects: Project[];
-  selectedProject: string;
-  onProjectChange: (value: string) => void;
-  contracts: Contract[];
+  contextTree: { artists: CtxArtist[]; projects: CtxProject[] };
+  checkedArtistIds: string[];
+  setCheckedArtistIds: (updater: string[] | ((prev: string[]) => string[])) => void;
+  checkedProjectIds: string[];
+  setCheckedProjectIds: (updater: string[] | ((prev: string[]) => string[])) => void;
+  projectDocuments: Record<string, CtxDoc[]>;
+  knownContracts: { id: string; file_name: string }[];
   selectedContracts: string[];
   onSelectedContractsChange: (contracts: string[]) => void;
   uploadModalOpen: boolean;
   onUploadModalOpenChange: (open: boolean) => void;
   onUploadComplete: () => void;
-  isCreateProjectOpen: boolean;
-  onCreateProjectOpenChange: (open: boolean) => void;
-  newProjectNameInput: string;
-  onNewProjectNameInputChange: (value: string) => void;
-  isCreatingProject: boolean;
-  onCreateProject: () => void;
+}
+
+function initials(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() || "")
+    .join("");
+}
+
+function toggle(list: string[], id: string): string[] {
+  return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
 }
 
 export function ZoeContextPopover({
   children,
-  artists,
-  selectedArtist,
-  onArtistChange,
-  projects,
-  selectedProject,
-  onProjectChange,
-  contracts,
+  contextTree,
+  checkedArtistIds,
+  setCheckedArtistIds,
+  checkedProjectIds,
+  setCheckedProjectIds,
+  projectDocuments,
+  knownContracts,
   selectedContracts,
   onSelectedContractsChange,
   uploadModalOpen,
   onUploadModalOpenChange,
   onUploadComplete,
-  isCreateProjectOpen,
-  onCreateProjectOpenChange,
-  newProjectNameInput,
-  onNewProjectNameInputChange,
-  isCreatingProject,
-  onCreateProject,
 }: ZoeContextPopoverProps) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
-  const contractContracts = contracts.filter((c) => c.folder_category === "contract");
-  const splitSheets = contracts.filter((c) => c.folder_category === "split_sheet");
-  const otherContracts = contracts.filter(
-    (c) => c.folder_category !== "contract" && c.folder_category !== "split_sheet"
+  const q = query.trim().toLowerCase();
+  const artistNameById = useMemo(
+    () => Object.fromEntries(contextTree.artists.map((a) => [a.id, a.name])),
+    [contextTree.artists]
   );
+  const projectById = useMemo(
+    () => Object.fromEntries(contextTree.projects.map((p) => [p.id, p])),
+    [contextTree.projects]
+  );
+
+  // ARTISTS — filtered by search
+  const artists = q
+    ? contextTree.artists.filter((a) => a.name.toLowerCase().includes(q))
+    : contextTree.artists;
+
+  // PROJECTS — only for checked artists, filtered by search, grouped by artist
+  const projectGroups = useMemo(() => {
+    const visible = contextTree.projects.filter(
+      (p) => checkedArtistIds.includes(p.artist_id) && (!q || p.name.toLowerCase().includes(q))
+    );
+    const byArtist: Record<string, CtxProject[]> = {};
+    for (const p of visible) (byArtist[p.artist_id] ||= []).push(p);
+    return checkedArtistIds
+      .filter((aid) => byArtist[aid]?.length)
+      .map((aid) => ({ artistId: aid, artistName: artistNameById[aid] || "Artist", projects: byArtist[aid] }));
+  }, [contextTree.projects, checkedArtistIds, q, artistNameById]);
+
+  // DOCUMENTS — for checked projects, grouped by artist — project
+  const docGroups = useMemo(() => {
+    return checkedProjectIds
+      .map((pid) => {
+        const proj = projectById[pid];
+        const docs = projectDocuments[pid] || [];
+        return proj && docs.length
+          ? {
+              projectId: pid,
+              label: `${(artistNameById[proj.artist_id] || "Artist").toUpperCase()} — ${proj.name.toUpperCase()}`,
+              docs,
+            }
+          : null;
+      })
+      .filter(Boolean) as { projectId: string; label: string; docs: CtxDoc[] }[];
+  }, [checkedProjectIds, projectById, projectDocuments, artistNameById]);
+
+  const selectedDocCount = docGroups.reduce(
+    (n, g) => n + g.docs.filter((d) => selectedContracts.includes(d.id)).length,
+    0
+  );
+  const uploadProjectId = checkedProjectIds[0];
 
   return (
     <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>{children}</PopoverTrigger>
-        <PopoverContent
-          align="end"
-          sideOffset={8}
-          className="w-80 p-0 shadow-xl border"
-          style={{ zIndex: 50 }}
-        >
-          <div className="p-4 space-y-4">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Context
-            </p>
+        <PopoverContent align="end" sideOffset={8} className="zoe-cmp w-[360px] p-0" style={{ zIndex: 50 }}>
+          <div className="zoe-cmp-head">
+            <div className="zoe-cmp-title">Comparison context</div>
+            <p className="zoe-cmp-sub">Check multiple artists &amp; projects to analyze their contracts side by side.</p>
+            <div className="zoe-cmp-search">
+              <Search />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search artists or projects…"
+              />
+            </div>
+          </div>
 
-            {/* Artist */}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Users className="w-3 h-3" />
-                Artist
+          <div className="zoe-cmp-scroll">
+            {/* SELECTED — always shows the current comparison set, regardless of which filters are open */}
+            {selectedContracts.length > 0 && (
+              <div className="zoe-cmp-section">
+                <div className="zoe-cmp-shead">
+                  <span>
+                    Selected · <b>{selectedContracts.length}</b> contract{selectedContracts.length === 1 ? "" : "s"}
+                  </span>
+                  <button className="zoe-cmp-clear" onClick={() => onSelectedContractsChange([])}>
+                    Deselect all
+                  </button>
+                </div>
+                <div className="zoe-cmp-selchips">
+                  {selectedContracts.map((id) => {
+                    const label = knownContracts.find((c) => c.id === id)?.file_name || id;
+                    return (
+                      <span key={id} className="zoe-cmp-selchip" title={label}>
+                        <span className="zoe-cmp-selchip-name">{label}</span>
+                        <button
+                          onClick={() => onSelectedContractsChange(selectedContracts.filter((x) => x !== id))}
+                          title="Remove from selection"
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Select value={selectedArtist} onValueChange={onArtistChange}>
-                  <SelectTrigger className="flex-1 h-8 text-xs">
-                    <SelectValue placeholder="Select artist…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {artists.map((a) => (
-                      <SelectItem key={a.id} value={a.id} className="text-xs">
-                        {a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedArtist && (
-                  <button
-                    onClick={() => onArtistChange("")}
-                    className="w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                    title="Clear artist"
-                  >
-                    <X className="w-3.5 h-3.5" />
+            )}
+
+            {/* ARTISTS */}
+            <div className="zoe-cmp-section">
+              <div className="zoe-cmp-shead">
+                <span>
+                  Artists · <b>{checkedArtistIds.length}</b> selected
+                </span>
+                {checkedArtistIds.length > 0 && (
+                  <button className="zoe-cmp-clear" onClick={() => setCheckedArtistIds([])}>
+                    Clear
                   </button>
                 )}
               </div>
+              {artists.length === 0 ? (
+                <p className="zoe-cmp-empty">No artists found</p>
+              ) : (
+                artists.map((a) => {
+                  const checked = checkedArtistIds.includes(a.id);
+                  return (
+                    <label key={a.id} className={`zoe-cmp-row ${checked ? "is-on" : ""}`}>
+                      <span className={`zoe-cmp-check ${checked ? "is-on" : ""}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setCheckedArtistIds((prev) => toggle(prev, a.id))}
+                        />
+                        {checked && (
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                            <path d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </span>
+                      <span className="zoe-cmp-avatar">{initials(a.name)}</span>
+                      <span className="zoe-cmp-rowtext">
+                        <span className="zoe-cmp-name">{a.name}</span>
+                        <span className="zoe-cmp-meta">
+                          {a.project_count} project{a.project_count === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })
+              )}
             </div>
 
-            {/* Project */}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <FolderOpen className="w-3 h-3" />
-                Project
-              </div>
-              <div className="flex items-center gap-2">
-                <Select
-                  value={selectedProject}
-                  onValueChange={onProjectChange}
-                  disabled={!selectedArtist}
-                >
-                  <SelectTrigger className="flex-1 h-8 text-xs">
-                    <SelectValue placeholder="Select project…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projects.map((p) => (
-                      <SelectItem key={p.id} value={p.id} className="text-xs">
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <button
-                  onClick={() => onCreateProjectOpenChange(true)}
-                  disabled={!selectedArtist}
-                  className="w-7 h-7 flex items-center justify-center rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Create new project"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Contracts */}
-            {selectedProject && (
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                    <FileText className="w-3 h-3" />
-                    Contracts {contracts.length > 0 && `(${contracts.length})`}
-                  </div>
-                  <button
-                    onClick={() => onUploadModalOpenChange(true)}
-                    className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
-                  >
-                    Upload
-                  </button>
+            {/* PROJECTS */}
+            {checkedArtistIds.length > 0 && (
+              <div className="zoe-cmp-section">
+                <div className="zoe-cmp-shead">
+                  <span>
+                    Projects · <b>{checkedProjectIds.length}</b> selected
+                  </span>
+                  {checkedProjectIds.length > 0 && (
+                    <button className="zoe-cmp-clear" onClick={() => setCheckedProjectIds([])}>
+                      Clear
+                    </button>
+                  )}
                 </div>
-
-                {contracts.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-2">
-                    No documents yet
-                  </p>
+                {projectGroups.length === 0 ? (
+                  <p className="zoe-cmp-empty">No projects for the selected artists</p>
                 ) : (
-                  <ScrollArea className="max-h-52">
-                    <div className="space-y-0.5 pr-1">
-                      {selectedContracts.length > 0 && (
-                        <button
-                          onClick={() => onSelectedContractsChange([])}
-                          className="w-full text-left text-xs text-muted-foreground hover:text-foreground px-1 py-1 rounded transition-colors"
-                        >
-                          Clear selection
-                        </button>
-                      )}
-
-                      {contractContracts.length > 0 && (
-                        <>
-                          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 pt-1 pb-0.5">
-                            Contracts
-                          </p>
-                          {contractContracts.map((c) => (
-                            <ContractCheckbox
-                              key={c.id}
-                              contract={c}
-                              checked={selectedContracts.includes(c.id)}
-                              onChange={(checked) => {
-                                if (checked) {
-                                  onSelectedContractsChange([...selectedContracts, c.id]);
-                                } else {
-                                  onSelectedContractsChange(
-                                    selectedContracts.filter((id) => id !== c.id)
-                                  );
-                                }
-                              }}
-                            />
-                          ))}
-                        </>
-                      )}
-
-                      {splitSheets.length > 0 && (
-                        <>
-                          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1 pt-2 pb-0.5">
-                            Split Sheets
-                          </p>
-                          {splitSheets.map((c) => (
-                            <ContractCheckbox
-                              key={c.id}
-                              contract={c}
-                              checked={selectedContracts.includes(c.id)}
-                              onChange={(checked) => {
-                                if (checked) {
-                                  onSelectedContractsChange([...selectedContracts, c.id]);
-                                } else {
-                                  onSelectedContractsChange(
-                                    selectedContracts.filter((id) => id !== c.id)
-                                  );
-                                }
-                              }}
-                            />
-                          ))}
-                        </>
-                      )}
-
-                      {otherContracts.length > 0 &&
-                        otherContracts.map((c) => (
-                          <ContractCheckbox
-                            key={c.id}
-                            contract={c}
-                            checked={selectedContracts.includes(c.id)}
-                            onChange={(checked) => {
-                              if (checked) {
-                                onSelectedContractsChange([...selectedContracts, c.id]);
-                              } else {
-                                onSelectedContractsChange(
-                                  selectedContracts.filter((id) => id !== c.id)
-                                );
-                              }
-                            }}
-                          />
-                        ))}
+                  projectGroups.map((g) => (
+                    <div key={g.artistId}>
+                      <div className="zoe-cmp-group">
+                        <span className="zoe-cmp-dot" />
+                        {g.artistName}
+                      </div>
+                      {g.projects.map((p) => {
+                        const checked = checkedProjectIds.includes(p.id);
+                        return (
+                          <label key={p.id} className={`zoe-cmp-row ${checked ? "is-on" : ""}`}>
+                            <span className={`zoe-cmp-check ${checked ? "is-on" : ""}`}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => setCheckedProjectIds((prev) => toggle(prev, p.id))}
+                              />
+                              {checked && (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                  <path d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </span>
+                            <span className="zoe-cmp-rowtext">
+                              <span className="zoe-cmp-name">{p.name}</span>
+                              <span className="zoe-cmp-meta">
+                                {p.doc_count} doc{p.doc_count === 1 ? "" : "s"}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
                     </div>
-                  </ScrollArea>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* DOCUMENTS */}
+            {checkedProjectIds.length > 0 && (
+              <div className="zoe-cmp-section">
+                <div className="zoe-cmp-shead">
+                  <span>
+                    Documents · <b>{selectedDocCount}</b> selected
+                  </span>
+                  {uploadProjectId && (
+                    <button className="zoe-cmp-clear" onClick={() => onUploadModalOpenChange(true)}>
+                      + Upload
+                    </button>
+                  )}
+                </div>
+                {docGroups.length === 0 ? (
+                  <p className="zoe-cmp-empty">No documents in the selected projects</p>
+                ) : (
+                  docGroups.map((g) => (
+                    <div key={g.projectId}>
+                      <div className="zoe-cmp-group">
+                        <span className="zoe-cmp-dot" />
+                        {g.label}
+                      </div>
+                      {g.docs.map((d) => {
+                        const checked = selectedContracts.includes(d.id);
+                        return (
+                          <label key={d.id} className={`zoe-cmp-row ${checked ? "is-on" : ""}`}>
+                            <span className={`zoe-cmp-check ${checked ? "is-on" : ""}`}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => onSelectedContractsChange(toggle(selectedContracts, d.id))}
+                              />
+                              {checked && (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                  <path d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </span>
+                            <span className="zoe-cmp-rowtext">
+                              <span className="zoe-cmp-name" title={d.file_name}>
+                                {d.file_name}
+                              </span>
+                              {d.page_count != null && <span className="zoe-cmp-meta">{d.page_count} pages</span>}
+                            </span>
+                            <span className="zoe-cmp-badge">
+                              {(d.folder_category === "split_sheet" ? "split sheet" : "contract").toUpperCase()}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ))
                 )}
               </div>
             )}
@@ -255,84 +324,14 @@ export function ZoeContextPopover({
         </PopoverContent>
       </Popover>
 
-      {/* Upload modal — rendered outside Popover so it doesn't close when opening */}
-      {selectedProject && (
+      {uploadProjectId && (
         <ContractUploadModal
           open={uploadModalOpen}
           onOpenChange={onUploadModalOpenChange}
-          projectId={selectedProject}
+          projectId={uploadProjectId}
           onUploadComplete={onUploadComplete}
         />
       )}
-
-      {/* Create project dialog */}
-      <Dialog open={isCreateProjectOpen} onOpenChange={onCreateProjectOpenChange}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>Create New Project</DialogTitle>
-            <DialogDescription>Create a new project to organize your files.</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="zcp-name" className="text-right">
-                Name
-              </Label>
-              <Input
-                id="zcp-name"
-                value={newProjectNameInput}
-                onChange={(e) => onNewProjectNameInputChange(e.target.value)}
-                className="col-span-3"
-                placeholder="e.g. Summer 2024 Release"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => onCreateProjectOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={onCreateProject}
-              disabled={isCreatingProject || !newProjectNameInput.trim()}
-            >
-              {isCreatingProject ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating…
-                </>
-              ) : (
-                "Create Project"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
-  );
-}
-
-function ContractCheckbox({
-  contract,
-  checked,
-  onChange,
-}: {
-  contract: Contract;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted/50">
-      <Checkbox
-        id={`ctx-${contract.id}`}
-        checked={checked}
-        onCheckedChange={(v) => onChange(!!v)}
-        className="w-3.5 h-3.5"
-      />
-      <label
-        htmlFor={`ctx-${contract.id}`}
-        className="text-xs leading-none cursor-pointer truncate flex-1"
-      >
-        {contract.file_name}
-      </label>
-    </div>
   );
 }

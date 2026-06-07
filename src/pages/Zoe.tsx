@@ -60,6 +60,7 @@ const Zoe = () => {
     artists,
     projects,
     contracts,
+    knownContracts,
     selectedArtist,
     setSelectedArtist,
     selectedProject,
@@ -70,6 +71,12 @@ const Zoe = () => {
     selectedProjectName,
     messagesEndRef,
     contractMarkdowns,
+    contextTree,
+    checkedArtistIds,
+    setCheckedArtistIds,
+    checkedProjectIds,
+    setCheckedProjectIds,
+    projectDocuments,
     messages,
     isStreaming,
     isAtLimit,
@@ -151,48 +158,31 @@ const Zoe = () => {
             <div className="topbar-right">
               {/* Context pill — opens the context popover */}
               <ZoeContextPopover
-                artists={artists}
-                selectedArtist={selectedArtist}
-                onArtistChange={(v) => {
-                  setSelectedArtist(v);
-                  setSelectedProject("");
-                  setSelectedContracts([]);
-                }}
-                projects={projects}
-                selectedProject={selectedProject}
-                onProjectChange={(v) => {
-                  setSelectedProject(v);
-                  setSelectedContracts([]);
-                }}
-                contracts={contracts}
+                contextTree={contextTree}
+                checkedArtistIds={checkedArtistIds}
+                setCheckedArtistIds={setCheckedArtistIds}
+                checkedProjectIds={checkedProjectIds}
+                setCheckedProjectIds={setCheckedProjectIds}
+                projectDocuments={projectDocuments}
+                knownContracts={knownContracts}
                 selectedContracts={selectedContracts}
                 onSelectedContractsChange={setSelectedContracts}
                 uploadModalOpen={uploadModalOpen}
                 onUploadModalOpenChange={setUploadModalOpen}
                 onUploadComplete={handleUploadComplete}
-                isCreateProjectOpen={isCreateProjectOpen}
-                onCreateProjectOpenChange={setIsCreateProjectOpen}
-                newProjectNameInput={newProjectNameInput}
-                onNewProjectNameInputChange={setNewProjectNameInput}
-                isCreatingProject={isCreatingProject}
-                onCreateProject={handleCreateProject}
               >
                 <button className="ctx-pill" title="Select context" data-walkthrough="zoe-context">
-                  {hasContext ? (
+                  {contractCount > 0 ? (
                     <>
                       <span className="live" />
-                      <b>{selectedArtistName}</b>
-                      {selectedProjectName && (
-                        <>
-                          <span className="ctx-dot" />
-                          <span>{selectedProjectName}</span>
-                        </>
-                      )}
-                      {contractCount > 0 && (
+                      <span>
+                        <b>{contractCount}</b> contract{contractCount > 1 ? "s" : ""}
+                      </span>
+                      {checkedArtistIds.length > 1 && (
                         <>
                           <span className="ctx-dot" />
                           <span>
-                            <b>{contractCount}</b> contract{contractCount > 1 ? "s" : ""}
+                            <b>{checkedArtistIds.length}</b> artists
                           </span>
                         </>
                       )}
@@ -200,7 +190,7 @@ const Zoe = () => {
                   ) : (
                     <>
                       <span className="ctx-dot" />
-                      <span>No context selected</span>
+                      <span>Select contracts to compare</span>
                     </>
                   )}
                 </button>
@@ -230,7 +220,7 @@ const Zoe = () => {
           selectedArtist={selectedArtist}
           selectedProject={selectedProject}
           selectedContracts={selectedContracts}
-          contracts={contracts}
+          contracts={knownContracts}
           contractMarkdowns={contractMarkdowns}
           copiedMessageId={copiedMessageId}
           messagesEndRef={messagesEndRef}
@@ -248,10 +238,8 @@ const Zoe = () => {
             error={error}
             isStreaming={isStreaming}
             isAtLimit={isAtLimit}
-            selectedArtist={selectedArtist}
-            selectedProject={selectedProject}
             selectedContracts={selectedContracts}
-            contracts={contracts}
+            knownContracts={knownContracts}
             contractMarkdowns={contractMarkdowns}
             onDeselectContract={(id) =>
               setSelectedContracts((prev) => prev.filter((c) => c !== id))
@@ -259,27 +247,16 @@ const Zoe = () => {
             onSend={handleSendMessage}
             onStop={stopGeneration}
             onKeyDown={handleKeyDown}
-            artists={artists}
-            projects={projects}
-            onArtistChange={(v) => {
-              setSelectedArtist(v);
-              setSelectedProject("");
-              setSelectedContracts([]);
-            }}
-            onProjectChange={(v) => {
-              setSelectedProject(v);
-              setSelectedContracts([]);
-            }}
+            contextTree={contextTree}
+            checkedArtistIds={checkedArtistIds}
+            setCheckedArtistIds={setCheckedArtistIds}
+            checkedProjectIds={checkedProjectIds}
+            setCheckedProjectIds={setCheckedProjectIds}
+            projectDocuments={projectDocuments}
             onSelectedContractsChange={setSelectedContracts}
             uploadModalOpen={uploadModalOpen}
             onUploadModalOpenChange={setUploadModalOpen}
             onUploadComplete={handleUploadComplete}
-            isCreateProjectOpen={isCreateProjectOpen}
-            onCreateProjectOpenChange={setIsCreateProjectOpen}
-            newProjectNameInput={newProjectNameInput}
-            onNewProjectNameInputChange={setNewProjectNameInput}
-            isCreatingProject={isCreatingProject}
-            onCreateProject={handleCreateProject}
           />
         </div>
 

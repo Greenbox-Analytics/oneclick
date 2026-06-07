@@ -47,7 +47,7 @@ import {
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useGatedAction } from "@/hooks/useGatedAction";
 import { useEntitlements } from "@/hooks/useEntitlements";
-import { ApiError } from "@/lib/apiFetch";
+import { apiFetch, API_URL, ApiError } from "@/lib/apiFetch";
 
 const ROLE_COLORS: Record<string, string> = {
   owner: "bg-purple-500/20 text-purple-400 border-purple-500/30",
@@ -173,24 +173,16 @@ const Portfolio = () => {
 
   const { mutate: createProject, paywallElement: projectPaywallElement } = useGatedAction<void, { name: string; description: string; artist_id: string }>({
     mutationFn: async (data) => {
-      // FE-only cap check (page uses supabase directly, not backend POST /projects)
-      if (projectCap !== -1 && projectCap !== 0 && currentProjectCount >= projectCap) {
-        throw new ApiError(`You've reached your limit of ${projectCap} projects.`, 402);
-      }
-
-      const { data: existing } = await supabase
-        .from("projects")
-        .select("id")
-        .eq("artist_id", data.artist_id)
-        .ilike("name", data.name.trim())
-        .limit(1);
-      if (existing && existing.length > 0) {
-        throw new Error(`A project named "${data.name.trim()}" already exists for this artist.`);
-      }
-      const { error } = await supabase
-        .from("projects")
-        .insert({ name: data.name, description: data.description || null, artist_id: data.artist_id });
-      if (error) throw error;
+      // Single source of truth: the backend endpoint gates the cap (402 -> paywall),
+      // rejects duplicate names (409), and adds the creator as project owner.
+      await apiFetch(`${API_URL}/projects`, {
+        method: "POST",
+        body: JSON.stringify({
+          artist_id: data.artist_id,
+          name: data.name,
+          description: data.description || null,
+        }),
+      });
     },
     onSuccess: () => {
       toast({ title: "Success", description: "Project created" });
@@ -198,8 +190,9 @@ const Portfolio = () => {
       setProjectDialogOpen(false);
     },
     onError: (err) => {
+      const isDup = err instanceof ApiError && err.status === 409;
       toast({
-        title: "Duplicate project name",
+        title: isDup ? "Duplicate project name" : "Couldn't create project",
         description: err.message,
         className: "bg-white text-black border border-border",
       });

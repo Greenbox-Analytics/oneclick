@@ -790,3 +790,84 @@
   .zoe-chat .thread { padding: 24px 16px 160px; }
   .zoe-chat .composer-wrap { padding: 0 12px 16px; }
 }
+
+/* ── Comparison-context panel (portaled popover; uses global tokens + brand green) ── */
+.zoe-cmp {
+  --cmp-green: hsl(150 42% 34%);
+  --cmp-green-soft: hsl(150 40% 96%);
+  --cmp-fg: hsl(var(--foreground));
+  --cmp-muted: hsl(var(--muted-foreground));
+  --cmp-border: hsl(var(--border));
+  background: hsl(var(--card));
+  color: var(--cmp-fg);
+  border: 1px solid var(--cmp-border);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+}
+.dark .zoe-cmp {
+  --cmp-green: hsl(150 48% 55%);
+  --cmp-green-soft: hsl(150 30% 16%);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.zoe-cmp-head { padding: 16px 16px 12px; border-bottom: 1px solid var(--cmp-border); }
+.zoe-cmp-title { font-size: 15px; font-weight: 700; color: var(--cmp-fg); }
+.zoe-cmp-sub { margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--cmp-muted); }
+.zoe-cmp-search {
+  display: flex; align-items: center; gap: 7px; margin-top: 11px; padding: 0 10px; height: 34px;
+  border: 1px solid var(--cmp-border); border-radius: 9px; background: hsl(var(--muted));
+}
+.zoe-cmp-search svg { width: 14px; height: 14px; flex: none; color: var(--cmp-muted); }
+.zoe-cmp-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: 13px; color: var(--cmp-fg); }
+.zoe-cmp-scroll { max-height: 62vh; overflow-y: auto; }
+.zoe-cmp-section { padding: 12px 8px; border-bottom: 1px solid var(--cmp-border); }
+.zoe-cmp-section:last-child { border-bottom: 0; }
+.zoe-cmp-shead {
+  display: flex; align-items: center; justify-content: space-between; padding: 0 8px 6px;
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cmp-muted);
+}
+.zoe-cmp-shead b { color: var(--cmp-fg); }
+.zoe-cmp-clear {
+  background: none; border: 0; cursor: pointer; font-size: 12px; font-weight: 600;
+  color: var(--cmp-green); text-transform: none; letter-spacing: 0;
+}
+.zoe-cmp-empty { padding: 8px; font-size: 12px; text-align: center; color: var(--cmp-muted); }
+.zoe-cmp-row { display: flex; align-items: center; gap: 11px; padding: 8px; border-radius: 9px; cursor: pointer; }
+.zoe-cmp-row:hover { background: hsl(var(--muted) / 0.55); }
+.zoe-cmp-row.is-on { background: var(--cmp-green-soft); }
+.zoe-cmp-check {
+  position: relative; flex: none; width: 22px; height: 22px; border: 1.5px solid var(--cmp-border);
+  border-radius: 6px; display: flex; align-items: center; justify-content: center; background: hsl(var(--card));
+}
+.zoe-cmp-check.is-on { background: var(--cmp-green); border-color: var(--cmp-green); }
+.zoe-cmp-check input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.zoe-cmp-check svg { width: 13px; height: 13px; color: #fff; }
+.dark .zoe-cmp-check.is-on svg { color: hsl(var(--background)); }
+.zoe-cmp-avatar {
+  flex: none; width: 34px; height: 34px; border-radius: 8px; background: hsl(var(--muted));
+  color: var(--cmp-green); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+}
+.zoe-cmp-rowtext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.zoe-cmp-name {
+  font-size: 14px; font-weight: 600; color: var(--cmp-fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.zoe-cmp-meta { font-size: 12px; color: var(--cmp-muted); }
+.zoe-cmp-group {
+  display: flex; align-items: center; gap: 7px; padding: 10px 8px 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--cmp-muted);
+}
+.zoe-cmp-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--cmp-green); }
+.zoe-cmp-badge {
+  flex: none; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--cmp-muted); background: hsl(var(--muted)); padding: 3px 7px; border-radius: 5px;
+}
+.zoe-cmp-selchips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px; }
+.zoe-cmp-selchip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  background: var(--cmp-green-soft); border: 1px solid color-mix(in srgb, var(--cmp-green) 25%, transparent);
+  border-radius: 7px; padding: 4px 8px; font-size: 12px; color: var(--cmp-fg);
+}
+.zoe-cmp-selchip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.zoe-cmp-selchip button { border: 0; background: none; cursor: pointer; color: var(--cmp-muted); font-size: 12px; line-height: 1; padding: 0; }
+.zoe-cmp-selchip button:hover { color: var(--cmp-fg); }

@@ -268,6 +268,12 @@ def file_name_exists_in_project(project_id: str, file_name: str) -> bool:
     return any(normalize_file_name(existing["file_name"]) == target_name for existing in (existing_files.data or []))
 
 
+def _name_lookup_ids(contract_ids: list[str] | None, contract_markdowns: dict | None) -> list[str]:
+    """Every contract we need a filename for: the selection plus everything in the working-set
+    markdown payload (the frontend sends full text for selected + recently-used contracts)."""
+    return list({*(contract_ids or []), *((contract_markdowns or {}).keys())})
+
+
 # --- Data Models ---
 class RoyaltyBreakdown(BaseModel):
     songName: str
@@ -690,7 +696,14 @@ class ProjectCreateRequest(BaseModel):
 @app.post("/projects")
 async def create_project(project: ProjectCreateRequest, user_id: str = Depends(get_current_user_id)):
     """
-    Create a new project for an artist, verifying user ownership.
+    Create a new project for an artist — the single source of truth for project
+    creation (Portfolio, Zoe, and OneClick all call this).
+
+    The DB trigger `auto_create_project_owner` only fires for user-client inserts
+    (it reads auth.uid()), which is NULL under the service-role client used here. So
+    we MUST insert the owner project_members row explicitly — otherwise the project
+    has zero members and the creator can't upload files (the UI gates the upload
+    button on project_members role).
     """
     try:
         if not verify_user_owns_artist(user_id, project.artist_id):
@@ -711,13 +724,57 @@ async def create_project(project: ProjectCreateRequest, user_id: str = Depends(g
             project_count = 0
         gated_create(user_id, "project", current_count=project_count)
 
+        # Duplicate-name guard (case-insensitive, per artist) — moved server-side so every
+        # entry point enforces it, not just the Portfolio page. We fetch the artist's project
+        # names and compare normalized in Python (mirroring file_name_exists_in_project) rather
+        # than using ilike, because ilike treats % and _ in the name as SQL wildcards (e.g.
+        # "50% Off" would spuriously match "50ABC Off"). Best-effort: this is a check-then-
+        # insert with no DB unique constraint, so a genuine concurrent double-submit of the
+        # same name could still slip through (documented TOCTOU limitation).
+        name = project.name.strip()
+        target = name.lower()
+        existing = get_supabase_client().table("projects").select("name").eq("artist_id", project.artist_id).execute()
+        if any((row.get("name") or "").strip().lower() == target for row in (existing.data or [])):
+            raise HTTPException(
+                status_code=409,
+                detail=f'A project named "{name}" already exists for this artist.',
+            )
+
         res = (
             get_supabase_client()
             .table("projects")
-            .insert({"artist_id": project.artist_id, "name": project.name, "description": project.description})
+            .insert({"artist_id": project.artist_id, "name": name, "description": project.description})
             .execute()
         )
-        return res.data[0]
+        new_project = res.data[0]
+
+        # Explicitly add the creator as project owner. The service-role client bypasses the
+        # auth.uid()-based trigger, so without this the project would have zero members.
+        try:
+            get_supabase_client().table("project_members").insert(
+                {"project_id": new_project["id"], "user_id": user_id, "role": "owner"}
+            ).execute()
+        except Exception as member_err:
+            # Roll back the just-created project so we don't persist an owner-less (unusable)
+            # one. The DELETE cascades to project_members, and prevent_owner_deletion permits
+            # that cascade (it only blocks a *top-level* owner-row delete; it returns OLD when
+            # pg_trigger_depth() > 1 — migration 20260518020000). So even in the rare edge where
+            # the owner row actually committed and only the response read failed, the rollback
+            # cleanly removes the project and its owner row — no orphan left behind. The
+            # try/except guards any other rollback failure so we still surface a clean 500.
+            try:
+                get_supabase_client().table("projects").delete().eq("id", new_project["id"]).execute()
+            except Exception:
+                logger.exception(
+                    "Rollback of project %s after owner-insert failure did not complete",
+                    new_project["id"],
+                )
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to finalize project creation. Please try again.",
+            ) from member_err
+
+        return new_project
     except HTTPException:
         raise
     except Exception as e:
@@ -1017,9 +1074,65 @@ async def get_project_documents(project_id: str, user_id: str = Depends(get_curr
             .in_("folder_category", ["contract", "split_sheet"])
             .execute()
         )
-        return response.data
+        # Derive page_count from the [[PAGE n]] markers in the cached markdown (null until converted),
+        # and drop the heavy markdown from the response — the selector only needs the count.
+        rows = response.data or []
+        for f in rows:
+            md = f.pop("contract_markdown", None)
+            f["page_count"] = md.count("[[PAGE ") if md else None
+        return rows
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/zoe/context-tree")
+async def get_zoe_context_tree(user_id: str = Depends(get_current_user_id)):
+    """Aggregated artists → projects (with project/document counts) for Zoe's comparison-context
+    selector. Lightweight — counts only; documents (with page counts) are fetched per checked project."""
+    try:
+        db = get_supabase_client()
+        artists = db.table("artists").select("id, name").eq("user_id", user_id).execute().data or []
+        artist_ids = [a["id"] for a in artists]
+        projects = []
+        doc_count_by_project: dict[str, int] = {}
+        if artist_ids:
+            projects = (
+                db.table("projects").select("id, name, artist_id").in_("artist_id", artist_ids).execute().data or []
+            )
+            project_ids = [p["id"] for p in projects]
+            if project_ids:
+                files = (
+                    db.table("project_files")
+                    .select("project_id")
+                    .in_("project_id", project_ids)
+                    .in_("folder_category", ["contract", "split_sheet"])
+                    .execute()
+                    .data
+                    or []
+                )
+                for f in files:
+                    pid = f["project_id"]
+                    doc_count_by_project[pid] = doc_count_by_project.get(pid, 0) + 1
+        proj_count_by_artist: dict[str, int] = {}
+        for p in projects:
+            proj_count_by_artist[p["artist_id"]] = proj_count_by_artist.get(p["artist_id"], 0) + 1
+        return {
+            "artists": [
+                {"id": a["id"], "name": a["name"], "project_count": proj_count_by_artist.get(a["id"], 0)}
+                for a in artists
+            ],
+            "projects": [
+                {
+                    "id": p["id"],
+                    "name": p["name"],
+                    "artist_id": p["artist_id"],
+                    "doc_count": doc_count_by_project.get(p["id"], 0),
+                }
+                for p in projects
+            ],
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1507,15 +1620,10 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
 
         # Look up contract filenames for labeling in LLM context
         contract_names = {}
-        if request.contract_ids:
+        name_ids = _name_lookup_ids(request.contract_ids, request.contract_markdowns)
+        if name_ids:
             try:
-                res = (
-                    get_supabase_client()
-                    .table("project_files")
-                    .select("id, file_name")
-                    .in_("id", request.contract_ids)
-                    .execute()
-                )
+                res = get_supabase_client().table("project_files").select("id, file_name").in_("id", name_ids).execute()
                 contract_names = {r["id"]: r["file_name"] for r in (res.data or [])}
             except Exception as e:
                 print(f"Warning: Could not fetch contract names: {e}")
