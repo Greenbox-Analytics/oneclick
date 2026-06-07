@@ -16,11 +16,16 @@ Defined directly in `src/backend/main.py`.
 
 ## How It Works
 
-1. **Select context** — Pick an artist, project, and one or more contracts from the sidebar. Zoe fetches and caches the full markdown for each selected contract.
+1. **Select context (optional)** — Pick an artist, project, and one or more contracts from the sidebar. Zoe fetches and caches the full markdown for each selected contract. You can also ask with **nothing selected** — Zoe answers general music-business questions from its knowledge base.
 2. **Ask a question** — The frontend sends query + conversation context + cached contract markdowns to `/zoe/ask-stream`.
-3. **Smart retrieval** — If all selected contracts fit under ~100k tokens, the backend sends the full documents as context (best accuracy). If not, it falls back to semantic vector search via Pinecone, pulling only the most relevant chunks.
+3. **Routing — knowledge base vs your contracts** — An LLM router picks the answer source per question, and it **emphasizes the contract**:
+   - **No contracts selected**, or a **general concept/clarification** whose answer doesn't depend on a specific deal ("what's a deficit vs net-payable royalty?") → answered from the **knowledge base** (a music-business reference book retrieved via Pinecone RAG), in Zoe's own words with no page citations. This mode uses the book + recent conversation history; it does **not** re-read the contract document.
+   - A **deal-specific question** ("what's my master split in this contract?") → answered from the **full contract document(s)**. The reference book is still retrieved and injected as silent **background**, so Zoe can append a short "Supplemental (general industry context)" note when the book adds context the contract doesn't cover — but the contract always governs.
+   - Genuinely ambiguous questions lean toward the contract.
 4. **Streaming response** — The LLM streams its answer back via SSE. The frontend renders tokens in real-time with confidence scores, source citations, and extracted structured data.
 5. **Page-jump** — For contract answers, after the answer finishes, the backend makes one cheap follow-up call that maps the answer back to the contract **page** it drew from, then emits a second `sources` event so the source chip opens the PDF at that page. Best-effort/model-attributed (a sensible page, not an exact clause). Full mechanics in `src/backend/zoe_chatbot/CHATBOT.md` → "Contract Page-Jump".
+
+> For the full routing rules, retrieval tuning, and reference-book mechanics, see `src/backend/zoe_chatbot/CHATBOT.md` → "Routing Decision" and "Reference Knowledge (Book RAG)".
 
 ## Frontend
 

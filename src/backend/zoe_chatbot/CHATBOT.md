@@ -2,9 +2,11 @@
 
 An AI assistant for music contracts, artist profiles, and **general music-business questions**. Streams responses in real-time via SSE (like ChatGPT/Claude), with intelligent routing that decides where to pull answers from.
 
-> **Two answer modes** (decided by whether contracts are selected):
-> - **Contract-assist** — one or more contracts selected → answers from the **full contract document(s)** (passed as markdown into a long-context model), with the reference book injected as labeled background.
-> - **General** — no contracts selected → answers general music-business questions from the **reference book** (Pinecone RAG) + the model's knowledge. Needs no artist or project — see "Reference Knowledge" below.
+> **Two answer sources, picked per question by an LLM router** (`_llm_route_decision`):
+> - **Contract-assist** — answers from the **full contract document(s)** (passed as markdown into a long-context model), with the reference book retrieved and injected as labeled **background** (the contract always governs). Used for any question whose answer depends on the selected contract(s).
+> - **General (knowledge base)** — answers a music-business question from the **reference book** (Pinecone RAG) + the model's knowledge, in Zoe's own words with no page citations. Used when **no contracts are selected**, AND when contracts *are* selected but the question is a general concept/clarification whose answer doesn't depend on the specific deal (e.g. "what's a deficit vs net-payable royalty?"). Needs no artist or project.
+>
+> The router **emphasizes the contract**: deal-specific questions stay in contract-assist, and genuinely ambiguous questions lean contract. See "Routing Decision" below.
 >
 > Note: contract answers use the **full-document** approach, not per-chunk Pinecone search of contracts. The only Pinecone namespace Zoe queries is the shared reference book.
 
@@ -30,10 +32,15 @@ User Query
     │   → LLM checks if history/context can answer the question
     │   → Avoids redundant document searches for follow-ups
     │
-    ├─ No contracts selected? → General mode
+    ├─ No contracts selected? → General mode (knowledge base)
     │   → search_reference() over the music-business reference book (Pinecone)
     │   → Answers a general music-business question as a general knowledge base (no page citations)
     │   → No artist/project required
+    │
+    ├─ Contracts selected → Routing decision (_llm_route_decision: contract vs general)
+    │   → "general"  → general concept/clarification (answer doesn't depend on the deal)
+    │   │              → General mode (knowledge base), same as above
+    │   └→ "contract" → deal-specific question (default; ambiguous leans here) → Tier 3
     │
     └─ Tier 3: Full-document contract context + LLM generation
         → Selected contracts' full markdown is passed into a long-context model
@@ -66,6 +73,17 @@ User Query
 - **Skipped for artist intent queries** to prevent history from intercepting profile questions (see below)
 - **Skipped when contracts change** — if the user switches contract selection between queries, Tier 2 is bypassed to force fresh retrieval on the new contract (prevents stale answers from old contract history)
 
+### Routing Decision: general vs contract (`_llm_route_decision`)
+
+Once contracts are selected, an LLM router classifies each question as **`contract`** or **`general`** (`max_completion_tokens=2000` — a reasoning model needs headroom, or it returns empty and falls back to `contract`):
+
+- **`contract`** — the answer depends on the selected contract(s): their terms, parties, splits, percentages, dates, amounts, or obligations; or the question refers to "this/my/the contract/deal"; or it's a follow-up building on a prior contract answer. → **Tier 3**.
+- **`general`** — a clarification or concept question whose answer does **not** depend on the specific contract: definitions/terminology ("what does 'controlled composition' mean?"), how the industry works broadly ("how are publishers paid?"), what a clause type typically does, or whether something is standard. → **General mode (knowledge base)**, even though contracts are selected.
+
+The router **emphasizes the contract**: when a question could be read either way (the litmus test is "does the answer change based on what *this* contract says?"), and when it is genuinely unsure, it chooses **`contract`**. With no contracts selected the router is skipped — everything is general mode.
+
+**What general mode does NOT load: the contract document.** A clarification answered in general mode draws on the **reference book + the last ~5 conversation turns** (so it stays aware of what you were just discussing) but does **not** re-read the selected contract — it's a clean general answer, not tailored to the deal's numbers. To get a clarification grounded in a specific deal, phrase it against the contract ("in *this* contract, is the royalty deficit-based?") so it routes to `contract` (which has both the contract and the book background).
+
 ### Tier 3: Full-Document Contract Context + LLM
 - The selected contracts' **full markdown** is passed into a long-context model (combined size capped ~370k chars). No per-chunk Pinecone search of contracts.
 - The reference book is retrieved **strictly** (`search_reference(query, floor_count=0)`) and, if it clears threshold, appended as a clearly-labeled background block — *the user's contract always governs; the book never overrides it*.
@@ -89,11 +107,11 @@ User Query
 
 ## Reference Knowledge (Book RAG)
 
-Zoe is backed by a long-form music-business reference book ingested into a shared Pinecone namespace (see the `chunk-pdf-pinecone` skill and `knowledge/` package).
+Zoe is backed by a long-form music-business reference book ingested into a shared Pinecone namespace (see the `chunk-pdf-pinecone` skill and `knowledge/` package). It works as **semantic RAG, not a whole-book context dump**: each turn, only the few passages most relevant to *that* question are retrieved and injected — the model never sees the full book at once.
 
 - **Namespace:** `REFERENCE_NAMESPACE` (env-configurable; default `music-business-reference`). It is the **only** namespace Zoe queries. The upload CLI defaults to the same env var so write/read can't drift.
 - **Retriever:** `knowledge.reference_search.search_reference(query, top_k=10, min_score=0.45, floor_count, floor_min=0.2)`. Tuned from a live probe (relevant passages ~0.52–0.70, off-topic ≤0.18); `0.45` admits genuine matches while excluding noise.
-- **General mode** (no contracts): `floor_count=5` — always feed the top-ranked book passages so the book contributes even when nothing clears 0.45. The book informs the answer invisibly (RAG): answers are **concise, in Zoe's own words, with no page citations or source naming**. Book passages still ride the `reference_sources` SSE field for observability.
+- **General mode** (no contracts selected, **or** a clarification/concept question the router classified `general` even with contracts selected): `floor_count=5` — always feed the top-ranked book passages so the book contributes even when nothing clears 0.45. The book informs the answer invisibly (RAG): answers are **concise, in Zoe's own words, with no page citations or source naming**. The contract document is **not** loaded in this mode — only the book and the last ~5 conversation turns. Book passages still ride the `reference_sources` SSE field for observability.
 - **Contract-assist mode** (contracts selected): `floor_count=0` (strict) — only ≥0.45 matches injected as background, so marginal book text never pollutes contract-specific reasoning. The model is instructed to **answer from the contract first**; if the question is fully answered by the contract it adds nothing, but if the background offers genuinely applicable general industry context the contract doesn't cover, it appends a short, clearly-separated **"Supplemental (general industry context)"** section (1–3 concise bullets). The book never overrides or adds contract terms.
 - **Resilience:** a retrieval/Pinecone failure never breaks Zoe — general mode falls back to a general-knowledge answer; contract mode proceeds with no book context. (So Zoe works even before the book is uploaded.)
 - **Analytics:** the `/zoe/ask-stream` endpoint tags every event with `mode` (`general` | `contract`).
