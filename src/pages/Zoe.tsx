@@ -190,7 +190,7 @@ const Zoe = () => {
                   ) : (
                     <>
                       <span className="ctx-dot" />
-                      <span>Select contracts to compare</span>
+                      <span>Select Contracts</span>
                     </>
                   )}
                 </button>
