@@ -285,17 +285,24 @@ export function useZoeData() {
   }, [selectedProject, selectedProjectName, sessionId]);
 
   useEffect(() => {
+    // Resolve names across the current artist's contracts AND popover-selected
+    // project documents — falling back to the raw id leaks UUIDs into the UI.
+    const nameById = new Map(contracts.map((c) => [c.id, c.file_name]));
+    for (const docs of Object.values(projectDocuments)) {
+      for (const d of docs) if (!nameById.has(d.id)) nameById.set(d.id, d.file_name);
+    }
     const prevIds = prevSelectedContractsRef.current;
     const currentIds = selectedContracts;
     const isContractSwitch = prevIds.length > 0
       && (prevIds.length !== currentIds.length
           || !prevIds.every(id => currentIds.includes(id)));
     if (isContractSwitch) {
-      const fromNames = prevIds.map(id => contracts.find(c => c.id === id)?.file_name || id);
-      const toNames = currentIds.map(id => contracts.find(c => c.id === id)?.file_name || id);
-      const dividerContent = currentIds.length === 1
-        ? `--- Switched to Contract: ${toNames[0]} ---`
-        : currentIds.length > 1
+      const fromNames = prevIds.map(id => nameById.get(id) || id);
+      const toNames = currentIds.map(id => nameById.get(id) || id);
+      const singleName = currentIds.length === 1 ? nameById.get(currentIds[0]) : undefined;
+      const dividerContent = singleName
+        ? `--- Switched to Contract: ${singleName} ---`
+        : currentIds.length >= 1
           ? `--- Switched Contracts ---`
           : `--- Deselected Contracts ---`;
       const dividerMessage: Message = {
@@ -322,7 +329,7 @@ export function useZoeData() {
           .filter(id => !existingIds.includes(id))
           .map(id => ({
             id,
-            name: contracts.find(c => c.id === id)?.file_name || id,
+            name: nameById.get(id) || id,
             data_extracted: {}
           }));
         if (newContracts.length === 0) return prev;
@@ -337,7 +344,7 @@ export function useZoeData() {
       ...recencyRef.current.filter((id) => !selectedContracts.includes(id)),
     ];
     prevSelectedContractsRef.current = selectedContracts;
-  }, [selectedContracts, contracts]);
+  }, [selectedContracts, contracts, projectDocuments]);
 
   // NOTE: the working set is intentionally NOT reset on artist/project switch — carrying
   // recently-discussed contracts across artists is what enables "compare to the previous

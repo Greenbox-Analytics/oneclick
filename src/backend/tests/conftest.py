@@ -120,6 +120,7 @@ class MockStorageBucket:
         self.download = MagicMock(return_value=b"mock-file-content")
         self.remove = MagicMock(return_value=None)
         self.create_signed_url = MagicMock(return_value={"signedURL": "https://example.com/signed"})
+        self.get_public_url = MagicMock(return_value="https://example.com/public")
         self.list = MagicMock(return_value=[])
 
 

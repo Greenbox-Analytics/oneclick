@@ -86,7 +86,11 @@ async def import_drive_file(token: str, supabase: Client, user_id: str, data: di
 
     timestamp = int(time.time())
     storage_path = f"{user_id}/{data['project_id']}/{timestamp}_{file_name}"
-    supabase.storage.from_("project-files").upload(storage_path, content)
+    supabase.storage.from_("project-files").upload(
+        storage_path,
+        content,
+        file_options={"content-type": metadata.get("mimeType") or "application/octet-stream"},
+    )
 
     # Create project_files record
     file_url = supabase.storage.from_("project-files").get_public_url(storage_path)
