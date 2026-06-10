@@ -918,8 +918,13 @@ async def upload_file(
 
         file_path = f"{artist_id}/{project_id}/{folder_category}/{timestamp}_{safe_filename}"
 
-        # 1. Upload to Storage
-        get_supabase_client().storage.from_("project-files").upload(file_path, file_content)
+        # 1. Upload to Storage — explicit content-type so signed URLs serve the
+        # real MIME type (the client defaults to text/plain, which breaks inline PDF viewing)
+        get_supabase_client().storage.from_("project-files").upload(
+            file_path,
+            file_content,
+            file_options={"content-type": file.content_type or "application/octet-stream"},
+        )
 
         # Get public URL
         file_url = get_supabase_client().storage.from_("project-files").get_public_url(file_path)
@@ -1205,8 +1210,13 @@ async def _upload_contract_impl(
         timestamp = int(time.time())
         file_path = f"{user_id}/{project_id}/contract/{timestamp}_{safe_filename}"
 
-        # 1. Upload to Supabase Storage
-        get_supabase_client().storage.from_("project-files").upload(file_path, file_content)
+        # 1. Upload to Supabase Storage — endpoint accepts PDFs only, so pin the
+        # MIME type (the client defaults to text/plain, which breaks inline PDF viewing)
+        get_supabase_client().storage.from_("project-files").upload(
+            file_path,
+            file_content,
+            file_options={"content-type": "application/pdf"},
+        )
 
         # Get public URL
         file_url = get_supabase_client().storage.from_("project-files").get_public_url(file_path)

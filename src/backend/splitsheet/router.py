@@ -96,7 +96,9 @@ async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(ge
             timestamp = int(time.time())
             storage_path = f"{req.artist_id}/{req.project_id}/split_sheet/{timestamp}_{filename}"
 
-            get_supabase_client().storage.from_("project-files").upload(storage_path, file_bytes)
+            get_supabase_client().storage.from_("project-files").upload(
+                storage_path, file_bytes, file_options={"content-type": media_type}
+            )
             file_url = get_supabase_client().storage.from_("project-files").get_public_url(storage_path)
 
             db_record = {

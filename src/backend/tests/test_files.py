@@ -665,3 +665,90 @@ class TestUploadGated:
         # Verify Storage was never touched (gate fired before any upload)
         upload_calls = mock_supabase.storage.from_.return_value.upload.call_count
         assert upload_calls == 0, f"Expected 0 storage uploads, got {upload_calls}"
+
+
+# ---------------------------------------------------------------------------
+# Upload content type
+# ---------------------------------------------------------------------------
+
+
+def _storage_upload_file_options(mock_supabase):
+    """Return the file_options passed to the (single) storage upload call."""
+    upload_mock = mock_supabase.storage.from_.return_value.upload
+    assert upload_mock.call_count == 1, f"Expected 1 storage upload, got {upload_mock.call_count}"
+    call = upload_mock.call_args
+    if "file_options" in call.kwargs:
+        return call.kwargs["file_options"]
+    return call.args[2] if len(call.args) > 2 else None
+
+
+class TestUploadContentType:
+    """Uploaded files must keep their real MIME type in Storage.
+
+    Without an explicit content-type, the Python storage client stores objects
+    as text/plain — signed URLs then serve PDFs as text and the browser's
+    inline PDF viewer refuses to render them.
+    """
+
+    def _make_happy_router(self):
+        """Table router: user owns the artist/project, no duplicate files, insert returns an id."""
+        from tests.conftest import TEST_USER_ID, _default_table_side_effect
+
+        project_files_calls = {"n": 0}
+
+        def _router(name):
+            if name == "artists":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[{"id": ARTIST_ID, "user_id": TEST_USER_ID}], count=1)
+                return b
+            if name == "projects":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(
+                    data=[{"id": PROJECT_ID, "name": "Test Project", "artist_id": ARTIST_ID}], count=1
+                )
+                return b
+            if name == "project_files":
+                project_files_calls["n"] += 1
+                b = MockQueryBuilder()
+                if project_files_calls["n"] == 1:
+                    # duplicate-name check — no existing files
+                    b.execute.return_value = MagicMock(data=[], count=0)
+                else:
+                    # insert — return the created row
+                    b.execute.return_value = MagicMock(data=[dict(FILE_RECORD)], count=1)
+                return b
+            return _default_table_side_effect(name)
+
+        return _router
+
+    def test_contracts_upload_passes_pdf_content_type_to_storage(self, client, mock_supabase, monkeypatch):
+        """POST /contracts/upload stores the PDF with content-type application/pdf."""
+        import io
+
+        import main
+
+        monkeypatch.setattr(main, "_convert_pdf_background", lambda **kwargs: None)
+        mock_supabase.table.side_effect = self._make_happy_router()
+
+        files = {"file": ("contract.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")}
+        resp = client.post("/contracts/upload", files=files, data={"project_id": PROJECT_ID})
+
+        assert resp.status_code == 200, resp.text
+        file_options = _storage_upload_file_options(mock_supabase)
+        assert file_options is not None, "storage upload was called without file_options"
+        assert file_options.get("content-type") == "application/pdf"
+
+    def test_upload_passes_file_content_type_to_storage(self, client, mock_supabase):
+        """POST /upload stores the file with the content type the client sent."""
+        import io
+
+        mock_supabase.table.side_effect = self._make_happy_router()
+
+        files = {"file": ("statement.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")}
+        data = {"artist_id": ARTIST_ID, "category": "royalty_statement", "project_id": PROJECT_ID}
+        resp = client.post("/upload", files=files, data=data)
+
+        assert resp.status_code == 200, resp.text
+        file_options = _storage_upload_file_options(mock_supabase)
+        assert file_options is not None, "storage upload was called without file_options"
+        assert file_options.get("content-type") == "application/pdf"
