@@ -3,8 +3,8 @@ and the helper forwards contract_id so the audit log is accountable."""
 
 from unittest.mock import MagicMock, patch
 
-from oneclick.nuance_adjuster import BasisFinding
 from oneclick.royalty_calculator import RoyaltyCalculator, RoyaltyPayment
+from utils.contract_parsing.basis_detection import BasisFinding
 
 
 def _calc_with(payments):

@@ -1,6 +1,6 @@
 """Tests for stale-cache re-conversion decision and OneClick marker-stripping."""
 
-from zoe_chatbot.helpers import markdown_has_page_markers, strip_page_markers
+from utils.ingestion.pdf_markdown import markdown_has_page_markers, strip_page_markers
 
 
 def _needs_reconvert(cached: str | None) -> bool:

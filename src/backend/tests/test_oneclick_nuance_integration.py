@@ -20,8 +20,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import oneclick.royalty_calculator as rc
-from oneclick.nuance_adjuster import BasisFinding, audit_contract_basis
 from oneclick.royalty_calculator import RoyaltyCalculator
+from utils.contract_parsing.basis_detection import BasisFinding, audit_contract_basis
 
 # A contract whose clause is verbatim-present (the audit rejects non-verbatim quotes).
 CONTRACT = (

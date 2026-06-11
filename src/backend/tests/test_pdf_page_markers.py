@@ -5,7 +5,7 @@ import tempfile
 
 import fitz  # PyMuPDF, already a dependency
 
-from zoe_chatbot.helpers import (
+from utils.ingestion.pdf_markdown import (
     markdown_has_page_markers,
     pdf_to_markdown,
     strip_page_markers,

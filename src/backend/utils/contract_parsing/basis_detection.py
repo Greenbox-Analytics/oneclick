@@ -1,4 +1,4 @@
-"""Contract-nuance basis DETECTION for OneClick (log-only v1).
+"""Contract-nuance basis DETECTION (log-only v1) — originally OneClick-specific.
 
 The OneClick calc applies a flat percentage to each song's net-payable total. Some
 contracts describe a different base (net receipts, a stated deduction, wholesale vs
@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from analytics import capture as analytics_capture
 
 logger = logging.getLogger(__name__)
+# Logger name is load-bearing: tests use `caplog.at_level(logger="oneclick.audit")`.
+# Keep the string literal even though this module now lives outside oneclick/.
 audit_logger = logging.getLogger("oneclick.audit")
 
 LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5.2")

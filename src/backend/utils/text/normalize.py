@@ -1,6 +1,14 @@
 """
-Helper functions for OneClick royalty calculations
-Contains utility methods for song matching and normalization
+Shared text-normalization helpers used by OneClick, Zoe, and any future tool that
+needs to compare song titles, party names, or role strings.
+
+Functions:
+- normalize_title: prepare song/work titles for fuzzy matching against statements.
+- find_matching_song: fuzzy-match a contract song title against a statement dict and
+  aggregate the matched amounts.
+- simplify_role: collapse verbose role strings ("lyrical writer (songwriter)") into a
+  small canonical taxonomy (writer / producer / label / etc.).
+- normalize_name: prepare party/artist names for case-insensitive comparison.
 """
 
 import re

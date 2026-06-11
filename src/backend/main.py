@@ -112,7 +112,7 @@ def _convert_pdf_background(
 
     from supabase import create_client
 
-    from zoe_chatbot.helpers import pdf_to_markdown
+    from utils.ingestion.pdf_markdown import pdf_to_markdown
 
     try:
         db = create_client(db_url, db_key)
@@ -1423,7 +1423,7 @@ async def get_contract_markdown(contract_id: str, user_id: str = Depends(get_cur
         markdown = record.get("contract_markdown")
 
         # Re-convert when empty OR cached before page markers existed (Tier 1 page-jump).
-        from zoe_chatbot.helpers import markdown_has_page_markers, pdf_to_markdown
+        from utils.ingestion.pdf_markdown import markdown_has_page_markers, pdf_to_markdown
 
         if not markdown or not markdown_has_page_markers(markdown):
             file_data = get_supabase_client().storage.from_("project-files").download(record["file_path"])
@@ -2044,7 +2044,7 @@ async def oneclick_calculate_royalties_stream(
                         md = c_res.data[0].get("contract_markdown")
                         if not md:
                             # Lazy migration: convert PDF to markdown
-                            from zoe_chatbot.helpers import pdf_to_markdown
+                            from utils.ingestion.pdf_markdown import pdf_to_markdown
 
                             pdf_data = (
                                 get_supabase_client()
@@ -2062,7 +2062,7 @@ async def oneclick_calculate_royalties_stream(
                             finally:
                                 os.unlink(tmp_pdf_path)
                         if md:
-                            from zoe_chatbot.helpers import strip_page_markers
+                            from utils.ingestion.pdf_markdown import strip_page_markers
 
                             contract_markdowns[cid] = strip_page_markers(md)
                 except Exception as e:
