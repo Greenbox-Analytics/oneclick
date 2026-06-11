@@ -31,8 +31,9 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from knowledge.reference_search import search_reference
-from oneclick.helpers import normalize_name
-from zoe_chatbot.helpers import detect_and_extract_tables, linearize_table, strip_page_markers
+from utils.ingestion.pdf_markdown import strip_page_markers
+from utils.ingestion.tables import detect_and_extract_tables, linearize_table
+from utils.text.normalize import normalize_name
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")

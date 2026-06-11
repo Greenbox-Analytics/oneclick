@@ -12,22 +12,17 @@ Covers:
 
 import pytest
 
-from oneclick.contract_parser import (
-    STREAMING_EQUIVALENT_TERMS,
-    ContractData,
-    Party,
-    RoyaltyShare,
-    Work,
+from oneclick.royalty_calculator import (
+    RoyaltyCalculator,
+    is_streaming_equivalent_royalty_type,
 )
-from oneclick.helpers import (
+from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
+from utils.contract_parsing.parser import STREAMING_EQUIVALENT_TERMS
+from utils.text.normalize import (
     find_matching_song,
     normalize_name,
     normalize_title,
     simplify_role,
-)
-from oneclick.royalty_calculator import (
-    RoyaltyCalculator,
-    is_streaming_equivalent_royalty_type,
 )
 
 # ---------------------------------------------------------------------------

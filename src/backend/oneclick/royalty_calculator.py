@@ -23,13 +23,13 @@ from pathlib import Path
 
 import openpyxl
 from dotenv import load_dotenv
-from openai import OpenAI
 
 from knowledge.reference_search import search_reference
-from oneclick.nuance_adjuster import audit_contract_basis, log_basis_finding
-
-from .contract_parser import STREAMING_EQUIVALENT_TERMS, ContractData, MusicContractParser
-from .helpers import find_matching_song, normalize_name, normalize_title, simplify_role
+from utils.contract_parsing.basis_detection import audit_contract_basis, log_basis_finding
+from utils.contract_parsing.models import ContractData
+from utils.contract_parsing.parser import STREAMING_EQUIVALENT_TERMS, MusicContractParser
+from utils.llm.client import get_openai_client
+from utils.text.normalize import find_matching_song, normalize_name, normalize_title, simplify_role
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -368,7 +368,7 @@ class RoyaltyCalculator:
 
         if self.api_key:
             try:
-                client = OpenAI(api_key=self.api_key)
+                client = get_openai_client()
 
                 prompt = (
                     f"Given these column headers from a music royalty statement: {headers}\\n\\n"
