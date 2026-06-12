@@ -30,12 +30,9 @@ const DESC_FOR_TOOL: Partial<Record<ToolId, string>> = {
   registry: "Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents.",
 };
 
-// `comingSoon` was hardcoded on Registry — preserve that behavior here.
-// Keeping the toggle external to TOOL_REGISTRY because "coming soon" is a UI
+// Keep the toggle external to TOOL_REGISTRY because "coming soon" is a UI
 // concern, not a tracking concern (the spec keeps Registry tracking active).
-const COMING_SOON: Partial<Record<ToolId, boolean>> = {
-  registry: true,
-};
+const COMING_SOON: Partial<Record<ToolId, boolean>> = {};
 
 const TOOL_CARDS = TOOL_REGISTRY.filter((t) => t.category === "tool").map((t) => ({
   route: ROUTE_FOR_TOOL[t.id]!,

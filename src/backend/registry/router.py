@@ -4,7 +4,7 @@ import re
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -13,7 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
-from registry import service, work_links_service
+from registry import contract_splits, service, work_links_service
 from registry.models import (
     AgreementCreate,
     CollaboratorInvite,
@@ -111,8 +111,11 @@ async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_
 @router.put("/works/{work_id}")
 async def update_work(work_id: str, body: WorkUpdate, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    data = body.model_dump(exclude_none=True)
-    if "release_date" in data and data["release_date"]:
+    # exclude_unset (not exclude_none) so callers can explicitly null out a
+    # field — needed for unreleasing a track (release_date = null), unsetting
+    # an ISRC, etc. exclude_none would silently strip those nulls.
+    data = body.model_dump(exclude_unset=True)
+    if data.get("release_date") is not None and not isinstance(data["release_date"], str):
         data["release_date"] = data["release_date"].isoformat()
     work = await service.update_work(_get_supabase(), user_id, work_id, data)
     if not work:
@@ -772,3 +775,97 @@ async def mark_all_read(user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
     await service.mark_all_notifications_read(_get_supabase(), user_id)
     return {"ok": True}
+
+
+# ============================================================
+# Contract → royalty-splits parsing (Add Work wizard)
+# ============================================================
+
+
+@router.post("/parse-contract-splits")
+async def parse_contract_splits(
+    main_artist_name: str = Form(""),
+    contract_file_id: str = Form(""),
+    file: UploadFile | None = File(None),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Pivot a contract PDF into per-party master/publishing royalty splits.
+
+    Accepts either:
+      - a multipart `file` upload (PDF), OR
+      - a `contract_file_id` referencing an existing `project_files` row that
+        the user can access. The file is downloaded from the `project-files`
+        Supabase storage bucket.
+
+    Powers the Add Work wizard's "Pull from the contract" step. Returns:
+        {parties: [{name, role, master_pct, publishing_pct, is_main_artist}],
+         main_artist_found: bool}
+
+    If `main_artist_found` is false, the main artist is omitted from `parties`
+    and the frontend prompts the user to enter their own split manually.
+    """
+    gated_feature(user_id, Action.USE_REGISTRY)
+
+    import os
+    import tempfile
+
+    has_upload = file is not None and file.filename
+    has_picked = bool(contract_file_id)
+    if has_upload == has_picked:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide exactly one of: `file` (upload) or `contract_file_id` (existing).",
+        )
+
+    contents: bytes
+    if has_upload:
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    else:
+        db = _get_supabase()
+        row = (
+            db.table("project_files").select("file_path, file_name").eq("id", contract_file_id).maybe_single().execute()
+        )
+        if not row.data:
+            raise HTTPException(status_code=404, detail="Contract file not found")
+        file_path = row.data.get("file_path")
+        if not file_path:
+            raise HTTPException(status_code=400, detail="Contract file has no storage path")
+        try:
+            contents = db.storage.from_("project-files").download(file_path)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to download contract: {exc}") from exc
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        try:
+            result = contract_splits.parse_royalty_splits(
+                pdf_path=tmp_path,
+                main_artist_name=main_artist_name or "",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Contract parsing failed: {e}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    analytics_capture(
+        user_id,
+        "registry_contract_splits_parsed",
+        properties={
+            "party_count": len(result["parties"]),
+            "main_artist_found": result["main_artist_found"],
+            "source": "upload" if has_upload else "project_file",
+        },
+    )
+    return result

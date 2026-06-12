@@ -25,7 +25,7 @@ import {
 // ---------------------------------------------------------------------------
 
 // Flip to false to restore Rights Registry / Work Detail docs and works references.
-const HIDE_REGISTRY_AND_WORKS = true;
+const HIDE_REGISTRY_AND_WORKS = false;
 
 interface Section {
   id: string;

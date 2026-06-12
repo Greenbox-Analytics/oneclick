@@ -13,7 +13,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 // Flip to false to restore the Rights Registry walkthrough and works mentions.
-const HIDE_REGISTRY_AND_WORKS = true;
+const HIDE_REGISTRY_AND_WORKS = false;
 
 export interface ToolWalkthroughStep {
   targetSelector: string;

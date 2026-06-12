@@ -45,6 +45,7 @@ from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
+from integrations.spotify.router import router as spotify_router
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
@@ -60,6 +61,7 @@ from users.router import router as users_router
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
 app.include_router(notion_router, prefix="/integrations/notion", tags=["Notion"])
+app.include_router(spotify_router, prefix="/integrations/spotify", tags=["Spotify"])
 app.include_router(connections_router, prefix="/integrations", tags=["Integrations"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
 app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])

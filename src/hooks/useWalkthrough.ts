@@ -3,7 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 
 // Flip to false to restore Rights Registry / works mentions in the dashboard walkthrough.
-const HIDE_REGISTRY_AND_WORKS = true;
+const HIDE_REGISTRY_AND_WORKS = false;
 
 export interface WalkthroughStep {
   targetSelector: string;
