@@ -8,6 +8,7 @@ from supabase import Client
 
 from analytics import capture as analytics_capture
 from pagination import PaginatedResponse, paginate_query
+from registry.access import get_work_access
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +88,20 @@ async def create_work(db: Client, user_id: str, data: dict):
 
 
 async def update_work(db: Client, user_id: str, work_id: str, data: dict):
-    work = db.table("works_registry").select("status").eq("id", work_id).eq("user_id", user_id).single().execute()
+    wa = await get_work_access(db, user_id, work_id)
+    if not wa.can_edit:
+        raise PermissionError("Not allowed to edit this work")
+    work = db.table("works_registry").select("status").eq("id", work_id).single().execute()
     if not work.data:
         return None
-    result = db.table("works_registry").update(data).eq("id", work_id).eq("user_id", user_id).execute()
+    result = db.table("works_registry").update(data).eq("id", work_id).execute()
     return result.data[0] if result.data else None
 
 
 async def delete_work(db: Client, user_id: str, work_id: str):
+    wa = await get_work_access(db, user_id, work_id)
+    if not wa.can_delete:
+        raise PermissionError("Not allowed to delete this work")
     # Notify collaborators before deletion so they don't silently lose access
     collabs = (
         db.table("registry_collaborators")
@@ -116,7 +123,7 @@ async def delete_work(db: Client, user_id: str, work_id: str):
                 message=f'The work "{work_title}" has been deleted by its owner.',
                 metadata={"work_title": work_title},
             )
-    return db.table("works_registry").delete().eq("id", work_id).eq("user_id", user_id).execute().data
+    return db.table("works_registry").delete().eq("id", work_id).execute().data
 
 
 # ============================================================
@@ -144,11 +151,13 @@ async def validate_stake_percentage(
     new_percentage: float,
     exclude_stake_id: str = None,
 ):
+    # Work-scoped (not user-scoped): sum ALL stakes of this type on the work so a
+    # non-owner admin adding a stake can't blow past 100% just because the existing
+    # stakes are stamped to the work owner's user_id, not theirs.
     existing = (
         db.table("ownership_stakes")
         .select("id, percentage")
         .eq("work_id", work_id)
-        .eq("user_id", user_id)
         .eq("stake_type", stake_type)
         .execute()
     )
@@ -157,18 +166,41 @@ async def validate_stake_percentage(
 
 
 async def create_stake(db: Client, user_id: str, data: dict):
-    data["user_id"] = user_id
+    wa = await get_work_access(db, user_id, data["work_id"])
+    if not wa.can_edit:
+        raise PermissionError("Not allowed to edit this work")
+    work = db.table("works_registry").select("user_id").eq("id", data["work_id"]).single().execute()
+    work_owner = work.data["user_id"] if work.data else user_id
+    data["user_id"] = work_owner  # stake user_id is ALWAYS the work owner, never the caller
+    # is_owner_stake safety-net: only when not already set AND not collaborator-linked
+    # (the NAND check forbids both) AND the holder email matches the owner's auth email.
+    if not data.get("is_owner_stake") and data.get("collaborator_id") is None:
+        owner_email = _resolve_auth_email(db, work_owner)
+        if owner_email and (data.get("holder_email") or "").lower() == owner_email.lower():
+            data["is_owner_stake"] = True
     result = db.table("ownership_stakes").insert(data).execute()
     return result.data[0] if result.data else None
 
 
 async def update_stake(db: Client, user_id: str, stake_id: str, data: dict):
-    result = db.table("ownership_stakes").update(data).eq("id", stake_id).eq("user_id", user_id).execute()
+    row = db.table("ownership_stakes").select("work_id").eq("id", stake_id).single().execute()
+    if not row.data:
+        return None
+    wa = await get_work_access(db, user_id, row.data["work_id"])
+    if not wa.can_edit:
+        raise PermissionError("Not allowed to edit this work")
+    result = db.table("ownership_stakes").update(data).eq("id", stake_id).execute()
     return result.data[0] if result.data else None
 
 
 async def delete_stake(db: Client, user_id: str, stake_id: str):
-    return db.table("ownership_stakes").delete().eq("id", stake_id).eq("user_id", user_id).execute().data
+    row = db.table("ownership_stakes").select("work_id").eq("id", stake_id).single().execute()
+    if not row.data:
+        return None
+    wa = await get_work_access(db, user_id, row.data["work_id"])
+    if not wa.can_edit:
+        raise PermissionError("Not allowed to edit this work")
+    return db.table("ownership_stakes").delete().eq("id", stake_id).execute().data
 
 
 # ============================================================
@@ -182,18 +214,34 @@ async def get_licenses(db: Client, user_id: str, work_id: str):
 
 
 async def create_license(db: Client, user_id: str, data: dict):
-    data["user_id"] = user_id
+    wa = await get_work_access(db, user_id, data["work_id"])
+    if not wa.can_edit:
+        raise PermissionError("Not allowed to edit this work")
+    work = db.table("works_registry").select("user_id").eq("id", data["work_id"]).single().execute()
+    data["user_id"] = work.data["user_id"] if work.data else user_id
     result = db.table("licensing_rights").insert(data).execute()
     return result.data[0] if result.data else None
 
 
 async def update_license(db: Client, user_id: str, license_id: str, data: dict):
-    result = db.table("licensing_rights").update(data).eq("id", license_id).eq("user_id", user_id).execute()
+    row = db.table("licensing_rights").select("work_id").eq("id", license_id).single().execute()
+    if not row.data:
+        return None
+    wa = await get_work_access(db, user_id, row.data["work_id"])
+    if not wa.can_edit:
+        raise PermissionError("Not allowed to edit this work")
+    result = db.table("licensing_rights").update(data).eq("id", license_id).execute()
     return result.data[0] if result.data else None
 
 
 async def delete_license(db: Client, user_id: str, license_id: str):
-    return db.table("licensing_rights").delete().eq("id", license_id).eq("user_id", user_id).execute().data
+    row = db.table("licensing_rights").select("work_id").eq("id", license_id).single().execute()
+    if not row.data:
+        return None
+    wa = await get_work_access(db, user_id, row.data["work_id"])
+    if not wa.can_edit:
+        raise PermissionError("Not allowed to edit this work")
+    return db.table("licensing_rights").delete().eq("id", license_id).execute().data
 
 
 # ============================================================
@@ -209,7 +257,11 @@ async def get_agreements(db: Client, user_id: str, work_id: str):
 
 
 async def create_agreement(db: Client, user_id: str, data: dict):
-    data["user_id"] = user_id
+    wa = await get_work_access(db, user_id, data["work_id"])
+    if not wa.can_edit:
+        raise PermissionError("Not allowed to edit this work")
+    work = db.table("works_registry").select("user_id").eq("id", data["work_id"]).single().execute()
+    data["user_id"] = work.data["user_id"] if work.data else user_id
     result = db.table("registry_agreements").insert(data).execute()
     return result.data[0] if result.data else None
 
@@ -281,6 +333,44 @@ async def is_invite_expired(collab: dict) -> bool:
     if isinstance(expires_at, str):
         expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
     return datetime.now(UTC) > expires_at
+
+
+async def get_invite_preview(db: Client, token: str, requester_user_id: str):
+    """Pre-confirm preview for the claim page. Token-authorized; enforces expiry + email
+    match so split/terms don't leak to an expired token or a wrong-email account. Returns
+    ALL the claimant's stakes via collaborator_id (not the first-only legacy stake_id)."""
+    collab = db.table("registry_collaborators").select("*").eq("invite_token", token).maybe_single().execute()
+    if not collab or not collab.data:
+        return None
+    c = collab.data
+    if await is_invite_expired(c):  # async; takes the collab DICT
+        return {"expired": True}
+    requester_email = _resolve_auth_email(db, requester_user_id)
+    if (requester_email or "").lower() != (c.get("email") or "").lower():
+        work = db.table("works_registry").select("title").eq("id", c["work_id"]).maybe_single().execute()
+        return {
+            "email_mismatch": True,
+            "invite_email": c["email"],
+            "work_title": (work.data or {}).get("title") if work and work.data else None,
+        }
+    stakes = (
+        db.table("ownership_stakes")
+        .select("stake_type, percentage, holder_role")
+        .eq("collaborator_id", c["id"])
+        .execute()
+    ).data or []
+    work = (
+        db.table("works_registry")
+        .select("title, project_id, artist_id")
+        .eq("id", c["work_id"])
+        .maybe_single()
+        .execute()
+    )
+    return {
+        "collaborator": {"name": c["name"], "role": c["role"], "terms": c.get("terms", [])},
+        "stakes": stakes,
+        "work": work.data if work else None,
+    }
 
 
 async def claim_invitation(db: Client, invite_token: str, user_id: str):
@@ -432,29 +522,23 @@ async def resend_invitation(db: Client, user_id: str, collaborator_id: str):
 
 
 async def revoke_collaborator(db: Client, user_id: str, collaborator_id: str):
-    """Revoke a collaborator. Deletes associated stakes. Reverts registered works to draft."""
-    collab = (
-        db.table("registry_collaborators")
-        .select("*")
-        .eq("id", collaborator_id)
-        .eq("invited_by", user_id)
-        .single()
-        .execute()
-    )
+    """Revoke a collaborator: remove ACCESS, KEEP ownership. Clears access grants and sets
+    status='revoked'. Does NOT delete stakes (a revoked producer may still legally own their %)
+    and does NOT revert a registered work to draft. Gated by can_manage (work owner/admin or
+    project owner/admin) — not just the original inviter."""
+    collab = db.table("registry_collaborators").select("*").eq("id", collaborator_id).single().execute()
     if not collab.data:
         return None
 
-    # Revoke
+    wa = await get_work_access(db, user_id, collab.data["work_id"])
+    if not wa.can_manage:
+        raise PermissionError("Not allowed")
+
+    # Revoke = remove access, keep ownership.
     db.table("registry_collaborators").update({"status": "revoked"}).eq("id", collaborator_id).execute()
 
-    # Delete associated stake
-    if collab.data.get("stake_id"):
-        db.table("ownership_stakes").delete().eq("id", collab.data["stake_id"]).execute()
-
-    # Revert registered work to draft
-    work = db.table("works_registry").select("status").eq("id", collab.data["work_id"]).single().execute()
-    if work.data and work.data["status"] == "registered":
-        db.table("works_registry").update({"status": "draft"}).eq("id", collab.data["work_id"]).execute()
+    # Clear access grants (stakes are intentionally KEPT).
+    db.table("registry_access_grants").delete().eq("collaborator_id", collaborator_id).execute()
 
     return collab.data
 
@@ -514,64 +598,130 @@ async def submit_for_approval(db: Client, user_id: str, work_id: str):
 
 
 async def invite_with_stakes(db: Client, user_id: str, data):
-    """Create collaborator + ownership stakes atomically."""
+    """Create collaborator + ownership stakes, linking every stake to the collaborator.
+    Gated by can_manage (work owner/admin or project owner/admin).
+    NOTE: not transactional — these are separate Supabase calls; a mid-sequence failure
+    can leave an orphan collaborator/stakes (pre-existing limitation, not claimed atomic)."""
     import secrets
     from datetime import datetime, timedelta
 
+    from registry import grants_service
+    from registry.access import get_work_access
+
     work = db.table("works_registry").select("*").eq("id", data.work_id).single().execute()
-    if not work.data or work.data["user_id"] != user_id:
-        raise PermissionError("Not the work owner")
+    if not work.data:
+        raise PermissionError("Work not found")
+    wa = await get_work_access(db, user_id, data.work_id)
+    if not wa.can_manage:
+        raise PermissionError("Not allowed to manage this work")
+    work_owner = work.data["user_id"]
 
     token = secrets.token_urlsafe(32)
     expires = (datetime.now(UTC) + timedelta(hours=48)).isoformat()
-    collab = (
-        db.table("registry_collaborators")
-        .insert(
-            {
-                "work_id": data.work_id,
-                "invited_by": user_id,
-                "email": data.email,
-                "name": data.name,
-                "role": data.role,
-                "status": "invited",
-                "invite_token": token,
-                "expires_at": expires,
-            }
-        )
-        .execute()
-    )
-    collab_row = collab.data[0] if collab.data else None
+    access_level = getattr(data, "access_level", None) or "viewer"
 
+    # REACTIVATE-ON-RE-INVITE (cap-table correctness). Because revoke now KEEPS the stake
+    # (Task 8 decision), blindly INSERTing a fresh collaborator + stakes on re-invite would
+    # create a SECOND set of stakes for the same person -> silent double-count. So reuse any
+    # prior row for this (work, email) and UPSERT its stakes. Email matched case-insensitively.
+    prior_rows = (db.table("registry_collaborators").select("*").eq("work_id", data.work_id).execute()).data or []
+    prior = next((r for r in prior_rows if (r.get("email") or "").lower() == data.email.lower()), None)
+    if prior and prior["status"] in ("invited", "confirmed"):
+        raise ValueError("This person is already a collaborator on this work")
+
+    base = {
+        "work_id": data.work_id,
+        "invited_by": user_id,
+        "email": data.email,
+        "name": data.name,
+        "role": data.role,
+        "status": "invited",
+        "access_level": access_level,
+        "invite_token": token,
+        "expires_at": expires,
+        "terms": getattr(data, "terms", None) or [],
+    }
+    if prior:  # revoked or declined -> reactivate the SAME row (keeps its existing stakes)
+        collab_id = prior["id"]
+        db.table("registry_collaborators").update({**base, "collaborator_user_id": None, "responded_at": None}).eq(
+            "id", collab_id
+        ).execute()
+    else:
+        ins = db.table("registry_collaborators").insert(base).execute()
+        collab_id = ins.data[0]["id"] if ins.data else None
+    collab_row = {"id": collab_id, **base}
+
+    # Upsert stakes by (collaborator_id, stake_type): update an existing same-type stake
+    # (e.g. one KEPT from a prior revoke) in place; insert only when none exists. No dupes.
+    existing_by_type = {
+        s["stake_type"]: s["id"]
+        for s in (db.table("ownership_stakes").select("id, stake_type").eq("collaborator_id", collab_id).execute()).data
+        or []
+    }
     created_stakes = []
     for stake in data.stakes:
-        s = (
-            db.table("ownership_stakes")
-            .insert(
-                {
-                    "work_id": data.work_id,
-                    "user_id": user_id,
-                    "stake_type": stake.stake_type,
-                    "holder_name": data.name,
-                    "holder_role": data.role,
-                    "percentage": stake.percentage,
-                    "holder_email": data.email,
-                }
-            )
-            .execute()
-        )
+        payload = {
+            "work_id": data.work_id,
+            "user_id": work_owner,  # user_id = work owner, never caller
+            "stake_type": stake.stake_type,
+            "holder_name": data.name,
+            "holder_role": data.role,
+            "percentage": stake.percentage,
+            "holder_email": data.email,
+            "collaborator_id": collab_id,  # link EVERY stake
+        }
+        if stake.stake_type in existing_by_type:
+            s = db.table("ownership_stakes").update(payload).eq("id", existing_by_type[stake.stake_type]).execute()
+        else:
+            s = db.table("ownership_stakes").insert(payload).execute()
         if s.data:
             created_stakes.append(s.data[0])
 
-    if created_stakes and collab_row:
-        db.table("registry_collaborators").update({"stake_id": created_stakes[0]["id"]}).eq(
-            "id", collab_row["id"]
-        ).execute()
+    # Auto-link pre-existing unlinked manual stakes matching the invitee email, EXCLUDING
+    # every stake_type this collaborator already holds (kept + created) to avoid the
+    # (collaborator_id, stake_type) unique-index violation.
+    exclude_types = set(existing_by_type) | {s["stake_type"] for s in created_stakes}
+    await auto_link_stakes_by_email(db, data.work_id, data.email, collab_id, exclude_types=exclude_types)
 
-    # If work is registered, revert to draft (ownership changed)
+    # Optional initial grants (GrantItem pydantic objects or dicts).
+    for g in getattr(data, "initial_grants", None) or []:
+        gd = g if isinstance(g, dict) else g.model_dump()
+        await grants_service.add_grant(db, collab_id, data.work_id, gd["resource_type"], gd.get("resource_id"), user_id)
+    if getattr(data, "ownership_breakdown", False):
+        await grants_service.add_grant(db, collab_id, data.work_id, "ownership_breakdown", None, user_id)
+
     if work.data["status"] == "registered":
         db.table("works_registry").update({"status": "draft"}).eq("id", data.work_id).execute()
 
     return {"collaborator": collab_row, "stakes": created_stakes, "invite_token": token}
+
+
+async def auto_link_stakes_by_email(
+    db: Client, work_id: str, email: str, collaborator_id: str, exclude_types: set[str] | None = None
+):
+    """Link existing unlinked stakes on the work whose holder_email matches `email`.
+    Email matching is used ONCE here to WRITE the explicit link (not at read time).
+    `exclude_types` are stake_types already held by this collaborator (kept + created) so we
+    never attempt a second same-type link (unique-index violation). If two unlinked stakes
+    share email + stake_type, link one and skip the other (flag for manual review)."""
+    if not collaborator_id or not email:
+        return
+    rows = (
+        db.table("ownership_stakes")
+        .select("id, stake_type, holder_email, collaborator_id, is_owner_stake")
+        .eq("work_id", work_id)
+        .execute()
+    ).data or []
+    seen_types: set[str] = set(exclude_types or set())
+    for r in rows:
+        if r.get("collaborator_id") or r.get("is_owner_stake"):
+            continue
+        if (r.get("holder_email") or "").lower() != email.lower():
+            continue
+        if r["stake_type"] in seen_types:
+            continue
+        seen_types.add(r["stake_type"])
+        db.table("ownership_stakes").update({"collaborator_id": collaborator_id}).eq("id", r["id"]).execute()
 
 
 async def decline_invitation(db: Client, user_id: str, collaborator_id: str):
@@ -593,6 +743,9 @@ async def decline_invitation(db: Client, user_id: str, collaborator_id: str):
             "responded_at": datetime.now(UTC).isoformat(),
         }
     ).eq("id", collaborator_id).execute()
+
+    # Decline = remove access too. Clear any access grants for this collaborator.
+    db.table("registry_access_grants").delete().eq("collaborator_id", collaborator_id).execute()
 
     # Notify work owner
     work = db.table("works_registry").select("user_id, title").eq("id", collab.data["work_id"]).single().execute()
@@ -695,18 +848,168 @@ async def _check_auto_register(db: Client, work_id: str):
 
 
 # ============================================================
+# Access-filtered reads
+# ============================================================
+
+
+async def get_stakes_filtered(db, user_id, work_id, wa=None):
+    wa = wa or await get_work_access(db, user_id, work_id)
+    if not wa.can_view:
+        return None
+    rows = await get_stakes(db, user_id, work_id)
+    if wa.all_visible():
+        return rows
+    return [r for r in rows if r["id"] in wa.visible_stake_ids]
+
+
+async def get_licenses_filtered(db, user_id, work_id, wa=None):
+    wa = wa or await get_work_access(db, user_id, work_id)
+    if not wa.can_view:
+        return None
+    rows = await get_licenses(db, user_id, work_id)
+    return rows if wa.all_visible() else [r for r in rows if r["id"] in wa.visible_license_ids]
+
+
+async def get_agreements_filtered(db, user_id, work_id, wa=None):
+    wa = wa or await get_work_access(db, user_id, work_id)
+    if not wa.can_view:
+        return None
+    rows = await get_agreements(db, user_id, work_id)
+    return rows if wa.all_visible() else [r for r in rows if r["id"] in wa.visible_agreement_ids]
+
+
+async def _owner_identity(db, work_id):
+    """Resolve the work owner's display identity (owner is works_registry.user_id, not a
+    collaborator row). profiles has no email but has full_name."""
+    work = db.table("works_registry").select("user_id").eq("id", work_id).maybe_single().execute()
+    if not work or not work.data:
+        return None
+    owner_id = work.data["user_id"]
+    prof = db.table("profiles").select("full_name").eq("id", owner_id).maybe_single().execute()
+    name = (prof.data or {}).get("full_name") if prof else None
+    return {
+        "id": f"owner:{owner_id}",
+        "collaborator_user_id": owner_id,
+        "name": name or "Owner",
+        "role": "Owner",
+        "is_owner": True,
+        "status": "owner",
+    }
+
+
+async def get_collaborators_filtered(db, user_id, work_id, wa=None):
+    wa = wa or await get_work_access(db, user_id, work_id)
+    if not wa.can_view:
+        return None
+    rows = await get_collaborators(db, work_id)
+    if wa.all_visible():
+        return rows
+    # work-only viewer — always include the owner's identity (spec requires it).
+    owner_row = await _owner_identity(db, work_id)
+    if wa.can_see_full_ownership:
+        out = [owner_row] if owner_row else []
+        for r in rows:
+            if r["id"] == wa.my_collaborator_id:
+                out.append(r)
+            else:
+                out.append(
+                    {
+                        "id": r["id"],
+                        "name": r["name"],
+                        "role": r["role"],
+                        "collaborator_user_id": r.get("collaborator_user_id"),
+                        "status": r["status"],
+                    }
+                )
+        return out
+    self_rows = [r for r in rows if r["id"] == wa.my_collaborator_id]
+    return ([owner_row] if owner_row else []) + self_rows
+
+
+async def get_work_filtered(db, user_id, work_id, wa=None):
+    wa = wa or await get_work_access(db, user_id, work_id)
+    if not wa.can_view:
+        return None
+    return await get_work(db, user_id, work_id)
+
+
+# ============================================================
+# Signed download URLs (access-checked)
+# ============================================================
+
+# Short-lived signed URLs — long enough to start the download, short enough not
+# to be a durable share link. Buckets stay public until Task 11 locks them.
+_SIGNED_URL_TTL_SECONDS = 300
+
+
+def _sign_download_url(db, bucket: str, path: str, filename: str | None) -> str:
+    """Create a short-lived signed download URL for *path* in *bucket*.
+
+    supabase-py returns a dict keyed ``signedURL`` on most versions and
+    ``signedUrl`` on others — accept both. Raises HTTPException(502) if neither
+    is present so callers surface a clean error instead of a KeyError.
+    """
+    from fastapi import HTTPException
+
+    signed = db.storage.from_(bucket).create_signed_url(path, _SIGNED_URL_TTL_SECONDS, {"download": filename or True})
+    url = (signed or {}).get("signedURL") or (signed or {}).get("signedUrl")
+    if not url:
+        raise HTTPException(status_code=502, detail="Could not sign URL")
+    return url
+
+
+async def get_file_download_url(db, user_id: str, work_id: str, file_id: str) -> str:
+    """Return a signed download URL for a project file linked to *work_id*.
+
+    Access is gated by WorkAccess: callers who can see everything
+    (``all_visible``) or who have an explicit grant for this file
+    (``file_id in visible_file_ids``) get a URL; everyone else gets 403.
+    """
+    from fastapi import HTTPException
+
+    wa = await get_work_access(db, user_id, work_id)
+    if not (wa.all_visible() or file_id in wa.visible_file_ids):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    row = db.table("project_files").select("file_path, file_name").eq("id", file_id).maybe_single().execute()
+    if not row or not row.data or not row.data.get("file_path"):
+        raise HTTPException(status_code=404, detail="File not found")
+    return _sign_download_url(db, "project-files", row.data["file_path"], row.data.get("file_name"))
+
+
+async def get_audio_download_url(db, user_id: str, work_id: str, audio_id: str) -> str:
+    """Return a signed download URL for an audio file linked to *work_id*.
+
+    Same gate as files but keyed on ``visible_audio_ids``. The visibility set is
+    already work-scoped (it comes from grants for this work's collaborator), so no
+    extra work_audio_links join is needed.
+    """
+    from fastapi import HTTPException
+
+    wa = await get_work_access(db, user_id, work_id)
+    if not (wa.all_visible() or audio_id in wa.visible_audio_ids):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    row = db.table("audio_files").select("file_path, file_name").eq("id", audio_id).maybe_single().execute()
+    if not row or not row.data or not row.data.get("file_path"):
+        raise HTTPException(status_code=404, detail="File not found")
+    return _sign_download_url(db, "audio-files", row.data["file_path"], row.data.get("file_name"))
+
+
+# ============================================================
 # Full Work Data
 # ============================================================
 
 
 async def get_work_full(db: Client, user_id: str, work_id: str):
+    wa = await get_work_access(db, user_id, work_id)
+    if not wa.can_view:
+        return None
     work = await get_work(db, user_id, work_id)
     if not work:
         return None
-    stakes = await get_stakes(db, user_id, work_id)
-    licenses = await get_licenses(db, user_id, work_id)
-    agreements = await get_agreements(db, user_id, work_id)
-    collaborators = await get_collaborators(db, work_id)
+    stakes = await get_stakes_filtered(db, user_id, work_id, wa=wa)
+    licenses = await get_licenses_filtered(db, user_id, work_id, wa=wa)
+    agreements = await get_agreements_filtered(db, user_id, work_id, wa=wa)
+    collaborators = await get_collaborators_filtered(db, user_id, work_id, wa=wa)
     return {
         **work,
         "stakes": stakes or [],

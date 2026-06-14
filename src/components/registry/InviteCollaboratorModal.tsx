@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-import { type OwnershipStake } from "@/hooks/useRegistry";
+import { type OwnershipStake, useWorkFull } from "@/hooks/useRegistry";
+import { useWorkFiles } from "@/hooks/useWorkFiles";
+import { useWorkAudio } from "@/hooks/useWorkAudio";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -12,13 +16,33 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Send, Shield, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import {
+  ResourceGrantPicker,
+  type ResourceItem,
+  type GrantSelection,
+} from "./ResourceGrantPicker";
+import DeriveCollaboratorSplitDialog from "./DeriveCollaboratorSplitDialog";
 
 const ROLES = ["Artist", "Producer", "Songwriter", "Composer", "Publisher", "Label", "Other"];
 const STAKE_TYPES = ["none", "master", "publishing", "both"] as const;
 type StakeType = (typeof STAKE_TYPES)[number];
+
+const FOLDER_BADGE: Record<string, string> = {
+  contract: "CONTRACT",
+  split_sheet: "SPLIT SHEET",
+  royalty_statement: "STATEMENT",
+};
+
+const EMPTY_SELECTION: GrantSelection = {
+  project_file: [],
+  audio_file: [],
+  license: [],
+  agreement: [],
+  ownership_breakdown: false,
+};
 
 interface Props {
   workId: string;
@@ -41,6 +65,65 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
   const [masterPct, setMasterPct] = useState("");
   const [publishingPct, setPublishingPct] = useState("");
   const [notes, setNotes] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [selection, setSelection] = useState<GrantSelection>(EMPTY_SELECTION);
+  const [useContracts, setUseContracts] = useState(false);
+  const [deriveDialogOpen, setDeriveDialogOpen] = useState(false);
+  const [terms, setTerms] = useState<Array<{ label: string; value: string }>>([]);
+
+  // Resources linked to this work, for the "Share now" picker. Mapping mirrors
+  // PermissionsPanel so the two surfaces stay consistent.
+  const filesQuery = useWorkFiles(workId);
+  const audioQuery = useWorkAudio(workId);
+  const workFullQuery = useWorkFull(workId);
+
+  const documents: ResourceItem[] = useMemo(
+    () =>
+      (filesQuery.data || [])
+        .filter((wf) => wf.project_files)
+        .map((wf) => {
+          const f = wf.project_files!;
+          return {
+            id: f.id,
+            label: f.file_name,
+            badge: FOLDER_BADGE[f.folder_category] || "FILE",
+          };
+        }),
+    [filesQuery.data]
+  );
+
+  const audio: ResourceItem[] = useMemo(
+    () =>
+      (audioQuery.data || [])
+        .filter((wa) => wa.audio_files)
+        .map((wa) => ({
+          id: wa.audio_files!.id,
+          label: wa.audio_files!.file_name,
+          badge: "AUDIO",
+        })),
+    [audioQuery.data]
+  );
+
+  const licenses: ResourceItem[] = useMemo(
+    () =>
+      (workFullQuery.data?.licenses || []).map((l) => ({
+        id: l.id,
+        label: l.licensee_name,
+        meta: [l.territory, l.status].filter(Boolean).join(" · "),
+        badge: "LICENSE",
+      })),
+    [workFullQuery.data?.licenses]
+  );
+
+  const agreements: ResourceItem[] = useMemo(
+    () =>
+      (workFullQuery.data?.agreements || []).map((a) => ({
+        id: a.id,
+        label: a.title,
+        badge: "AGREEMENT",
+      })),
+    [workFullQuery.data?.agreements]
+  );
 
   interface InvitePayload {
     work_id: string;
@@ -49,6 +132,10 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
     role: string;
     stakes: Array<{ stake_type: string; percentage: number }>;
     notes?: string;
+    access_level: "viewer" | "admin";
+    initial_grants?: Array<{ resource_type: string; resource_id: string }>;
+    ownership_breakdown: boolean;
+    terms?: Array<{ label: string; value: string }>;
   }
 
   const inviteWithStakes = useMutation({
@@ -70,6 +157,38 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
     setEmail(""); setName(""); setRole(""); setCustomRole("");
     setSelectedArtistId(""); setStakeType("none");
     setMasterPct(""); setPublishingPct(""); setNotes("");
+    setIsAdmin(false); setSelection(EMPTY_SELECTION);
+    setUseContracts(false); setDeriveDialogOpen(false); setTerms([]);
+  };
+
+  // Apply the result of contract-derivation back onto the invite form: set the
+  // stake type/percentages, merge matched files into the share-now grants, and
+  // store the derived terms to carry on submit.
+  const handleDeriveApply = ({
+    masterPct: mPct,
+    publishingPct: pPct,
+    terms: derivedTerms,
+    matchedFileIds,
+  }: {
+    masterPct: number;
+    publishingPct: number;
+    terms: Array<{ label: string; value: string }>;
+    matchedFileIds: string[];
+  }) => {
+    const hasMaster = mPct > 0;
+    const hasPublishing = pPct > 0;
+    if (hasMaster && hasPublishing) setStakeType("both");
+    else if (hasMaster) setStakeType("master");
+    else if (hasPublishing) setStakeType("publishing");
+    setMasterPct(hasMaster ? String(mPct) : "");
+    setPublishingPct(hasPublishing ? String(pPct) : "");
+    setTerms(derivedTerms);
+    if (matchedFileIds.length > 0) {
+      setSelection((prev) => ({
+        ...prev,
+        project_file: Array.from(new Set([...prev.project_file, ...matchedFileIds])),
+      }));
+    }
   };
 
   const handleArtistSelect = (artistId: string) => {
@@ -102,14 +221,30 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
       }
     }
 
-    await inviteWithStakes.mutateAsync({
+    // Admins see & edit everything, so we don't send per-resource grants.
+    const payload: InvitePayload = {
       work_id: workId,
       email: email.trim(),
       name: name.trim(),
       role: resolvedRole,
       stakes: stakesArr,
       notes: notes.trim() || undefined,
-    });
+      access_level: isAdmin ? "admin" : "viewer",
+      ownership_breakdown: isAdmin ? false : selection.ownership_breakdown,
+      // Terms describe the person's deal regardless of access level, so viewer
+      // and admin invites both carry them.
+      terms,
+    };
+    if (!isAdmin) {
+      const grantKeys: Array<keyof Pick<GrantSelection, "project_file" | "audio_file" | "license" | "agreement">> = [
+        "project_file", "audio_file", "license", "agreement",
+      ];
+      payload.initial_grants = grantKeys.flatMap((rt) =>
+        selection[rt].map((id) => ({ resource_type: rt, resource_id: id }))
+      );
+    }
+
+    await inviteWithStakes.mutateAsync(payload);
     resetForm();
   };
 
@@ -172,6 +307,41 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
             </div>
           )}
 
+          {/* Use my contracts to fill in the details */}
+          <div className="space-y-2 rounded-lg border border-border bg-card px-3 py-2.5">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <Checkbox
+                checked={useContracts}
+                onCheckedChange={(c) => setUseContracts(!!c)}
+                className="mt-0.5"
+              />
+              <span className="flex flex-col">
+                <span className="text-sm font-medium text-foreground">
+                  Use my contracts to fill in the details
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Scan this work's documents for {name.trim() || "this person"}'s split.
+                </span>
+              </span>
+            </label>
+            {useContracts && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!name.trim()}
+                onClick={() => setDeriveDialogOpen(true)}
+                className="w-full"
+              >
+                <Sparkles className="mr-2 h-4 w-4" />
+                Derive from contracts
+              </Button>
+            )}
+            {useContracts && !name.trim() && (
+              <p className="text-xs text-muted-foreground">Enter a name first.</p>
+            )}
+          </div>
+
           {/* Stake Type */}
           <div>
             <Label className="text-sm font-medium">Stake Type</Label>
@@ -211,6 +381,43 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
               placeholder="Any additional terms or notes for this collaborator..." rows={3} />
           </div>
 
+          {/* Admin access level */}
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5">
+            <div className="flex items-start gap-2.5">
+              <Shield className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-sm font-medium text-foreground">Admin</span>
+                <span className="text-xs text-muted-foreground">
+                  Can see &amp; edit everything and manage others
+                </span>
+              </div>
+            </div>
+            <Switch
+              checked={isAdmin}
+              onCheckedChange={setIsAdmin}
+              className="data-[state=checked]:bg-primary"
+            />
+          </div>
+
+          {/* Share now */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Share now</Label>
+            {isAdmin ? (
+              <div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+                Admins can see &amp; edit everything.
+              </div>
+            ) : (
+              <ResourceGrantPicker
+                documents={documents}
+                audio={audio}
+                licenses={licenses}
+                agreements={agreements}
+                value={selection}
+                onChange={setSelection}
+              />
+            )}
+          </div>
+
           <Button onClick={handleSubmit} disabled={inviteWithStakes.isPending || !canSubmit}
             className="w-full">
             {inviteWithStakes.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
@@ -218,6 +425,14 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
           </Button>
         </div>
       </DialogContent>
+
+      <DeriveCollaboratorSplitDialog
+        workId={workId}
+        collaboratorName={name}
+        open={deriveDialogOpen}
+        onOpenChange={setDeriveDialogOpen}
+        onApply={handleDeriveApply}
+      />
     </Dialog>
   );
 }

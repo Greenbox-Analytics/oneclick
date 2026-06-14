@@ -215,7 +215,10 @@ const App = () => (
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/security" element={<Security />} />
             <Route path="/tools/registry" element={<ProtectedRoute><Registry /></ProtectedRoute>} />
-            <Route path="/tools/registry/invite/:token" element={<ProtectedRoute><InviteClaim /></ProtectedRoute>} />
+            {/* Public: invited collaborators may not be signed in yet — the page
+                shows a sign-in gate and only fetches the (auth-required) preview
+                once a user session exists. */}
+            <Route path="/tools/registry/invite/:token" element={<InviteClaim />} />
             <Route path="/tools/registry/:workId" element={<ProtectedRoute><WorkDetail /></ProtectedRoute>} />
             <Route path="/projects/:projectId" element={<ProtectedRoute><ProjectDetail /></ProtectedRoute>} />
             <Route

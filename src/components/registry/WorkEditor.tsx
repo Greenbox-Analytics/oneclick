@@ -33,9 +33,12 @@ import {
   useUpdateStake,
   useDeleteStake,
   useExportProof,
+  useFileDownloadUrl,
+  useWorkAccess,
   type WorkFull,
   type OwnershipStake,
 } from "@/hooks/useRegistry";
+import { PermissionsPanel } from "./PermissionsPanel";
 import {
   useWorkFiles,
   useLinkFileToWork,
@@ -50,12 +53,12 @@ import {
 } from "@/components/ui/dialog";
 import { useSpotifyTrack, spotifyTrackIdFromUrl } from "@/hooks/useSpotifySearch";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 import { ReleaseTag } from "./ReleaseTag";
 import { RegistryStatusBadge } from "./RegistryStatusBadge";
 import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
+import { DeleteWorkConfirmModal } from "./DeleteWorkConfirmModal";
 
 interface WorkEditorProps {
   work: WorkFull;
@@ -81,9 +84,9 @@ interface JoinedArtist {
 /** Single-work editor — two-column grid (main + sticky sidebar). */
 export function WorkEditor({ work }: WorkEditorProps) {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const updateWork = useUpdateWork();
   const exportProof = useExportProof();
+  const { data: access } = useWorkAccess(work.id);
 
   // Join project + artist for breadcrumb + sidebar
   const projectQuery = useQuery<JoinedProject | null>({
@@ -123,8 +126,21 @@ export function WorkEditor({ work }: WorkEditorProps) {
   // release_date is set. Toggling on seeds today's date as a default; toggling
   // off clears it. Either direction is editable from the date field after.
   const released = !!work.release_date;
-  const isOwner = work.user_id === user?.id;
-  const canEdit = isOwner; // TODO: also derive from project membership when wired
+  // Edit affordances are driven by the resolved WorkAccess (project membership +
+  // work role), not by raw ownership. While access is still loading, default to
+  // non-editable to avoid a flash of editable controls for viewers.
+  const canEdit = !!access?.can_edit;
+
+  // "Your access" card label/description, derived from the resolved access.
+  const accessRole = useMemo(() => {
+    if (access?.work_role === "owner")
+      return { isOwner: true, label: "Owner", desc: "Full control" };
+    if (access?.can_manage)
+      return { isOwner: false, label: "Admin", desc: "Can manage & edit" };
+    if (access?.can_edit)
+      return { isOwner: false, label: "Editor", desc: "Can edit" };
+    return { isOwner: false, label: "Viewer", desc: "View only" };
+  }, [access?.work_role, access?.can_manage, access?.can_edit]);
 
   const set = (patch: Partial<WorkFull>) =>
     updateWork.mutate({ workId: work.id, ...patch });
@@ -228,6 +244,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
   const workFilesQuery = useWorkFiles(work.id);
   const workFiles = workFilesQuery.data || [];
   const [linkOpen, setLinkOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_312px] gap-6 items-start">
@@ -264,6 +281,16 @@ export function WorkEditor({ work }: WorkEditorProps) {
             </h2>
             <ReleaseTag released={released} size="lg" />
             <RegistryStatusBadge status={work.status} />
+            {access?.can_delete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto text-muted-foreground hover:text-destructive"
+                onClick={() => setDeleteOpen(true)}
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete work
+              </Button>
+            )}
           </div>
         </div>
 
@@ -480,6 +507,11 @@ export function WorkEditor({ work }: WorkEditorProps) {
             </ul>
           )}
         </CardBlock>
+
+        {/* People & access — owners/admins manage roles + per-resource visibility */}
+        {access?.can_manage && (
+          <PermissionsPanel workId={work.id} projectName={project?.name} />
+        )}
       </div>
 
       {/* Sidebar */}
@@ -493,18 +525,20 @@ export function WorkEditor({ work }: WorkEditorProps) {
             <div
               className={cn(
                 "w-9 h-9 rounded-lg flex items-center justify-center",
-                isOwner
+                accessRole.isOwner
                   ? "bg-primary/15 text-primary"
                   : "bg-blue-500/15 text-blue-400"
               )}
             >
-              {isOwner ? <Shield className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              {accessRole.isOwner ? (
+                <Shield className="w-4 h-4" />
+              ) : (
+                <Eye className="w-4 h-4" />
+              )}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold">{isOwner ? "Owner" : "Collaborator"}</div>
-              <div className="text-xs text-muted-foreground">
-                {isOwner ? "Full control" : canEdit ? "Can edit" : "View only"}
-              </div>
+              <div className="text-sm font-semibold">{accessRole.label}</div>
+              <div className="text-xs text-muted-foreground">{accessRole.desc}</div>
             </div>
           </div>
         </Card>
@@ -564,6 +598,16 @@ export function WorkEditor({ work }: WorkEditorProps) {
           workId={work.id}
           projectId={work.project_id || ""}
           alreadyLinkedFileIds={new Set(workFiles.map((wf) => wf.file_id))}
+        />
+      )}
+
+      {access?.can_delete && (
+        <DeleteWorkConfirmModal
+          workId={work.id}
+          workTitle={work.title || "Untitled work"}
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          onDeleted={() => navigate("/tools/registry")}
         />
       )}
     </div>
@@ -706,6 +750,7 @@ function SplitsSidebar({
               holder_name: name,
               holder_role: row.role || "Collaborator",
               percentage: row.master,
+              ...(row.isYou === true ? { is_owner_stake: true } : {}),
             })
           );
         }
@@ -730,6 +775,7 @@ function SplitsSidebar({
               holder_name: name,
               holder_role: row.role || "Collaborator",
               percentage: row.publishing,
+              ...(row.isYou === true ? { is_owner_stake: true } : {}),
             })
           );
         }
@@ -808,8 +854,24 @@ function WorkFileRow({
   canEdit: boolean;
 }) {
   const unlink = useUnlinkFileFromWork();
+  const downloadUrl = useFileDownloadUrl();
   const file = link.project_files;
   if (!file) return null;
+
+  const handleOpen = async () => {
+    try {
+      const { url } = await downloadUrl.mutateAsync({
+        workId,
+        fileId: file.id,
+      });
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : "Could not open this document"
+      );
+    }
+  };
+
   return (
     <li className="flex items-center gap-3 py-2">
       <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -819,16 +881,16 @@ function WorkFileRow({
           {FOLDER_LABEL[file.folder_category] || file.folder_category}
         </div>
       </div>
-      {file.file_url && (
-        <a
-          href={file.file_url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-muted-foreground hover:text-foreground"
+      {file.id && (
+        <button
+          type="button"
+          onClick={handleOpen}
+          disabled={downloadUrl.isPending}
+          className="text-muted-foreground hover:text-foreground disabled:opacity-50"
           title="Open"
         >
           <ExternalLink className="w-4 h-4" />
-        </a>
+        </button>
       )}
       {canEdit && (
         <button

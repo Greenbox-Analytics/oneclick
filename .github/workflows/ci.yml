@@ -6,6 +6,12 @@ on:
   push:
     branches: [main]
 
+# Needed so the test-reporter can publish a check run with the results.
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
 jobs:
   backend:
     name: Backend (Python)
@@ -35,12 +41,19 @@ jobs:
       - name: Ruff format check
         run: poetry run ruff format --check .
       - name: Run tests
-        run: poetry run pytest -v --tb=short
+        run: poetry run pytest -v --tb=short --junitxml=junit.xml
         env:
           VITE_SUPABASE_URL: "https://fake.supabase.co"
           VITE_SUPABASE_SECRET_KEY: "fake-key-for-ci"
           OPENAI_API_KEY: "fake-key-for-ci"
           RESEND_API_KEY: "fake-key-for-ci"
+      - name: Publish test report
+        uses: dorny/test-reporter@v1
+        if: always() # run even when tests fail, so failures show up in the report
+        with:
+          name: Backend Test Report
+          path: src/backend/junit.xml
+          reporter: java-junit
 
   frontend:
     name: Frontend (TypeScript)

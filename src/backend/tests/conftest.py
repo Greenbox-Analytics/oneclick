@@ -239,6 +239,27 @@ def mock_supabase():
 TEST_USER_EMAIL = "test@example.com"
 
 
+def grant_owner_access():
+    """Context manager that patches registry.service.get_work_access to return an
+    owner-level WorkAccess (all_visible).
+
+    Read endpoints (stakes/licenses/agreements/works/collaborators) now gate reads
+    through get_work_access, which issues several table lookups in a specific order.
+    Endpoint-contract tests that use a single shared MockQueryBuilder for every table
+    can't satisfy that resolver, so they patch it to an authorized result here.
+    Access resolution itself is covered by tests/test_registry_access.py and
+    tests/test_registry_read_filtering.py.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from registry import service
+    from registry.access import WorkAccess
+
+    wa = WorkAccess(work_role="owner", can_see_full_ownership=True)
+    wa._all_visible = True
+    return patch.object(service, "get_work_access", AsyncMock(return_value=wa))
+
+
 @pytest.fixture()
 def client(mock_supabase):
     """FastAPI TestClient with Supabase mocked and auth overridden.

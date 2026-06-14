@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Music } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -12,7 +12,16 @@ import { Separator } from "@/components/ui/separator";
 
 const Auth = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { signIn, signUp, signInWithGoogle } = useAuth();
+
+  // Honor an optional ?redirect= return path (e.g. a collaboration invite link).
+  // Only accept same-origin relative paths to avoid open-redirect abuse.
+  const rawRedirect = searchParams.get("redirect");
+  const redirectTo =
+    rawRedirect && rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")
+      ? rawRedirect
+      : "/dashboard";
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [signInEmail, setSignInEmail] = useState("");
@@ -30,7 +39,7 @@ const Auth = () => {
         title: "Success!",
         description: "You have been signed in.",
       });
-      navigate("/dashboard");
+      navigate(redirectTo);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : undefined;
       toast({
@@ -68,7 +77,7 @@ const Auth = () => {
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
     try {
-      await signInWithGoogle();
+      await signInWithGoogle(redirectTo);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : undefined;
       toast({

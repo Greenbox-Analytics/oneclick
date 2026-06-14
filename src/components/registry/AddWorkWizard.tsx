@@ -367,6 +367,7 @@ export function AddWorkWizard({
               holder_name: name,
               holder_role: row.role || (row.isYou ? "Primary Artist" : "Collaborator"),
               percentage: row.master,
+              is_owner_stake: row.isYou === true,
             });
           }
           if (row.publishing > 0) {
@@ -376,6 +377,7 @@ export function AddWorkWizard({
               holder_name: name,
               holder_role: row.role || (row.isYou ? "Primary Artist" : "Collaborator"),
               percentage: row.publishing,
+              is_owner_stake: row.isYou === true,
             });
           }
         }
