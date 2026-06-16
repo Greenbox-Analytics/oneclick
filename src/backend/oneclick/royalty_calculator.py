@@ -45,8 +45,7 @@ def is_streaming_equivalent_royalty_type(royalty_type: str) -> bool:
         return False
     normalized = royalty_type.lower()
     # Lowercase each term too — STREAMING_EQUIVALENT_TERMS contains mixed-case
-    # entries like "DPD" and "SoundExchange royalties" that would otherwise
-    # never match a lowercased input.
+    # entries like "DPD" that would otherwise never match a lowercased input.
     return any(term.lower() in normalized for term in STREAMING_EQUIVALENT_TERMS)
 
 
