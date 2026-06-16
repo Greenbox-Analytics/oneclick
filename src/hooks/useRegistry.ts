@@ -8,8 +8,8 @@ import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 export interface Work {
   id: string; user_id: string; artist_id: string; project_id: string;
   title: string; work_type: string; isrc: string | null; iswc: string | null;
-  upc: string | null; release_date: string | null; status: string;
-  notes: string | null; created_at: string; updated_at: string;
+  upc: string | null; release_date: string | null; is_released: boolean;
+  status: string; notes: string | null; created_at: string; updated_at: string;
 }
 
 export interface OwnershipStake {
@@ -114,7 +114,7 @@ export function useCreateWork() {
     mutationFn: async (body: {
       artist_id: string; project_id: string; title: string; work_type?: string;
       custom_work_type?: string; isrc?: string; iswc?: string; upc?: string;
-      release_date?: string; notes?: string;
+      release_date?: string; is_released?: boolean; notes?: string;
     }) =>
       apiFetch(`${API_URL}/registry/works`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -136,6 +136,7 @@ export function useCreateWork() {
         iswc: body.iswc || null,
         upc: body.upc || null,
         release_date: body.release_date || null,
+        is_released: body.is_released ?? true,
         status: "draft",
         notes: body.notes || null,
         created_at: new Date().toISOString(),

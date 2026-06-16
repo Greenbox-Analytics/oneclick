@@ -63,7 +63,7 @@ function enrichWorks(
     const artist = project ? artistsById[project.artist_id] : artistsById[w.artist_id];
     return {
       ...w,
-      released: !!w.release_date,
+      released: w.is_released ?? !!w.release_date,
       artist: artist ? { id: artist.id, name: artist.name } : undefined,
       project: project ? { id: project.id, name: project.name } : undefined,
       issues: computeIssues(w),

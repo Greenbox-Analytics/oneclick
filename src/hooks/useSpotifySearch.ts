@@ -15,6 +15,7 @@ export interface SpotifyTrack {
   isrc: string | null;
   upc: string | null;
   label: string | null;
+  genre: string | null;
   cover_url: string | null;
   spotify_url: string | null;
 }

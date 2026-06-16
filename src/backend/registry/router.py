@@ -11,6 +11,8 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from postgrest.exceptions import APIError
+
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from registry import contract_splits, derive_service, grants_service, service, work_links_service
@@ -101,13 +103,28 @@ async def get_work_full(work_id: str, user_id: str = Depends(get_current_user_id
     return data
 
 
+def _raise_503_if_schema_stale(e: APIError) -> None:
+    """Turn PostgREST's opaque schema-cache miss into actionable feedback.
+    Raised when a migration has been written to repo but not yet applied to the
+    DB (or applied, but PostgREST hasn't reloaded its schema cache yet)."""
+    if getattr(e, "code", None) == "PGRST204":
+        raise HTTPException(
+            status_code=503,
+            detail="Database schema is out of date — please run pending Supabase migrations and try again.",
+        )
+
+
 @router.post("/works")
 async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     if "release_date" in data and data["release_date"]:
         data["release_date"] = data["release_date"].isoformat()
-    work = await service.create_work(_get_supabase(), user_id, data)
+    try:
+        work = await service.create_work(_get_supabase(), user_id, data)
+    except APIError as e:
+        _raise_503_if_schema_stale(e)
+        raise
     if not work:
         raise HTTPException(status_code=500, detail="Failed to create work")
     analytics_capture(user_id, "work_created", {"work_type": data.get("work_type", "unknown")})
@@ -127,6 +144,9 @@ async def update_work(work_id: str, body: WorkUpdate, user_id: str = Depends(get
         work = await service.update_work(_get_supabase(), user_id, work_id, data)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    except APIError as e:
+        _raise_503_if_schema_stale(e)
+        raise
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     return work
@@ -585,6 +605,21 @@ async def invite_with_stakes_endpoint(body: CollaboratorInviteWithStakes, user_i
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))  # already-active re-invite / bad grant
+    except APIError as e:
+        # The validate_stake_total trigger raises on >100% totals. Translate its
+        # raw message ("Total % for master would exceed 100% (current: %100.00,
+        # adding: %40.00)") into something a non-technical user can act on.
+        msg = (e.message if hasattr(e, "message") else str(e)) or ""
+        m = re.search(r"Total % for (\w+) would exceed 100% \(current: %([\d.]+), adding: %([\d.]+)\)", msg)
+        if m:
+            stake_type, current, adding = m.group(1), float(m.group(2)), float(m.group(3))
+            remaining = max(0.0, 100.0 - current)
+            friendly = (
+                f"This person's {stake_type} share ({adding:g}%) would push the total above 100%. "
+                f"{current:g}% is already allocated — at most {remaining:g}% is available."
+            )
+            raise HTTPException(status_code=400, detail=friendly)
+        raise
 
 
 @router.post("/collaborators/{collaborator_id}/decline")
@@ -755,6 +790,23 @@ async def derive_from_contracts(body: DeriveFromContractsBody, user_id: str = De
     result = await derive_service.derive_for_collaborator(
         db, body.work_id, body.name, body.email, body.contract_file_ids
     )
+
+    # Auto-link the source contract to the work — when a split was successfully
+    # derived from a file, that file is by definition related to this work and
+    # belongs in Related Documents. Pre-filter against work_files to skip files
+    # already linked (the common case when deriving from already-linked contracts).
+    if result.get("found") and result.get("matched_file_ids"):
+        already = (db.table("work_files").select("file_id").eq("work_id", body.work_id).execute()).data or []
+        already_ids = {r["file_id"] for r in already}
+        for fid in result["matched_file_ids"]:
+            if fid in already_ids:
+                continue
+            try:
+                await work_links_service.link_file_to_work(db, body.work_id, fid)
+            except Exception:
+                # Best-effort — a late duplicate or RLS edge shouldn't fail the derive.
+                pass
+
     analytics_capture(
         user_id,
         "registry_contract_derived",

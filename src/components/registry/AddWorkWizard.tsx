@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowRight,
@@ -38,6 +38,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
 import {
   useSpotifySearch,
@@ -50,6 +51,8 @@ import {
 import { Artwork } from "./Artwork";
 import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
+import { NewArtistDialog } from "@/components/NewArtistDialog";
+import { ProjectFormDialog } from "@/components/ProjectFormDialog";
 
 interface AddWorkWizardProps {
   open: boolean;
@@ -88,8 +91,39 @@ export function AddWorkWizard({
 
   // -------- destination state --------
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [selectedArtistId, setSelectedArtistId] = useState<string>(initialArtistId || "");
   const [selectedProjectId, setSelectedProjectId] = useState<string>(initialProjectId || "");
+
+  // Inline create-artist / create-project — lets the user spin up a missing
+  // destination without leaving the wizard.
+  const [newArtistOpen, setNewArtistOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+
+  const handleArtistCreated = (artistId: string) => {
+    // Refresh the wizard's artist list, then auto-pick the new artist. The
+    // dialog itself invalidates portfolio queries; this one is wizard-scoped.
+    queryClient.invalidateQueries({ queryKey: ["registry-wizard-artists"] });
+    setSelectedArtistId(artistId);
+    setSelectedProjectId("");
+  };
+
+  const handleProjectSave = async (data: { name: string; description: string; artist_id: string }) => {
+    // Direct supabase insert — the auto_create_project_owner trigger fires for
+    // user-client inserts and seeds ownership, so we don't need POST /projects.
+    const { data: inserted, error } = await supabase
+      .from("projects")
+      .insert({ artist_id: data.artist_id, name: data.name, description: data.description || null })
+      .select("id")
+      .single();
+    if (error) {
+      toast.error(error.message || "Couldn't create project");
+      return;
+    }
+    queryClient.invalidateQueries({ queryKey: ["registry-wizard-projects"] });
+    setSelectedProjectId(inserted.id);
+    toast.success("Project created");
+  };
 
   const artistsQuery = useQuery<ArtistOption[]>({
     queryKey: ["registry-wizard-artists", user?.id],
@@ -247,17 +281,36 @@ export function AddWorkWizard({
     setSearchEnabled(true);
   };
 
-  const chooseResult = (r: SpotifyTrack) => {
+  const chooseResult = async (r: SpotifyTrack) => {
     setChosen(r);
+    // Seed meta immediately from the search result so the Confirm step renders
+    // without a flash of empty fields…
     setMeta({
       isrc: r.isrc || "",
       upc: r.upc || "",
       releaseDate: r.release_date || "",
       label: r.label || "",
-      genre: "",
+      genre: r.genre || "",
       spotifyUrl: r.spotify_url || "",
     });
     setStep(2);
+    // …then upgrade with the richer /tracks/{id} payload (album-fetched UPC,
+    // artist-fetched genre). Falls back silently on network errors.
+    try {
+      const full = await apiFetch<SpotifyTrack>(`${API_URL}/integrations/spotify/tracks/${r.id}`);
+      setChosen((prev) => (prev?.id === r.id ? { ...prev, ...full } : prev));
+      setMeta((prev) => ({
+        ...prev,
+        isrc: prev.isrc || full.isrc || "",
+        upc: prev.upc || full.upc || "",
+        releaseDate: prev.releaseDate || full.release_date || "",
+        label: prev.label || full.label || "",
+        genre: prev.genre || full.genre || "",
+        spotifyUrl: prev.spotifyUrl || full.spotify_url || "",
+      }));
+    } catch {
+      // Best-effort enrichment — leave the search-result values in place.
+    }
   };
 
   // Build initial split rows when entering the royalty step
@@ -268,7 +321,7 @@ export function AddWorkWizard({
       setSplitRows([
         {
           key: "you",
-          name: artistName || "You",
+          name: artistName,
           role: "Primary Artist",
           isYou: true,
           master: 0,
@@ -297,7 +350,7 @@ export function AddWorkWizard({
         setSplitRows([
           {
             key: "you",
-            name: artistName || "You",
+            name: artistName,
             role: "Primary Artist",
             isYou: true,
             master: 0,
@@ -312,7 +365,7 @@ export function AddWorkWizard({
       if (!result.main_artist_found) {
         rows.push({
           key: "you",
-          name: artistName || "You",
+          name: artistName,
           role: "Primary Artist",
           isYou: true,
           master: 0,
@@ -336,7 +389,8 @@ export function AddWorkWizard({
     }
   };
 
-  const finish = async () => {
+  const finish = async (overrideRows?: SplitRow[]) => {
+    const rows = overrideRows ?? splitRows;
     if (!projectIdInUse || !artistIdInUse) {
       toast.error("Pick a project first");
       return;
@@ -348,6 +402,7 @@ export function AddWorkWizard({
         project_id: projectIdInUse,
         title: (chosen?.title || title).trim(),
         work_type: workType,
+        is_released: released ?? true,
         ...(meta.isrc ? { isrc: meta.isrc } : {}),
         ...(meta.upc ? { upc: meta.upc } : {}),
         ...(meta.releaseDate ? { release_date: meta.releaseDate } : {}),
@@ -357,7 +412,7 @@ export function AddWorkWizard({
 
       // Persist splits as ownership_stakes rows
       if (workId) {
-        for (const row of splitRows) {
+        for (const row of rows) {
           const name = row.name?.trim();
           if (!name) continue;
           if (row.master > 0) {
@@ -421,7 +476,7 @@ export function AddWorkWizard({
           <Button variant="outline" onClick={() => setStep(released ? 2 : 1)}>
             <ArrowLeft className="w-4 h-4 mr-1" /> Back
           </Button>
-          <Button onClick={finish} disabled={submitting}>
+          <Button onClick={() => finish()} disabled={submitting}>
             {submitting ? (
               <Loader2 className="w-4 h-4 mr-1 animate-spin" />
             ) : (
@@ -483,8 +538,9 @@ export function AddWorkWizard({
   })();
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle>Add a work</DialogTitle>
         </DialogHeader>
@@ -529,7 +585,7 @@ export function AddWorkWizard({
         </div>
 
         {/* Body */}
-        <div className="max-h-[60vh] overflow-y-auto px-1 -mx-1">
+        <div className="max-h-[78vh] overflow-y-auto px-2 -mx-2 py-1 -my-1">
           {onDestination ? (
             <DestinationStep
               artists={artistsQuery.data || []}
@@ -540,6 +596,8 @@ export function AddWorkWizard({
                 setSelectedProjectId("");
               }}
               onSelectProject={(id) => setSelectedProjectId(id)}
+              onAddNewArtist={() => setNewArtistOpen(true)}
+              onAddNewProject={() => setNewProjectOpen(true)}
             />
           ) : released === null ? (
             <ReleaseStatusStep onPick={(val) => {
@@ -598,9 +656,24 @@ export function AddWorkWizard({
           ) : null}
         </div>
 
-        <DialogFooter className="gap-2">{footer}</DialogFooter>
+        <DialogFooter className="gap-2 mt-6 pt-4 border-t">{footer}</DialogFooter>
       </DialogContent>
     </Dialog>
+
+    {/* Sibling dialogs so they layer above the wizard cleanly. */}
+    <NewArtistDialog
+      open={newArtistOpen}
+      onOpenChange={setNewArtistOpen}
+      onCreated={handleArtistCreated}
+    />
+    <ProjectFormDialog
+      open={newProjectOpen}
+      onOpenChange={setNewProjectOpen}
+      artists={artistsQuery.data || []}
+      defaultArtistId={selectedArtistId}
+      onSave={handleProjectSave}
+    />
+    </>
   );
 }
 
@@ -608,19 +681,34 @@ export function AddWorkWizard({
 // Steps
 // ============================================================
 
+// Sentinel value used inside the Artist Select to route the user into the
+// "create a new artist" dialog instead of selecting an existing one.
+const ADD_NEW_ARTIST_VALUE = "__add_new_artist__";
+
 function DestinationStep({
   artists,
   projects,
   selectedArtistId,
   onSelectArtist,
   onSelectProject,
+  onAddNewArtist,
+  onAddNewProject,
 }: {
   artists: ArtistOption[];
   projects: ProjectOption[];
   selectedArtistId: string;
   onSelectArtist: (id: string) => void;
   onSelectProject: (id: string) => void;
+  onAddNewArtist: () => void;
+  onAddNewProject: () => void;
 }) {
+  const handleArtistChange = (value: string) => {
+    if (value === ADD_NEW_ARTIST_VALUE) {
+      onAddNewArtist();
+      return;
+    }
+    onSelectArtist(value);
+  };
   return (
     <div className="space-y-4">
       <div>
@@ -633,7 +721,7 @@ function DestinationStep({
         <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Artist
         </label>
-        <Select value={selectedArtistId} onValueChange={onSelectArtist}>
+        <Select value={selectedArtistId} onValueChange={handleArtistChange}>
           <SelectTrigger className="mt-1">
             <SelectValue placeholder="Pick an artist…" />
           </SelectTrigger>
@@ -643,20 +731,32 @@ function DestinationStep({
                 {a.name}
               </SelectItem>
             ))}
+            {artists.length > 0 && <div className="my-1 h-px bg-border" role="separator" />}
+            <SelectItem value={ADD_NEW_ARTIST_VALUE} className="text-primary font-medium">
+              <span className="flex items-center gap-2">
+                <Plus className="w-4 h-4" />
+                Add new artist
+              </span>
+            </SelectItem>
           </SelectContent>
         </Select>
       </div>
       {selectedArtistId && (
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Project
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Project
+            </label>
+            <Button type="button" variant="ghost" size="sm" onClick={onAddNewProject} className="h-7 px-2 text-xs text-primary">
+              <Plus className="w-3.5 h-3.5 mr-1" /> New project
+            </Button>
+          </div>
           {projects.length === 0 ? (
             <p className="text-sm text-muted-foreground mt-2">
-              No projects yet for this artist. Create one from Portfolio first.
+              No projects yet for this artist. Click <b>New project</b> above to create one.
             </p>
           ) : (
-            <div className="mt-2 grid grid-cols-1 gap-1.5 max-h-60 overflow-y-auto">
+            <div className="mt-2 grid grid-cols-1 gap-1.5 max-h-[28rem] overflow-y-auto">
               {projects.map((p) => (
                 <button
                   key={p.id}
@@ -752,7 +852,7 @@ function SpotifyStep({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             autoFocus
-            placeholder="e.g. Midnight Drive"
+            placeholder="e.g. Burna Boy Last Last"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && onSearch()}
@@ -764,6 +864,9 @@ function SpotifyStep({
           Search
         </Button>
       </div>
+      <p className="text-xs text-muted-foreground -mt-2">
+        Tip: include the <b>artist name</b> with the song title for better matches.
+      </p>
 
       {loading && (
         <div className="space-y-2">
@@ -1309,7 +1412,7 @@ function RoyaltyStep({
                 : [
                     {
                       key: "you",
-                      name: artistName || "You",
+                      name: artistName,
                       role: "Primary Artist",
                       isYou: true,
                       master: 0,

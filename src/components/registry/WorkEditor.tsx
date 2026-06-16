@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ChevronRight,
+  ChevronDown,
   AlertTriangle,
   CheckCircle2,
   Clock,
@@ -17,14 +18,15 @@ import {
   Download,
   ExternalLink,
   Tag,
-  Link as LinkIcon,
   Trash2,
-  Search,
+  Upload,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
@@ -41,7 +43,6 @@ import {
 import { PermissionsPanel } from "./PermissionsPanel";
 import {
   useWorkFiles,
-  useLinkFileToWork,
   useUnlinkFileFromWork,
 } from "@/hooks/useWorkFiles";
 import {
@@ -51,7 +52,15 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { useStorageStatus } from "@/hooks/useEntitlements";
+import { useGatedAction } from "@/hooks/useGatedAction";
 import { useSpotifyTrack, spotifyTrackIdFromUrl } from "@/hooks/useSpotifySearch";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { ReleaseTag } from "./ReleaseTag";
@@ -59,6 +68,7 @@ import { RegistryStatusBadge } from "./RegistryStatusBadge";
 import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
 import { DeleteWorkConfirmModal } from "./DeleteWorkConfirmModal";
+import FetchSpotifyMetadataDialog from "./FetchSpotifyMetadataDialog";
 
 interface WorkEditorProps {
   work: WorkFull;
@@ -122,10 +132,10 @@ export function WorkEditor({ work }: WorkEditorProps) {
   });
   const artist = artistQuery.data;
 
-  // "Released" is derived from release_date: a track is released iff
-  // release_date is set. Toggling on seeds today's date as a default; toggling
-  // off clears it. Either direction is editable from the date field after.
-  const released = !!work.release_date;
+  // "Released" is an explicit flag on the work. We fall back to release_date
+  // for any row predating the is_released column (the backfill defaults that
+  // value to true, so this branch is effectively never hit on fresh data).
+  const released = work.is_released ?? !!work.release_date;
   // Edit affordances are driven by the resolved WorkAccess (project membership +
   // work role), not by raw ownership. While access is still loading, default to
   // non-editable to avoid a flash of editable controls for viewers.
@@ -145,15 +155,23 @@ export function WorkEditor({ work }: WorkEditorProps) {
   const set = (patch: Partial<WorkFull>) =>
     updateWork.mutate({ workId: work.id, ...patch });
 
+  const [spotifyFetchOpen, setSpotifyFetchOpen] = useState(false);
+
   const toggleReleased = (val: boolean) => {
-    if (val) {
-      // Going Unreleased → Released: seed today's date unless one already exists.
-      if (!work.release_date) {
-        set({ release_date: new Date().toISOString().slice(0, 10) });
-      }
+    // Going Unreleased → Released: seed today's date unless one already exists.
+    // We bundle release_date with is_released so the user doesn't have to fill
+    // both fields in two steps. Going off keeps release_date as-is — clearing
+    // it would discard a date the user may want to keep on record.
+    const wasReleased = work.is_released ?? !!work.release_date;
+    if (val && !work.release_date) {
+      set({ is_released: true, release_date: new Date().toISOString().slice(0, 10) });
     } else {
-      // Going Released → Unreleased: clear the date.
-      set({ release_date: null });
+      set({ is_released: val });
+    }
+    // First flip into "released" → offer to pull the newly-public Spotify
+    // metadata. Skipped when the artist has no name to search with.
+    if (val && !wasReleased && artist?.name) {
+      setSpotifyFetchOpen(true);
     }
   };
 
@@ -469,7 +487,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
           right={
             canEdit && (
               <Button size="sm" variant="outline" onClick={() => setLinkOpen(true)}>
-                <LinkIcon className="w-3.5 h-3.5 mr-1.5" /> Link from project
+                <Plus className="w-3.5 h-3.5 mr-1.5" /> Add documents
               </Button>
             )
           }
@@ -489,7 +507,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
                     className="text-primary hover:underline"
                     onClick={() => setLinkOpen(true)}
                   >
-                    Link one from the project.
+                    Add a document.
                   </button>
                 </>
               )}
@@ -610,6 +628,20 @@ export function WorkEditor({ work }: WorkEditorProps) {
           onDeleted={() => navigate("/tools/registry")}
         />
       )}
+
+      <FetchSpotifyMetadataDialog
+        open={spotifyFetchOpen}
+        onOpenChange={setSpotifyFetchOpen}
+        artistName={artist?.name || ""}
+        workTitle={work.title}
+        currentMeta={{
+          isrc: work.isrc,
+          upc: work.upc,
+          release_date: work.release_date,
+          notes: work.notes,
+        }}
+        onApply={(patch) => updateWork.mutate({ workId: work.id, ...patch })}
+      />
     </div>
   );
 }
@@ -914,6 +946,23 @@ interface ProjectFileOption {
   created_at: string;
 }
 
+// Categories shown in the Add Documents dialog. Mirrors the Project FilesTab
+// (same keys, labels, and accent colors) so users see a consistent grouping
+// across the work and project surfaces.
+const DOC_CATEGORIES = [
+  { key: "contract", label: "Contracts", accent: "border-l-blue-600 dark:border-l-blue-500", iconColor: "text-blue-600 dark:text-blue-400" },
+  { key: "split_sheet", label: "Split Sheets", accent: "border-l-purple-600 dark:border-l-purple-500", iconColor: "text-purple-600 dark:text-purple-400" },
+  { key: "royalty_statement", label: "Royalty Statements", accent: "border-l-orange-600 dark:border-l-orange-500", iconColor: "text-orange-600 dark:text-orange-400" },
+  { key: "other", label: "Other", accent: "border-l-slate-500 dark:border-l-slate-400", iconColor: "text-slate-600 dark:text-slate-400" },
+] as const;
+
+function fmtBytes(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)} GB`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} MB`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
 function LinkProjectFilesDialog({
   open,
   onClose,
@@ -927,10 +976,23 @@ function LinkProjectFilesDialog({
   projectId: string;
   alreadyLinkedFileIds: Set<string>;
 }) {
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const linkFile = useLinkFileToWork();
+  const queryClient = useQueryClient();
+  const storageStatus = useStorageStatus();
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    contract: true,
+    split_sheet: true,
+    royalty_statement: false,
+    other: false,
+  });
+  const [uploadingCategory, setUploadingCategory] = useState<string | null>(null);
+  const [linkingInProgress, setLinkingInProgress] = useState(false);
+
+  // Load all of the project's files so we can group them by category and let
+  // the user pick which ones to link. Re-fetch on every open so freshly-uploaded
+  // files (from any surface) appear right away.
   const filesQuery = useQuery<ProjectFileOption[]>({
     queryKey: ["link-project-files", projectId],
     queryFn: async () => {
@@ -946,17 +1008,22 @@ function LinkProjectFilesDialog({
     enabled: open && !!projectId,
   });
 
-  const available = (filesQuery.data || []).filter(
-    (f) => !alreadyLinkedFileIds.has(f.id)
-  );
-  const q = search.trim().toLowerCase();
-  const filtered = q
-    ? available.filter(
-        (f) =>
-          f.file_name.toLowerCase().includes(q) ||
-          (FOLDER_LABEL[f.folder_category] || "").toLowerCase().includes(q)
-      )
-    : available;
+  // Files not yet linked to this work, grouped by category. Files outside the
+  // known categories fall into "other".
+  const filesByCategory = useMemo(() => {
+    const groups: Record<string, ProjectFileOption[]> = {
+      contract: [],
+      split_sheet: [],
+      royalty_statement: [],
+      other: [],
+    };
+    for (const f of filesQuery.data || []) {
+      if (alreadyLinkedFileIds.has(f.id)) continue;
+      const key = f.folder_category in groups ? f.folder_category : "other";
+      groups[key].push(f);
+    }
+    return groups;
+  }, [filesQuery.data, alreadyLinkedFileIds]);
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -967,85 +1034,250 @@ function LinkProjectFilesDialog({
     });
   };
 
-  const linkSelected = async () => {
-    for (const fileId of selected) {
-      await linkFile.mutateAsync({ workId, fileId });
+  const toggleSection = (key: string) =>
+    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  // Upload pipeline: SHA-256 dedup → storage upload → project_files insert →
+  // immediate work-link. Mirrors FilesTab's upload behavior, but auto-links
+  // (no work-picker round-trip) since we already know the target work.
+  const { mutate: gatedUpload, paywallElement } = useGatedAction<
+    void,
+    { file: File; category: string }
+  >({
+    mutationFn: async ({ file, category }) => {
+      const hashBuffer = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+      const contentHash = Array.from(new Uint8Array(hashBuffer))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      // Dedup: if this exact file is already in the project, just link the
+      // existing row instead of re-uploading. Silent — no confirm dialog.
+      const { data: existing } = await supabase
+        .from("project_files")
+        .select("id")
+        .eq("project_id", projectId)
+        .eq("content_hash", contentHash)
+        .limit(1);
+
+      let fileIdToLink = existing && existing.length > 0 ? existing[0].id : null;
+
+      if (!fileIdToLink) {
+        const filePath = `${projectId}/${category}/${Date.now()}_${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from("project-files")
+          .upload(filePath, file);
+        if (uploadError) throw uploadError;
+        const { data: urlData } = supabase.storage
+          .from("project-files")
+          .getPublicUrl(filePath);
+        const { data: insertedData, error: dbError } = await supabase
+          .from("project_files")
+          .insert({
+            project_id: projectId,
+            file_name: file.name,
+            file_url: urlData.publicUrl,
+            file_path: filePath,
+            folder_category: category,
+            file_size: file.size,
+            file_type: file.type,
+            content_hash: contentHash,
+          })
+          .select("id")
+          .single();
+        if (dbError) {
+          await supabase.storage.from("project-files").remove([filePath]);
+          throw dbError;
+        }
+        fileIdToLink = insertedData.id;
+      }
+
+      if (!alreadyLinkedFileIds.has(fileIdToLink)) {
+        await apiFetch(
+          `${API_URL}/registry/works/${workId}/files?file_id=${fileIdToLink}`,
+          { method: "POST" }
+        );
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["link-project-files", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project-files-tab", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["work-files", workId] });
+      toast.success(existing && existing.length > 0 ? "Linked existing file" : "Uploaded and linked");
+      setUploadingCategory(null);
+    },
+    onError: (err) => {
+      setUploadingCategory(null);
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    },
+  });
+
+  const handleUpload = (category: string, event: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (fileList.length === 0) return;
+
+    const totalSize = fileList.reduce((sum, f) => sum + f.size, 0);
+    if (storageStatus.cap !== -1 && storageStatus.used + totalSize > storageStatus.cap) {
+      toast.error(
+        `Uploading ${fileList.length} file(s) (${fmtBytes(totalSize)}) would exceed your storage cap.`
+      );
+      return;
     }
-    setSelected(new Set());
-    onClose();
+
+    setUploadingCategory(category);
+    for (const file of fileList) {
+      gatedUpload({ file, category });
+    }
   };
+
+  const linkSelected = async () => {
+    if (selected.size === 0) return;
+    setLinkingInProgress(true);
+    try {
+      // Link in parallel — these are independent inserts; no need to serialize.
+      await Promise.all(
+        Array.from(selected).map((fileId) =>
+          apiFetch(
+            `${API_URL}/registry/works/${workId}/files?file_id=${fileId}`,
+            { method: "POST" }
+          )
+        )
+      );
+      queryClient.invalidateQueries({ queryKey: ["work-files", workId] });
+      queryClient.invalidateQueries({ queryKey: ["link-project-files", projectId] });
+      toast.success(`Linked ${selected.size} document${selected.size === 1 ? "" : "s"}`);
+      setSelected(new Set());
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to link documents");
+    } finally {
+      setLinkingInProgress(false);
+    }
+  };
+
+  const isLoading = filesQuery.isLoading;
+  const totalAvailable = Object.values(filesByCategory).reduce((n, list) => n + list.length, 0);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle>Link documents from project</DialogTitle>
+          <DialogTitle>Add documents</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Upload new files from your computer or pick existing project files. Files are organized by category.
+          </p>
         </DialogHeader>
-        <div className="relative mb-3">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            placeholder="Search files…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-        <div className="max-h-[50vh] overflow-y-auto rounded-lg border divide-y">
-          {filesQuery.isLoading ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
+
+        <div className="flex-1 overflow-y-auto space-y-2 -mx-1 px-1">
+          {isLoading ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 inline mr-2 animate-spin" /> Loading…
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              {q
-                ? "No matching files."
-                : available.length === 0
-                  ? "All project files are already linked to this work."
-                  : "No project files yet — upload from the project Files tab."}
-            </div>
           ) : (
-            filtered.map((f) => {
-              const picked = selected.has(f.id);
+            DOC_CATEGORIES.map((cat) => {
+              const items = filesByCategory[cat.key] || [];
+              const isOpen = openSections[cat.key];
+              const isUploading = uploadingCategory === cat.key;
               return (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => toggle(f.id)}
-                  className={cn(
-                    "w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-muted/40",
-                    picked && "bg-muted/40"
-                  )}
-                >
-                  <FileText
-                    className={cn(
-                      "w-4 h-4 shrink-0",
-                      picked ? "text-primary" : "text-muted-foreground"
-                    )}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{f.file_name}</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {FOLDER_LABEL[f.folder_category] || f.folder_category}
-                    </div>
-                  </div>
-                  {picked && <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />}
-                </button>
+                <Card key={cat.key} className={cn("border-l-4 overflow-hidden", cat.accent)}>
+                  <Collapsible open={isOpen} onOpenChange={() => toggleSection(cat.key)}>
+                    <CollapsibleTrigger className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-muted/30 text-left">
+                      {isOpen ? (
+                        <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                      )}
+                      <FileText className={cn("w-4 h-4 shrink-0", cat.iconColor)} />
+                      <span className="text-sm font-semibold">{cat.label}</span>
+                      <Badge variant="outline" className="text-[10px] font-medium">
+                        {items.length}
+                      </Badge>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          fileInputRefs.current[cat.key]?.click();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            fileInputRefs.current[cat.key]?.click();
+                          }
+                        }}
+                        className="ml-auto inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline cursor-pointer"
+                      >
+                        {isUploading ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Upload className="w-3.5 h-3.5" />
+                        )}
+                        Upload
+                      </span>
+                      <input
+                        ref={(el) => {
+                          fileInputRefs.current[cat.key] = el;
+                        }}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => handleUpload(cat.key, e)}
+                      />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      {items.length === 0 ? (
+                        <div className="px-4 py-3 text-xs text-muted-foreground border-t">
+                          No unlinked {cat.label.toLowerCase()} in this project — upload one from your computer.
+                        </div>
+                      ) : (
+                        <ul className="divide-y border-t">
+                          {items.map((f) => {
+                            const picked = selected.has(f.id);
+                            return (
+                              <li key={f.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => toggle(f.id)}
+                                  className={cn(
+                                    "w-full flex items-center gap-3 px-4 py-2 text-left hover:bg-muted/40",
+                                    picked && "bg-muted/40"
+                                  )}
+                                >
+                                  <Checkbox checked={picked} className="pointer-events-none" />
+                                  <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium truncate">{f.file_name}</div>
+                                  </div>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </CollapsibleContent>
+                  </Collapsible>
+                </Card>
               );
             })
           )}
+
+          {!isLoading && totalAvailable === 0 && (
+            <div className="text-xs text-muted-foreground text-center py-2">
+              No unlinked project files. Upload from above to add documents.
+            </div>
+          )}
         </div>
-        <DialogFooter className="gap-2">
+
+        <DialogFooter className="gap-2 pt-2">
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            disabled={selected.size === 0 || linkFile.isPending}
-            onClick={linkSelected}
-          >
-            {linkFile.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            Link {selected.size > 0 ? `(${selected.size})` : ""}
+          <Button disabled={selected.size === 0 || linkingInProgress} onClick={linkSelected}>
+            {linkingInProgress && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            Link selected{selected.size > 0 ? ` (${selected.size})` : ""}
           </Button>
         </DialogFooter>
+        {paywallElement}
       </DialogContent>
     </Dialog>
   );

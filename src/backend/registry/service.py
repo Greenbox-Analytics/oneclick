@@ -602,7 +602,7 @@ async def invite_with_stakes(db: Client, user_id: str, data):
     Gated by can_manage (work owner/admin or project owner/admin).
     NOTE: not transactional — these are separate Supabase calls; a mid-sequence failure
     can leave an orphan collaborator/stakes (pre-existing limitation, not claimed atomic)."""
-    import secrets
+    import uuid
     from datetime import datetime, timedelta
 
     from registry import grants_service
@@ -616,7 +616,7 @@ async def invite_with_stakes(db: Client, user_id: str, data):
         raise PermissionError("Not allowed to manage this work")
     work_owner = work.data["user_id"]
 
-    token = secrets.token_urlsafe(32)
+    token = str(uuid.uuid4())
     expires = (datetime.now(UTC) + timedelta(hours=48)).isoformat()
     access_level = getattr(data, "access_level", None) or "viewer"
 

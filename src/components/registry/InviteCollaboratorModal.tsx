@@ -249,7 +249,34 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
   };
 
   const resolvedRole = role === "Other" ? customRole.trim() : role;
-  const canSubmit = !!email.trim() && !!name.trim() && !!resolvedRole;
+
+  // Running master/publishing totals. Existing stakes come from the work's
+  // current cap table; the "new" portion is whatever the user has typed for
+  // this invite. We surface both totals inline and block submit on overflow so
+  // the user fixes it locally instead of hitting the DB trigger.
+  const allocatedMaster = useMemo(
+    () => stakes.filter((s) => s.stake_type === "master").reduce((sum, s) => sum + Number(s.percentage || 0), 0),
+    [stakes]
+  );
+  const allocatedPublishing = useMemo(
+    () => stakes.filter((s) => s.stake_type === "publishing").reduce((sum, s) => sum + Number(s.percentage || 0), 0),
+    [stakes]
+  );
+  const showMasterInput = stakeType === "master" || stakeType === "both";
+  const showPublishingInput = stakeType === "publishing" || stakeType === "both";
+  const newMaster = showMasterInput ? parseFloat(masterPct) || 0 : 0;
+  const newPublishing = showPublishingInput ? parseFloat(publishingPct) || 0 : 0;
+  const totalMaster = allocatedMaster + newMaster;
+  const totalPublishing = allocatedPublishing + newPublishing;
+  const masterOverflow = showMasterInput && totalMaster > 100;
+  const publishingOverflow = showPublishingInput && totalPublishing > 100;
+
+  const canSubmit =
+    !!email.trim() &&
+    !!name.trim() &&
+    !!resolvedRole &&
+    !masterOverflow &&
+    !publishingOverflow;
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) resetForm(); onOpenChange(o); }}>
@@ -357,20 +384,36 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
           </div>
 
           {/* Master percentage */}
-          {(stakeType === "master" || stakeType === "both") && (
+          {showMasterInput && (
             <div>
               <Label className="text-sm font-medium">Master Ownership %</Label>
               <Input type="number" min="0" max="100" step="0.01" value={masterPct}
                 onChange={(e) => setMasterPct(e.target.value)} placeholder="e.g. 15" />
+              <p className={`mt-1 text-xs ${masterOverflow ? "text-destructive" : "text-muted-foreground"}`}>
+                Already allocated: {allocatedMaster.toFixed(2)}% · This person: {newMaster.toFixed(2)}% ·{" "}
+                <span className="font-medium">Total: {totalMaster.toFixed(2)}% / 100%</span>
+                {masterOverflow && ` — exceeds 100% by ${(totalMaster - 100).toFixed(2)}%.`}
+              </p>
             </div>
           )}
 
           {/* Publishing percentage */}
-          {(stakeType === "publishing" || stakeType === "both") && (
+          {showPublishingInput && (
             <div>
               <Label className="text-sm font-medium">Publishing Ownership %</Label>
               <Input type="number" min="0" max="100" step="0.01" value={publishingPct}
                 onChange={(e) => setPublishingPct(e.target.value)} placeholder="e.g. 10" />
+              <p className={`mt-1 text-xs ${publishingOverflow ? "text-destructive" : "text-muted-foreground"}`}>
+                Already allocated: {allocatedPublishing.toFixed(2)}% · This person: {newPublishing.toFixed(2)}% ·{" "}
+                <span className="font-medium">Total: {totalPublishing.toFixed(2)}% / 100%</span>
+                {publishingOverflow && ` — exceeds 100% by ${(totalPublishing - 100).toFixed(2)}%.`}
+              </p>
+            </div>
+          )}
+
+          {(masterOverflow || publishingOverflow) && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              Royalty splits can't exceed 100%. Reduce this person's share before sending the invitation.
             </div>
           )}
 
@@ -428,6 +471,7 @@ export default function InviteCollaboratorModal({ workId, stakes, artists, open,
 
       <DeriveCollaboratorSplitDialog
         workId={workId}
+        projectId={workFullQuery.data?.project_id || undefined}
         collaboratorName={name}
         open={deriveDialogOpen}
         onOpenChange={setDeriveDialogOpen}

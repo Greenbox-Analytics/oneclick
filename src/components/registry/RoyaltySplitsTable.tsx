@@ -190,7 +190,7 @@ export function RoyaltySplitsTable({
                     />
                   ) : (
                     <div className="text-xs font-semibold truncate">
-                      {r.isYou ? "You" : r.name || "Unnamed"}
+                      {r.name || "Unnamed"}
                     </div>
                   )}
                   {editable && !r.isYou ? (

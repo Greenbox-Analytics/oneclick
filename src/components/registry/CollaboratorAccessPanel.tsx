@@ -893,7 +893,32 @@ export default function CollaboratorAccessPanel({
 
   // ---- send (invite) ----
   const resolvedName = name.trim();
-  const canSend = !!email.trim() && !!resolvedName && !!workRole;
+
+  // Running totals against the work's current cap table — block submit on
+  // overflow so the user fixes it locally rather than hitting the DB trigger.
+  const allocatedMaster = useMemo(
+    () =>
+      (workFullQuery.data?.stakes || [])
+        .filter((s) => s.stake_type === "master")
+        .reduce((sum, s) => sum + Number(s.percentage || 0), 0),
+    [workFullQuery.data?.stakes]
+  );
+  const allocatedPublishing = useMemo(
+    () =>
+      (workFullQuery.data?.stakes || [])
+        .filter((s) => s.stake_type === "publishing")
+        .reduce((sum, s) => sum + Number(s.percentage || 0), 0),
+    [workFullQuery.data?.stakes]
+  );
+  const newMaster = parseFloat(masterPct) || 0;
+  const newPublishing = parseFloat(publishingPct) || 0;
+  const totalMaster = allocatedMaster + newMaster;
+  const totalPublishing = allocatedPublishing + newPublishing;
+  const masterOverflow = mode === "invite" && totalMaster > 100;
+  const publishingOverflow = mode === "invite" && totalPublishing > 100;
+
+  const canSend =
+    !!email.trim() && !!resolvedName && !!workRole && !masterOverflow && !publishingOverflow;
 
   const handleSend = async () => {
     if (!canSend) return;
@@ -1118,6 +1143,11 @@ export default function CollaboratorAccessPanel({
                           placeholder="e.g. 15"
                           className="mt-1"
                         />
+                        <p className={`mt-1 text-xs ${masterOverflow ? "text-destructive" : "text-muted-foreground"}`}>
+                          Allocated: {allocatedMaster.toFixed(2)}% + {newMaster.toFixed(2)}% ={" "}
+                          <span className="font-medium">{totalMaster.toFixed(2)}% / 100%</span>
+                          {masterOverflow && ` — over by ${(totalMaster - 100).toFixed(2)}%.`}
+                        </p>
                       </div>
                       <div>
                         <Label className="text-xs font-medium text-muted-foreground">
@@ -1133,8 +1163,19 @@ export default function CollaboratorAccessPanel({
                           placeholder="e.g. 10"
                           className="mt-1"
                         />
+                        <p className={`mt-1 text-xs ${publishingOverflow ? "text-destructive" : "text-muted-foreground"}`}>
+                          Allocated: {allocatedPublishing.toFixed(2)}% + {newPublishing.toFixed(2)}% ={" "}
+                          <span className="font-medium">{totalPublishing.toFixed(2)}% / 100%</span>
+                          {publishingOverflow && ` — over by ${(totalPublishing - 100).toFixed(2)}%.`}
+                        </p>
                       </div>
                     </div>
+
+                    {(masterOverflow || publishingOverflow) && (
+                      <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                        Royalty splits can't exceed 100%. Reduce this person's share before sending the invitation.
+                      </div>
+                    )}
 
                     <div className="mt-3 space-y-2 rounded-lg border border-border bg-card px-3 py-2.5">
                       <label className="flex cursor-pointer items-start gap-2.5">
@@ -1236,6 +1277,7 @@ export default function CollaboratorAccessPanel({
       {mode === "invite" && (
         <DeriveCollaboratorSplitDialog
           workId={workId}
+          projectId={workFullQuery.data?.project_id || undefined}
           collaboratorName={name}
           open={deriveDialogOpen}
           onOpenChange={setDeriveDialogOpen}

@@ -59,6 +59,9 @@ def _format_track(track: dict) -> dict:
     album = track.get("album") or {}
     images = album.get("images") or []
     cover = images[0]["url"] if images else None
+    # _resolved_genre is set by get_track after a follow-up call to /artists/{id};
+    # search responses don't have it (Spotify's track endpoint doesn't carry genre).
+    genre = track.get("_resolved_genre")
     return {
         "id": track.get("id"),
         "title": track.get("name"),
@@ -72,6 +75,7 @@ def _format_track(track: dict) -> dict:
         "isrc": (track.get("external_ids") or {}).get("isrc"),
         "upc": (album.get("external_ids") or {}).get("upc"),
         "label": album.get("label"),
+        "genre": genre.title() if isinstance(genre, str) and genre else None,
         "cover_url": cover,
         "spotify_url": (track.get("external_urls") or {}).get("spotify"),
     }
@@ -92,7 +96,7 @@ async def search_tracks(query: str, limit: int = 10, market: str = "US") -> list
 
 
 async def get_track(track_id: str) -> dict:
-    """Fetch a single track by Spotify id. Returns full metadata including ISRC/UPC/label."""
+    """Fetch a single track by Spotify id. Returns full metadata including ISRC/UPC/label/genre."""
     token = await _get_access_token()
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(
@@ -111,5 +115,20 @@ async def get_track(track_id: str) -> dict:
             )
             if album_resp.status_code == 200:
                 track["album"] = album_resp.json()
+
+        # Genre lives on the artist endpoint, not the track endpoint. Take the
+        # primary artist's first genre — Spotify often returns several; the
+        # first is the most strongly associated.
+        artists = track.get("artists") or []
+        primary_artist_id = artists[0]["id"] if artists and artists[0].get("id") else None
+        if primary_artist_id:
+            artist_resp = await client.get(
+                f"{SPOTIFY_API}/artists/{primary_artist_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if artist_resp.status_code == 200:
+                genres = artist_resp.json().get("genres") or []
+                if genres:
+                    track["_resolved_genre"] = genres[0]
 
         return _format_track(track)

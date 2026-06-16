@@ -17,6 +17,7 @@ class WorkCreate(BaseModel):
     iswc: str | None = None
     upc: str | None = None
     release_date: date | None = None
+    is_released: bool | None = None
     notes: str | None = None
 
 
@@ -28,6 +29,7 @@ class WorkUpdate(BaseModel):
     iswc: str | None = None
     upc: str | None = None
     release_date: date | None = None
+    is_released: bool | None = None
     status: str | None = None
     notes: str | None = None
 
