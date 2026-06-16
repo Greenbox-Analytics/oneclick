@@ -4,22 +4,28 @@ import re
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from postgrest.exceptions import APIError
+
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
-from registry import service, work_links_service
+from registry import contract_splits, derive_service, grants_service, service, work_links_service
+from registry.access import get_work_access
 from registry.models import (
+    AccessLevelUpdate,
     AgreementCreate,
     CollaboratorInvite,
     CollaboratorInviteWithStakes,
+    DeriveFromContractsBody,
     FolderCreate,
     FolderUpdate,
+    GrantsBody,
     LicenseCreate,
     LicenseUpdate,
     NoteCreate,
@@ -29,6 +35,7 @@ from registry.models import (
     StakeUpdate,
     TeamCardUpdate,
     WorkCreate,
+    WorkRoleUpdate,
     WorkUpdate,
 )
 from subscriptions.enforcement import gated_feature
@@ -81,7 +88,8 @@ async def list_works_by_project(project_id: str, user_id: str = Depends(get_curr
 
 @router.get("/works/{work_id}")
 async def get_work(work_id: str, user_id: str = Depends(get_current_user_id)):
-    work = await service.get_work(_get_supabase(), user_id, work_id)
+    # 404 for both missing and no-access — don't leak existence.
+    work = await service.get_work_filtered(_get_supabase(), user_id, work_id)
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     return work
@@ -95,13 +103,28 @@ async def get_work_full(work_id: str, user_id: str = Depends(get_current_user_id
     return data
 
 
+def _raise_503_if_schema_stale(e: APIError) -> None:
+    """Turn PostgREST's opaque schema-cache miss into actionable feedback.
+    Raised when a migration has been written to repo but not yet applied to the
+    DB (or applied, but PostgREST hasn't reloaded its schema cache yet)."""
+    if getattr(e, "code", None) == "PGRST204":
+        raise HTTPException(
+            status_code=503,
+            detail="Database schema is out of date — please run pending Supabase migrations and try again.",
+        )
+
+
 @router.post("/works")
 async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
     data = body.model_dump(exclude_none=True)
     if "release_date" in data and data["release_date"]:
         data["release_date"] = data["release_date"].isoformat()
-    work = await service.create_work(_get_supabase(), user_id, data)
+    try:
+        work = await service.create_work(_get_supabase(), user_id, data)
+    except APIError as e:
+        _raise_503_if_schema_stale(e)
+        raise
     if not work:
         raise HTTPException(status_code=500, detail="Failed to create work")
     analytics_capture(user_id, "work_created", {"work_type": data.get("work_type", "unknown")})
@@ -111,10 +134,19 @@ async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_
 @router.put("/works/{work_id}")
 async def update_work(work_id: str, body: WorkUpdate, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    data = body.model_dump(exclude_none=True)
-    if "release_date" in data and data["release_date"]:
+    # exclude_unset (not exclude_none) so callers can explicitly null out a
+    # field — needed for unreleasing a track (release_date = null), unsetting
+    # an ISRC, etc. exclude_none would silently strip those nulls.
+    data = body.model_dump(exclude_unset=True)
+    if data.get("release_date") is not None and not isinstance(data["release_date"], str):
         data["release_date"] = data["release_date"].isoformat()
-    work = await service.update_work(_get_supabase(), user_id, work_id, data)
+    try:
+        work = await service.update_work(_get_supabase(), user_id, work_id, data)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except APIError as e:
+        _raise_503_if_schema_stale(e)
+        raise
     if not work:
         raise HTTPException(status_code=404, detail="Work not found")
     return work
@@ -123,7 +155,10 @@ async def update_work(work_id: str, body: WorkUpdate, user_id: str = Depends(get
 @router.delete("/works/{work_id}")
 async def delete_work(work_id: str, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    await service.delete_work(_get_supabase(), user_id, work_id)
+    try:
+        await service.delete_work(_get_supabase(), user_id, work_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     return {"ok": True}
 
 
@@ -179,7 +214,9 @@ async def export_proof_of_ownership(work_id: str, user_id: str = Depends(get_cur
 
 @router.get("/stakes")
 async def list_stakes(work_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
-    stakes = await service.get_stakes(_get_supabase(), user_id, work_id)
+    stakes = await service.get_stakes_filtered(_get_supabase(), user_id, work_id)
+    if stakes is None:
+        raise HTTPException(status_code=403, detail="Not allowed")
     return {"stakes": stakes}
 
 
@@ -194,7 +231,10 @@ async def create_stake(body: StakeCreate, user_id: str = Depends(get_current_use
             status_code=400, detail=f"Adding {body.percentage}% would exceed 100% for {body.stake_type}"
         )
     data = body.model_dump(exclude_none=True)
-    stake = await service.create_stake(_get_supabase(), user_id, data)
+    try:
+        stake = await service.create_stake(_get_supabase(), user_id, data)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     if not stake:
         raise HTTPException(status_code=500, detail="Failed to create stake")
     return stake
@@ -209,7 +249,6 @@ async def update_stake(stake_id: str, body: StakeUpdate, user_id: str = Depends(
             .table("ownership_stakes")
             .select("work_id, stake_type")
             .eq("id", stake_id)
-            .eq("user_id", user_id)
             .single()
             .execute()
         )
@@ -227,7 +266,10 @@ async def update_stake(stake_id: str, body: StakeUpdate, user_id: str = Depends(
         if not valid:
             raise HTTPException(status_code=400, detail=f"Exceeds 100% for {stake_type}")
     data = body.model_dump(exclude_none=True)
-    stake = await service.update_stake(_get_supabase(), user_id, stake_id, data)
+    try:
+        stake = await service.update_stake(_get_supabase(), user_id, stake_id, data)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     if not stake:
         raise HTTPException(status_code=404, detail="Stake not found")
     return stake
@@ -236,7 +278,10 @@ async def update_stake(stake_id: str, body: StakeUpdate, user_id: str = Depends(
 @router.delete("/stakes/{stake_id}")
 async def delete_stake(stake_id: str, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    await service.delete_stake(_get_supabase(), user_id, stake_id)
+    try:
+        await service.delete_stake(_get_supabase(), user_id, stake_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     return {"ok": True}
 
 
@@ -247,7 +292,9 @@ async def delete_stake(stake_id: str, user_id: str = Depends(get_current_user_id
 
 @router.get("/licenses")
 async def list_licenses(work_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
-    licenses = await service.get_licenses(_get_supabase(), user_id, work_id)
+    licenses = await service.get_licenses_filtered(_get_supabase(), user_id, work_id)
+    if licenses is None:
+        raise HTTPException(status_code=403, detail="Not allowed")
     return {"licenses": licenses}
 
 
@@ -258,7 +305,10 @@ async def create_license(body: LicenseCreate, user_id: str = Depends(get_current
     for field in ("start_date", "end_date"):
         if field in data and data[field]:
             data[field] = data[field].isoformat()
-    lic = await service.create_license(_get_supabase(), user_id, data)
+    try:
+        lic = await service.create_license(_get_supabase(), user_id, data)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     if not lic:
         raise HTTPException(status_code=500, detail="Failed to create license")
     return lic
@@ -271,7 +321,10 @@ async def update_license(license_id: str, body: LicenseUpdate, user_id: str = De
     for field in ("start_date", "end_date"):
         if field in data and data[field]:
             data[field] = data[field].isoformat()
-    lic = await service.update_license(_get_supabase(), user_id, license_id, data)
+    try:
+        lic = await service.update_license(_get_supabase(), user_id, license_id, data)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     if not lic:
         raise HTTPException(status_code=404, detail="License not found")
     return lic
@@ -280,7 +333,10 @@ async def update_license(license_id: str, body: LicenseUpdate, user_id: str = De
 @router.delete("/licenses/{license_id}")
 async def delete_license(license_id: str, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    await service.delete_license(_get_supabase(), user_id, license_id)
+    try:
+        await service.delete_license(_get_supabase(), user_id, license_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     return {"ok": True}
 
 
@@ -291,7 +347,9 @@ async def delete_license(license_id: str, user_id: str = Depends(get_current_use
 
 @router.get("/agreements")
 async def list_agreements(work_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
-    agreements = await service.get_agreements(_get_supabase(), user_id, work_id)
+    agreements = await service.get_agreements_filtered(_get_supabase(), user_id, work_id)
+    if agreements is None:
+        raise HTTPException(status_code=403, detail="Not allowed")
     return {"agreements": agreements}
 
 
@@ -303,7 +361,10 @@ async def create_agreement(body: AgreementCreate, user_id: str = Depends(get_cur
         data["effective_date"] = data["effective_date"].isoformat()
     if "parties" in data:
         data["parties"] = [p if isinstance(p, dict) else p.model_dump() for p in data["parties"]]
-    agreement = await service.create_agreement(_get_supabase(), user_id, data)
+    try:
+        agreement = await service.create_agreement(_get_supabase(), user_id, data)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     if not agreement:
         raise HTTPException(status_code=500, detail="Failed to create agreement")
     return agreement
@@ -316,23 +377,13 @@ async def create_agreement(body: AgreementCreate, user_id: str = Depends(get_cur
 
 @router.get("/collaborators")
 async def list_collaborators(work_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
-    """List collaborators. Only the work creator or an existing collaborator can view."""
+    """List collaborators. Access + roster visibility are gated by get_work_access:
+    elevated/project members see the full roster; work-only viewers see only the owner
+    (plus themselves, and limited info on others when granted ownership breakdown)."""
     db = _get_supabase()
-    work = db.table("works_registry").select("user_id").eq("id", work_id).single().execute()
-    if not work.data:
-        raise HTTPException(status_code=404, detail="Work not found")
-    is_creator = work.data["user_id"] == user_id
-    is_collab = (
-        db.table("registry_collaborators")
-        .select("id")
-        .eq("work_id", work_id)
-        .eq("collaborator_user_id", user_id)
-        .neq("status", "revoked")
-        .execute()
-    )
-    if not is_creator and not (is_collab.data):
+    collabs = await service.get_collaborators_filtered(db, user_id, work_id)
+    if collabs is None:
         raise HTTPException(status_code=403, detail="Not authorized to view collaborators")
-    collabs = await service.get_collaborators(db, work_id)
     return {"collaborators": collabs}
 
 
@@ -389,11 +440,25 @@ async def confirm_stake(collaborator_id: str, user_id: str = Depends(get_current
     return collab
 
 
+@router.get("/collaborators/invite/{token}/preview")
+async def invite_preview(token: str, user_id: str = Depends(get_current_user_id)):
+    db = _get_supabase()
+    data = await service.get_invite_preview(db, token, user_id)
+    if not data:
+        raise HTTPException(404, "Invitation not found")
+    if data.get("expired"):
+        raise HTTPException(410, "Invitation expired — ask the owner to resend")
+    return data  # may be {email_mismatch: True, ...} — frontend shows the mismatch message
+
+
 @router.post("/collaborators/{collaborator_id}/revoke")
 async def revoke_collaborator(collaborator_id: str, user_id: str = Depends(get_current_user_id)):
-    """Revoke a collaborator invitation. Only the inviter can do this."""
+    """Revoke a collaborator: remove access, keep ownership. Gated by can_manage."""
     gated_feature(user_id, Action.USE_REGISTRY)
-    collab = await service.revoke_collaborator(_get_supabase(), user_id, collaborator_id)
+    try:
+        collab = await service.revoke_collaborator(_get_supabase(), user_id, collaborator_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     if not collab:
         raise HTTPException(status_code=404, detail="Collaborator record not found")
     return collab
@@ -451,6 +516,17 @@ async def unlink_file(work_id: str, link_id: str, user_id: str = Depends(get_cur
     return await work_links_service.unlink_file_from_work(_get_supabase(), link_id)
 
 
+@router.get("/works/{work_id}/files/{file_id}/download-url")
+async def file_download_url(work_id: str, file_id: str, user_id: str = Depends(get_current_user_id)):
+    """Access-checked, short-lived signed download URL for a project file.
+
+    Replaces direct public bucket URLs in the registry UI so file access
+    follows the same WorkAccess gate as the rest of the work's data.
+    """
+    url = await service.get_file_download_url(_get_supabase(), user_id, work_id, file_id)
+    return {"url": url}
+
+
 # ============================================================
 # Work Audio Links
 # ============================================================
@@ -473,6 +549,13 @@ async def link_audio(work_id: str, audio_file_id: str = Query(...), user_id: str
 async def unlink_audio(work_id: str, link_id: str, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
     return await work_links_service.unlink_audio_from_work(_get_supabase(), link_id)
+
+
+@router.get("/works/{work_id}/audio/{audio_id}/download-url")
+async def audio_download_url(work_id: str, audio_id: str, user_id: str = Depends(get_current_user_id)):
+    """Access-checked, short-lived signed download URL for a linked audio file."""
+    url = await service.get_audio_download_url(_get_supabase(), user_id, work_id, audio_id)
+    return {"url": url}
 
 
 # ============================================================
@@ -520,6 +603,23 @@ async def invite_with_stakes_endpoint(body: CollaboratorInviteWithStakes, user_i
         return result
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))  # already-active re-invite / bad grant
+    except APIError as e:
+        # The validate_stake_total trigger raises on >100% totals. Translate its
+        # raw message ("Total % for master would exceed 100% (current: %100.00,
+        # adding: %40.00)") into something a non-technical user can act on.
+        msg = (e.message if hasattr(e, "message") else str(e)) or ""
+        m = re.search(r"Total % for (\w+) would exceed 100% \(current: %([\d.]+), adding: %([\d.]+)\)", msg)
+        if m:
+            stake_type, current, adding = m.group(1), float(m.group(2)), float(m.group(3))
+            remaining = max(0.0, 100.0 - current)
+            friendly = (
+                f"This person's {stake_type} share ({adding:g}%) would push the total above 100%. "
+                f"{current:g}% is already allocated — at most {remaining:g}% is available."
+            )
+            raise HTTPException(status_code=400, detail=friendly)
+        raise
 
 
 @router.post("/collaborators/{collaborator_id}/decline")
@@ -548,6 +648,171 @@ async def accept_from_dashboard_endpoint(collaborator_id: str, user_id: str = De
 async def my_invites_endpoint(user_id: str = Depends(get_current_user_id)):
     invites = await service.get_my_invites(_get_supabase(), user_id)
     return {"invites": invites}
+
+
+# ============================================================
+# Per-collaborator visibility grants & access level
+# ============================================================
+
+
+@router.get("/works/{work_id}/access")
+async def work_access(work_id: str, user_id: str = Depends(get_current_user_id)):
+    db = _get_supabase()
+    wa = await get_work_access(db, user_id, work_id)
+    return {
+        "work_role": wa.work_role,
+        "project_role": wa.project_role,
+        "can_view": wa.can_view,
+        "can_edit": wa.can_edit,
+        "can_manage": wa.can_manage,
+        "can_delete": wa.can_delete,
+        "can_see_full_ownership": wa.can_see_full_ownership,
+        "is_project_member": wa.is_project_member,
+        "my_collaborator_id": wa.my_collaborator_id,
+        "all_visible": wa.all_visible(),
+        # sets -> lists (sets are not JSON-serializable)
+        "visible_stake_ids": list(wa.visible_stake_ids),
+        "visible_file_ids": list(wa.visible_file_ids),
+        "visible_audio_ids": list(wa.visible_audio_ids),
+        "visible_license_ids": list(wa.visible_license_ids),
+        "visible_agreement_ids": list(wa.visible_agreement_ids),
+    }
+
+
+@router.get("/works/{work_id}/grants")
+async def list_grants(work_id: str, user_id: str = Depends(get_current_user_id)):
+    db = _get_supabase()
+    wa = await get_work_access(db, user_id, work_id)
+    if not wa.can_manage:
+        raise HTTPException(403, "Not allowed to manage this work")
+    return await grants_service.get_grant_matrix(db, work_id)
+
+
+@router.post("/collaborators/{collaborator_id}/grants")
+async def add_grants(collaborator_id: str, body: GrantsBody, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
+    db = _get_supabase()
+    collab = db.table("registry_collaborators").select("work_id").eq("id", collaborator_id).single().execute()
+    if not collab.data:
+        raise HTTPException(404, "Collaborator not found")
+    work_id = collab.data["work_id"]
+    wa = await get_work_access(db, user_id, work_id)
+    if not wa.can_manage:
+        raise HTTPException(403, "Not allowed")
+    try:
+        for g in body.grants:
+            await grants_service.add_grant(db, collaborator_id, work_id, g.resource_type, g.resource_id, user_id)
+        if body.ownership_breakdown is True:
+            await grants_service.add_grant(db, collaborator_id, work_id, "ownership_breakdown", None, user_id)
+        if body.ownership_breakdown is False:
+            await grants_service.remove_grant(db, collaborator_id, "ownership_breakdown", None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    analytics_capture(
+        user_id,
+        "registry_access_granted",
+        {
+            "resource_types": sorted({g.resource_type for g in body.grants}),
+            "ownership_breakdown": bool(body.ownership_breakdown),
+        },
+    )
+    return {"ok": True}
+
+
+@router.delete("/collaborators/{collaborator_id}/grants")
+async def delete_grants(collaborator_id: str, body: GrantsBody, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
+    db = _get_supabase()
+    collab = db.table("registry_collaborators").select("work_id").eq("id", collaborator_id).single().execute()
+    if not collab.data:
+        raise HTTPException(404, "Collaborator not found")
+    wa = await get_work_access(db, user_id, collab.data["work_id"])
+    if not wa.can_manage:
+        raise HTTPException(403, "Not allowed")
+    for g in body.grants:
+        await grants_service.remove_grant(db, collaborator_id, g.resource_type, g.resource_id)
+    analytics_capture(
+        user_id,
+        "registry_access_revoked",
+        {"resource_types": sorted({g.resource_type for g in body.grants})},
+    )
+    return {"ok": True}
+
+
+@router.put("/collaborators/{collaborator_id}/access-level")
+async def set_access_level(collaborator_id: str, body: AccessLevelUpdate, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
+    db = _get_supabase()
+    collab = db.table("registry_collaborators").select("work_id").eq("id", collaborator_id).single().execute()
+    if not collab.data:
+        raise HTTPException(404, "Collaborator not found")
+    wa = await get_work_access(db, user_id, collab.data["work_id"])
+    if not wa.can_manage:
+        raise HTTPException(403, "Not allowed")
+    try:
+        await grants_service.set_access_level(db, collaborator_id, body.access_level)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    analytics_capture(
+        user_id,
+        "registry_admin_assigned" if body.access_level == "admin" else "registry_admin_revoked",
+        {"collaborator_id": collaborator_id},
+    )
+    return {"ok": True}
+
+
+@router.put("/collaborators/{collaborator_id}/role")
+async def set_collaborator_role(
+    collaborator_id: str, body: WorkRoleUpdate, user_id: str = Depends(get_current_user_id)
+):
+    gated_feature(user_id, Action.USE_REGISTRY)
+    db = _get_supabase()
+    collab = db.table("registry_collaborators").select("work_id").eq("id", collaborator_id).single().execute()
+    if not collab.data:
+        raise HTTPException(404, "Collaborator not found")
+    wa = await get_work_access(db, user_id, collab.data["work_id"])
+    if not wa.can_manage:
+        raise HTTPException(403, "Not allowed")
+    try:
+        await grants_service.set_work_role(db, collaborator_id, body.role)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@router.post("/collaborators/derive-from-contracts")
+async def derive_from_contracts(body: DeriveFromContractsBody, user_id: str = Depends(get_current_user_id)):
+    gated_feature(user_id, Action.USE_REGISTRY)
+    db = _get_supabase()
+    wa = await get_work_access(db, user_id, body.work_id)
+    if not wa.can_manage:
+        raise HTTPException(403, "Not allowed to manage this work")
+    result = await derive_service.derive_for_collaborator(
+        db, body.work_id, body.name, body.email, body.contract_file_ids
+    )
+
+    # Auto-link the source contract to the work — when a split was successfully
+    # derived from a file, that file is by definition related to this work and
+    # belongs in Related Documents. Pre-filter against work_files to skip files
+    # already linked (the common case when deriving from already-linked contracts).
+    if result.get("found") and result.get("matched_file_ids"):
+        already = (db.table("work_files").select("file_id").eq("work_id", body.work_id).execute()).data or []
+        already_ids = {r["file_id"] for r in already}
+        for fid in result["matched_file_ids"]:
+            if fid in already_ids:
+                continue
+            try:
+                await work_links_service.link_file_to_work(db, body.work_id, fid)
+            except Exception:
+                # Best-effort — a late duplicate or RLS edge shouldn't fail the derive.
+                pass
+
+    analytics_capture(
+        user_id,
+        "registry_contract_derived",
+        {"found": result["found"], "confidence": result["confidence"]},
+    )
+    return result
 
 
 # ============================================================
@@ -772,3 +1037,97 @@ async def mark_all_read(user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
     await service.mark_all_notifications_read(_get_supabase(), user_id)
     return {"ok": True}
+
+
+# ============================================================
+# Contract → royalty-splits parsing (Add Work wizard)
+# ============================================================
+
+
+@router.post("/parse-contract-splits")
+async def parse_contract_splits(
+    main_artist_name: str = Form(""),
+    contract_file_id: str = Form(""),
+    file: UploadFile | None = File(None),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Pivot a contract PDF into per-party master/publishing royalty splits.
+
+    Accepts either:
+      - a multipart `file` upload (PDF), OR
+      - a `contract_file_id` referencing an existing `project_files` row that
+        the user can access. The file is downloaded from the `project-files`
+        Supabase storage bucket.
+
+    Powers the Add Work wizard's "Pull from the contract" step. Returns:
+        {parties: [{name, role, master_pct, publishing_pct, is_main_artist}],
+         main_artist_found: bool}
+
+    If `main_artist_found` is false, the main artist is omitted from `parties`
+    and the frontend prompts the user to enter their own split manually.
+    """
+    gated_feature(user_id, Action.USE_REGISTRY)
+
+    import os
+    import tempfile
+
+    has_upload = file is not None and file.filename
+    has_picked = bool(contract_file_id)
+    if has_upload == has_picked:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide exactly one of: `file` (upload) or `contract_file_id` (existing).",
+        )
+
+    contents: bytes
+    if has_upload:
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    else:
+        db = _get_supabase()
+        row = (
+            db.table("project_files").select("file_path, file_name").eq("id", contract_file_id).maybe_single().execute()
+        )
+        if not row.data:
+            raise HTTPException(status_code=404, detail="Contract file not found")
+        file_path = row.data.get("file_path")
+        if not file_path:
+            raise HTTPException(status_code=400, detail="Contract file has no storage path")
+        try:
+            contents = db.storage.from_("project-files").download(file_path)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to download contract: {exc}") from exc
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        try:
+            result = contract_splits.parse_royalty_splits(
+                pdf_path=tmp_path,
+                main_artist_name=main_artist_name or "",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Contract parsing failed: {e}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    analytics_capture(
+        user_id,
+        "registry_contract_splits_parsed",
+        properties={
+            "party_count": len(result["parties"]),
+            "main_artist_found": result["main_artist_found"],
+            "source": "upload" if has_upload else "project_file",
+        },
+    )
+    return result

@@ -12,22 +12,17 @@ Covers:
 
 import pytest
 
-from oneclick.contract_parser import (
-    STREAMING_EQUIVALENT_TERMS,
-    ContractData,
-    Party,
-    RoyaltyShare,
-    Work,
+from oneclick.royalty_calculator import (
+    RoyaltyCalculator,
+    is_streaming_equivalent_royalty_type,
 )
-from oneclick.helpers import (
+from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
+from utils.contract_parsing.parser import STREAMING_EQUIVALENT_TERMS
+from utils.text.normalize import (
     find_matching_song,
     normalize_name,
     normalize_title,
     simplify_role,
-)
-from oneclick.royalty_calculator import (
-    RoyaltyCalculator,
-    is_streaming_equivalent_royalty_type,
 )
 
 # ---------------------------------------------------------------------------
@@ -128,8 +123,11 @@ def test_streaming_term_net_receipts_matches():
     assert is_streaming_equivalent_royalty_type("net receipts") is True
 
 
-def test_streaming_term_soundexchange_royalties_matches():
-    assert is_streaming_equivalent_royalty_type("soundexchange royalties") is True
+def test_streaming_term_soundexchange_royalties_does_not_match():
+    # SoundExchange royalties are intentionally excluded from streaming-equivalent
+    # terms — they're a separate US neighbouring-rights collection stream and
+    # shouldn't be lumped into streaming for splits calculations.
+    assert is_streaming_equivalent_royalty_type("soundexchange royalties") is False
 
 
 # Substring + case behavior.
@@ -183,7 +181,6 @@ def test_streaming_terms_list_includes_each_new_category():
         "sound engineering",
         "mixer royalties",
         "net receipts",
-        "SoundExchange royalties",
     ]:
         assert term in STREAMING_EQUIVALENT_TERMS, f"Missing expected term: {term!r}"
 

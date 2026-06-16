@@ -3,7 +3,7 @@
 import json
 from unittest.mock import MagicMock
 
-from oneclick.nuance_adjuster import BasisFinding, audit_contract_basis
+from utils.contract_parsing.basis_detection import BasisFinding, audit_contract_basis
 
 CONTRACT = (
     "ARTIST ROYALTY. The Company shall pay Artist fifty percent (50%) of Net Receipts. "
@@ -117,7 +117,7 @@ def test_non_numeric_factor_rejected():
 import logging
 from dataclasses import dataclass
 
-from oneclick.nuance_adjuster import log_basis_finding
+from utils.contract_parsing.basis_detection import log_basis_finding
 
 
 @dataclass
@@ -184,7 +184,7 @@ def test_emits_aggregate_analytics_no_clause_text():
     from unittest.mock import patch
 
     f = BasisFinding(basis="net", implied_factor=0.75, clause_quote="SECRET CLAUSE", affected_types="all")
-    with patch("oneclick.nuance_adjuster.analytics_capture") as cap:
+    with patch("utils.contract_parsing.basis_detection.analytics_capture") as cap:
         log_basis_finding(_payments(), f, contract_id="c1", user_id="u1")
     cap.assert_called_once()
     assert cap.call_args.args[0] == "u1" and cap.call_args.args[1] == "oneclick_basis_detected"

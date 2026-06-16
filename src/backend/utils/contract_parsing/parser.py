@@ -1,29 +1,27 @@
 """
-Music Contract Parser - Unified full-document extraction
-Extracts structured data (parties, works, royalty shares) from contract markdown in a single LLM call.
+Music Contract Parser — unified full-document extraction.
+
+Extracts structured data (parties, works, royalty shares) from contract markdown
+in a single LLM call. Reusable across any feature that needs to pull contract
+data, not just OneClick.
 """
 
 import json
 import logging
 import os
 import time
-from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from openai import OpenAI
+
+from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
+from utils.llm.client import get_openai_client
+from utils.text.normalize import normalize_name, normalize_title, simplify_role
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-
-# Initialize clients
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
-
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY not found in .env file")
 
 # Configuration
 LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5.2")
@@ -109,7 +107,6 @@ STREAMING_EQUIVALENT_TERMS = [
     "performance royalties on master",
     "master performance royalties",
     "digital performance royalties",
-    "SoundExchange royalties",
     "non-interactive digital performance royalties",
     # # Specific deal-structure terms
     # "all-in royalty",
@@ -137,60 +134,26 @@ STREAMING_EQUIVALENT_TERMS = [
     "user-centric royalty",
 ]
 
-# Load OneClick-specific extraction context (cached once at module load)
+# Load OneClick-specific extraction context (cached once at module load).
+# The markdown lives next to this file so `os.path.dirname(__file__)` resolves it.
 _ONECLICK_CONTEXT_PATH = os.path.join(os.path.dirname(__file__), "oneclick_context.md")
 with open(_ONECLICK_CONTEXT_PATH) as _f:
     ONECLICK_CONTEXT = _f.read()
 del _f
 
 
-# ---------------------------------------------------------------------------
-# Data Models
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class Party:
-    name: str
-    role: str
-
-
-@dataclass
-class Work:
-    title: str
-    work_type: str = "song"
-
-
-@dataclass
-class RoyaltyShare:
-    party_name: str
-    royalty_type: str
-    percentage: float
-    terms: str | None = None
-
-
-@dataclass
-class ContractData:
-    parties: list[Party]
-    works: list[Work]
-    royalty_shares: list[RoyaltyShare]
-    contract_summary: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Parser Class
-# ---------------------------------------------------------------------------
-
-
 class MusicContractParser:
     """Extract structured data from contracts using full document context"""
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or OPENAI_API_KEY
+        # Preserve the historical fail-fast guard on bad keys (OneClick relies on it),
+        # but reuse the shared lazily-initialized client so we don't keep building
+        # one OpenAI client per consumer.
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key or not self.api_key.startswith("sk-"):
             raise ValueError("Missing or invalid OpenAI API key.")
 
-        self.openai_client = OpenAI(api_key=self.api_key, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None)
+        self.openai_client = get_openai_client()
 
     def parse_contract(
         self, full_text: str, path: str = None, user_id: str = None, contract_id: str = None, use_parallel: bool = True
@@ -223,8 +186,6 @@ class MusicContractParser:
         royalty_shares = result["royalty_shares"]
 
         # Post-processing: simplify roles
-        from oneclick.helpers import normalize_name, simplify_role
-
         for party in parties:
             party.role = simplify_role(party.role)
 
@@ -346,8 +307,6 @@ Return ONLY valid JSON."""
         data = json.loads(response_text)
 
         # Parse parties
-        from oneclick.helpers import normalize_name, normalize_title
-
         parties = []
         seen_party_names = set()
         for item in data.get("parties", []):

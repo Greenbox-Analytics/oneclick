@@ -9,7 +9,7 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect, grant_owner_access
 
 _SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
@@ -307,7 +307,8 @@ class TestListAgreements:
         builder.execute.return_value = MagicMock(data=[SAMPLE_AGREEMENT], count=1)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/agreements?work_id={WORK_ID}")
+        with grant_owner_access():
+            response = client.get(f"/registry/agreements?work_id={WORK_ID}")
 
         assert response.status_code == 200
         body = response.json()
@@ -320,7 +321,8 @@ class TestListAgreements:
         builder.execute.return_value = MagicMock(data=[], count=0)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/agreements?work_id={WORK_ID}")
+        with grant_owner_access():
+            response = client.get(f"/registry/agreements?work_id={WORK_ID}")
 
         assert response.status_code == 200
         assert response.json()["agreements"] == []
@@ -331,7 +333,8 @@ class TestListAgreements:
         builder.execute.return_value = MagicMock(data=[SAMPLE_AGREEMENT], count=1)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/agreements?work_id={WORK_ID}")
+        with grant_owner_access():
+            response = client.get(f"/registry/agreements?work_id={WORK_ID}")
 
         assert response.status_code == 200
         body = response.json()
@@ -346,14 +349,26 @@ class TestListAgreements:
         assert response.status_code == 422
 
 
+def _agreement_create_side(insert_data):
+    """Side-effect: works_registry returns the owner dict (for user_id stamping),
+    registry_agreements returns the insert result."""
+    work_builder = MockQueryBuilder()
+    work_builder.execute.return_value = MagicMock(data={"user_id": TEST_USER_ID})
+    agreement_builder = MockQueryBuilder()
+    agreement_builder.execute.return_value = MagicMock(data=insert_data, count=len(insert_data))
+
+    def _side(name):
+        return work_builder if name == "works_registry" else agreement_builder
+
+    return _side
+
+
 class TestCreateAgreement:
     """POST /registry/agreements"""
 
     def test_create_agreement_success(self, client, mock_supabase):
         """Creates and returns new agreement."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[SAMPLE_AGREEMENT], count=1)
-        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+        mock_supabase.table.side_effect = _sub_wrap(_agreement_create_side([SAMPLE_AGREEMENT]))
 
         payload = {
             "work_id": WORK_ID,
@@ -362,7 +377,8 @@ class TestCreateAgreement:
             "effective_date": "2026-01-01",
             "parties": [{"name": "Alice", "role": "publisher"}],
         }
-        response = client.post("/registry/agreements", json=payload)
+        with grant_owner_access():
+            response = client.post("/registry/agreements", json=payload)
 
         assert response.status_code == 200
         body = response.json()
@@ -371,9 +387,7 @@ class TestCreateAgreement:
 
     def test_create_agreement_failure_returns_500(self, client, mock_supabase):
         """Returns 500 when insert fails."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[], count=0)
-        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+        mock_supabase.table.side_effect = _sub_wrap(_agreement_create_side([]))
 
         payload = {
             "work_id": WORK_ID,
@@ -382,7 +396,8 @@ class TestCreateAgreement:
             "effective_date": "2026-01-01",
             "parties": [{"name": "Bob", "role": "distributor"}],
         }
-        response = client.post("/registry/agreements", json=payload)
+        with grant_owner_access():
+            response = client.post("/registry/agreements", json=payload)
 
         assert response.status_code == 500
         assert "Failed to create agreement" in response.json()["detail"]
@@ -396,10 +411,7 @@ class TestCreateAgreement:
     def test_create_agreement_with_optional_fields(self, client, mock_supabase):
         """Creates agreement with optional description and file_id."""
         enriched = {**SAMPLE_AGREEMENT, "description": "Detailed terms", "file_id": FILE_ID}
-
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[enriched], count=1)
-        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+        mock_supabase.table.side_effect = _sub_wrap(_agreement_create_side([enriched]))
 
         payload = {
             "work_id": WORK_ID,
@@ -410,7 +422,8 @@ class TestCreateAgreement:
             "description": "Detailed terms",
             "file_id": FILE_ID,
         }
-        response = client.post("/registry/agreements", json=payload)
+        with grant_owner_access():
+            response = client.post("/registry/agreements", json=payload)
 
         assert response.status_code == 200
         body = response.json()

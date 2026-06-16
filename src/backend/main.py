@@ -45,6 +45,7 @@ from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
+from integrations.spotify.router import router as spotify_router
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
@@ -60,6 +61,7 @@ from users.router import router as users_router
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
 app.include_router(notion_router, prefix="/integrations/notion", tags=["Notion"])
+app.include_router(spotify_router, prefix="/integrations/spotify", tags=["Spotify"])
 app.include_router(connections_router, prefix="/integrations", tags=["Integrations"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
 app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])
@@ -112,7 +114,7 @@ def _convert_pdf_background(
 
     from supabase import create_client
 
-    from zoe_chatbot.helpers import pdf_to_markdown
+    from utils.ingestion.pdf_markdown import pdf_to_markdown
 
     try:
         db = create_client(db_url, db_key)
@@ -1423,7 +1425,7 @@ async def get_contract_markdown(contract_id: str, user_id: str = Depends(get_cur
         markdown = record.get("contract_markdown")
 
         # Re-convert when empty OR cached before page markers existed (Tier 1 page-jump).
-        from zoe_chatbot.helpers import markdown_has_page_markers, pdf_to_markdown
+        from utils.ingestion.pdf_markdown import markdown_has_page_markers, pdf_to_markdown
 
         if not markdown or not markdown_has_page_markers(markdown):
             file_data = get_supabase_client().storage.from_("project-files").download(record["file_path"])
@@ -2044,7 +2046,7 @@ async def oneclick_calculate_royalties_stream(
                         md = c_res.data[0].get("contract_markdown")
                         if not md:
                             # Lazy migration: convert PDF to markdown
-                            from zoe_chatbot.helpers import pdf_to_markdown
+                            from utils.ingestion.pdf_markdown import pdf_to_markdown
 
                             pdf_data = (
                                 get_supabase_client()
@@ -2062,7 +2064,7 @@ async def oneclick_calculate_royalties_stream(
                             finally:
                                 os.unlink(tmp_pdf_path)
                         if md:
-                            from zoe_chatbot.helpers import strip_page_markers
+                            from utils.ingestion.pdf_markdown import strip_page_markers
 
                             contract_markdowns[cid] = strip_page_markers(md)
                 except Exception as e:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from zoe_chatbot.helpers import create_query_embedding
+from utils.ingestion.embeddings import create_query_embedding
 
 # The single source of truth for which namespace holds the reference knowledge.
 # Set REFERENCE_NAMESPACE in the backend .env to point Zoe/OneClick at a different
