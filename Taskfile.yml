@@ -252,6 +252,11 @@ tasks:
         try_gsm "NOTION_CLIENT_SECRET"
         end_section
 
+        start_section "SPOTIFY INTEGRATION"
+        try_gsm "SPOTIFY_CLIENT_ID"
+        try_gsm "SPOTIFY_CLIENT_SECRET"
+        end_section
+
         start_section "POSTHOG"
         try_literal "POSTHOG_ENABLED" "{{.POSTHOG_ENABLED}}"
         try_gsm "POSTHOG_PROJECT_TOKEN"
