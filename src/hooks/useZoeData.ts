@@ -420,7 +420,6 @@ export function useZoeData() {
       );
       if (Object.keys(results).length > 0) setProjectDocuments((prev) => ({ ...prev, ...results }));
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkedProjectIds, projectDocuments, user]);
 
   useEffect(() => {
