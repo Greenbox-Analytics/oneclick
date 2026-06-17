@@ -8,6 +8,7 @@ from supabase import Client
 
 _ELEVATED_PROJECT_ROLES = {"owner", "admin"}
 
+
 @dataclass
 class WorkAccess:
     work_role: str = "none"  # owner | admin | viewer | none

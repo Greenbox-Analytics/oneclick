@@ -67,7 +67,6 @@ export default function FetchSpotifyMetadataDialog({
       setEnriched(null);
       setEnriching(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, seedQuery]);
 
   const searchQuery = useSpotifySearch(query, searchEnabled);
