@@ -73,6 +73,7 @@ STREAMING_EQUIVALENT_TERMS = [
     "points",
     "royalty points",
     "production royalties",
+    "mixer",
     "mixer royalties",
     "mixer points",
     "remixer royalties",
@@ -132,6 +133,56 @@ STREAMING_EQUIVALENT_TERMS = [
     "per-stream royalty",
     "pro-rata royalty",
     "user-centric royalty",
+]
+
+# Direct-pay collectors / payors whose royalties do NOT flow through DSP
+# streaming statements. Each name is combined with NON_STREAMING_PAYOR_CONTEXT_PHRASES
+# to build regexes that require a payment-direction context — bare mentions
+# (e.g. "applies to Direct Monies such as SoundExchange") must NOT trip the
+# denylist, only direct-payor references ("payable by SoundExchange",
+# "via ASCAP", "BMI Letter of Direction") should.
+NON_STREAMING_PAYOR_TERMS = [
+    # US neighbouring rights
+    "soundexchange",
+    "sound exchange",
+    # US mechanical
+    "mechanical licensing collective",
+    "the mlc",
+    # PROs (US)
+    "ascap",
+    "bmi",
+    "sesac",
+    # PROs (international)
+    "prs",  # UK
+    "gema",  # Germany
+    "socan",  # Canada
+    "sacem",  # France
+    "jasrac",  # Japan
+]
+
+# Phrase templates describing a direct-payor relationship. Each must contain
+# the literal "{payor}" placeholder, which is substituted with a word-boundary
+# alternation of NON_STREAMING_PAYOR_TERMS at module load in royalty_calculator.
+# Matched case-insensitively. Add new phrasings here when contracts surface them.
+NON_STREAMING_PAYOR_CONTEXT_PHRASES = [
+    # "payable by SoundExchange" / "paid directly by ASCAP"
+    r"payable\s+(?:directly\s+)?by\s+{payor}",
+    r"paid\s+(?:directly\s+)?by\s+{payor}",
+    r"remitted\s+(?:directly\s+)?by\s+{payor}",
+    r"collected\s+(?:directly\s+)?by\s+{payor}",
+    r"distributed\s+(?:directly\s+)?by\s+{payor}",
+    # "received directly from SoundExchange" — requires "received" so we don't
+    # match bare "income from SoundExchange" (contextual mention).
+    r"received\s+(?:directly\s+)?from\s+{payor}",
+    # "via SoundExchange" / "payable via ASCAP"
+    r"via\s+{payor}",
+    # Letter of Direction phrasing
+    r"{payor}\s+letter\s+of\s+direction",
+    r"{payor}\s+lod\b",
+    r"letter\s+of\s+direction\s+to\s+{payor}",
+    r"lod\s+to\s+{payor}",
+    # "SoundExchange shall pay" / "BMI will pay"
+    r"{payor}\s+(?:shall|will)\s+pay",
 ]
 
 # Load OneClick-specific extraction context (cached once at module load).

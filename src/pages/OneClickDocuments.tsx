@@ -20,9 +20,23 @@ import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
 import CalculationResults from "@/components/oneclick/CalculationResults";
+import SongMismatchComparison from "@/components/oneclick/SongMismatchComparison";
 
 interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; }
 interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; }
+interface CalculationErrorState {
+  message: string;
+  code?: string;
+  suggestion?: string;
+  details?: {
+    contract_works?: string[];
+    statement_songs?: string[];
+    statement_song_total_count?: number;
+    available_columns?: string[];
+    looking_for?: string[];
+    excluded_payor_count?: number;
+  };
+}
 interface Project { id: string; name: string; }
 interface ArtistFile { id: string; file_name: string; created_at: string; folder_category: string; file_path: string; project_id: string; }
 interface Artist { id: string; name: string; }
@@ -35,7 +49,7 @@ const OneClickDocuments = () => {
   const [royaltyStatementFile, setRoyaltyStatementFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [calculationResult, setCalculationResult] = useState<CalculationResult | null>(null);
-  const [error, setError] = useState<string>("");
+  const [error, setError] = useState<CalculationErrorState | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [selectedExistingContracts, setSelectedExistingContracts] = useState<string[]>([]);
@@ -197,7 +211,7 @@ const OneClickDocuments = () => {
     }
     setIsUploading(true);
     setCalculationResult(null);
-    setError("");
+    setError(null);
     try {
         let finalContractIds: string[] = [];
         let finalStatementId = "";
@@ -331,7 +345,7 @@ const OneClickDocuments = () => {
 
         const timeout = setTimeout(() => {
             reader.cancel(); setShowProgressModal(false);
-            setError("Calculation timed out. Please try again."); toast.error("Calculation timed out"); setIsUploading(false);
+            setError({ message: "Calculation timed out. Please try again." }); toast.error("Calculation timed out"); setIsUploading(false);
         }, 120000);
 
         let buffer = "";
@@ -349,7 +363,14 @@ const OneClickDocuments = () => {
                     setContractFiles([]); setRoyaltyStatementFile(null); setIsUploading(false);
                 } else if (data.type === 'error') {
                     clearTimeout(timeout); setShowProgressModal(false);
-                    setError(data.message || "An error occurred"); toast.error(data.message || "Calculation failed"); setIsUploading(false);
+                    setError({
+                        message: data.message || "An error occurred",
+                        code: data.error_code,
+                        suggestion: data.suggestion,
+                        details: data.details,
+                    });
+                    toast.error(data.message || "Calculation failed");
+                    setIsUploading(false);
                 }
             } catch (err) { console.error("Error parsing SSE data:", err); }
         };
@@ -366,13 +387,13 @@ const OneClickDocuments = () => {
             if (buffer.trim()) processLine(buffer.trim());
         } catch {
             clearTimeout(timeout); setShowProgressModal(false);
-            setError("Connection error. Please try again."); toast.error("Connection error during calculation"); setIsUploading(false);
+            setError({ message: "Connection error. Please try again." }); toast.error("Connection error during calculation"); setIsUploading(false);
         }
 
     } catch (error: unknown) {
         console.error("Error:", error);
         const errorMessage = error instanceof Error ? error.message : "An error occurred.";
-        setError(errorMessage);
+        setError({ message: errorMessage });
         if (!String(errorMessage).toLowerCase().includes("duplicate file")) toast.error(errorMessage || "An error occurred during processing.");
         setShowProgressModal(false); setIsUploading(false);
     }
@@ -549,8 +570,23 @@ const OneClickDocuments = () => {
         {error && (
             <Alert variant="destructive" className="mb-6">
                 <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
+                <AlertTitle>{error.message}</AlertTitle>
+                <AlertDescription>
+                    {error.suggestion && <p className="mt-2">{error.suggestion}</p>}
+                    {error.code === 'NO_SONG_MATCHES' && error.details?.contract_works && error.details?.statement_songs && (
+                        <SongMismatchComparison
+                            contractWorks={error.details.contract_works}
+                            statementSongs={error.details.statement_songs}
+                            statementTotalCount={error.details.statement_song_total_count ?? error.details.statement_songs.length}
+                        />
+                    )}
+                    {error.code === 'STATEMENT_COLUMNS_UNDETECTABLE' && error.details?.available_columns && (
+                        <p className="mt-3 text-sm">
+                            <span className="font-medium">Columns we found in your statement:</span>{" "}
+                            {error.details.available_columns.join(", ")}
+                        </p>
+                    )}
+                </AlertDescription>
             </Alert>
         )}
 

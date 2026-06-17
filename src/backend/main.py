@@ -46,6 +46,7 @@ from integrations.google_drive.router import router as google_drive_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from integrations.spotify.router import router as spotify_router
+from oneclick.royalty_calculator import CalculationError
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
@@ -2118,14 +2119,10 @@ async def oneclick_calculate_royalties_stream(
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
             await asyncio.sleep(0.3)
 
-            if not payments or len(payments) == 0:
-                analytics_capture(
-                    user_id,
-                    "oneclick_calc_failed",
-                    {"tool": "oneclick", "error_code": "NoPaymentsCalculated", "stage": "calc"},
-                )
-                yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
-                return
+            # Note: an empty payments list is no longer possible here — the
+            # calculator now raises a CalculationError with a specific reason
+            # code (NO_SONG_MATCHES / NO_STREAMING_EARNABLE_SHARES / etc.)
+            # which is caught below and surfaced to the user.
 
             yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
             await asyncio.sleep(0.2)
@@ -2169,6 +2166,23 @@ async def oneclick_calculate_royalties_stream(
                     "cached": False,
                 },
             )
+
+        except CalculationError as e:
+            # Structured, user-facing reason — surface code/message/suggestion/details
+            # so the frontend can render a rich error panel.
+            analytics_capture(
+                user_id,
+                "oneclick_calc_failed",
+                {"tool": "oneclick", "error_code": e.code, "stage": "calc"},
+            )
+            error_payload = {
+                "type": "error",
+                "error_code": e.code,
+                "message": e.user_message,
+                "suggestion": e.suggestion,
+                "details": e.details,
+            }
+            yield f"data: {json.dumps(error_payload)}\n\n"
 
         except Exception as e:
             import traceback
@@ -2321,11 +2335,9 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
                 contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
             )
 
-            if not payments or len(payments) == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail="No payments could be calculated. Please verify the contract and royalty statement contain matching songs.",
-                )
+            # Note: empty payments is no longer possible here — the calculator
+            # now raises CalculationError with a specific reason code, caught
+            # by the dedicated handler below.
 
             print(f"Calculated {len(payments)} payments")
 
@@ -2378,6 +2390,21 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
 
     except HTTPException:
         raise
+    except CalculationError as e:
+        analytics_capture(
+            user_id,
+            "oneclick_calc_failed",
+            {"tool": "oneclick", "error_code": e.code, "stage": "calc"},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": e.code,
+                "message": e.user_message,
+                "suggestion": e.suggestion,
+                "details": e.details,
+            },
+        )
     except Exception as e:
         print(f"Error in OneClick royalty calculation: {str(e)}")
         import traceback
