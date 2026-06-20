@@ -198,10 +198,22 @@ export function WorkEditor({ work }: WorkEditorProps) {
     try {
       const data = await spotifyTrack.refetch();
       if (data.data) {
+        const credited = (data.data.artists || []).map((a) => ({
+          name: a.name,
+          role: a.role,
+        }));
         set({
           isrc: work.isrc || data.data.isrc || null,
           upc: work.upc || data.data.upc || null,
           release_date: work.release_date || data.data.release_date || null,
+          genre: work.genre || data.data.genre || null,
+          label: work.label || data.data.label || null,
+          featured_artists:
+            work.featured_artists && work.featured_artists.length > 0
+              ? work.featured_artists
+              : credited.length > 0
+                ? credited
+                : null,
         });
         toast.success("Metadata pulled from Spotify");
       }
@@ -449,6 +461,22 @@ export function WorkEditor({ work }: WorkEditorProps) {
                 onChange={(e) => set({ iswc: e.target.value })}
               />
             </Field>
+            <Field label="Genre" hint="Pulls from Spotify">
+              <Input
+                value={work.genre || ""}
+                placeholder="e.g. Afrobeats"
+                disabled={!canEdit}
+                onChange={(e) => set({ genre: e.target.value })}
+              />
+            </Field>
+            <Field label="Label" hint="Record label / distributor">
+              <Input
+                value={work.label || ""}
+                placeholder="e.g. Sony Music"
+                disabled={!canEdit}
+                onChange={(e) => set({ label: e.target.value })}
+              />
+            </Field>
             <Field label="Duration" hint={spotifyTrack.data ? "From Spotify" : "Pulls when synced"}>
               <div className="h-10 rounded-md border bg-muted/40 px-3 flex items-center text-sm text-muted-foreground">
                 {fmtDuration(spotifyTrack.data?.duration_ms || null)}
@@ -476,6 +504,29 @@ export function WorkEditor({ work }: WorkEditorProps) {
                 )}
               </div>
             </Field>
+          </div>
+
+          {/* Credited artists — display-only metadata pulled from Spotify,
+              separate from the ownership / royalty splits below. */}
+          <div className="mt-4 pt-4 border-t border-border/60">
+            <div className="text-sm font-medium mb-2">Featured artists &amp; credits</div>
+            {work.featured_artists && work.featured_artists.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {work.featured_artists.map((a, i) => (
+                  <span
+                    key={`${a.name}-${i}`}
+                    className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 px-2.5 py-1 text-xs"
+                  >
+                    <span className="font-medium">{a.name}</span>
+                    <span className="text-muted-foreground">· {a.role}</span>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No credited artists yet — pull from Spotify to populate them.
+              </p>
+            )}
           </div>
         </CardBlock>
 
@@ -639,6 +690,8 @@ export function WorkEditor({ work }: WorkEditorProps) {
           upc: work.upc,
           release_date: work.release_date,
           notes: work.notes,
+          genre: work.genre,
+          label: work.label,
         }}
         onApply={(patch) => updateWork.mutate({ workId: work.id, ...patch })}
       />

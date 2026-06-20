@@ -19,6 +19,9 @@ class WorkCreate(BaseModel):
     release_date: date | None = None
     is_released: bool | None = None
     notes: str | None = None
+    genre: str | None = None
+    label: str | None = None
+    featured_artists: list | None = None
 
 
 class WorkUpdate(BaseModel):
@@ -32,6 +35,9 @@ class WorkUpdate(BaseModel):
     is_released: bool | None = None
     status: str | None = None
     notes: str | None = None
+    genre: str | None = None
+    label: str | None = None
+    featured_artists: list | None = None
 
 
 # --- Ownership Stakes ---
