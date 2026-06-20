@@ -122,25 +122,23 @@ async def import_drive_file(token: str, supabase: Client, user_id: str, data: di
 
 async def export_to_drive(token: str, supabase: Client, user_id: str, data: dict) -> dict:
     """Export a project file to Google Drive."""
-    # Get file from Supabase
-    file_record = (
-        supabase.table("project_files")
-        .select("*")
-        .eq("id", data["project_file_id"])
-        .eq("user_id", user_id)
-        .single()
-        .execute()
-    )
-    if not file_record.data:
-        raise ValueError("File not found")
+    from projects.service import get_user_role
 
-    file_data = file_record.data
-    content = supabase.storage.from_("project-files").download(file_data["file_path"])
+    # Get file from Supabase (without user_id filter — project_files has no user_id column).
+    # select("*") preserves all columns (e.g. mime_type) used downstream.
+    pf = supabase.table("project_files").select("*").eq("id", data["project_file_id"]).maybe_single().execute()
+    if not pf or not pf.data:
+        raise PermissionError("not found")
+    if await get_user_role(supabase, user_id, pf.data["project_id"]) is None:
+        raise PermissionError("denied")
+    file_row = pf.data
+
+    content = supabase.storage.from_("project-files").download(file_row["file_path"])
 
     # Upload to Drive
     folder_id = data.get("drive_folder_id", "root")
     metadata = {
-        "name": file_data["file_name"],
+        "name": file_row["file_name"],
         "parents": [folder_id],
     }
 
@@ -153,7 +151,7 @@ async def export_to_drive(token: str, supabase: Client, user_id: str, data: dict
             headers={"Authorization": f"Bearer {token}"},
             files={
                 "metadata": ("metadata", json.dumps(metadata), "application/json"),
-                "file": (file_data["file_name"], content, file_data.get("mime_type", "application/octet-stream")),
+                "file": (file_row["file_name"], content, file_row.get("mime_type", "application/octet-stream")),
             },
         )
         response.raise_for_status()
@@ -164,7 +162,7 @@ async def export_to_drive(token: str, supabase: Client, user_id: str, data: dict
         {
             "user_id": user_id,
             "project_file_id": data["project_file_id"],
-            "project_id": file_data["project_id"],
+            "project_id": file_row["project_id"],
             "drive_file_id": drive_file["id"],
             "sync_direction": "to_drive",
         }

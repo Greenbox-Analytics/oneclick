@@ -87,9 +87,12 @@ async def generate_split_sheet(req: SplitSheetRequest, user_id: str = Depends(ge
 
     # Save to artist profile if requested
     if req.save_to_artist and req.artist_id and req.project_id:
-        try:
-            from main import get_supabase_client
+        from main import get_supabase_client, verify_user_owns_artist, verify_user_owns_project
 
+        if not verify_user_owns_artist(user_id, req.artist_id) or not verify_user_owns_project(user_id, req.project_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        try:
             file_bytes = buffer.read()
             buffer.seek(0)
 

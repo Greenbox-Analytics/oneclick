@@ -1,6 +1,11 @@
 """FastAPI router for Slack integration."""
 
+import hashlib
+import hmac
+import json
+import os
 import sys
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,6 +30,20 @@ from subscriptions.enforcement import gated_feature
 from subscriptions.models import Action
 
 router = APIRouter()
+
+
+def _verify_slack_signature(timestamp: str, signature: str, raw_body: bytes) -> bool:
+    secret = os.getenv("SLACK_SIGNING_SECRET")
+    if not secret or not timestamp or not signature:
+        return False
+    try:
+        if abs(time.time() - int(timestamp)) > 60 * 5:  # replay window
+            return False
+    except ValueError:
+        return False
+    base = f"v0:{timestamp}:".encode() + raw_body
+    expected = "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 def _get_supabase():
@@ -149,8 +168,15 @@ async def get_settings(user_id: str = Depends(get_current_user_id)):
 
 @router.post("/webhook")
 async def handle_webhook(request: Request):
-    """Handle incoming Slack events (app_mention)."""
-    body = await request.json()
+    """Handle incoming Slack events (app_mention). Verifies the Slack signing secret."""
+    raw_body = await request.body()
+    if not _verify_slack_signature(
+        request.headers.get("X-Slack-Request-Timestamp", ""),
+        request.headers.get("X-Slack-Signature", ""),
+        raw_body,
+    ):
+        raise HTTPException(status_code=403, detail="Invalid Slack signature")
+    body = json.loads(raw_body)
 
     # Slack URL verification challenge
     if body.get("type") == "url_verification":

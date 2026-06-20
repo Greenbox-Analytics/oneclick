@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException
+from supabase import create_client
 
 _NONCE_BYTES = 12
 
@@ -179,7 +180,11 @@ async def reveal_credential(
         raise HTTPException(status_code=400, detail="User email not available for re-auth")
 
     try:
-        supabase.auth.sign_in_with_password({"email": email, "password": msanii_password})
+        auth_client = create_client(
+            os.getenv("VITE_SUPABASE_URL"),
+            os.getenv("VITE_SUPABASE_ANON_KEY"),
+        )
+        auth_client.auth.sign_in_with_password({"email": email, "password": msanii_password})
     except Exception:
         _record_failure(user_id)
         raise HTTPException(status_code=401, detail="Invalid Msanii password")

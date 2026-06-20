@@ -10,9 +10,25 @@ imported into `main` at module scope.
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from tests.conftest import MockQueryBuilder, _default_table_side_effect
+
+
+@pytest.fixture(autouse=True)
+def _bypass_oneclick_ownership(monkeypatch):
+    """Bypass the OneClick ownership guard for all tests in this module.
+
+    These tests focus on analytics instrumentation, not access control.
+    Ownership guard correctness is covered by test_oneclick_ownership.py.
+    """
+    monkeypatch.setattr(
+        "main._assert_can_access_oneclick_inputs",
+        AsyncMock(return_value=None),
+    )
+
 
 PROJECT_ID = "proj-0000-0000-0000-0000-000000000001"
 CONTRACT_ID = "cont-0000-0000-0000-0000-000000000001"

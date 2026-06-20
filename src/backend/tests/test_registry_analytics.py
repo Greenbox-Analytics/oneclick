@@ -4,7 +4,7 @@
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
 
@@ -81,8 +81,11 @@ def test_invite_collaborator_fires_event(client, mock_supabase):
 
     mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
+    from registry.access import WorkAccess
+
     with (
         patch("registry.emails.send_invitation_email"),
+        patch("registry.router.get_work_access", AsyncMock(return_value=WorkAccess(work_role="owner"))),
         patch(
             "registry.router.analytics_capture",
             side_effect=lambda uid, event, props=None: captured.append((uid, event, dict(props or {}))),

@@ -7,9 +7,26 @@ Acceptance criteria:
 4. Work audio links: list (200 with "audio" key), link (200 with "link" key), unlink (200)
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect, grant_owner_access
+
+
+def _grant_link_owner_access():
+    """Patch work_links_service.get_work_access to an owner-level WorkAccess.
+
+    The work file/audio link endpoints gate through get_work_access in
+    work_links_service; the shared MockQueryBuilder can't satisfy that resolver,
+    so these endpoint-contract tests pin it to an authorized result. The resolver
+    itself is covered by tests/test_registry_access.py.
+    """
+    from registry import work_links_service
+    from registry.access import WorkAccess
+
+    wa = WorkAccess(work_role="owner", can_see_full_ownership=True)
+    wa._all_visible = True
+    return patch.object(work_links_service, "get_work_access", AsyncMock(return_value=wa))
+
 
 _SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
@@ -444,7 +461,8 @@ class TestWorkFileLinks:
         builder.execute.return_value = MagicMock(data=[SAMPLE_FILE_LINK], count=1)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/works/{WORK_ID}/files")
+        with _grant_link_owner_access():
+            response = client.get(f"/registry/works/{WORK_ID}/files")
 
         assert response.status_code == 200
         body = response.json()
@@ -457,7 +475,8 @@ class TestWorkFileLinks:
         builder.execute.return_value = MagicMock(data=[], count=0)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/works/{WORK_ID}/files")
+        with _grant_link_owner_access():
+            response = client.get(f"/registry/works/{WORK_ID}/files")
 
         assert response.status_code == 200
         assert response.json()["files"] == []
@@ -468,7 +487,8 @@ class TestWorkFileLinks:
         builder.execute.return_value = MagicMock(data=[SAMPLE_FILE_LINK], count=1)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/works/{WORK_ID}/files")
+        with _grant_link_owner_access():
+            response = client.get(f"/registry/works/{WORK_ID}/files")
 
         assert response.status_code == 200
         body = response.json()
@@ -481,7 +501,8 @@ class TestWorkFileLinks:
         builder.execute.return_value = MagicMock(data=[SAMPLE_FILE_LINK], count=1)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.post(f"/registry/works/{WORK_ID}/files?file_id={FILE_ID}")
+        with _grant_link_owner_access():
+            response = client.post(f"/registry/works/{WORK_ID}/files?file_id={FILE_ID}")
 
         assert response.status_code == 200
         body = response.json()
@@ -499,7 +520,8 @@ class TestWorkFileLinks:
         builder.execute.return_value = MagicMock(data=[], count=0)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.delete(f"/registry/works/{WORK_ID}/files/{LINK_ID}")
+        with _grant_link_owner_access():
+            response = client.delete(f"/registry/works/{WORK_ID}/files/{LINK_ID}")
 
         assert response.status_code == 200
         body = response.json()
@@ -511,7 +533,8 @@ class TestWorkFileLinks:
         builder.execute.return_value = MagicMock(data=[], count=0)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.post(f"/registry/works/{WORK_ID}/files?file_id={FILE_ID}")
+        with _grant_link_owner_access():
+            response = client.post(f"/registry/works/{WORK_ID}/files?file_id={FILE_ID}")
 
         assert response.status_code == 200
         body = response.json()
@@ -533,7 +556,8 @@ class TestWorkAudioLinks:
         builder.execute.return_value = MagicMock(data=[SAMPLE_AUDIO_LINK], count=1)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/works/{WORK_ID}/audio")
+        with _grant_link_owner_access():
+            response = client.get(f"/registry/works/{WORK_ID}/audio")
 
         assert response.status_code == 200
         body = response.json()
@@ -546,7 +570,8 @@ class TestWorkAudioLinks:
         builder.execute.return_value = MagicMock(data=[], count=0)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/works/{WORK_ID}/audio")
+        with _grant_link_owner_access():
+            response = client.get(f"/registry/works/{WORK_ID}/audio")
 
         assert response.status_code == 200
         assert response.json()["audio"] == []
@@ -557,7 +582,8 @@ class TestWorkAudioLinks:
         builder.execute.return_value = MagicMock(data=[SAMPLE_AUDIO_LINK], count=1)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.get(f"/registry/works/{WORK_ID}/audio")
+        with _grant_link_owner_access():
+            response = client.get(f"/registry/works/{WORK_ID}/audio")
 
         assert response.status_code == 200
         body = response.json()
@@ -570,7 +596,8 @@ class TestWorkAudioLinks:
         builder.execute.return_value = MagicMock(data=[SAMPLE_AUDIO_LINK], count=1)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.post(f"/registry/works/{WORK_ID}/audio?audio_file_id={AUDIO_FILE_ID}")
+        with _grant_link_owner_access():
+            response = client.post(f"/registry/works/{WORK_ID}/audio?audio_file_id={AUDIO_FILE_ID}")
 
         assert response.status_code == 200
         body = response.json()
@@ -588,7 +615,8 @@ class TestWorkAudioLinks:
         builder.execute.return_value = MagicMock(data=[], count=0)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.delete(f"/registry/works/{WORK_ID}/audio/{LINK_ID}")
+        with _grant_link_owner_access():
+            response = client.delete(f"/registry/works/{WORK_ID}/audio/{LINK_ID}")
 
         assert response.status_code == 200
         body = response.json()
@@ -600,7 +628,8 @@ class TestWorkAudioLinks:
         builder.execute.return_value = MagicMock(data=[], count=0)
         mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-        response = client.post(f"/registry/works/{WORK_ID}/audio?audio_file_id={AUDIO_FILE_ID}")
+        with _grant_link_owner_access():
+            response = client.post(f"/registry/works/{WORK_ID}/audio?audio_file_id={AUDIO_FILE_ID}")
 
         assert response.status_code == 200
         body = response.json()

@@ -18,6 +18,43 @@ def _set_junction(supabase: Client, table: str, task_id: str, fk_column: str, id
         supabase.table(table).insert(rows).execute()
 
 
+def _owned_artist_ids(db: Client, user_id: str, ids: list[str]) -> list[str]:
+    """Return only the ids from `ids` that belong to the calling user."""
+    if not ids:
+        return []
+    rows = db.table("artists").select("id").in_("id", ids).eq("user_id", user_id).execute()
+    return [r["id"] for r in (rows.data or [])]
+
+
+def _accessible_project_ids(db: Client, user_id: str, ids: list[str]) -> list[str]:
+    """Return only project ids the calling user can access (owns or is a member of)."""
+    if not ids:
+        return []
+    allowed: set[str] = set()
+
+    # Projects belonging to the user's own artists
+    art = db.table("artists").select("id").eq("user_id", user_id).execute()
+    my_artist_ids = [a["id"] for a in (art.data or [])]
+    if my_artist_ids:
+        owned = db.table("projects").select("id").in_("id", ids).in_("artist_id", my_artist_ids).execute()
+        allowed.update(p["id"] for p in (owned.data or []))
+
+    # Projects the user is a member of
+    member = db.table("project_members").select("project_id").in_("project_id", ids).eq("user_id", user_id).execute()
+    allowed.update(m["project_id"] for m in (member.data or []))
+
+    return [i for i in ids if i in allowed]
+
+
+def _accessible_contract_ids(db: Client, user_id: str, ids: list[str]) -> list[str]:
+    """Return only contract (project_files) ids the calling user can access."""
+    if not ids:
+        return []
+    rows = db.table("project_files").select("id, project_id").in_("id", ids).execute()
+    ok = set(_accessible_project_ids(db, user_id, [r["project_id"] for r in (rows.data or [])]))
+    return [r["id"] for r in (rows.data or []) if r["project_id"] in ok]
+
+
 def _get_junction_ids(supabase: Client, table: str, fk_column: str, task_ids: list[str]) -> dict:
     """Batch-fetch junction rows for multiple tasks. Returns {task_id: [fk_ids]}."""
     if not task_ids:
@@ -150,6 +187,12 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
 
     if task:
         task_id = task["id"]
+
+        # Filter junction ids to only those the caller is authorised to reference
+        artist_ids = _owned_artist_ids(supabase, user_id, artist_ids)
+        project_ids = _accessible_project_ids(supabase, user_id, project_ids)
+        contract_ids = _accessible_contract_ids(supabase, user_id, contract_ids)
+
         if artist_ids:
             _set_junction(supabase, "board_task_artists", task_id, "artist_id", artist_ids)
         if project_ids:
@@ -200,11 +243,15 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
         task = result.data or {}
 
     if task:
+        # Filter junction ids to only those the caller is authorised to reference
         if artist_ids is not None:
+            artist_ids = _owned_artist_ids(supabase, user_id, artist_ids)
             _set_junction(supabase, "board_task_artists", task_id, "artist_id", artist_ids)
         if project_ids is not None:
+            project_ids = _accessible_project_ids(supabase, user_id, project_ids)
             _set_junction(supabase, "board_task_projects", task_id, "project_id", project_ids)
         if contract_ids is not None:
+            contract_ids = _accessible_contract_ids(supabase, user_id, contract_ids)
             _set_junction(supabase, "board_task_contracts", task_id, "project_file_id", contract_ids)
 
         await events.emit(events.TASK_UPDATED, {"user_id": user_id, "task": task})
@@ -502,7 +549,11 @@ async def get_all_parents_with_children(
 
 
 async def create_comment(supabase: Client, user_id: str, task_id: str, content: str) -> dict:
-    """Add a comment to a task."""
+    """Add a comment to a task. Raises PermissionError if the task is not owned by the caller."""
+    ownership = supabase.table("board_tasks").select("id").eq("id", task_id).eq("user_id", user_id).execute()
+    if not ownership.data:
+        raise PermissionError("denied")
+
     result = (
         supabase.table("board_task_comments")
         .insert(

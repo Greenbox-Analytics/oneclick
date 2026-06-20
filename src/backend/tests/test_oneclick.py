@@ -7,10 +7,26 @@ Acceptance criteria:
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from oneclick.royalty_calculator import CalculationError
 from tests.conftest import MockQueryBuilder, _default_table_side_effect
+
+
+@pytest.fixture(autouse=True)
+def _bypass_oneclick_ownership(monkeypatch):
+    """Bypass the OneClick ownership guard for all tests in this module.
+
+    These tests focus on royalty calculation logic, not access control.
+    Ownership guard correctness is covered by test_oneclick_ownership.py.
+    """
+    monkeypatch.setattr(
+        "main._assert_can_access_oneclick_inputs",
+        AsyncMock(return_value=None),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Constants

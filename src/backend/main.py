@@ -263,6 +263,76 @@ def verify_user_owns_contract(user_id: str, contract_id: str) -> bool:
     return verify_user_owns_project(user_id, contract_res.data[0]["project_id"])
 
 
+async def user_can_access_project(db, user_id: str, project_id: str) -> bool:
+    """True if the caller is a member of the project (owner is auto-enrolled), with an
+    artist-ownership fallback so the creator is never falsely denied."""
+    from projects.service import get_user_role  # lazy import: avoid circular import
+
+    if not project_id:
+        return False
+    if await get_user_role(db, user_id, project_id) is not None:
+        return True
+    return verify_user_owns_project(user_id, project_id)
+
+
+async def user_can_access_file(db, user_id: str, file_id: str) -> bool:
+    """Accessible if the caller is a member of the file's project, OR the file is linked to a
+    work where the caller was specifically granted this file (or is elevated on a work in the
+    file's OWN project). The same-project guard prevents a cross-project work_files link from
+    widening access to a file in another tenant's project."""
+    if not file_id:
+        return False
+    res = db.table("project_files").select("project_id").eq("id", file_id).execute()
+    if not res.data:
+        return False
+    file_project_id = res.data[0]["project_id"]
+    if await user_can_access_project(db, user_id, file_project_id):
+        return True
+    # Per-contract grant: file linked to a work the caller can view this file on.
+    from registry.access import get_work_access  # lazy import to avoid circular import
+
+    links = db.table("work_files").select("work_id").eq("file_id", file_id).execute()
+    for link in links.data or []:
+        work_id = link["work_id"]
+        wa = await get_work_access(db, user_id, work_id)
+        # An explicit per-file grant to this collaborator is always honored.
+        if file_id in wa.visible_file_ids:
+            return True
+        # "Sees everything on the work" (owner/admin/member) is honored ONLY when the file
+        # genuinely belongs to that work's project — never via a cross-project link.
+        if wa.all_visible():
+            wrow = db.table("works_registry").select("project_id").eq("id", work_id).execute()
+            if wrow.data and wrow.data[0].get("project_id") == file_project_id:
+                return True
+    return False
+
+
+async def _assert_can_access_oneclick_inputs(db, user_id, project_id, statement_id, contract_ids) -> None:
+    """Gate on the actual files read: the royalty statement and every contract.
+    project_id is the container, not the security boundary."""
+    if not await user_can_access_file(db, user_id, statement_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    for cid in contract_ids:
+        if cid and not await user_can_access_file(db, user_id, cid):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+
+def verify_user_owns_audio_file(user_id: str, audio_file_id: str) -> dict | None:
+    """Return the audio_files row if it belongs to one of the user's artists, else None."""
+    af = get_supabase_client().table("audio_files").select("id, file_path, folder_id").eq("id", audio_file_id).execute()
+    if not af.data:
+        return None
+    folder_id = af.data[0].get("folder_id")
+    if not folder_id:
+        return None
+    folder = get_supabase_client().table("audio_folders").select("artist_id").eq("id", folder_id).execute()
+    if not folder.data:
+        return None
+    if not verify_user_owns_artist(user_id, folder.data[0]["artist_id"]):
+        return None
+    return af.data[0]
+
+
 def file_name_exists_in_project(project_id: str, file_name: str) -> bool:
     existing_files = (
         get_supabase_client().table("project_files").select("file_name").eq("project_id", project_id).execute()
@@ -458,6 +528,10 @@ class ZoeAskResponse(BaseModel):
     needs_clarification: bool | None = None  # True if query is ambiguous
     clarification_options: list[str] | None = None  # Options for disambiguation
 
+
+# Maps a Zoe session_id to the user_id that created it (in-memory; same lifetime as
+# the chatbot's own in-memory session state).
+_zoe_session_owners: dict[str, str] = {}
 
 # Initialize Zoe chatbot (singleton)
 zoe_chatbot = None
@@ -861,6 +935,8 @@ async def upload_file(
     """
     try:
         if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if project_id and project_id not in ("none", "") and not verify_user_owns_project(user_id, project_id):
             raise HTTPException(status_code=403, detail="Access denied")
         if not project_id or project_id == "none" or project_id == "":
             # Check if a "General" project exists for this artist, if not create one
@@ -1581,6 +1657,24 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
       complete — instant non-streamed response (tiers 1/2)
       error    — error during generation
     """
+    sb = get_supabase_client()
+    # Contracts are the access gate: each must be accessible (member OR granted).
+    for _cid in request.contract_ids or []:
+        if _cid and not await user_can_access_file(sb, user_id, _cid):
+            raise HTTPException(status_code=403, detail="Access denied")
+    # artist_id / project_id are optional CONTEXT — drop them if the caller can't access
+    # them (never leak another tenant's private artist/project; never block the request).
+    if request.artist_id and not verify_user_owns_artist(user_id, request.artist_id):
+        request.artist_id = None
+    if request.project_id and not await user_can_access_project(sb, user_id, request.project_id):
+        request.project_id = None
+
+    session_id = request.session_id or str(uuid.uuid4())
+    _owner = _zoe_session_owners.get(session_id)
+    if _owner is not None and _owner != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    _zoe_session_owners[session_id] = user_id
+
     # SP3: gate Zoe feature; raises 402 for Free users without a Pro host.
     gated_feature(user_id, Action.USE_ZOE, host_user_id=request.host_user_id)
 
@@ -1613,7 +1707,6 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
             user_id, "tool_used", {"tool": "zoe", "mode": "contract" if request.contract_ids else "general"}
         )
         chatbot = get_zoe_chatbot()
-        session_id = request.session_id or str(uuid.uuid4())
 
         # Fetch artist data if artist_id is provided
         artist_data = None
@@ -1713,11 +1806,13 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
 
 
 @app.delete("/zoe/session/{session_id}")
-async def zoe_clear_session(session_id: str):
+async def zoe_clear_session(session_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Clear conversation history for a session.
     Use this when starting a new conversation or switching projects.
     """
+    if _zoe_session_owners.get(session_id) != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
     try:
         chatbot = get_zoe_chatbot()
         chatbot.clear_session(session_id)
@@ -1728,11 +1823,13 @@ async def zoe_clear_session(session_id: str):
 
 
 @app.get("/zoe/session/{session_id}/history")
-async def zoe_get_session_history(session_id: str):
+async def zoe_get_session_history(session_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Get conversation history for a session.
     Useful for restoring chat state or debugging.
     """
+    if _zoe_session_owners.get(session_id) != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
     try:
         chatbot = get_zoe_chatbot()
         history = chatbot.get_session_history(session_id)
@@ -1785,6 +1882,9 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
     """
     Save confirmed calculation results to the database.
     """
+    await _assert_can_access_oneclick_inputs(
+        get_supabase_client(), user_id, request.project_id, request.royalty_statement_id, request.contract_ids or []
+    )
     try:
         # 0. Delete old cached calculation for same statement + contracts (if any)
         existing = (
@@ -1884,6 +1984,13 @@ async def oneclick_calculate_royalties_stream(
     """
     # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
     gated_feature(user_id, Action.USE_ONECLICK, host_user_id=host_user_id)
+    await _assert_can_access_oneclick_inputs(
+        get_supabase_client(),
+        user_id,
+        project_id,
+        royalty_statement_file_id,
+        (contract_ids or []) + ([contract_id] if contract_id else []),
+    )
     # SP2: track per-period OneClick usage; best-effort, never blocks.
     _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
     analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
@@ -2235,6 +2342,14 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
     _calc_started_at = _time.perf_counter()
     _contract_count = len(request.contract_ids) if request.contract_ids else (1 if request.contract_id else 0)
 
+    await _assert_can_access_oneclick_inputs(
+        get_supabase_client(),
+        user_id,
+        request.project_id,
+        request.royalty_statement_file_id,
+        (request.contract_ids or []) + ([request.contract_id] if request.contract_id else []),
+    )
+
     try:
         # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
         gated_feature(user_id, Action.USE_ONECLICK, host_user_id=request.host_user_id)
@@ -2450,24 +2565,30 @@ async def share_files(req: ShareFilesRequest, user_id: str = Depends(get_current
         resend.api_key = api_key
         sb = get_supabase_client()
 
-        # All files are stored in the project-files bucket
-        def bucket_for(source: str) -> str:
-            return "project-files"
-
         # Generate signed URLs (7 days = 604800 seconds) with download option
         expiry_seconds = 7 * 24 * 60 * 60
         link_expires_at = datetime.now(UTC) + timedelta(seconds=expiry_seconds)
         file_links: list[dict] = []
 
         for f in req.files:
-            bucket = bucket_for(f.file_source)
-            print(f"DEBUG share: bucket={bucket}, file_path='{f.file_path}', file_name='{f.file_name}'")
-            if not f.file_path:
-                print(f"Warning: Empty file_path for {f.file_name}, skipping")
+            # Resolve + access-check by id; NEVER trust the client-supplied path.
+            if f.file_source == "project_file":
+                row = sb.table("project_files").select("id, project_id, file_path").eq("id", f.file_id).execute()
+                if not row.data or not await user_can_access_project(sb, user_id, row.data[0]["project_id"]):
+                    raise HTTPException(status_code=403, detail="Access denied")
+                server_path = row.data[0]["file_path"]
+                bucket = "project-files"
+            else:  # audio_file — artist-scoped, owner-only
+                audio = verify_user_owns_audio_file(user_id, f.file_id)
+                if not audio:
+                    raise HTTPException(status_code=403, detail="Access denied")
+                server_path = audio["file_path"]
+                bucket = "audio-files"
+            if not server_path:
                 continue
             try:
                 signed = sb.storage.from_(bucket).create_signed_url(
-                    f.file_path, expiry_seconds, options={"download": True}
+                    server_path, expiry_seconds, options={"download": True}
                 )
                 signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
                 if not signed_url:
