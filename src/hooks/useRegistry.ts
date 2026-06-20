@@ -5,11 +5,19 @@ import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 // --- Types ---
 
+export interface CreditedArtist {
+  name: string;
+  role: string; // "Main artist" | "Featured artist" — display-only, from Spotify
+}
+
 export interface Work {
   id: string; user_id: string; artist_id: string; project_id: string;
   title: string; work_type: string; isrc: string | null; iswc: string | null;
   upc: string | null; release_date: string | null; is_released: boolean;
-  status: string; notes: string | null; created_at: string; updated_at: string;
+  status: string; notes: string | null;
+  genre: string | null; label: string | null;
+  featured_artists: CreditedArtist[] | null;
+  created_at: string; updated_at: string;
 }
 
 export interface OwnershipStake {
@@ -115,6 +123,7 @@ export function useCreateWork() {
       artist_id: string; project_id: string; title: string; work_type?: string;
       custom_work_type?: string; isrc?: string; iswc?: string; upc?: string;
       release_date?: string; is_released?: boolean; notes?: string;
+      genre?: string; label?: string; featured_artists?: CreditedArtist[];
     }) =>
       apiFetch(`${API_URL}/registry/works`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -139,6 +148,9 @@ export function useCreateWork() {
         is_released: body.is_released ?? true,
         status: "draft",
         notes: body.notes || null,
+        genre: body.genre || null,
+        label: body.label || null,
+        featured_artists: body.featured_artists || null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };

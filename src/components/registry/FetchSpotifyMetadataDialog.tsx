@@ -10,15 +10,26 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { type SpotifyTrack, useSpotifySearch } from "@/hooks/useSpotifySearch";
+import { type CreditedArtist } from "@/hooks/useRegistry";
 
 interface CurrentMeta {
   isrc: string | null;
   upc: string | null;
   release_date: string | null;
   notes: string | null;
+  genre: string | null;
+  label: string | null;
 }
 
-type MetaPatch = Partial<{ isrc: string; upc: string; release_date: string; notes: string }>;
+type MetaPatch = Partial<{
+  isrc: string;
+  upc: string;
+  release_date: string;
+  notes: string;
+  genre: string;
+  label: string;
+  featured_artists: CreditedArtist[];
+}>;
 
 interface Props {
   open: boolean;
@@ -29,12 +40,14 @@ interface Props {
   onApply: (patch: MetaPatch) => void;
 }
 
-// Fields we can actually write back to works_registry. Genre/label live on
-// the Spotify payload but have no destination column today.
+// Scalar fields we write back to works_registry. Featured artists are an array,
+// so they're handled separately (see the patch memo and preview below).
 const PATCHABLE: Array<{ key: keyof CurrentMeta; label: string; from: keyof SpotifyTrack }> = [
   { key: "isrc", label: "ISRC", from: "isrc" },
   { key: "upc", label: "UPC", from: "upc" },
   { key: "release_date", label: "Release date", from: "release_date" },
+  { key: "genre", label: "Genre", from: "genre" },
+  { key: "label", label: "Label", from: "label" },
   { key: "notes", label: "Spotify link", from: "spotify_url" },
 ];
 
@@ -104,7 +117,12 @@ export default function FetchSpotifyMetadataDialog({
     if (enriched.isrc) p.isrc = enriched.isrc;
     if (enriched.upc) p.upc = enriched.upc;
     if (enriched.release_date) p.release_date = enriched.release_date;
+    if (enriched.genre) p.genre = enriched.genre;
+    if (enriched.label) p.label = enriched.label;
     if (enriched.spotify_url) p.notes = enriched.spotify_url;
+    if (enriched.artists && enriched.artists.length > 0) {
+      p.featured_artists = enriched.artists.map((a) => ({ name: a.name, role: a.role }));
+    }
     return p;
   }, [enriched]);
 
@@ -136,8 +154,8 @@ export default function FetchSpotifyMetadataDialog({
         <div className="space-y-4 pt-1">
           <p className="text-sm text-muted-foreground">
             Now that "{workTitle}" is released, we can pull the public Spotify metadata —
-            ISRC, UPC, release date, and the Spotify link. The fetched values will
-            <b> overwrite</b> any existing entries for these fields.
+            ISRC, UPC, release date, genre, label, featured artists, and the Spotify link.
+            The fetched values will <b> overwrite</b> any existing entries for these fields.
           </p>
 
           {/* Search */}
@@ -270,6 +288,16 @@ export default function FetchSpotifyMetadataDialog({
                   );
                 })}
               </div>
+              {enriched.artists && enriched.artists.length > 0 && (
+                <div className="flex items-start justify-between gap-2 pt-1 text-xs">
+                  <span className="text-muted-foreground shrink-0">Featured artists</span>
+                  <span className="text-right font-medium text-emerald-600 dark:text-emerald-400">
+                    {enriched.artists
+                      .map((a) => `${a.name} (${a.role})`)
+                      .join(", ")}
+                  </span>
+                </div>
+              )}
               <p className="text-[11px] text-muted-foreground pt-1">
                 {willFillCount > 0
                   ? `Will update ${willFillCount} field${willFillCount === 1 ? "" : "s"} from Spotify.`

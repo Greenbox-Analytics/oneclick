@@ -2,10 +2,17 @@ import { useQuery } from "@tanstack/react-query";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useAuth } from "@/contexts/AuthContext";
 
+export interface CreditedArtist {
+  name: string;
+  role: string; // "Main artist" | "Featured artist" (the only roles Spotify provides)
+  spotify_url: string | null;
+}
+
 export interface SpotifyTrack {
   id: string;
   title: string | null;
   artist: string;
+  artists: CreditedArtist[] | null;
   album: string | null;
   release_date: string | null;
   year: number | null;

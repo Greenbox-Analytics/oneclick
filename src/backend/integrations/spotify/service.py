@@ -62,10 +62,21 @@ def _format_track(track: dict) -> dict:
     # _resolved_genre is set by get_track after a follow-up call to /artists/{id};
     # search responses don't have it (Spotify's track endpoint doesn't carry genre).
     genre = track.get("_resolved_genre")
+    artists = track.get("artists") or []
     return {
         "id": track.get("id"),
         "title": track.get("name"),
-        "artist": ", ".join(a["name"] for a in track.get("artists") or []),
+        "artist": ", ".join(a["name"] for a in artists),
+        # Credited artists with the only role distinction Spotify provides:
+        # the first artist is the main artist, the rest are featured.
+        "artists": [
+            {
+                "name": a.get("name"),
+                "role": "Main artist" if i == 0 else "Featured artist",
+                "spotify_url": (a.get("external_urls") or {}).get("spotify"),
+            }
+            for i, a in enumerate(artists)
+        ],
         "album": album.get("name"),
         "release_date": album.get("release_date"),
         "year": int(album.get("release_date", "0000")[:4]) if album.get("release_date") else None,

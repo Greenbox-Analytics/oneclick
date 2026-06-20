@@ -42,6 +42,7 @@ import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
 import {
   useSpotifySearch,
+  type CreditedArtist,
   type SpotifyTrack,
 } from "@/hooks/useSpotifySearch";
 import {
@@ -216,6 +217,10 @@ export function AddWorkWizard({
   const spotifyResults = useSpotifySearch(searchQuery, searchEnabled);
   const [chosen, setChosen] = useState<SpotifyTrack | null>(null);
 
+  // Manually-entered credited artists for the unreleased flow (no Spotify to
+  // pull from). Saved to featured_artists, mirroring the released path's shape.
+  const [manualArtists, setManualArtists] = useState<CreditedArtist[]>([]);
+
   // Splits
   const [royMode, setRoyMode] = useState<null | "ai" | "manual">(null);
   const [contractFile, setContractFile] = useState<File | null>(null);
@@ -244,6 +249,7 @@ export function AddWorkWizard({
     setSearchQuery("");
     setSearchEnabled(false);
     setChosen(null);
+    setManualArtists([]);
     setRoyMode(null);
     setContractFile(null);
     setSplitRows([]);
@@ -396,6 +402,14 @@ export function AddWorkWizard({
       return;
     }
     setSubmitting(true);
+    // Credited artists come from Spotify on the released path, or from the
+    // user's manual entries on the unreleased path. Drop blank-name rows.
+    const creditedArtists: CreditedArtist[] =
+      chosen?.artists && chosen.artists.length > 0
+        ? chosen.artists.map((a) => ({ name: a.name, role: a.role, spotify_url: a.spotify_url ?? null }))
+        : manualArtists
+            .map((a) => ({ name: a.name.trim(), role: a.role, spotify_url: null }))
+            .filter((a) => a.name);
     try {
       const created = await createWork.mutateAsync({
         artist_id: artistIdInUse,
@@ -407,6 +421,9 @@ export function AddWorkWizard({
         ...(meta.upc ? { upc: meta.upc } : {}),
         ...(meta.releaseDate ? { release_date: meta.releaseDate } : {}),
         ...(meta.spotifyUrl ? { notes: meta.spotifyUrl } : {}),
+        ...(meta.genre ? { genre: meta.genre } : {}),
+        ...(meta.label ? { label: meta.label } : {}),
+        ...(creditedArtists.length > 0 ? { featured_artists: creditedArtists } : {}),
       });
       const workId = (created as { id?: string })?.id;
 
@@ -636,6 +653,8 @@ export function AddWorkWizard({
               artistName={artistName}
               meta={meta}
               setMeta={setMeta}
+              manualArtists={manualArtists}
+              setManualArtists={setManualArtists}
             />
           ) : onRoyalty ? (
             <RoyaltyStep
@@ -980,6 +999,38 @@ function ConfirmMetadataStep({
           Change
         </button>
       </div>
+      {chosen.artists && chosen.artists.length > 0 && (
+        <div className="rounded-lg border p-3 space-y-2">
+          <p className="text-xs font-semibold text-foreground">
+            Credited artists
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {chosen.artists.map((a, i) => {
+              const isMain = /main/i.test(a.role);
+              return (
+                <span
+                  key={`${a.name}-${i}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 pl-1 pr-2.5 py-1 text-xs"
+                >
+                  <RegistryAvatar name={a.name || "?"} size={18} />
+                  <span className="font-medium">{a.name}</span>
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      "text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0",
+                      isMain
+                        ? "bg-primary/15 text-primary"
+                        : "bg-muted text-muted-foreground"
+                    )}
+                  >
+                    {isMain ? "Main" : "Featured"}
+                  </Badge>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <WizardField label="ISRC">
           <Input
@@ -1030,6 +1081,8 @@ function ConfirmMetadataStep({
   );
 }
 
+const CREDIT_ROLES = ["Featured artist", "Main artist"] as const;
+
 function UnreleasedStep({
   title,
   setTitle,
@@ -1038,6 +1091,8 @@ function UnreleasedStep({
   artistName,
   meta,
   setMeta,
+  manualArtists,
+  setManualArtists,
 }: {
   title: string;
   setTitle: (v: string) => void;
@@ -1046,8 +1101,16 @@ function UnreleasedStep({
   artistName: string;
   meta: { isrc: string; upc: string; releaseDate: string; label: string; genre: string; spotifyUrl: string };
   setMeta: React.Dispatch<React.SetStateAction<typeof meta>>;
+  manualArtists: CreditedArtist[];
+  setManualArtists: React.Dispatch<React.SetStateAction<CreditedArtist[]>>;
 }) {
   const set = (patch: Partial<typeof meta>) => setMeta((m) => ({ ...m, ...patch }));
+  const addArtist = () =>
+    setManualArtists((list) => [...list, { name: "", role: "Featured artist", spotify_url: null }]);
+  const updateArtist = (idx: number, patch: Partial<CreditedArtist>) =>
+    setManualArtists((list) => list.map((a, i) => (i === idx ? { ...a, ...patch } : a)));
+  const removeArtist = (idx: number) =>
+    setManualArtists((list) => list.filter((_, i) => i !== idx));
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg px-3 py-2">
@@ -1115,6 +1178,65 @@ function UnreleasedStep({
             onChange={(e) => set({ releaseDate: e.target.value })}
           />
         </WizardField>
+      </div>
+
+      {/* Credited artists — manual entry, since there's no Spotify data to pull
+          for an unreleased track. Saved as display-only credits, separate from
+          the royalty splits set on the next step. */}
+      <div className="pt-1">
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="text-xs font-semibold text-foreground">Featured artists</label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={addArtist}
+            className="h-7 px-2 text-xs text-primary"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" /> Add artist
+          </Button>
+        </div>
+        {manualArtists.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            Optional — add any featured or co-credited artists. These are display-only
+            credits and don't affect royalty splits.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {manualArtists.map((a, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <div className="flex-1">
+                  <Input
+                    value={a.name}
+                    placeholder="Artist name"
+                    onChange={(e) => updateArtist(i, { name: e.target.value })}
+                  />
+                </div>
+                <Select value={a.role} onValueChange={(v) => updateArtist(i, { role: v })}>
+                  <SelectTrigger className="w-40 shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CREDIT_ROLES.map((r) => (
+                      <SelectItem key={r} value={r}>
+                        {r}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                  onClick={() => removeArtist(i)}
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
