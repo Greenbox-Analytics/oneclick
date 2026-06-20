@@ -369,7 +369,10 @@ class TestGetArtistWithTeamCard:
         def table_side_effect(name):
             call_count["n"] += 1
             n = call_count["n"]
-            if n == 1:
+            # Call 1: verify_user_owns_artist (ownership check) → artists table
+            # Call 2: service's artists fetch → artists table
+            # Call 3+: teamcards table
+            if n <= 2:
                 return artist_builder
             else:
                 return tc_builder
@@ -386,9 +389,24 @@ class TestGetArtistWithTeamCard:
 
     def test_artist_not_found_returns_404(self, client, mock_supabase):
         """Returns 404 when artist does not exist."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=None)
-        mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+        # verify_user_owns_artist must pass (ownership check) before service can return 404.
+        # Call 1: ownership check → artists row found (truthy) so guard passes
+        # Call 2: service's artist fetch → data=None → 404
+        owner_builder = MockQueryBuilder()
+        owner_builder.execute.return_value = MagicMock(data=[{"id": ARTIST_ID}])
+
+        not_found_builder = MockQueryBuilder()
+        not_found_builder.execute.return_value = MagicMock(data=None)
+
+        call_count = {"n": 0}
+
+        def table_side_effect(name):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return owner_builder
+            return not_found_builder
+
+        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/artists/{ARTIST_ID}/with-teamcard")
 

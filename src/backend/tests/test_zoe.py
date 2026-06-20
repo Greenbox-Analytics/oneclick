@@ -9,7 +9,10 @@ Acceptance criteria:
 import json
 from unittest.mock import MagicMock, patch
 
-from tests.conftest import MockQueryBuilder, _default_table_side_effect
+import pytest
+
+import main
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -61,13 +64,22 @@ def _make_mock_chatbot(history=None):
     return mock_chatbot
 
 
+@pytest.fixture(autouse=False)
+def owned_session():
+    """Pre-register SESSION_ID as owned by TEST_USER_ID so session endpoints pass the
+    ownership guard.  Cleaned up after the test regardless of outcome."""
+    main._zoe_session_owners[SESSION_ID] = TEST_USER_ID
+    yield
+    main._zoe_session_owners.pop(SESSION_ID, None)
+
+
 # ---------------------------------------------------------------------------
 # GET /zoe/session/{session_id}/history
 # ---------------------------------------------------------------------------
 
 
 class TestZoeSessionHistory:
-    def test_history_returns_200_with_messages(self, client):
+    def test_history_returns_200_with_messages(self, client, owned_session):
         """GET /zoe/session/{id}/history returns session messages and count."""
         mock_chatbot = _make_mock_chatbot(history=SAMPLE_HISTORY)
 
@@ -81,7 +93,7 @@ class TestZoeSessionHistory:
         assert body["count"] == len(SAMPLE_HISTORY)
         assert body["messages"] == SAMPLE_HISTORY
 
-    def test_history_empty_session_returns_empty_list(self, client):
+    def test_history_empty_session_returns_empty_list(self, client, owned_session):
         """GET /zoe/session/{id}/history returns empty list for new session."""
         mock_chatbot = _make_mock_chatbot(history=[])
 
@@ -93,7 +105,7 @@ class TestZoeSessionHistory:
         assert body["messages"] == []
         assert body["count"] == 0
 
-    def test_history_uses_correct_session_id(self, client):
+    def test_history_uses_correct_session_id(self, client, owned_session):
         """GET /zoe/session/{id}/history passes the session_id to the chatbot."""
         mock_chatbot = _make_mock_chatbot(history=[])
 
@@ -102,7 +114,7 @@ class TestZoeSessionHistory:
 
         mock_chatbot.get_session_history.assert_called_once_with(SESSION_ID)
 
-    def test_history_returns_500_on_chatbot_error(self, client):
+    def test_history_returns_500_on_chatbot_error(self, client, owned_session):
         """GET /zoe/session/{id}/history returns 500 when chatbot raises."""
         mock_chatbot = _make_mock_chatbot()
         mock_chatbot.get_session_history.side_effect = RuntimeError("chatbot exploded")
@@ -119,7 +131,7 @@ class TestZoeSessionHistory:
 
 
 class TestZoeClearSession:
-    def test_clear_session_returns_200_with_success_message(self, client):
+    def test_clear_session_returns_200_with_success_message(self, client, owned_session):
         """DELETE /zoe/session/{id} returns 200 with success message."""
         mock_chatbot = _make_mock_chatbot()
 
@@ -132,7 +144,7 @@ class TestZoeClearSession:
         assert body["session_id"] == SESSION_ID
         assert "cleared" in body["message"].lower()
 
-    def test_clear_session_calls_chatbot_clear(self, client):
+    def test_clear_session_calls_chatbot_clear(self, client, owned_session):
         """DELETE /zoe/session/{id} calls chatbot.clear_session with the correct id."""
         mock_chatbot = _make_mock_chatbot()
 
@@ -141,7 +153,7 @@ class TestZoeClearSession:
 
         mock_chatbot.clear_session.assert_called_once_with(SESSION_ID)
 
-    def test_clear_session_returns_500_on_chatbot_error(self, client):
+    def test_clear_session_returns_500_on_chatbot_error(self, client, owned_session):
         """DELETE /zoe/session/{id} returns 500 when chatbot raises."""
         mock_chatbot = _make_mock_chatbot()
         mock_chatbot.clear_session.side_effect = RuntimeError("chatbot error")
@@ -151,16 +163,15 @@ class TestZoeClearSession:
 
         assert response.status_code == 500
 
-    def test_clear_session_does_not_require_auth(self, client):
-        """DELETE /zoe/session/{id} works without an explicit Authorization header."""
+    def test_clear_session_requires_ownership(self, client):
+        """DELETE /zoe/session/{id} returns 404 when session is not owned by caller."""
         mock_chatbot = _make_mock_chatbot()
 
-        # Use default client (auth already bypassed in conftest).
-        # What we verify here is that the endpoint is reachable and 200.
+        # Session not registered → 404 (ownership check fails before chatbot is called)
         with patch("main.get_zoe_chatbot", return_value=mock_chatbot):
             response = client.delete(f"/zoe/session/{SESSION_ID}")
 
-        assert response.status_code == 200
+        assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -317,12 +328,24 @@ class TestZoeAskStream:
         mock_chatbot = _make_mock_chatbot()
         mock_chatbot.ask_stream.return_value = iter(['data: {"type": "done"}\n\n'])
 
-        contract_file = {"id": CONTRACT_ID, "file_name": "deal_memo.pdf"}
-        mock_supabase.table.side_effect = lambda name: (
-            _default_table_side_effect(name)
-            if name in _SUBSCRIPTION_TABLES
-            else _builder([contract_file] if name == "project_files" else [])
-        )
+        # project_files must include project_id so user_can_access_file can resolve
+        # project membership.  project_members must return a single-dict result (as
+        # maybe_single() would in production) so get_user_role can do result.data["role"].
+        contract_file = {"id": CONTRACT_ID, "file_name": "deal_memo.pdf", "project_id": PROJECT_ID}
+
+        def _side_effect(name):
+            if name in _SUBSCRIPTION_TABLES:
+                return _default_table_side_effect(name)
+            if name == "project_files":
+                return _builder([contract_file])
+            if name == "project_members":
+                b = MockQueryBuilder()
+                # maybe_single() returns self; execute() should return a dict (not list)
+                b.execute.return_value = MagicMock(data={"role": "owner"})
+                return b
+            return _builder([])
+
+        mock_supabase.table.side_effect = _side_effect
 
         with patch("main.get_zoe_chatbot", return_value=mock_chatbot):
             response = client.post(

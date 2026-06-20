@@ -7,9 +7,24 @@ Acceptance criteria:
 4. OneClick share validation
 """
 
+import hashlib
+import hmac
+import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.conftest import TEST_USER_ID, MockQueryBuilder
+
+_WEBHOOK_TEST_SECRET = "test-signing-secret"
+
+
+def _slack_headers(body: bytes, secret: str = _WEBHOOK_TEST_SECRET) -> dict:
+    """Return X-Slack-Signature and X-Slack-Request-Timestamp headers for a body."""
+    ts = str(int(time.time()))
+    base = f"v0:{ts}:".encode() + body
+    sig = "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
+    return {"X-Slack-Signature": sig, "X-Slack-Request-Timestamp": ts}
+
 
 # ---------------------------------------------------------------------------
 # Shared constants
@@ -243,28 +258,28 @@ class TestSlackChannels:
 
 
 class TestSlackWebhook:
-    def test_url_verification_challenge(self, client):
+    def test_url_verification_challenge(self, client, monkeypatch):
         """POST /integrations/slack/webhook handles URL verification."""
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", _WEBHOOK_TEST_SECRET)
+        body = json.dumps({"type": "url_verification", "challenge": "test-challenge-string"}).encode()
         response = client.post(
             "/integrations/slack/webhook",
-            json={
-                "type": "url_verification",
-                "challenge": "test-challenge-string",
-            },
+            content=body,
+            headers=_slack_headers(body),
         )
 
         assert response.status_code == 200
         assert response.json() == {"challenge": "test-challenge-string"}
 
-    def test_event_callback_returns_ok(self, client, mock_supabase):
+    def test_event_callback_returns_ok(self, client, mock_supabase, monkeypatch):
         """POST /integrations/slack/webhook returns ok for event_callback."""
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", _WEBHOOK_TEST_SECRET)
         builder = MockQueryBuilder()
         builder.execute.return_value = MagicMock(data=[])
         mock_supabase.table.side_effect = lambda name: builder
 
-        response = client.post(
-            "/integrations/slack/webhook",
-            json={
+        body = json.dumps(
+            {
                 "type": "event_callback",
                 "event": {
                     "type": "app_mention",
@@ -273,17 +288,25 @@ class TestSlackWebhook:
                     "text": "Hey <@BOT> check this out",
                     "ts": "1234567890.123456",
                 },
-            },
+            }
+        ).encode()
+        response = client.post(
+            "/integrations/slack/webhook",
+            content=body,
+            headers=_slack_headers(body),
         )
 
         assert response.status_code == 200
         assert response.json() == {"ok": True}
 
-    def test_unknown_event_type_returns_ok(self, client):
+    def test_unknown_event_type_returns_ok(self, client, monkeypatch):
         """POST /integrations/slack/webhook returns ok for unknown event types."""
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", _WEBHOOK_TEST_SECRET)
+        body = json.dumps({"type": "some_other_type"}).encode()
         response = client.post(
             "/integrations/slack/webhook",
-            json={"type": "some_other_type"},
+            content=body,
+            headers=_slack_headers(body),
         )
 
         assert response.status_code == 200

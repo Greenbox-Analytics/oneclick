@@ -10,7 +10,7 @@ Covers:
 import base64
 import os
 import secrets
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def _ensure_key():
@@ -98,12 +98,14 @@ def test_reveal_returns_401_on_bad_msanii_password(client, mock_supabase):
     user_obj = MagicMock()
     user_obj.user.email = "artist@example.com"
     mock_supabase.auth.admin.get_user_by_id.return_value = user_obj
-    mock_supabase.auth.sign_in_with_password.side_effect = Exception("invalid credentials")
 
-    resp = client.post(
-        "/credentials/abcd-1234/reveal",
-        json={"msanii_password": "wrong"},
-    )
+    mock_auth_client = MagicMock()
+    mock_auth_client.auth.sign_in_with_password.side_effect = Exception("invalid credentials")
+    with patch("credentials.service.create_client", return_value=mock_auth_client):
+        resp = client.post(
+            "/credentials/abcd-1234/reveal",
+            json={"msanii_password": "wrong"},
+        )
     assert resp.status_code == 401
 
 
@@ -120,7 +122,9 @@ def test_reveal_returns_plaintext_on_good_msanii_password(client, mock_supabase)
     user_obj = MagicMock()
     user_obj.user.email = "artist@example.com"
     mock_supabase.auth.admin.get_user_by_id.return_value = user_obj
-    mock_supabase.auth.sign_in_with_password.return_value = MagicMock()  # truthy success
+
+    mock_auth_client = MagicMock()
+    mock_auth_client.auth.sign_in_with_password.return_value = MagicMock()  # truthy success
 
     def _table(_name):
         qb = MagicMock()
@@ -132,9 +136,10 @@ def test_reveal_returns_plaintext_on_good_msanii_password(client, mock_supabase)
 
     mock_supabase.table.side_effect = _table
 
-    resp = client.post(
-        "/credentials/abcd-1234/reveal",
-        json={"msanii_password": "correct-horse-battery-staple"},
-    )
+    with patch("credentials.service.create_client", return_value=mock_auth_client):
+        resp = client.post(
+            "/credentials/abcd-1234/reveal",
+            json={"msanii_password": "correct-horse-battery-staple"},
+        )
     assert resp.status_code == 200
     assert resp.json() == {"password": "my-real-distrokid-password"}

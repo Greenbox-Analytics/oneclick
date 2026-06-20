@@ -122,7 +122,14 @@ class TestListMembers:
 
     def test_returns_members_list(self, client, mock_supabase):
         """Returns a list of members wrapped in {members: [...]}."""
-        mock_supabase.table.side_effect = lambda name: _builder([OWNER_MEMBER, EDITOR_MEMBER])
+        # get_members now calls get_user_role first (project_members, maybe_single → dict),
+        # then lists all members (project_members, select → list).
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "owner"},  # get_user_role membership check
+                [OWNER_MEMBER, EDITOR_MEMBER],  # actual member listing
+            ]
+        )
 
         response = client.get(f"/projects/{PROJECT_ID}/members")
 
@@ -133,7 +140,12 @@ class TestListMembers:
 
     def test_returns_empty_list_when_no_members(self, client, mock_supabase):
         """Returns empty members list when project has no members."""
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "viewer"},  # get_user_role membership check
+                [],  # actual member listing (empty)
+            ]
+        )
 
         response = client.get(f"/projects/{PROJECT_ID}/members")
 
@@ -143,7 +155,12 @@ class TestListMembers:
 
     def test_member_record_contains_expected_fields(self, client, mock_supabase):
         """Each member record has id, project_id, user_id, and role."""
-        mock_supabase.table.side_effect = lambda name: _builder([OWNER_MEMBER])
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "owner"},  # get_user_role membership check
+                [OWNER_MEMBER],  # actual member listing
+            ]
+        )
 
         response = client.get(f"/projects/{PROJECT_ID}/members")
 
@@ -156,7 +173,12 @@ class TestListMembers:
     def test_returns_multiple_roles(self, client, mock_supabase):
         """Returns members with different roles correctly."""
         viewer = {**EDITOR_MEMBER, "role": "viewer", "id": "memb-003"}
-        mock_supabase.table.side_effect = lambda name: _builder([OWNER_MEMBER, EDITOR_MEMBER, viewer])
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "owner"},  # get_user_role membership check
+                [OWNER_MEMBER, EDITOR_MEMBER, viewer],  # actual member listing
+            ]
+        )
 
         response = client.get(f"/projects/{PROJECT_ID}/members")
 
@@ -546,7 +568,14 @@ class TestListPendingInvites:
 
     def test_returns_invites_list(self, client, mock_supabase):
         """Returns list of pending invites wrapped in {invites: [...]}."""
-        mock_supabase.table.side_effect = lambda name: _builder([PENDING_INVITE])
+        # get_pending_invites now calls get_user_role first (project_members, maybe_single → dict),
+        # then queries pending_project_invites.
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "owner"},  # get_user_role membership check
+                [PENDING_INVITE],  # actual invite listing
+            ]
+        )
 
         response = client.get(f"/projects/{PROJECT_ID}/pending-invites")
 
@@ -557,7 +586,12 @@ class TestListPendingInvites:
 
     def test_returns_empty_list_when_no_pending_invites(self, client, mock_supabase):
         """Returns empty invites list when no pending invites exist."""
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "viewer"},  # get_user_role membership check
+                [],  # actual invite listing (empty)
+            ]
+        )
 
         response = client.get(f"/projects/{PROJECT_ID}/pending-invites")
 
@@ -566,7 +600,12 @@ class TestListPendingInvites:
 
     def test_invite_record_contains_expected_fields(self, client, mock_supabase):
         """Each invite record has id, project_id, email, and role."""
-        mock_supabase.table.side_effect = lambda name: _builder([PENDING_INVITE])
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "owner"},  # get_user_role membership check
+                [PENDING_INVITE],  # actual invite listing
+            ]
+        )
 
         response = client.get(f"/projects/{PROJECT_ID}/pending-invites")
 
@@ -579,7 +618,12 @@ class TestListPendingInvites:
     def test_returns_multiple_pending_invites(self, client, mock_supabase):
         """Returns all pending invites when multiple exist."""
         invite2 = {**PENDING_INVITE, "id": "invt-002", "email": "another@example.com", "role": "editor"}
-        mock_supabase.table.side_effect = lambda name: _builder([PENDING_INVITE, invite2])
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "owner"},  # get_user_role membership check
+                [PENDING_INVITE, invite2],  # actual invite listing
+            ]
+        )
 
         response = client.get(f"/projects/{PROJECT_ID}/pending-invites")
 

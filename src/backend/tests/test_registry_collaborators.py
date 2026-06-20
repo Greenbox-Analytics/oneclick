@@ -37,6 +37,21 @@ def _sub_wrap(fn):
     return _wrapped
 
 
+def _grant_invite_manage_access():
+    """Patch registry.router.get_work_access to a manage-capable WorkAccess.
+
+    The plain invite endpoint now gates on can_manage before inviting; the shared
+    MockQueryBuilder can't satisfy that resolver, so the contract tests pin it to
+    an authorized result. The resolver is covered by tests/test_registry_access.py.
+    """
+    from unittest.mock import AsyncMock
+
+    from registry import router as _router
+    from registry.access import WorkAccess
+
+    return patch.object(_router, "get_work_access", AsyncMock(return_value=WorkAccess(work_role="owner")))
+
+
 WORK_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 COLLAB_ID = "bbbbbbbb-0000-0000-0000-000000000002"
 INVITE_TOKEN = "test-invite-token-abc123"
@@ -176,7 +191,10 @@ class TestInviteCollaborator:
 
         mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
-        with patch("registry.emails.send_invitation_email") as mock_email:
+        with (
+            patch("registry.emails.send_invitation_email") as mock_email,
+            _grant_invite_manage_access(),
+        ):
             response = client.post(
                 "/registry/collaborators/invite",
                 json={
@@ -216,7 +234,7 @@ class TestInviteCollaborator:
 
         mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
-        with patch("registry.emails.send_invitation_email"):
+        with patch("registry.emails.send_invitation_email"), _grant_invite_manage_access():
             response = client.post(
                 "/registry/collaborators/invite",
                 json={

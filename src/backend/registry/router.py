@@ -82,7 +82,10 @@ async def list_my_collaborations(
 
 @router.get("/works/by-project/{project_id}")
 async def list_works_by_project(project_id: str, user_id: str = Depends(get_current_user_id)):
-    works = await service.get_works_by_project(_get_supabase(), user_id, project_id)
+    try:
+        works = await service.get_works_by_project(_get_supabase(), user_id, project_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
     return {"works": works}
 
 
@@ -390,6 +393,9 @@ async def list_collaborators(work_id: str = Query(...), user_id: str = Depends(g
 @router.post("/collaborators/invite")
 async def invite_collaborator(body: CollaboratorInvite, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
+    wa = await get_work_access(_get_supabase(), user_id, body.work_id)
+    if not wa.can_manage:
+        raise HTTPException(status_code=403, detail="Access denied")
     data = body.model_dump(exclude_none=True)
     work = _get_supabase().table("works_registry").select("title").eq("id", body.work_id).single().execute()
     work_title = (work.data or {}).get("title") or "Untitled Work"
@@ -499,21 +505,30 @@ async def resend_invitation(collaborator_id: str, user_id: str = Depends(get_cur
 
 @router.get("/works/{work_id}/files")
 async def list_work_files(work_id: str, user_id: str = Depends(get_current_user_id)):
-    files = await work_links_service.get_work_files(_get_supabase(), work_id)
+    try:
+        files = await work_links_service.get_work_files(_get_supabase(), user_id, work_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
     return {"files": files}
 
 
 @router.post("/works/{work_id}/files")
 async def link_file(work_id: str, file_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    result = await work_links_service.link_file_to_work(_get_supabase(), work_id, file_id)
+    try:
+        result = await work_links_service.link_file_to_work(_get_supabase(), user_id, work_id, file_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
     return {"link": result}
 
 
 @router.delete("/works/{work_id}/files/{link_id}")
 async def unlink_file(work_id: str, link_id: str, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    return await work_links_service.unlink_file_from_work(_get_supabase(), link_id)
+    try:
+        return await work_links_service.unlink_file_from_work(_get_supabase(), user_id, work_id, link_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 @router.get("/works/{work_id}/files/{file_id}/download-url")
@@ -534,21 +549,30 @@ async def file_download_url(work_id: str, file_id: str, user_id: str = Depends(g
 
 @router.get("/works/{work_id}/audio")
 async def list_work_audio(work_id: str, user_id: str = Depends(get_current_user_id)):
-    audio = await work_links_service.get_work_audio(_get_supabase(), work_id)
+    try:
+        audio = await work_links_service.get_work_audio(_get_supabase(), user_id, work_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
     return {"audio": audio}
 
 
 @router.post("/works/{work_id}/audio")
 async def link_audio(work_id: str, audio_file_id: str = Query(...), user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    result = await work_links_service.link_audio_to_work(_get_supabase(), work_id, audio_file_id)
+    try:
+        result = await work_links_service.link_audio_to_work(_get_supabase(), user_id, work_id, audio_file_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
     return {"link": result}
 
 
 @router.delete("/works/{work_id}/audio/{link_id}")
 async def unlink_audio(work_id: str, link_id: str, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
-    return await work_links_service.unlink_audio_from_work(_get_supabase(), link_id)
+    try:
+        return await work_links_service.unlink_audio_from_work(_get_supabase(), user_id, work_id, link_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 @router.get("/works/{work_id}/audio/{audio_id}/download-url")
@@ -787,6 +811,10 @@ async def derive_from_contracts(body: DeriveFromContractsBody, user_id: str = De
     wa = await get_work_access(db, user_id, body.work_id)
     if not wa.can_manage:
         raise HTTPException(403, "Not allowed to manage this work")
+    for cid in body.contract_file_ids or []:
+        link = db.table("work_files").select("id").eq("work_id", body.work_id).eq("file_id", cid).execute()
+        if not link.data:
+            raise HTTPException(status_code=403, detail="Access denied")
     result = await derive_service.derive_for_collaborator(
         db, body.work_id, body.name, body.email, body.contract_file_ids
     )
@@ -802,7 +830,7 @@ async def derive_from_contracts(body: DeriveFromContractsBody, user_id: str = De
             if fid in already_ids:
                 continue
             try:
-                await work_links_service.link_file_to_work(db, body.work_id, fid)
+                await work_links_service.link_file_to_work(db, user_id, body.work_id, fid)
             except Exception:
                 # Best-effort — a late duplicate or RLS edge shouldn't fail the derive.
                 pass
@@ -868,6 +896,10 @@ async def get_collaborator_team_card(collaborator_user_id: str, user_id: str = D
 
 @router.get("/artists/{artist_id}/with-teamcard")
 async def get_artist_with_teamcard(artist_id: str, user_id: str = Depends(get_current_user_id)):
+    from main import verify_user_owns_artist
+
+    if not verify_user_owns_artist(user_id, artist_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     data = await service.get_artist_with_teamcard(_get_supabase(), artist_id)
     if not data:
         raise HTTPException(status_code=404, detail="Artist not found")
@@ -1085,6 +1117,10 @@ async def parse_contract_splits(
         if not contents:
             raise HTTPException(status_code=400, detail="Uploaded file is empty")
     else:
+        from main import verify_user_owns_contract
+
+        if not verify_user_owns_contract(user_id, contract_file_id):
+            raise HTTPException(status_code=403, detail="Access denied")
         db = _get_supabase()
         row = (
             db.table("project_files").select("file_path, file_name").eq("id", contract_file_id).maybe_single().execute()

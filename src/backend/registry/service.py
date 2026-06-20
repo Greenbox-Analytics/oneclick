@@ -68,6 +68,10 @@ async def get_works_as_collaborator(db: Client, user_id: str, page: int = None, 
 
 
 async def get_works_by_project(db: Client, user_id: str, project_id: str):
+    from projects.service import get_user_role
+
+    if await get_user_role(db, user_id, project_id) is None:
+        raise PermissionError("denied")
     result = db.table("works_registry").select("*").eq("project_id", project_id).order("created_at").execute()
     return result.data
 
@@ -1181,9 +1185,12 @@ async def get_notes(db: Client, user_id: str, artist_id: str = None, project_id:
 
 
 async def get_note(db: Client, user_id: str, note_id: str):
-    """Get a single note. RLS handles access control."""
-    result = db.table("notes").select("*").eq("id", note_id).single().execute()
-    return result.data
+    """Get a single note, scoped to the owner. The service-role client bypasses
+    RLS, so the user_id filter is the authoritative access check here."""
+    res = db.table("notes").select("*").eq("id", note_id).eq("user_id", user_id).maybe_single().execute()
+    if not res or not res.data:
+        return None
+    return res.data
 
 
 async def create_note(db: Client, user_id: str, data: dict):

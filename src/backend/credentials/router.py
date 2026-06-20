@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
@@ -42,6 +42,10 @@ async def create_credential(
     body: CredentialCreate,
     user_id: str = Depends(get_current_user_id),
 ):
+    from main import verify_user_owns_artist
+
+    if not verify_user_owns_artist(user_id, body.artist_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     return await service.create_credential(
         _get_supabase(),
         user_id,
