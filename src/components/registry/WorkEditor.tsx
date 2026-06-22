@@ -326,7 +326,10 @@ export function WorkEditor({ work }: WorkEditorProps) {
               <span>Works Registry</span>
             </div>
           )}
-          <div className="flex items-center gap-3 flex-wrap mt-2">
+          <div
+            data-walkthrough="work-header"
+            className="flex items-center gap-3 flex-wrap mt-2"
+          >
             <h2 className="text-2xl font-bold tracking-tight">
               {work.title || "Untitled work"}
             </h2>
@@ -418,6 +421,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
 
         {/* Track details */}
         <CardBlock
+          dataWalkthrough="work-details"
           icon={<Music className="w-4 h-4" />}
           title="Track details"
           desc="Core identifiers and metadata for this work."
@@ -624,7 +628,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
       {/* Sidebar */}
       <div className="flex flex-col gap-4 lg:sticky lg:top-24">
         {/* Access */}
-        <Card className="p-4">
+        <Card className="p-4" data-walkthrough="work-access">
           <div className="text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-3">
             Your access
           </div>
@@ -679,7 +683,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
         </Card>
 
         {/* Royalty splits */}
-        <Card className="p-4">
+        <Card className="p-4" data-walkthrough="work-splits">
           <SplitsSidebar
             work={work}
             canEdit={canEdit}
@@ -689,7 +693,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
         </Card>
 
         {/* Traceability */}
-        <Card className="p-4">
+        <Card className="p-4" data-walkthrough="work-trace">
           <div className="text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-3">
             Traceability
           </div>
@@ -776,11 +780,13 @@ interface CardBlockProps {
   desc?: string;
   right?: React.ReactNode;
   children?: React.ReactNode;
+  /** Optional onboarding-walkthrough anchor. */
+  dataWalkthrough?: string;
 }
 
-function CardBlock({ icon, title, desc, right, children }: CardBlockProps) {
+function CardBlock({ icon, title, desc, right, children, dataWalkthrough }: CardBlockProps) {
   return (
-    <Card className="p-5">
+    <Card className="p-5" data-walkthrough={dataWalkthrough}>
       <div className="flex items-start justify-between gap-3 mb-4">
         <div className="flex items-start gap-3">
           <div className="w-9 h-9 rounded-lg bg-muted text-muted-foreground flex items-center justify-center shrink-0">
