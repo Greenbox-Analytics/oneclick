@@ -323,7 +323,6 @@ const LOGOS: readonly LogoEntry[] = [
   { name: "Slack", src: "/slack.png" },
   { name: "Notion", src: "/Notion_app_logo.png" },
   { name: "Atlassian", src: "/atlassian.png" },
-  { name: "Monday", src: "/mondaycom.png" },
 ];
 
 // Doubled so the keyframes can translate -50% and loop seamlessly.

@@ -884,17 +884,23 @@ async def get_agreements_filtered(db, user_id, work_id, wa=None):
 
 async def _owner_identity(db, work_id):
     """Resolve the work owner's display identity (owner is works_registry.user_id, not a
-    collaborator row). profiles has no email but has full_name."""
+    collaborator row). profiles has no email, so the contact email is sourced from
+    auth.users via _resolve_auth_email — surfaced so a work-only collaborator knows how
+    to reach the owner for edit access or a fuller view. This row is only ever returned
+    to work-only collaborators (see get_collaborators_filtered), who were invited by the
+    owner, so exposing the owner's contact email to them is intended."""
     work = db.table("works_registry").select("user_id").eq("id", work_id).maybe_single().execute()
     if not work or not work.data:
         return None
     owner_id = work.data["user_id"]
     prof = db.table("profiles").select("full_name").eq("id", owner_id).maybe_single().execute()
     name = (prof.data or {}).get("full_name") if prof else None
+    email = _resolve_auth_email(db, owner_id)
     return {
         "id": f"owner:{owner_id}",
         "collaborator_user_id": owner_id,
         "name": name or "Owner",
+        "email": email,
         "role": "Owner",
         "is_owner": True,
         "status": "owner",
