@@ -64,7 +64,7 @@ export default function WorksTab({ projectId, userRole, artistId }: WorksTabProp
           <p className="text-xs text-muted-foreground/60 mt-1">Add your first work to start tracking compositions and registrations</p>
           {canEdit(userRole) && (
             <div className="mt-4">
-              <Button onClick={() => setDialogOpen(true)}>
+              <Button data-walkthrough="project-add-work" onClick={() => setDialogOpen(true)}>
                 <Plus className="w-4 h-4 mr-2" /> Add Work
               </Button>
             </div>
@@ -74,7 +74,7 @@ export default function WorksTab({ projectId, userRole, artistId }: WorksTabProp
         <div className="space-y-4">
           {canEdit(userRole) && (
             <div className="flex justify-end">
-              <Button size="sm" onClick={() => setDialogOpen(true)}>
+              <Button size="sm" data-walkthrough="project-add-work" onClick={() => setDialogOpen(true)}>
                 <Plus className="w-4 h-4 mr-2" /> Add Work
               </Button>
             </div>

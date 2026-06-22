@@ -94,7 +94,7 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="zoe-newchat"]',
         title: "New Chat",
         description:
-          "Start a fresh conversation anytime. Your previous chats are saved automatically.",
+          "Start a fresh conversation anytime. New Chat clears the current session — Zoe keeps context only while you're chatting and doesn't store a long-term archive, so save anything important first.",
         placement: "bottom",
         skipIfMissing: true,
       },
@@ -208,7 +208,7 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="workspace-integrations"]',
         title: "Integrations",
         description:
-          "Connect Google Drive and Slack to sync files and receive notifications. Import contracts, royalty statements, and split sheets from Drive directly into your projects — each category only accepts the right file types (e.g., PDFs for contracts, Excel/CSV for royalty statements). Configure Slack to get notified when tasks are created, contracts uploaded, or royalties calculated.",
+          "Connect Google Drive to import contracts, royalty statements, and split sheets directly into your projects — each category only accepts the right file types (e.g., PDFs for contracts, Excel/CSV for royalty statements). Slack and Notion notifications are coming soon.",
         placement: "bottom",
       },
     ],
@@ -242,9 +242,8 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       {
         targetSelector: '[data-walkthrough="portfolio-year"]',
         title: "Year & Artist Groups",
-        description: HIDE_REGISTRY_AND_WORKS
-          ? "Projects are grouped by year, then by artist. Each project card shows file count, audio count, and member count. Click any project to open its detail page."
-          : "Projects are grouped by year, then by artist. Each project card shows work count and member count. Click any project to open its detail page.",
+        description:
+          "Projects are grouped by year, then by artist. Each project card shows its file, audio, and member counts. Click any project to open its detail page.",
         placement: "bottom",
         skipIfMissing: true,
       },
@@ -265,35 +264,35 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       icon: Shield,
       title: "Rights Registry",
       description:
-        "Track and protect ownership of your works. Register master and publishing stakes, invite collaborators with defined roles and splits, and manage licensing and agreements — all in one place.",
+        "Track and protect ownership of your works. Register master and publishing stakes, invite collaborators with defined roles and splits, and keep full traceability of contracts and ownership — all in one place.",
     },
     steps: [
       {
         targetSelector: '[data-walkthrough="registry-summary"]',
         title: "Your Catalog at a Glance",
         description:
-          "See how many works you own, how many are fully registered, which are pending approval, and how many collaborations you're part of.",
+          "Five quick stats — total works you're involved in, released and unreleased tracks, works that need attention, and works shared with you. Click any card to filter the list below.",
+        placement: "bottom",
+      },
+      {
+        targetSelector: '[data-walkthrough="registry-tabs"]',
+        title: "My Works & Shared with Me",
+        description:
+          "Toggle between My Works (everything you own) and Shared with Me (works others invited you to). Change the sort order or add a new work from this toolbar.",
         placement: "bottom",
       },
       {
         targetSelector: '[data-walkthrough="registry-search"]',
         title: "Find Any Work",
         description:
-          "Search by title, ISRC, or ISWC to quickly locate a specific work across all your projects.",
-        placement: "bottom",
-      },
-      {
-        targetSelector: '[data-walkthrough="registry-tabs"]',
-        title: "Organized by Priority",
-        description:
-          "Action Required shows pending invitations you need to accept or decline. My Works lists everything you own. Collaborations shows works where others invited you. Activity tracks all changes.",
+          "Search by title, ISRC, artist, or project to quickly locate a specific work across all your projects.",
         placement: "bottom",
       },
       {
         targetSelector: '[data-walkthrough="registry-action"]',
-        title: "Accept or Decline Invites",
+        title: "Your Works",
         description:
-          "When someone invites you as a collaborator on their work, it appears here. Review the ownership details, then accept to confirm your stake or decline to remove yourself.",
+          "Works appear here grouped by artist and project — click any one to open it. Switch to Shared with Me to review collaboration invites and accept or decline your stake.",
         placement: "bottom",
         skipIfMissing: true,
       },
@@ -388,37 +387,43 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       icon: FileText,
       title: "Work Detail",
       description:
-        "This is where you manage a single work — a track, composition, or recording. Define ownership splits, invite collaborators, set up licensing, and record agreements. Everything about this work lives here.",
+        "This is where you manage a single work — a track, composition, or recording. Set its identity codes and release status, record ownership splits, link documents, and export proof of ownership. Everything about this work lives on one page.",
     },
     steps: [
       {
         targetSelector: '[data-walkthrough="work-header"]',
-        title: "Work Identity",
+        title: "Work Identity & Status",
         description:
-          "ISRC (International Standard Recording Code) identifies a specific recording. ISWC (International Standard Musical Work Code) identifies the underlying composition. UPC (Universal Product Code) identifies the release/product. These codes are used by distributors and royalty collection societies worldwide.",
+          "The work's title sits alongside its release tag and registration status — Draft (being set up), Pending (submitted for collaborator approval), or Registered (all collaborators confirmed).",
         placement: "bottom",
       },
       {
-        targetSelector: '[data-walkthrough="work-status"]',
-        title: "Registration Status",
+        targetSelector: '[data-walkthrough="work-details"]',
+        title: "Track Details",
         description:
-          "Draft: still being set up. Pending: submitted for collaborator approval. Registered: all collaborators have accepted their stakes and the work is fully confirmed.",
-        placement: "bottom",
+          "Industry codes identify the work everywhere royalties are tracked: ISRC (the recording), ISWC (the composition), and UPC (the release). Add the release date and a Spotify link, then use 'Pull from Spotify' to auto-fill metadata once the track is live.",
+        placement: "top",
       },
       {
-        targetSelector: '[data-walkthrough="work-actions"]',
-        title: "Owner Actions",
+        targetSelector: '[data-walkthrough="work-access"]',
+        title: "Your Access",
         description:
-          "Invite collaborators to claim their ownership stake. Upload proof-of-ownership documents. Edit metadata like ISRC codes and release dates. Register the work once everything is in order.",
-        placement: "bottom",
-        skipIfMissing: true,
+          "Your role on this work — Owner, Admin, Editor, or Viewer — decides what you can change. If you're not the owner, this card shows who is and how to reach them for edit access.",
+        placement: "left",
       },
       {
-        targetSelector: '[data-walkthrough="work-tabs"]',
-        title: "Ownership, Licensing & Agreements",
+        targetSelector: '[data-walkthrough="work-splits"]',
+        title: "Ownership Splits",
         description:
-          "Ownership: master (recording) and publishing (songwriting) splits with percentages. Licensing: rights granted to third parties (sync, mechanical, performance). Agreements: formal records of ownership transfers, split agreements, and amendments.",
-        placement: "bottom",
+          "Master (recording) and publishing (songwriting) percentages for each party. Owners and editors can edit them and see whether each column totals 100%; a work-only collaborator sees just their own share.",
+        placement: "left",
+      },
+      {
+        targetSelector: '[data-walkthrough="work-trace"]',
+        title: "Traceability & Proof",
+        description:
+          "A quick audit of what's on file — linked documents, ISRC, and recorded stakes — with a one-click Export Proof of Ownership PDF.",
+        placement: "left",
       },
     ],
   },
