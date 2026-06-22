@@ -140,6 +140,11 @@ export function WorkEditor({ work }: WorkEditorProps) {
   // work role), not by raw ownership. While access is still loading, default to
   // non-editable to avoid a flash of editable controls for viewers.
   const canEdit = !!access?.can_edit;
+  // Work-only viewers only receive their own slice of the splits, so a summed
+  // "total" (and the "should total 100%" nudge) would be meaningless for them.
+  // This is only ever true for people who see every stake (owner/admin/editor or
+  // a project member), so it's the right gate for the totals + imbalance warning.
+  const canSeeFullOwnership = !!access?.can_see_full_ownership;
 
   // "Your access" card label/description, derived from the resolved access.
   const accessRole = useMemo(() => {
@@ -151,6 +156,22 @@ export function WorkEditor({ work }: WorkEditorProps) {
       return { isOwner: false, label: "Editor", desc: "Can edit" };
     return { isOwner: false, label: "Viewer", desc: "View only" };
   }, [access?.work_role, access?.can_manage, access?.can_edit]);
+
+  // The owner's identity (name + contact email), surfaced to non-owners so they
+  // know who to reach for edit access or a fuller view. The backend always
+  // includes an owner row (status "owner") in the collaborators list for
+  // work-only viewers; `name` falls back to the literal "Owner" when the profile
+  // has no name, which we treat as "unknown" so we never render a placeholder as
+  // a real name. `email` may be null if the auth lookup fails.
+  const owner = useMemo(() => {
+    const row = (work.collaborators || []).find((c) => c.status === "owner");
+    if (!row) return null;
+    const rawName = row.name?.trim();
+    const name = rawName && rawName.toLowerCase() !== "owner" ? rawName : null;
+    const email = row.email?.trim() || null;
+    if (!name && !email) return null;
+    return { name, email };
+  }, [work.collaborators]);
 
   const set = (patch: Partial<WorkFull>) =>
     updateWork.mutate({ workId: work.id, ...patch });
@@ -330,7 +351,24 @@ export function WorkEditor({ work }: WorkEditorProps) {
             <div className="text-sm">
               <strong className="font-semibold">View only.</strong>{" "}
               <span className="text-muted-foreground">
-                Ask the owner of {project?.name || "this project"} for edit access.
+                {owner ? (
+                  <>
+                    Contact{" "}
+                    {owner.email ? (
+                      <a
+                        href={`mailto:${owner.email}`}
+                        className="font-medium text-foreground hover:underline"
+                      >
+                        {owner.name || owner.email}
+                      </a>
+                    ) : (
+                      <span className="font-medium text-foreground">{owner.name}</span>
+                    )}{" "}
+                    (the owner) for edit access or a fuller view of this work.
+                  </>
+                ) : (
+                  `Ask the owner of ${project?.name || "this project"} for edit access.`
+                )}
               </span>
             </div>
           </Card>
@@ -610,11 +648,44 @@ export function WorkEditor({ work }: WorkEditorProps) {
               <div className="text-xs text-muted-foreground">{accessRole.desc}</div>
             </div>
           </div>
+          {!accessRole.isOwner && owner && (
+            <div className="pt-3 border-t border-border/60">
+              <div className="text-[11px] font-medium text-muted-foreground mb-2">
+                Owner
+              </div>
+              <div className="flex items-center gap-2 min-w-0">
+                <RegistryAvatar name={owner.name || owner.email || "Owner"} size={26} />
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold truncate">
+                    {owner.name || "Owner"}
+                  </div>
+                  {owner.email ? (
+                    <a
+                      href={`mailto:${owner.email}`}
+                      className="block text-[11px] text-primary hover:underline truncate"
+                      title={`Email ${owner.name || owner.email}`}
+                    >
+                      {owner.email}
+                    </a>
+                  ) : (
+                    <div className="text-[11px] text-muted-foreground">
+                      Email unavailable
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </Card>
 
         {/* Royalty splits */}
         <Card className="p-4">
-          <SplitsSidebar work={work} canEdit={canEdit} initialRows={stakeRows} />
+          <SplitsSidebar
+            work={work}
+            canEdit={canEdit}
+            canSeeFullOwnership={canSeeFullOwnership}
+            initialRows={stakeRows}
+          />
         </Card>
 
         {/* Traceability */}
@@ -786,10 +857,12 @@ function TraceRow({ icon, label, value, ok }: TraceRowProps) {
 function SplitsSidebar({
   work,
   canEdit,
+  canSeeFullOwnership,
   initialRows,
 }: {
   work: WorkFull;
   canEdit: boolean;
+  canSeeFullOwnership: boolean;
   initialRows: SplitRow[];
 }) {
   const [isEditing, setEditing] = useState(false);
@@ -898,7 +971,8 @@ function SplitsSidebar({
         setEditing((v) => !v);
       }}
       allowAddRow={isEditing}
-      warnOnImbalance
+      warnOnImbalance={canEdit}
+      showTotals={canSeeFullOwnership}
     />
   );
 }

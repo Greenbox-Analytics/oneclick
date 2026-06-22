@@ -21,7 +21,7 @@ def _patch_access(wa):
     return patch.object(service, "get_work_access", AsyncMock(return_value=wa))
 
 
-def _owner_db(owner_id="owner-1", full_name="Owner Name"):
+def _owner_db(owner_id="owner-1", full_name="Owner Name", email="owner@x.com"):
     """MagicMock db so service._owner_identity resolves a real owner row."""
     db = MagicMock()
 
@@ -40,6 +40,9 @@ def _owner_db(owner_id="owner-1", full_name="Owner Name"):
         return q
 
     db.table.side_effect = table
+    # _owner_identity resolves the owner's contact email via _resolve_auth_email,
+    # which reads db.auth.admin.get_user_by_id(...).user.email
+    db.auth.admin.get_user_by_id.return_value = MagicMock(user=MagicMock(email=email))
     return db
 
 
@@ -83,6 +86,9 @@ def test_no_breakdown_viewer_sees_owner_and_self_only():
     ids = {r["id"] for r in result}
     assert ids == {"owner:owner-1", "c1"}
     assert "c2" not in ids
+    # Owner row carries a contact email so the collaborator knows how to reach them.
+    owner = next(r for r in result if r["id"] == "owner:owner-1")
+    assert owner["email"] == "owner@x.com"
 
 
 def test_full_ownership_viewer_sees_others_but_stripped():

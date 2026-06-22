@@ -40,6 +40,9 @@ interface RoyaltySplitsTableProps {
   allowAddRow?: boolean;
   /** Hide totals warning until the user has interacted (wizard UX). */
   warnOnImbalance?: boolean;
+  /** Show the summed "Master X% · Publishing Y%" line. Hidden for viewers who
+   *  only receive their own slice of the splits, where a "total" is meaningless. */
+  showTotals?: boolean;
 }
 
 const clampPct = (v: string | number): number => {
@@ -80,6 +83,7 @@ export function RoyaltySplitsTable({
   source,
   allowAddRow = false,
   warnOnImbalance = true,
+  showTotals = true,
 }: RoyaltySplitsTableProps) {
   const totals = useMemo(
     () =>
@@ -253,38 +257,44 @@ export function RoyaltySplitsTable({
       </div>
 
       {/* totals + add */}
-      <div className="flex items-center justify-between mt-3">
-        <div
-          className={cn(
-            "inline-flex items-center gap-1.5 text-[11px] font-medium",
-            balanced
-              ? "text-emerald-400"
-              : warnOnImbalance
-              ? "text-amber-400"
-              : "text-muted-foreground"
-          )}
-        >
-          {balanced ? (
-            <CheckCircle2 className="w-3.5 h-3.5" />
+      {(showTotals || (editable && allowAddRow)) && (
+        <div className="flex items-center justify-between mt-3">
+          {showTotals ? (
+            <div
+              className={cn(
+                "inline-flex items-center gap-1.5 text-[11px] font-medium",
+                balanced
+                  ? "text-emerald-400"
+                  : warnOnImbalance
+                  ? "text-amber-400"
+                  : "text-muted-foreground"
+              )}
+            >
+              {balanced ? (
+                <CheckCircle2 className="w-3.5 h-3.5" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5" />
+              )}
+              <span>
+                Master {totals.master}% · Publishing {totals.publishing}%
+                {!balanced && warnOnImbalance && " — should total 100%"}
+              </span>
+            </div>
           ) : (
-            <AlertTriangle className="w-3.5 h-3.5" />
+            <span />
           )}
-          <span>
-            Master {totals.master}% · Publishing {totals.publishing}%
-            {!balanced && warnOnImbalance && " — should total 100%"}
-          </span>
+          {editable && allowAddRow && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={addRow}
+            >
+              <Plus className="w-3 h-3 mr-1" /> Add party
+            </Button>
+          )}
         </div>
-        {editable && allowAddRow && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={addRow}
-          >
-            <Plus className="w-3 h-3 mr-1" /> Add party
-          </Button>
-        )}
-      </div>
+      )}
     </div>
   );
 }

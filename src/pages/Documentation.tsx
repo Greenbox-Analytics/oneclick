@@ -525,6 +525,9 @@ const WorkDetailContent = () => (
       <Callout type="info" title="When to Use Which">
         Use <strong>project members</strong> for your internal team (managers, assistants) who need access to everything in a project. Use <strong>work collaborators</strong> for external parties (producers, featured artists) who should only see their specific work and its ownership details.
       </Callout>
+      <Callout type="tip" title="What a Work Collaborator Sees">
+        A work collaborator sees <strong>only their own royalty splits</strong> — not the full ownership breakdown — so the "should total 100%" balance check doesn't appear on their view. That check is for owners and editors who manage the complete split. The work's <strong>owner is always shown</strong> on the page (in the View-only banner and the Your Access card), including their <strong>contact email</strong>, so a collaborator knows exactly who to reach out to for edit access or a fuller view.
+      </Callout>
     </div>
   </div>
 );
