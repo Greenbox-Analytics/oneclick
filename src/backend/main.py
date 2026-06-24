@@ -46,6 +46,7 @@ from integrations.google_drive.router import router as google_drive_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from integrations.spotify.router import router as spotify_router
+from oneclick.royalties.router import router as royalties_router
 from oneclick.royalty_calculator import CalculationError
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
@@ -71,6 +72,7 @@ app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"]
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
+app.include_router(royalties_router, prefix="/oneclick/royalties", tags=["OneClick Royalties"])
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
@@ -315,6 +317,16 @@ async def _assert_can_access_oneclick_inputs(db, user_id, project_id, statement_
     for cid in contract_ids:
         if cid and not await user_can_access_file(db, user_id, cid):
             raise HTTPException(status_code=403, detail="Access denied")
+
+
+from oneclick.royalties.ingest import sync_calc_royalties
+from oneclick.royalty_calculator import RoyaltyCalculator
+
+
+def _statement_currency(statement_id: str) -> str:
+    res = get_supabase_client().table("project_files").select("currency").eq("id", statement_id).execute()
+    cur = res.data[0].get("currency") if res.data else None
+    return cur or "USD"
 
 
 def verify_user_owns_audio_file(user_id: str, audio_file_id: str) -> dict | None:
@@ -927,6 +939,7 @@ async def upload_file(
     artist_id: str = Form(...),
     category: str = Form(...),  # 'contract' or 'royalty_statement'
     project_id: str | None = Form(None),
+    currency: str | None = Form(None),
     user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -1018,6 +1031,8 @@ async def upload_file(
             "file_size": file.size,
             "file_type": file.content_type,
         }
+        if folder_category == "royalty_statement":
+            db_record["currency"] = currency.upper() if currency else "USD"
 
         try:
             db_res = get_supabase_client().table("project_files").insert(db_record).execute()
@@ -1943,6 +1958,47 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
 
         get_supabase_client().table("royalty_calculation_contracts").insert(junction_rows).execute()
 
+        # 3. Persist statement rows + sync royalty lines. The statement parse + statement-rows
+        #    step is best-effort (isolated below + inside sync_calc_royalties); line sync ALWAYS
+        #    runs so payees/owed are never blocked by a statement-rows problem.
+        try:
+            db = get_supabase_client()
+            currency = _statement_currency(request.royalty_statement_id)
+            rows = []
+            try:
+                sf = (
+                    db.table("project_files")
+                    .select("file_path, file_name")
+                    .eq("id", request.royalty_statement_id)
+                    .execute()
+                )
+                if sf.data:
+                    file_data = db.storage.from_("project-files").download(sf.data[0]["file_path"])
+                    suffix = Path(sf.data[0]["file_name"]).suffix.lower() or ".xlsx"
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                        tmp.write(file_data)
+                        tmp_path = tmp.name
+                    try:
+                        rows = RoyaltyCalculator(api_key=os.getenv("OPENAI_API_KEY")).read_royalty_statement_rows(
+                            tmp_path
+                        )
+                    finally:
+                        os.unlink(tmp_path)
+            except Exception as e:
+                print(f"[royalties] statement parse failed for calc {calculation_id}: {e}")
+            sync_calc_royalties(
+                db,
+                user_id,
+                calculation_id,
+                request.royalty_statement_id,
+                request.project_id,
+                request.results,
+                currency,
+                statement_rows=rows,
+            )
+        except Exception as e:
+            print(f"[royalties] ingestion failed for calc {calculation_id}: {e}")
+
         return {"status": "success", "message": "Calculation saved successfully", "id": calculation_id}
 
     except Exception as e:
@@ -2093,6 +2149,23 @@ async def oneclick_calculate_royalties_stream(
                                         "cached": True,
                                     },
                                 )
+
+                                # Cache-hit: sync royalty_lines (period derived from persisted
+                                # statement rows if present; line sync always runs regardless).
+                                try:
+                                    _db = get_supabase_client()
+                                    sync_calc_royalties(
+                                        _db,
+                                        user_id,
+                                        calc["id"],
+                                        royalty_statement_file_id,
+                                        project_id,
+                                        calc["results"],
+                                        _statement_currency(royalty_statement_file_id),
+                                        statement_rows=None,
+                                    )
+                                except Exception as e:
+                                    print(f"[royalties] cache-hit sync failed for calc {calc['id']}: {e}")
 
                                 yield f"data: {json.dumps(result)}\n\n"
                                 return

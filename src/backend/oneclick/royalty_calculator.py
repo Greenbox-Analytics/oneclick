@@ -20,6 +20,7 @@ import os
 import re
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 import openpyxl
@@ -120,6 +121,57 @@ class RoyaltyPayment:
     terms: str | None = None
 
 
+@dataclass
+class StatementRow:
+    """A single row parsed from a royalty statement, preserving dimensional fields
+    needed for the Earnings Breakdown feature (vendor, country, delivery format,
+    sale date).  Optional fields are None when the column is absent or unparseable.
+    """
+
+    song_title: str
+    net_payable: float
+    vendor: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+    delivery_format: str | None = None
+    delivery_type: str | None = None
+    sale_date: str | None = None  # ISO YYYY-MM-DD or None
+    units_sold: float | None = None
+    net_income: float | None = None
+    isrc: str | None = None
+    upc: str | None = None
+    currency: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Date-format patterns tried in order when coercing sale_date to ISO.
+# ---------------------------------------------------------------------------
+_DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y")
+
+
+def _coerce_date(raw: str) -> str | None:
+    """Return ISO YYYY-MM-DD or None if the string can't be parsed."""
+    if not raw or not raw.strip():
+        return None
+    s = raw.strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def _coerce_float(raw: str) -> float | None:
+    """Return float or None; handles comma-separated numbers."""
+    if raw is None:
+        return None
+    try:
+        return float(str(raw).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
 class RoyaltyCalculator:
     """
     Enhanced calculator for royalty payments from statements and contracts.
@@ -191,6 +243,182 @@ class RoyaltyCalculator:
             raise
         except Exception as e:
             raise Exception(f"Error reading royalty statement: {str(e)}")
+
+    def read_royalty_statement_rows(self, path: str) -> list[StatementRow]:
+        """Parse a royalty statement (CSV or xlsx) and return one StatementRow per
+        data row, preserving all dimensional fields for the Earnings Breakdown
+        feature.
+
+        Column matching is case-insensitive and uses substring keywords so that
+        column variants used by different distributors all resolve correctly.
+
+        Rows are skipped when:
+        - ``song_title`` is blank / whitespace
+        - ``net_payable`` is blank or cannot be parsed as a number
+
+        An unparseable ``sale_date`` does NOT drop the row — it becomes ``None``.
+        """
+        file_ext = Path(path).suffix.lower()
+        if file_ext == ".csv":
+            return self._read_statement_rows_csv(path)
+        elif file_ext in (".xlsx", ".xls"):
+            return self._read_statement_rows_xlsx(path)
+        else:
+            raise CalculationError(
+                code="STATEMENT_UNSUPPORTED_FORMAT",
+                message=f"We can't read {file_ext} files for royalty statements.",
+                suggestion="Upload the statement as a CSV or Excel (.xlsx / .xls) file.",
+            )
+
+    # ------------------------------------------------------------------
+    # Column-name → StatementRow field mapping helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _map_headers_to_fields(raw_headers: list[str]) -> dict[str, str]:
+        """Return a mapping of lowercased original-header → StatementRow field name.
+
+        Priority rules:
+        - "country of sale" takes precedence over bare "country" for the
+          ``country`` field (more specific wins).
+        - All matching is case-insensitive substring against the keywords listed
+          per field.
+        """
+        # (field_name, ordered list of substrings to check; first hit wins)
+        FIELD_KEYWORDS = [
+            (
+                "song_title",
+                ["release title", "song title", "track title", "song name", "track name", "title", "song", "track"],
+            ),
+            ("net_payable", ["net payable", "payable"]),
+            ("vendor", ["vendor", "store"]),
+            # "country of sale" must be checked before plain "country"
+            ("country", ["country of sale", "country"]),
+            ("country_code", ["country code"]),
+            ("delivery_format", ["delivery format"]),
+            ("delivery_type", ["delivery type"]),
+            ("sale_date", ["sale date", "date"]),
+            ("units_sold", ["units"]),
+            ("net_income", ["net income"]),
+            ("isrc", ["isrc"]),
+            ("upc", ["upc"]),
+            ("currency", ["currency"]),
+        ]
+
+        mapping: dict[str, str] = {}  # lowercase header → field
+        assigned_fields: set[str] = set()  # prevent double-assignment
+
+        # Process field priority list in order so the first matching header
+        # for each field wins.
+        for field_name, keywords in FIELD_KEYWORDS:
+            if field_name in assigned_fields:
+                continue
+            for header in raw_headers:
+                h = header.strip().lower()
+                for kw in keywords:
+                    if kw in h and h not in mapping:
+                        mapping[h] = field_name
+                        assigned_fields.add(field_name)
+                        break
+                if field_name in assigned_fields:
+                    break
+
+        return mapping
+
+    def _row_dict_to_statement_row(self, row: dict[str, str], mapping: dict[str, str]) -> StatementRow | None:
+        """Convert a raw dict row (header → raw string) to a StatementRow.
+
+        Returns None if the row should be skipped (blank title or
+        unparseable/blank net_payable).
+        """
+        # Build a lookup: field_name → raw value (using the mapping)
+        field_values: dict[str, str] = {}
+        for raw_header, field in mapping.items():
+            # Find the actual key in the row dict (original case)
+            for k, v in row.items():
+                if k.strip().lower() == raw_header:
+                    field_values[field] = v
+                    break
+
+        # --- song_title ---
+        song_title = field_values.get("song_title", "").strip()
+        if not song_title:
+            return None
+
+        # --- net_payable ---
+        raw_payable = field_values.get("net_payable", "")
+        net_payable = _coerce_float(raw_payable)
+        if net_payable is None:
+            return None
+
+        # --- optional fields ---
+        vendor = field_values.get("vendor", "").strip() or None
+        country = field_values.get("country", "").strip() or None
+        country_code = field_values.get("country_code", "").strip() or None
+        delivery_format = field_values.get("delivery_format", "").strip() or None
+        delivery_type = field_values.get("delivery_type", "").strip() or None
+        sale_date = _coerce_date(field_values.get("sale_date", ""))
+        units_sold = _coerce_float(field_values.get("units_sold"))
+        net_income = _coerce_float(field_values.get("net_income"))
+        isrc = field_values.get("isrc", "").strip() or None
+        upc = field_values.get("upc", "").strip() or None
+        currency = field_values.get("currency", "").strip() or None
+
+        return StatementRow(
+            song_title=song_title,
+            net_payable=net_payable,
+            vendor=vendor,
+            country=country,
+            country_code=country_code,
+            delivery_format=delivery_format,
+            delivery_type=delivery_type,
+            sale_date=sale_date,
+            units_sold=units_sold,
+            net_income=net_income,
+            isrc=isrc,
+            upc=upc,
+            currency=currency,
+        )
+
+    def _read_statement_rows_csv(self, csv_path: str) -> list[StatementRow]:
+        with open(csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                return []
+            raw_headers = list(reader.fieldnames)
+            mapping = self._map_headers_to_fields(raw_headers)
+            rows: list[StatementRow] = []
+            for row in reader:
+                result = self._row_dict_to_statement_row(row, mapping)
+                if result is not None:
+                    rows.append(result)
+        return rows
+
+    def _read_statement_rows_xlsx(self, xlsx_path: str) -> list[StatementRow]:
+        workbook = openpyxl.load_workbook(xlsx_path, data_only=True)
+        sheet = workbook.active
+
+        # Extract headers from first row
+        raw_headers = []
+        for cell in sheet[1]:
+            raw_headers.append(str(cell.value).strip() if cell.value is not None else "")
+
+        mapping = self._map_headers_to_fields(raw_headers)
+        rows: list[StatementRow] = []
+
+        for row_cells in sheet.iter_rows(min_row=2, values_only=True):
+            # Build a dict using original headers as keys
+            row = {
+                raw_headers[i]: (str(v) if v is not None else "")
+                for i, v in enumerate(row_cells)
+                if i < len(raw_headers)
+            }
+            result = self._row_dict_to_statement_row(row, mapping)
+            if result is not None:
+                rows.append(result)
+
+        workbook.close()
+        return rows
 
     def _read_csv_statement(
         self, csv_path: str, title_column: str | None = None, payable_column: str | None = None

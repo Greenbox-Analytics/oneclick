@@ -64,6 +64,7 @@ const OneClickDocuments = () => {
   const [contractTabValue, setContractTabValue] = useState<string>("upload");
   const [royaltyStatementTabValue, setRoyaltyStatementTabValue] = useState<string>("upload");
   const [newRoyaltyStatementProjectId, setNewRoyaltyStatementProjectId] = useState<string>("");
+  const [royaltyStatementCurrency, setRoyaltyStatementCurrency] = useState<string>("USD");
   // Artist name fetched via React Query so the result is cached across
   // remounts. Without this, navigating away from /tools/oneclick/.../documents
   // and back would re-fetch and (worse) re-trigger a full-page loader that
@@ -278,6 +279,7 @@ const OneClickDocuments = () => {
              formData.append("file", royaltyStatementFile);
              formData.append("artist_id", artistId);
              formData.append("category", "royalty_statement");
+             formData.append("currency", royaltyStatementCurrency);
              const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
              if (targetProjectId) formData.append("project_id", targetProjectId);
 
@@ -542,6 +544,8 @@ const OneClickDocuments = () => {
             selectedExistingRoyaltyStatement={selectedExistingRoyaltyStatement}
             setSelectedExistingRoyaltyStatement={setSelectedExistingRoyaltyStatement}
             fetchProjectFilesForValidation={fetchProjectFilesForValidation}
+            currency={royaltyStatementCurrency}
+            onCurrencyChange={setRoyaltyStatementCurrency}
           />
         </div>
 

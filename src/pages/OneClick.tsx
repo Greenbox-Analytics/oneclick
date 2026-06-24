@@ -2,13 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, ArrowLeft, BookOpen, Info } from "lucide-react";
+import { AlertCircle, ArrowLeft, BookOpen, Info, Calculator, Wallet } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { PaymentTracking } from "@/components/oneclick/payments/PaymentTracking";
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
@@ -31,6 +33,8 @@ const OneClick = () => {
   // Changed to string[] because Supabase IDs are UUIDs (strings)
   const [selectedArtists, setSelectedArtists] = useState<string[]>([]);
   const [error, setError] = useState<string>("");
+
+  const [tab, setTab] = useState("calculate");
 
   const { captureToolOpened } = useAnalytics();
   useEffect(() => {
@@ -99,72 +103,85 @@ const OneClick = () => {
         }
       />
 
-      <main className="container mx-auto px-4 py-8 max-w-4xl">
+      <main className="container mx-auto px-4 py-8 max-w-6xl">
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-foreground mb-2">OneClick</h2>
-          <p className="text-muted-foreground">Calculate royalty splits across your artists</p>
+          <p className="text-muted-foreground">Calculate royalty splits and track payouts across your artists</p>
         </div>
 
-        <Alert className="mb-6">
-          <Info className="w-4 h-4" />
-          <AlertTitle>Streaming Master royalties only</AlertTitle>
-          <AlertDescription>
-            OneClick currently analyzes master royalties related to streaming earnings only. Split sheets generated for publishing-only royalties will not be recognized.
-          </AlertDescription>
-        </Alert>
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList>
+            <TabsTrigger value="calculate" className="gap-1.5"><Calculator className="w-4 h-4" /> Calculate</TabsTrigger>
+            <TabsTrigger value="payments" className="gap-1.5"><Wallet className="w-4 h-4" /> Royalty Tracking</TabsTrigger>
+          </TabsList>
 
-        <div className="grid gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Select Artists</CardTitle>
-              <CardDescription>Choose artists to include in the royalty calculation</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {artists.length === 0 ? (
-                <div className="text-center py-4 text-muted-foreground">
-                  No artists found. Please add an artist first.
-                </div>
-              ) : (
-                artists.map((artist) => (
-                  <div
-                    key={artist.id}
-                    className="flex items-center p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Checkbox
-                        id={`artist-${artist.id}`}
-                        checked={selectedArtists.includes(artist.id)}
-                        onCheckedChange={() => handleArtistToggle(artist.id)}
-                      />
-                      <label
-                        htmlFor={`artist-${artist.id}`}
-                        className="text-foreground font-medium cursor-pointer"
-                      >
-                        {artist.name}
-                      </label>
-                    </div>
-                  </div>
-                ))
-              )}
-
-              <Button
-                onClick={handleContinue}
-                className="w-full"
-                disabled={selectedArtists.length === 0}
-              >
-                Continue
-              </Button>
-            </CardContent>
-          </Card>
-
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
+          <TabsContent value="calculate" className="mt-6">
+            <Alert className="mb-6">
+              <Info className="w-4 h-4" />
+              <AlertTitle>Streaming Master royalties only</AlertTitle>
+              <AlertDescription>
+                OneClick currently analyzes master royalties related to streaming earnings only. Split sheets generated for publishing-only royalties will not be recognized.
+              </AlertDescription>
             </Alert>
-          )}
-        </div>
+
+            <div className="grid gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Select Artists</CardTitle>
+                  <CardDescription>Choose artists to include in the royalty calculation</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {artists.length === 0 ? (
+                    <div className="text-center py-4 text-muted-foreground">
+                      No artists found. Please add an artist first.
+                    </div>
+                  ) : (
+                    artists.map((artist) => (
+                      <div
+                        key={artist.id}
+                        className="flex items-center p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Checkbox
+                            id={`artist-${artist.id}`}
+                            checked={selectedArtists.includes(artist.id)}
+                            onCheckedChange={() => handleArtistToggle(artist.id)}
+                          />
+                          <label
+                            htmlFor={`artist-${artist.id}`}
+                            className="text-foreground font-medium cursor-pointer"
+                          >
+                            {artist.name}
+                          </label>
+                        </div>
+                      </div>
+                    ))
+                  )}
+
+                  <Button
+                    onClick={handleContinue}
+                    className="w-full"
+                    disabled={selectedArtists.length === 0}
+                  >
+                    Continue
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {error && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Error</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="payments" className="mt-6">
+            <PaymentTracking />
+          </TabsContent>
+        </Tabs>
       </main>
       </div>
     </RequireFeature>
