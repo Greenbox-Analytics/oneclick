@@ -138,7 +138,7 @@ def _build_db(payees, lines, payouts, coverage_by_payee=None):
     return db
 
 
-def _identity_fx(db, amount, frm, to, on="latest"):
+def _identity_fx(db, amount, frm, to, **kwargs):
     """Identity FX: same ccy = unchanged, GBP→USD ×1.27, USD→GBP /1.27."""
     if frm.upper() == to.upper():
         return amount
@@ -513,3 +513,220 @@ class TestProjectCount:
             summaries = service.payee_summary(db, USER_ID, base="USD")
 
         assert summaries[0]["project_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Test: multi-project statement splits per project (P0.1 regression test)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiProjectStatementRebucket:
+    """A single royalty statement with lines in two distinct projects must produce
+    two independent (statement, project) buckets — not one combined bucket.
+
+    This is the P0.1 regression guard: before the fix the whole statement was
+    attributed to the first line's project and coverage was keyed by stmt_id alone.
+    """
+
+    def test_multiproject_statement_splits_per_project(self):
+        """One payee, one statement s1, lines in proj-A (earned 100) and proj-B (earned 40),
+        no coverage → payee_owed_buckets returns two buckets: one for each project."""
+        payee = _make_payee()
+        line_a = _make_line(stmt_id="s1", amount=100.0, ccy="USD", project_id="proj-A", line_id="la")
+        line_b = _make_line(stmt_id="s1", amount=40.0, ccy="USD", project_id="proj-B", line_id="lb")
+
+        db = _build_db(
+            payees=[payee],
+            lines=[line_a, line_b],
+            payouts=[],
+            coverage_by_payee={PAYEE_ID: []},
+        )
+
+        buckets = service.payee_owed_buckets(db, USER_ID, PAYEE_ID)
+
+        assert len(buckets) == 2, (
+            f"Expected 2 buckets (one per project), got {len(buckets)} — "
+            "multi-project statement must not be lumped into a single bucket"
+        )
+
+        owed_by_project = {b["project_id"]: b["owed_b"] for b in buckets}
+        assert owed_by_project.get("proj-A") == pytest.approx(100.0), (
+            f"proj-A bucket should owe 100, got {owed_by_project.get('proj-A')}"
+        )
+        assert owed_by_project.get("proj-B") == pytest.approx(40.0), (
+            f"proj-B bucket should owe 40, got {owed_by_project.get('proj-B')}"
+        )
+
+        # Both buckets reference the same statement
+        assert all(b["royalty_statement_id"] == "s1" for b in buckets)
+
+    def test_multiproject_buckets_sum_to_payee_total(self):
+        """The sum of multi-project bucket owed_b values must equal the payee's
+        total owed in the payee_summary (after FX, both are USD so identity holds)."""
+        payee = _make_payee(payout_ccy="USD")
+        line_a = _make_line(stmt_id="s1", amount=100.0, ccy="USD", project_id="proj-A", line_id="la")
+        line_b = _make_line(stmt_id="s1", amount=40.0, ccy="USD", project_id="proj-B", line_id="lb")
+
+        db = _build_db(
+            payees=[payee],
+            lines=[line_a, line_b],
+            payouts=[],
+            coverage_by_payee={PAYEE_ID: []},
+        )
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_identity_fx):
+            summaries = service.payee_summary(db, USER_ID, base="USD")
+
+        assert summaries[0]["owed"] == pytest.approx(140.0), "Total owed (100+40) must equal sum of per-project buckets"
+
+    def test_single_project_statement_back_compat(self):
+        """Back-compat: a single-project statement still yields exactly one bucket
+        with the same owed as before the re-bucketing change."""
+        payee = _make_payee()
+        line = _make_line(stmt_id="stmt-1", amount=200.0, ccy="USD", project_id="proj-1", line_id="l1")
+
+        db = _build_db(
+            payees=[payee],
+            lines=[line],
+            payouts=[],
+            coverage_by_payee={PAYEE_ID: []},
+        )
+
+        buckets = service.payee_owed_buckets(db, USER_ID, PAYEE_ID)
+
+        assert len(buckets) == 1, f"Single-project statement must yield exactly one bucket, got {len(buckets)}"
+        assert buckets[0]["owed_b"] == pytest.approx(200.0)
+        assert buckets[0]["project_id"] == "proj-1"
+        assert buckets[0]["royalty_statement_id"] == "stmt-1"
+
+    def test_multiproject_statement_coverage_per_project(self):
+        """Coverage for proj-A should not reduce owed for proj-B when they share a statement."""
+        payee = _make_payee()
+        line_a = _make_line(stmt_id="s1", amount=100.0, ccy="USD", project_id="proj-A", line_id="la")
+        line_b = _make_line(stmt_id="s1", amount=40.0, ccy="USD", project_id="proj-B", line_id="lb")
+
+        payout = _make_payout("payout-1", status="paid")
+        # Coverage only for proj-A bucket within statement s1
+        cov_a = {
+            "payout_id": "payout-1",
+            "payee_id": PAYEE_ID,
+            "royalty_statement_id": "s1",
+            "covered_amount": 100.0,
+            "project_id": "proj-A",
+        }
+
+        db = _build_db(
+            payees=[payee],
+            lines=[line_a, line_b],
+            payouts=[payout],
+            coverage_by_payee={PAYEE_ID: [cov_a]},
+        )
+
+        buckets = service.payee_owed_buckets(db, USER_ID, PAYEE_ID)
+
+        # proj-A is fully covered → skipped; proj-B still owes 40
+        assert len(buckets) == 1, f"Expected 1 bucket (proj-A fully covered), got {len(buckets)}"
+        assert buckets[0]["project_id"] == "proj-B"
+        assert buckets[0]["owed_b"] == pytest.approx(40.0), "Coverage for proj-A must not reduce owed for proj-B"
+
+
+# ---------------------------------------------------------------------------
+# Test: periods_ledger multi-project state independence (P0.1 follow-up)
+# ---------------------------------------------------------------------------
+
+
+class TestPeriodsLedgerMultiProject:
+    """A multi-project statement must produce independent PeriodCells: a fully-covered
+    project must not flip an uncovered project's cell to 'settled'.
+
+    Before the re-bucket, periods_ledger grouped by stmt_id alone and keyed coverage
+    by stmt_id alone, so proj-A's coverage could mask proj-B's owed within the cell.
+    """
+
+    def test_covered_project_does_not_flip_uncovered_project_state(self):
+        payee = _make_payee(payout_ccy="USD")
+        # One statement s1, two projects: proj-A (covered) + proj-B (uncovered)
+        line_a = _make_line(stmt_id="s1", amount=100.0, ccy="USD", project_id="proj-A", line_id="la")
+        line_b = _make_line(stmt_id="s1", amount=40.0, ccy="USD", project_id="proj-B", line_id="lb")
+
+        payout = _make_payout("payout-1", status="paid")
+        # Coverage fully settles proj-A within s1 only
+        cov_a = {
+            "payout_id": "payout-1",
+            "payee_id": PAYEE_ID,
+            "royalty_statement_id": "s1",
+            "covered_amount": 100.0,
+            "project_id": "proj-A",
+        }
+
+        db = _build_db(
+            payees=[payee],
+            lines=[line_a, line_b],
+            payouts=[payout],
+            coverage_by_payee={PAYEE_ID: [cov_a]},
+        )
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_identity_fx):
+            ledger = service.periods_ledger(db, USER_ID, base="USD")
+
+        assert len(ledger["rows"]) == 1
+        cells = ledger["rows"][0]["cells"]
+
+        # Two cells: one per (statement, project)
+        assert len(cells) == 2, f"Expected 2 cells (one per project), got {len(cells)}"
+
+        states_by_earned = {round(c["earned"], 2): c["state"] for c in cells}
+        # proj-A: earned 100, fully covered → settled
+        assert states_by_earned[100.0] == "settled"
+        # proj-B: earned 40, no coverage → owed (must NOT be flipped to settled)
+        assert states_by_earned[40.0] == "owed", "proj-A's coverage must not flip proj-B's uncovered cell to settled"
+
+        # Row total still foots to the full earned (100 + 40)
+        assert ledger["rows"][0]["total"] == pytest.approx(140.0)
+
+
+# ---------------------------------------------------------------------------
+# Test: unconvertible bucket is excluded and counted
+# ---------------------------------------------------------------------------
+
+
+class TestUnconvertibleBucketExcluded:
+    """When fx.convert returns None for a bucket (on_missing='none'), that bucket
+    must be excluded from the base total and unconvertible_count must be 1."""
+
+    def test_ngn_bucket_excluded_and_counted(self):
+        """One USD bucket (convertible) + one NGN bucket (unconvertible).
+
+        The NGN bucket must be excluded from earned/owed totals, and
+        unconvertible_count must equal 1.
+        """
+        payee = _make_payee(payout_ccy="USD")
+        line_usd = _make_line(stmt_id="stmt-usd", amount=100.0, ccy="USD", project_id="proj-1", line_id="l-usd")
+        line_ngn = _make_line(stmt_id="stmt-ngn", amount=50000.0, ccy="NGN", project_id="proj-1", line_id="l-ngn")
+
+        db = _build_db(
+            payees=[payee],
+            lines=[line_usd, line_ngn],
+            payouts=[],
+            coverage_by_payee={PAYEE_ID: []},
+        )
+
+        def _fx_with_ngn_none(db, amount, frm, to, **kwargs):
+            on_missing = kwargs.get("on_missing", "amount")
+            if frm.upper() == "NGN" and on_missing == "none":
+                return None
+            # identity for everything else
+            return _identity_fx(db, amount, frm, to)
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_fx_with_ngn_none):
+            summaries = service.payee_summary(db, USER_ID, base="USD")
+
+        assert len(summaries) == 1
+        s = summaries[0]
+
+        # Only the USD bucket (100.0) should be included in the base total
+        assert s["earned"] == pytest.approx(100.0), f"NGN bucket must be excluded from earned; got {s['earned']}"
+        assert s["owed"] == pytest.approx(100.0), f"NGN bucket must be excluded from owed; got {s['owed']}"
+
+        # Exactly one bucket was unconvertible
+        assert s["unconvertible_count"] == 1, f"Expected unconvertible_count=1, got {s['unconvertible_count']}"

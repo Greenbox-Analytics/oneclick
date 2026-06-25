@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
@@ -45,6 +45,12 @@ const OneClickDocuments = () => {
   const navigate = useNavigate();
   const { artistId } = useParams<{ artistId: string }>();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const invalidateRoyalties = () => {
+    ["royalty-payees", "royalty-periods", "royalty-payouts"].forEach((k) =>
+      queryClient.invalidateQueries({ queryKey: [k] }),
+    );
+  };
   const [contractFiles, setContractFiles] = useState<File[]>([]);
   const [royaltyStatementFile, setRoyaltyStatementFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -420,13 +426,17 @@ const OneClickDocuments = () => {
               })
           });
           setSaveSuccess(true);
+          invalidateRoyalties();
       } catch (err) { console.error("Error saving results:", err); toast.error("Failed to save results"); }
       finally { setIsSaving(false); }
   };
 
   useEffect(() => {
       if (!calculationResult || !lastCalculationContext || !user) return;
-      if (calculationResult.is_cached) return;
+      if (calculationResult.is_cached) {
+        invalidateRoyalties();
+        return;
+      }
       const resultKey = `${lastCalculationContext.statementId}-${lastCalculationContext.contractIds.join(',')}`;
       if (autoSaveTriggeredRef.current === resultKey) return;
       autoSaveTriggeredRef.current = resultKey;

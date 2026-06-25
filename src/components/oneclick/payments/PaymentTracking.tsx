@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { Send, Coins, CheckCheck, Hourglass, Users, Calendar, Search, Loader2 } from "lucide-react";
+import { Send, Coins, CheckCheck, Hourglass, Users, Calendar, Search, Loader2, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useRoyaltyPayees, useRoyaltyPeriods, useRoyaltyPayouts, useMarkPayoutPaid } from "@/hooks/useRoyalties";
 import type { PeriodLedger } from "@/hooks/useRoyalties";
+import { useReportingCurrency } from "@/hooks/useReportingCurrency";
 import { CurrencySelect, money } from "./shared";
 import { PartiesTable } from "./PartiesTable";
 import { PeriodsLedger } from "./PeriodsLedger";
@@ -13,6 +14,7 @@ import { NewPayoutModal } from "./NewPayoutModal";
 import { PayoutRuns } from "./PayoutRuns";
 import { PayoutDetailModal } from "./PayoutDetailModal";
 import { PartyDrawer } from "./PartyDrawer";
+import { OverviewDashboard } from "./analytics/OverviewDashboard";
 
 // ---------------------------------------------------------------------------
 // PaymentTracking — orchestrator (Task 14 read-path rewrite)
@@ -23,8 +25,8 @@ import { PartyDrawer } from "./PartyDrawer";
 // ---------------------------------------------------------------------------
 
 export function PaymentTracking() {
-  const [view, setView] = useState("parties");
-  const [baseCur, setBaseCur] = useState("USD");
+  const [view, setView] = useState("overview");
+  const [baseCur, setBaseCur] = useReportingCurrency();
   const [selection, setSelection] = useState<string[]>([]);
   const [query, setQuery] = useState("");
 
@@ -34,7 +36,7 @@ export function PaymentTracking() {
   const markPaid = useMarkPayoutPaid();
 
   // ── Server data ──────────────────────────────────────────────────────────
-  const { data: payees = [], isLoading: payeesLoading } = useRoyaltyPayees(baseCur);
+  const { data: payees = [], isLoading: payeesLoading, isFetching: payeesFetching } = useRoyaltyPayees(baseCur);
   const { data: periods, isLoading: periodsLoading } = useRoyaltyPeriods(baseCur);
   const { data: payouts = [] } = useRoyaltyPayouts();
 
@@ -63,8 +65,11 @@ export function PaymentTracking() {
   const toggleSel = (id: string) =>
     setSelection((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
 
-  const isLoading = payeesLoading;
-  const isEmpty = !isLoading && payees.length === 0;
+  // Only treat as "first load" skeleton when there's truly no prior data.
+  // With keepPreviousData, payeesLoading stays false during a currency switch
+  // (the stale data is still present), so the table never flashes to empty.
+  const isLoading = payeesLoading && payees.length === 0;
+  const isEmpty = !payeesLoading && !isLoading && payees.length === 0;
 
   // Safe ledger fallback while loading
   const safeLedger: PeriodLedger = periods ?? { base: baseCur, rows: [] };
@@ -91,12 +96,18 @@ export function PaymentTracking() {
       <Tabs value={view} onValueChange={setView}>
         <div className="flex flex-wrap items-center gap-3">
           <TabsList>
+            <TabsTrigger value="overview" className="gap-1.5"><LayoutDashboard className="w-4 h-4" /> Overview</TabsTrigger>
             <TabsTrigger value="parties" className="gap-1.5"><Users className="w-4 h-4" /> Parties</TabsTrigger>
             <TabsTrigger value="runs" className="gap-1.5"><Send className="w-4 h-4" /> Payouts</TabsTrigger>
             <TabsTrigger value="periods" className="gap-1.5"><Calendar className="w-4 h-4" /> Periods</TabsTrigger>
           </TabsList>
           <span className="flex-1" />
-          <CurrencySelect value={baseCur} onChange={setBaseCur} />
+          <div className="flex items-center gap-1.5">
+            <CurrencySelect value={baseCur} onChange={setBaseCur} />
+            {payeesFetching && !isLoading && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            )}
+          </div>
           {view === "parties" && (
             <div className="relative max-w-[260px]">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -109,6 +120,11 @@ export function PaymentTracking() {
             </div>
           )}
         </div>
+
+        {/* ── Overview tab ── */}
+        <TabsContent value="overview" className="mt-4">
+          <OverviewDashboard base={baseCur} />
+        </TabsContent>
 
         {/* ── Parties tab ── */}
         <TabsContent value="parties" className="mt-4">

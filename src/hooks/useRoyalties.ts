@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
@@ -97,11 +97,6 @@ export interface PayoutOut {
   orphan_state: string; // "none" | "partial" | "orphaned"
 }
 
-export interface FxRatesResponse {
-  base: string;
-  rates: Record<string, number>;
-}
-
 // ---------------------------------------------------------------------------
 // Request payload interfaces
 // ---------------------------------------------------------------------------
@@ -138,6 +133,7 @@ export function useRoyaltyPayees(base: string) {
       ),
     enabled: !!user?.id,
     staleTime: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -152,6 +148,7 @@ export function useRoyaltyPayee(payeeId: string | null | undefined, base: string
       ),
     enabled: !!user?.id && !!payeeId,
     staleTime: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -166,6 +163,7 @@ export function useRoyaltyPeriods(base: string) {
       ),
     enabled: !!user?.id,
     staleTime: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -177,20 +175,7 @@ export function useRoyaltyPayouts() {
     queryFn: () => apiFetch<PayoutOut[]>(`${API_URL}/oneclick/royalties/payouts`),
     enabled: !!user?.id,
     staleTime: 60_000,
-  });
-}
-
-/** GET /oneclick/royalties/fx?base={lowercased base} */
-export function useRoyaltyFxRates(base: string) {
-  const { user } = useAuth();
-  return useQuery<FxRatesResponse>({
-    queryKey: ["royalty-fx", user?.id, base],
-    queryFn: () =>
-      apiFetch<FxRatesResponse>(
-        `${API_URL}/oneclick/royalties/fx?base=${encodeURIComponent(base.toLowerCase())}`,
-      ),
-    enabled: !!user?.id,
-    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -40,6 +40,7 @@ import {
   fmtDate,
   CURRENCIES,
 } from "./shared";
+import { PayeeTrendChart } from "./analytics/PayeeTrendChart";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -630,6 +631,12 @@ export function PartyDrawer({
                   })}
                 </div>
               )}
+            </div>
+
+            {/* Earned vs Paid trend chart */}
+            <div>
+              <SectionLabel>Earnings trend</SectionLabel>
+              <PayeeTrendChart payeeId={payeeId} base={base} />
             </div>
           </div>
         )}

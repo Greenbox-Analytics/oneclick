@@ -1,4 +1,4 @@
-"""Unit tests for oneclick.royalties.fx — get_rates + convert + _boc_cad_rates.
+"""Unit tests for oneclick.royalties.fx — convert + _boc_cad_rates.
 
 All external dependencies (Supabase client, httpx) are mocked. No real network
 calls or database access are made.
@@ -12,15 +12,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from oneclick.royalties.fx import _boc_cad_rates, convert, get_rates
+from oneclick.royalties import fx as _fxmod
+from oneclick.royalties.fx import _boc_cad_rates, convert
+
+# ---------------------------------------------------------------------------
+# Autouse fixture — clear in-process memo before + after every test so the
+# cache never leaks state between tests.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_fx_memo():
+    _fxmod._clear_rate_memo()
+    yield
+    _fxmod._clear_rate_memo()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_RATES_USD = {"gbp": 0.79, "eur": 0.92, "cad": 1.36}
-_RESOLVED_DATE = "2024-06-15"
-_API_PAYLOAD_USD = {"date": _RESOLVED_DATE, "usd": _RATES_USD}
 
 
 class _ChainBuilder:
@@ -85,222 +95,6 @@ def _mock_client_context(response):
     context_manager.__enter__ = MagicMock(return_value=mock_client)
     context_manager.__exit__ = MagicMock(return_value=False)
     return context_manager, mock_client
-
-
-# ---------------------------------------------------------------------------
-# get_rates — cache hit (dated on)
-# ---------------------------------------------------------------------------
-
-
-class TestGetRatesCacheHit:
-    def test_dated_on_cache_hit_returns_cached_rates_no_http(self):
-        """When on != 'latest' and a cache row exists, return cached rates with
-        no HTTP call made."""
-        cached_rates = {"gbp": 0.80, "eur": 0.93}
-        builder = _ChainBuilder(execute_result=[{"rate_date": "2024-01-01", "rates": cached_rates}])
-        db = _make_db({"fx_rate_snapshots": builder})
-
-        with patch("httpx.Client") as mock_httpx_client:
-            result = get_rates(db, "USD", on="2024-01-01")
-
-        assert result == cached_rates
-        mock_httpx_client.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# get_rates — cache miss → primary fetch
-# ---------------------------------------------------------------------------
-
-
-class TestGetRatesPrimaryFetch:
-    def test_cache_miss_fetches_primary_upserts_and_returns_rates(self):
-        """On a cache miss (empty db result), the primary CDN is fetched,
-        result is upserted with on_conflict='base,rate_date', and rates returned."""
-        # Cache miss — empty result
-        cache_builder = _ChainBuilder(execute_result=[])
-        # Track upsert calls
-        upsert_mock = MagicMock(return_value=cache_builder)
-        cache_builder.upsert = upsert_mock
-
-        db = _make_db({"fx_rate_snapshots": cache_builder})
-
-        resp = _mock_httpx_response(_API_PAYLOAD_USD)
-        ctx, mock_client = _mock_client_context(resp)
-
-        with patch("httpx.Client", return_value=ctx):
-            result = get_rates(db, "USD", on="2024-06-15")
-
-        # Rates returned correctly
-        assert result == _RATES_USD
-
-        # Upsert called with correct payload and on_conflict
-        upsert_mock.assert_called_once_with(
-            {
-                "base": "usd",
-                "rate_date": _RESOLVED_DATE,
-                "rates": _RATES_USD,
-            },
-            on_conflict="base,rate_date",
-        )
-
-    def test_resolved_date_comes_from_response_json_not_on_param(self):
-        """The stored rate_date should be json['date'], not the 'on' parameter."""
-        cache_builder = _ChainBuilder(execute_result=[])
-        upsert_mock = MagicMock(return_value=cache_builder)
-        cache_builder.upsert = upsert_mock
-
-        db = _make_db({"fx_rate_snapshots": cache_builder})
-
-        # The API resolves "latest" → a specific date in the response
-        payload = {"date": "2024-06-20", "usd": {"gbp": 0.79}}
-        resp = _mock_httpx_response(payload)
-        ctx, _ = _mock_client_context(resp)
-
-        with patch("httpx.Client", return_value=ctx):
-            result = get_rates(db, "usd", on="latest")
-
-        assert result == {"gbp": 0.79}
-        # resolved date from json, not "latest"
-        call_kwargs = upsert_mock.call_args
-        assert call_kwargs[0][0]["rate_date"] == "2024-06-20"
-
-    def test_base_normalised_to_lowercase(self):
-        """Uppercase base currency is lowercased before the API call and upsert."""
-        cache_builder = _ChainBuilder(execute_result=[])
-        upsert_mock = MagicMock(return_value=cache_builder)
-        cache_builder.upsert = upsert_mock
-
-        db = _make_db({"fx_rate_snapshots": cache_builder})
-
-        payload = {"date": "2024-06-20", "usd": {"eur": 0.92}}
-        resp = _mock_httpx_response(payload)
-        ctx, mock_client = _mock_client_context(resp)
-
-        with patch("httpx.Client", return_value=ctx):
-            result = get_rates(db, "USD", on="latest")
-
-        assert result == {"eur": 0.92}
-        # URL should contain lowercase base
-        url_called = mock_client.get.call_args[0][0]
-        assert "usd" in url_called
-        assert "USD" not in url_called
-
-
-# ---------------------------------------------------------------------------
-# get_rates — primary fails → fallback
-# ---------------------------------------------------------------------------
-
-
-class TestGetRatesFallback:
-    def test_primary_raises_fallback_url_used(self):
-        """When the primary CDN raises an exception, the fallback URL is tried."""
-        cache_builder = _ChainBuilder(execute_result=[])
-        db = _make_db({"fx_rate_snapshots": cache_builder})
-
-        # Primary raises a connection error
-        primary_ctx = MagicMock()
-        primary_ctx.__enter__ = MagicMock(side_effect=Exception("connection refused"))
-        primary_ctx.__exit__ = MagicMock(return_value=False)
-
-        # Fallback succeeds
-        fallback_payload = {"date": "2024-06-15", "usd": {"gbp": 0.79}}
-        fallback_resp = _mock_httpx_response(fallback_payload)
-        fallback_ctx, fallback_client = _mock_client_context(fallback_resp)
-
-        call_count = 0
-
-        def _side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return primary_ctx
-            return fallback_ctx
-
-        with patch("httpx.Client", side_effect=_side_effect):
-            result = get_rates(db, "USD", on="latest")
-
-        assert result == {"gbp": 0.79}
-        # Fallback URL must contain "currency-api.pages.dev"
-        fallback_url_called = fallback_client.get.call_args[0][0]
-        assert "currency-api.pages.dev" in fallback_url_called
-
-
-# ---------------------------------------------------------------------------
-# get_rates — both raise → stale cache
-# ---------------------------------------------------------------------------
-
-
-class TestGetRatesBothFail:
-    def test_both_raise_returns_newest_cached_snapshot(self):
-        """When both CDN URLs fail, the newest cached snapshot is returned."""
-        stale_rates = {"gbp": 0.78, "eur": 0.91}
-        stale_builder = _ChainBuilder(execute_result=[{"rate_date": "2024-05-01", "rates": stale_rates}])
-        db = _make_db({"fx_rate_snapshots": stale_builder})
-
-        # Both HTTP calls raise
-        def _raise_ctx(*args, **kwargs):
-            ctx = MagicMock()
-            ctx.__enter__ = MagicMock(side_effect=Exception("timeout"))
-            ctx.__exit__ = MagicMock(return_value=False)
-            return ctx
-
-        with patch("httpx.Client", side_effect=_raise_ctx):
-            result = get_rates(db, "USD", on="latest")
-
-        assert result == stale_rates
-
-    def test_both_raise_no_cache_returns_empty_dict(self):
-        """When both URLs fail and there is no cached snapshot, returns {}."""
-        empty_builder = _ChainBuilder(execute_result=[])
-        db = _make_db({"fx_rate_snapshots": empty_builder})
-
-        def _raise_ctx(*args, **kwargs):
-            ctx = MagicMock()
-            ctx.__enter__ = MagicMock(side_effect=Exception("timeout"))
-            ctx.__exit__ = MagicMock(return_value=False)
-            return ctx
-
-        with patch("httpx.Client", side_effect=_raise_ctx):
-            result = get_rates(db, "USD", on="latest")
-
-        assert result == {}
-
-    def test_both_raise_stale_query_uses_desc_order_limit_1(self):
-        """The stale-fallback query orders by rate_date desc, limit 1."""
-        stale_rates = {"gbp": 0.77}
-        stale_builder = _ChainBuilder(execute_result=[{"rate_date": "2024-04-01", "rates": stale_rates}])
-
-        # Spy on order/limit calls
-        order_calls = []
-        limit_calls = []
-
-        def _spy_order(*a, **kw):
-            order_calls.append((a, kw))
-            return stale_builder
-
-        def _spy_limit(*a, **kw):
-            limit_calls.append(a)
-            return stale_builder
-
-        stale_builder.order = _spy_order
-        stale_builder.limit = _spy_limit
-
-        db = _make_db({"fx_rate_snapshots": stale_builder})
-
-        def _raise_ctx(*args, **kwargs):
-            ctx = MagicMock()
-            ctx.__enter__ = MagicMock(side_effect=Exception("timeout"))
-            ctx.__exit__ = MagicMock(return_value=False)
-            return ctx
-
-        with patch("httpx.Client", side_effect=_raise_ctx):
-            result = get_rates(db, "USD", on="latest")
-
-        assert result == stale_rates
-        # Verify ordering
-        assert any("rate_date" in str(c) for c in order_calls)
-        assert any(kw.get("desc") is True for _, kw in order_calls)
-        assert limit_calls and limit_calls[-1][0] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +215,7 @@ class TestBocCadRates:
 
 
 # ---------------------------------------------------------------------------
-# convert — hybrid routing
+# convert — BoC-only routing
 # ---------------------------------------------------------------------------
 
 
@@ -444,67 +238,50 @@ class TestConvert:
         assert result == 50.0
         mock_httpx_client.assert_not_called()
 
-    def test_boc_path_usd_to_gbp_no_fawazahmed0(self):
-        """convert(db, 100, 'USD', 'GBP') uses BoC triangulation; get_rates NOT called."""
+    def test_usd_to_gbp_via_boc_triangulation(self):
+        """convert(db, 100, 'USD', 'GBP') uses BoC triangulation."""
         db = _make_db()
         boc_result = {"usd": 1.37, "gbp": 1.74, "cad": 1.0}
 
-        with (
-            patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result) as mock_boc,
-            patch("oneclick.royalties.fx.get_rates") as mock_fawaz,
-        ):
+        with patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result) as mock_boc:
             result = convert(db, 100.0, "USD", "GBP")
 
         expected = 100.0 * 1.37 / 1.74
         assert result == pytest.approx(expected)
         mock_boc.assert_called_once()
-        mock_fawaz.assert_not_called()
 
-    def test_fallback_for_uncovered_ngn(self):
-        """convert(db, 100, 'USD', 'NGN'): BoC lacks NGN -> falls through to fawazahmed0."""
+    def test_eur_to_gbp_via_boc_triangulation(self):
+        """convert(db, 100, 'EUR', 'GBP') triangulates via CAD."""
         db = _make_db()
-        # BoC only returns USD (no NGN)
-        boc_result = {"usd": 1.37, "cad": 1.0}
+        boc_result = {"eur": 1.45, "gbp": 1.74, "cad": 1.0}
 
-        with (
-            patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result),
-            patch("oneclick.royalties.fx.get_rates", return_value={"ngn": 1500.0}) as mock_fawaz,
-        ):
-            result = convert(db, 100.0, "USD", "NGN")
+        with patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result):
+            result = convert(db, 100.0, "EUR", "GBP")
 
-        assert result == pytest.approx(100.0 * 1500.0)
-        mock_fawaz.assert_called_once()
+        assert result == pytest.approx(100.0 * 1.45 / 1.74)
 
-    def test_all_unavailable_returns_unconverted(self):
-        """When BoC lacks both AND fawazahmed0 returns empty, amount returned unconverted (no raise)."""
-        db = _make_db()
-        # BoC returns only cad (neither usd nor xyz)
-        boc_result = {"cad": 1.0}
-
-        with (
-            patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result),
-            patch("oneclick.royalties.fx.get_rates", return_value={}),
-        ):
-            result = convert(db, 42.0, "USD", "XYZ")
-
-        assert result == pytest.approx(42.0)
-
-    def test_convert_mid_market_no_spread_usd_to_cad_via_boc(self):
+    def test_usd_to_cad_via_boc(self):
         """USD->CAD via BoC: cad[usd]/cad[cad] = rate/1.0 = rate."""
         db = _make_db()
         rate = 1.36
         boc_result = {"usd": rate, "cad": 1.0}
 
-        with (
-            patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result),
-            patch("oneclick.royalties.fx.get_rates") as mock_fawaz,
-        ):
+        with patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result):
             result = convert(db, 200.0, "USD", "CAD")
 
         assert result == pytest.approx(200.0 * rate)
-        mock_fawaz.assert_not_called()
 
-    def test_usd_to_gbp_via_boc_triangulation_math(self):
+    def test_cad_to_usd_via_boc(self):
+        """CAD->USD via BoC: 1.0 / cad[usd]."""
+        db = _make_db()
+        boc_result = {"usd": 1.36, "cad": 1.0}
+
+        with patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result):
+            result = convert(db, 136.0, "CAD", "USD")
+
+        assert result == pytest.approx(136.0 * 1.0 / 1.36)
+
+    def test_usd_to_gbp_triangulation_math(self):
         """Triangulation math: amount * cad_per_usd / cad_per_gbp."""
         db = _make_db()
         boc_result = {"usd": 1.37, "gbp": 1.74, "cad": 1.0}
@@ -514,32 +291,102 @@ class TestConvert:
 
         assert result == pytest.approx(100.0 * 1.37 / 1.74)
 
-    def test_missing_target_currency_returns_amount_unconverted(self):
-        """When neither BoC nor fawazahmed0 has JPY, convert returns unconverted amount."""
+    def test_missing_rate_on_missing_none_returns_none(self):
+        """convert(db, amount, 'NGN', 'USD', on_missing='none') returns None when BoC lacks NGN."""
         db = _make_db()
-        # BoC has USD but not JPY
+        # BoC only has USD, not NGN
         boc_result = {"usd": 1.37, "cad": 1.0}
 
-        with (
-            patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result),
-            patch("oneclick.royalties.fx.get_rates", return_value={"eur": 0.92}),
-        ):
-            result = convert(db, 100.0, "USD", "JPY")
+        with patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result):
+            result = convert(db, 100.0, "NGN", "USD", on_missing="none")
+
+        assert result is None
+
+    def test_missing_rate_default_returns_amount_unconverted(self):
+        """convert(db, amount, 'NGN', 'USD') with default on_missing returns amount unchanged."""
+        db = _make_db()
+        # BoC only has USD, not NGN
+        boc_result = {"usd": 1.37, "cad": 1.0}
+
+        with patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result):
+            result = convert(db, 42.0, "NGN", "USD")
+
+        assert result == pytest.approx(42.0)
+
+    def test_boc_zero_rate_target_on_missing_none_returns_none(self):
+        """If BoC returns a zero rate for target (division guard falsy), on_missing='none' → None."""
+        db = _make_db()
+        # cad[t] == 0 — the guard `cad[t]` is falsy
+        boc_result = {"usd": 1.37, "gbp": 0.0, "cad": 1.0}
+
+        with patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result):
+            result = convert(db, 100.0, "USD", "GBP", on_missing="none")
+
+        assert result is None
+
+    def test_boc_zero_rate_target_default_returns_amount(self):
+        """If BoC returns a zero rate for target, default on_missing returns amount unconverted."""
+        db = _make_db()
+        boc_result = {"usd": 1.37, "gbp": 0.0, "cad": 1.0}
+
+        with patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result):
+            result = convert(db, 100.0, "USD", "GBP")
 
         assert result == pytest.approx(100.0)
 
-    def test_boc_zero_rate_falls_through_to_fawazahmed0(self):
-        """If BoC returns a zero rate for target (division guard), falls through to fawazahmed0."""
-        db = _make_db()
-        # cad[t] == 0 — the guard `cad[t]` is falsy, so we skip BoC path
-        boc_result = {"usd": 1.37, "gbp": 0.0, "cad": 1.0}
 
-        with (
-            patch("oneclick.royalties.fx._boc_cad_rates", return_value=boc_result),
-            patch("oneclick.royalties.fx.get_rates", return_value={"gbp": 0.79}) as mock_fawaz,
-        ):
-            result = convert(db, 100.0, "USD", "GBP")
+# ---------------------------------------------------------------------------
+# Memoisation tests — prove that repeated calls hit network only once
+# ---------------------------------------------------------------------------
 
-        # Falls back to fawazahmed0 rate
-        assert result == pytest.approx(100.0 * 0.79)
-        mock_fawaz.assert_called_once()
+
+class TestBocCadRatesMemo:
+    def test_second_boc_call_reuses_memo_network_called_once(self):
+        """Two _boc_cad_rates calls for the same codes: httpx.Client invoked only once."""
+        boc_payload = {
+            "observations": [{"d": "2026-06-23", "FXUSDCAD": {"v": "1.37"}, "FXGBPCAD": {"v": "1.74"}}],
+            "seriesDetail": {},
+        }
+        cache_builder = _ChainBuilder(execute_result=[])
+        db = _make_db({"fx_rate_snapshots": cache_builder})
+
+        resp = _mock_httpx_response(boc_payload)
+        ctx, _ = _mock_client_context(resp)
+
+        with patch("httpx.Client", return_value=ctx) as mock_httpx_cls:
+            r1 = _boc_cad_rates(db, ["USD"])
+            r2 = _boc_cad_rates(db, ["USD"])
+
+        assert r1["usd"] == pytest.approx(1.37)
+        assert r2["usd"] == pytest.approx(1.37)
+        # Network hit only once; second call served from in-process memo
+        assert mock_httpx_cls.call_count == 1
+
+    def test_memo_serves_superset_of_codes_without_refetch(self):
+        """If memo already has USD + GBP, a second call for just USD reuses memo without fetching."""
+        boc_payload = {
+            "observations": [{"d": "2026-06-23", "FXUSDCAD": {"v": "1.37"}, "FXGBPCAD": {"v": "1.74"}}],
+            "seriesDetail": {},
+        }
+        cache_builder = _ChainBuilder(execute_result=[])
+        db = _make_db({"fx_rate_snapshots": cache_builder})
+
+        resp = _mock_httpx_response(boc_payload)
+        ctx, _ = _mock_client_context(resp)
+
+        with patch("httpx.Client", return_value=ctx) as mock_httpx_cls:
+            # First call: fetches USD + GBP; populates memo
+            r1 = _boc_cad_rates(db, ["USD", "GBP"])
+            # Second call: only asks for USD — should be satisfied from memo
+            r2 = _boc_cad_rates(db, ["USD"])
+
+        assert r1["usd"] == pytest.approx(1.37)
+        assert r1["gbp"] == pytest.approx(1.74)
+        assert r2["usd"] == pytest.approx(1.37)
+        # Only one network call total
+        assert mock_httpx_cls.call_count == 1
+
+    def test_memo_cleared_between_tests_via_autouse(self):
+        """Sanity-check: the autouse fixture clears the memo, so this test starts clean."""
+        # The memo must be empty at the start of every test
+        assert _fxmod._RATE_MEMO == {}

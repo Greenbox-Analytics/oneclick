@@ -46,6 +46,7 @@ from integrations.google_drive.router import router as google_drive_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from integrations.spotify.router import router as spotify_router
+from oneclick.royalties.analytics_router import router as royalties_analytics_router
 from oneclick.royalties.router import router as royalties_router
 from oneclick.royalty_calculator import CalculationError
 from oneclick.share import router as oneclick_share_router
@@ -73,6 +74,9 @@ app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
 app.include_router(royalties_router, prefix="/oneclick/royalties", tags=["OneClick Royalties"])
+app.include_router(
+    royalties_analytics_router, prefix="/oneclick/royalties/analytics", tags=["OneClick Royalties Analytics"]
+)
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
@@ -327,6 +331,31 @@ def _statement_currency(statement_id: str) -> str:
     res = get_supabase_client().table("project_files").select("currency").eq("id", statement_id).execute()
     cur = res.data[0].get("currency") if res.data else None
     return cur or "USD"
+
+
+def _parse_statement_rows(db, statement_id: str):
+    """Best-effort parse of a royalty statement file into StatementRow objects.
+
+    Downloads the statement from storage and runs the deterministic row reader.
+    Returns [] on any failure (missing file, download/parse error) so callers can
+    treat statement rows as optional and never block line sync over them.
+    """
+    try:
+        sf = db.table("project_files").select("file_path, file_name").eq("id", statement_id).execute()
+        if not sf.data:
+            return []
+        file_data = db.storage.from_("project-files").download(sf.data[0]["file_path"])
+        suffix = Path(sf.data[0]["file_name"]).suffix.lower() or ".xlsx"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
+        try:
+            return RoyaltyCalculator(api_key=os.getenv("OPENAI_API_KEY")).read_royalty_statement_rows(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+    except Exception as e:
+        print(f"[royalties] statement parse failed for {statement_id}: {e}")
+        return []
 
 
 def verify_user_owns_audio_file(user_id: str, audio_file_id: str) -> dict | None:
@@ -1964,28 +1993,7 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
         try:
             db = get_supabase_client()
             currency = _statement_currency(request.royalty_statement_id)
-            rows = []
-            try:
-                sf = (
-                    db.table("project_files")
-                    .select("file_path, file_name")
-                    .eq("id", request.royalty_statement_id)
-                    .execute()
-                )
-                if sf.data:
-                    file_data = db.storage.from_("project-files").download(sf.data[0]["file_path"])
-                    suffix = Path(sf.data[0]["file_name"]).suffix.lower() or ".xlsx"
-                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                        tmp.write(file_data)
-                        tmp_path = tmp.name
-                    try:
-                        rows = RoyaltyCalculator(api_key=os.getenv("OPENAI_API_KEY")).read_royalty_statement_rows(
-                            tmp_path
-                        )
-                    finally:
-                        os.unlink(tmp_path)
-            except Exception as e:
-                print(f"[royalties] statement parse failed for calc {calculation_id}: {e}")
+            rows = _parse_statement_rows(db, request.royalty_statement_id)
             sync_calc_royalties(
                 db,
                 user_id,
@@ -2150,10 +2158,22 @@ async def oneclick_calculate_royalties_stream(
                                     },
                                 )
 
-                                # Cache-hit: sync royalty_lines (period derived from persisted
-                                # statement rows if present; line sync always runs regardless).
+                                # Cache-hit: sync royalty_lines. Self-heal statement rows — if this
+                                # cached calc has none persisted yet (e.g. it was first run before
+                                # royalty_statement_rows existed), parse + backfill them so periods/
+                                # totals become real; otherwise skip the re-parse (cheap).
                                 try:
                                     _db = get_supabase_client()
+                                    _existing_rows = (
+                                        _db.table("royalty_statement_rows")
+                                        .select("id", count="exact")
+                                        .eq("calculation_id", calc["id"])
+                                        .limit(1)
+                                        .execute()
+                                    )
+                                    _rows_for_sync = None
+                                    if not (getattr(_existing_rows, "count", 0) or 0):
+                                        _rows_for_sync = _parse_statement_rows(_db, royalty_statement_file_id)
                                     sync_calc_royalties(
                                         _db,
                                         user_id,
@@ -2162,7 +2182,7 @@ async def oneclick_calculate_royalties_stream(
                                         project_id,
                                         calc["results"],
                                         _statement_currency(royalty_statement_file_id),
-                                        statement_rows=None,
+                                        statement_rows=_rows_for_sync,
                                     )
                                 except Exception as e:
                                     print(f"[royalties] cache-hit sync failed for calc {calc['id']}: {e}")

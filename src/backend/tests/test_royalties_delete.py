@@ -6,8 +6,8 @@ All tests mock the Supabase client. No real DB or network calls.
 Key invariants verified:
   1. Coverage rows are deleted by project_id.
   2. Calculations are deleted by their ids (not by project_id directly).
-  3. royalty_lines and royalty_statement_rows are NOT deleted explicitly
-     (DB cascade handles them).
+  3. royalty_lines ARE deleted explicitly by project_id (they outlive their calc
+     under ON DELETE SET NULL); royalty_statement_rows is left as-is.
   4. When there are no calcs, the calc-delete call is skipped.
   5. Returns {"deleted_calculations": N, "project_id": ...}.
   6. Router returns 403 when caller does not own the project.
@@ -154,19 +154,21 @@ class TestDeleteProjectRoyaltyEntries:
         cov_deletes = [entry for entry in db.deleted_tables if entry[0] == "royalty_payout_coverage"]
         assert len(cov_deletes) == 1
 
-    def test_does_not_delete_royalty_lines_explicitly(self):
-        """royalty_lines must NOT be explicitly deleted — cascade handles it."""
+    def test_deletes_royalty_lines_by_project(self):
+        """royalty_lines ARE deleted explicitly by project_id — under ON DELETE SET NULL
+        they outlive their calc, so the calc deletion would not remove them."""
         db = MockDB(calc_rows=[_make_calc(CALC_ID_1)])
         service.delete_project_royalty_entries(db, USER_ID, PROJECT_ID)
         line_deletes = [entry for entry in db.deleted_tables if entry[0] == "royalty_lines"]
-        assert line_deletes == [], "royalty_lines must not be deleted explicitly (DB cascade)"
+        assert line_deletes, "royalty_lines must be deleted explicitly by project_id"
 
     def test_does_not_delete_royalty_statement_rows_explicitly(self):
-        """royalty_statement_rows must NOT be explicitly deleted — cascade handles it."""
+        """royalty_statement_rows is not deleted here (it carries no project_id; any
+        orphaned breakdown rows are harmless and don't affect earned/owed)."""
         db = MockDB(calc_rows=[_make_calc(CALC_ID_1)])
         service.delete_project_royalty_entries(db, USER_ID, PROJECT_ID)
         stmt_row_deletes = [entry for entry in db.deleted_tables if entry[0] == "royalty_statement_rows"]
-        assert stmt_row_deletes == [], "royalty_statement_rows must not be deleted explicitly (DB cascade)"
+        assert stmt_row_deletes == [], "royalty_statement_rows is not deleted by this function"
 
     def test_does_not_delete_royalty_payouts(self):
         """royalty_payouts must NOT be deleted — orphan state is derived at read time."""

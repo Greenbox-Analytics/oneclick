@@ -24,8 +24,6 @@ export const CURRENCIES: Record<string, CurrencyMeta> = {
   EUR: { code: "EUR", symbol: "€",   name: "Euro",              flag: "🇪🇺" },
   CAD: { code: "CAD", symbol: "C$",  name: "Canadian Dollar",   flag: "🇨🇦" },
   AUD: { code: "AUD", symbol: "A$",  name: "Australian Dollar", flag: "🇦🇺" },
-  NGN: { code: "NGN", symbol: "₦",   name: "Nigerian Naira",    flag: "🇳🇬" },
-  AED: { code: "AED", symbol: "Dh",  name: "UAE Dirham",        flag: "🇦🇪" },
 };
 
 // ---------------------------------------------------------------------------
@@ -35,8 +33,7 @@ export const CURRENCIES: Record<string, CurrencyMeta> = {
 export function fmtMoney(amount: number, cur: string, opts?: { dp?: number }): string {
   const c = CURRENCIES[cur];
   const symbol = c?.symbol ?? cur + " ";
-  // NGN (large denominations) defaults to 0 dp; others to 2
-  const defaultDp = cur === "NGN" ? 0 : 2;
+  const defaultDp = 2;
   const dp = opts?.dp != null ? opts.dp : defaultDp;
   const n = Math.abs(amount).toLocaleString("en-US", {
     minimumFractionDigits: dp,

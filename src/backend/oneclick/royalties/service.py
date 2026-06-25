@@ -1,7 +1,7 @@
 """Aggregation service for OneClick royalties: payee summaries, detail, and period ledger.
 
 Money-safety invariant:
-  owed is computed **per (payee, royalty_statement_id) bucket in statement currency**,
+  owed is computed **per (payee, royalty_statement_id, project_id) bucket in statement currency**,
   clamped to ≥ 0, and THEN converted to the reporting base and summed.
   Cross-bucket, cross-currency subtraction is never performed.
 
@@ -123,27 +123,30 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
     # Index payouts by id and by status
     payout_by_id: dict[str, dict] = {p["id"]: p for p in payouts}
 
-    # Build (payee, statement) → {paid, drafted} coverage sums
+    # Build (payee, statement, project) → {paid, drafted} coverage sums
     # coverage rows are for THIS payee already (loaded by payee_id)
-    cov_paid: dict[str, float] = defaultdict(float)
-    cov_drafted: dict[str, float] = defaultdict(float)
+    # Key: (royalty_statement_id, project_id) — matches the bucket granularity.
+    cov_paid: dict[tuple, float] = defaultdict(float)
+    cov_drafted: dict[tuple, float] = defaultdict(float)
     for cov in coverage:
         stmt_id = cov.get("royalty_statement_id")
+        proj_id = cov.get("project_id", "")
         payout_id = cov.get("payout_id")
         payout = payout_by_id.get(payout_id, {})
         status = payout.get("status")
         amt = float(cov.get("covered_amount") or 0)
         if status == "paid":
-            cov_paid[stmt_id] += amt
+            cov_paid[(stmt_id, proj_id)] += amt
         elif status == "draft":
-            cov_drafted[stmt_id] += amt
+            cov_drafted[(stmt_id, proj_id)] += amt
 
-    # Group lines by royalty_statement_id (bucket)
-    buckets: dict[str, list[dict]] = defaultdict(list)
+    # Group lines by (royalty_statement_id, project_id) bucket
+    buckets: dict[tuple, list[dict]] = defaultdict(list)
     for line in lines:
         if line.get("payee_id") == payee_id:
             stmt_id = line.get("royalty_statement_id", "")
-            buckets[stmt_id].append(line)
+            proj_id = line.get("project_id", "")
+            buckets[(stmt_id, proj_id)].append(line)
 
     # Reporting-currency accumulators
     earned_r = paid_r = drafted_r = owed_r = 0.0
@@ -153,28 +156,38 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
     # Collect project ids
     project_ids: set[str] = set()
 
-    for stmt_id, bucket_lines in buckets.items():
+    # Count buckets whose statement currency is not convertible to the reporting base
+    unconvertible_count = 0
+
+    for (stmt_id, proj_id), bucket_lines in buckets.items():
         ccy = (bucket_lines[0].get("statement_currency") or base).upper()
         earned_b = sum(float(bl.get("amount_owed") or 0) for bl in bucket_lines)
-        paid_b = cov_paid.get(stmt_id, 0.0)
-        drafted_b = cov_drafted.get(stmt_id, 0.0)
+        paid_b = cov_paid.get((stmt_id, proj_id), 0.0)
+        drafted_b = cov_drafted.get((stmt_id, proj_id), 0.0)
         owed_b = max(0.0, earned_b - paid_b - drafted_b)
 
-        # Convert each component → reporting base
-        earned_r += fx.convert(db, earned_b, ccy, base)
-        paid_r += fx.convert(db, paid_b, ccy, base)
-        drafted_r += fx.convert(db, drafted_b, ccy, base)
-        owed_r += fx.convert(db, owed_b, ccy, base)
+        # Convert each component → reporting base (on_missing="none" → skip unconvertible buckets)
+        earned_conv = fx.convert(db, earned_b, ccy, base, on_missing="none")
+        if earned_conv is None:
+            unconvertible_count += 1
+            continue
+        paid_conv = fx.convert(db, paid_b, ccy, base, on_missing="none")
+        drafted_conv = fx.convert(db, drafted_b, ccy, base, on_missing="none")
+        owed_conv = fx.convert(db, owed_b, ccy, base, on_missing="none")
 
-        # Convert each component → payout_currency (native)
+        earned_r += earned_conv
+        paid_r += paid_conv if paid_conv is not None else 0.0
+        drafted_r += drafted_conv if drafted_conv is not None else 0.0
+        owed_r += owed_conv if owed_conv is not None else 0.0
+
+        # Convert each component → payout_currency (native) — use default "amount" fallback
         earned_n += fx.convert(db, earned_b, ccy, payout_ccy)
         paid_n += fx.convert(db, paid_b, ccy, payout_ccy)
         drafted_n += fx.convert(db, drafted_b, ccy, payout_ccy)
         owed_n += fx.convert(db, owed_b, ccy, payout_ccy)
 
-        for bl in bucket_lines:
-            if bl.get("project_id"):
-                project_ids.add(bl["project_id"])
+        if proj_id:
+            project_ids.add(proj_id)
 
     return {
         "earned": earned_r,
@@ -186,6 +199,7 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
         "drafted_native": drafted_n,
         "owed_native": owed_n,
         "project_ids": project_ids,
+        "unconvertible_count": unconvertible_count,
     }
 
 
@@ -238,6 +252,7 @@ def payee_summary(db, user_id: str, base: str = "USD") -> list[dict]:
                 paid_native=totals["paid_native"],
                 drafted_native=totals["drafted_native"],
                 owed_native=totals["owed_native"],
+                unconvertible_count=totals["unconvertible_count"],
             ).model_dump()
         )
 
@@ -289,6 +304,7 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
         paid_native=totals["paid_native"],
         drafted_native=totals["drafted_native"],
         owed_native=totals["owed_native"],
+        unconvertible_count=totals["unconvertible_count"],
     )
 
     # Build projects → statements → lines tree
@@ -296,19 +312,22 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
     payee_lines = [l for l in all_lines if l.get("payee_id") == payee_id]
 
     # Index payouts for coverage lookup
+    # Key: (royalty_statement_id, project_id) — matches bucket granularity so that
+    # a statement spanning multiple projects does not blur coverage across them.
     payout_by_id: dict[str, dict] = {p["id"]: p for p in all_payouts}
-    cov_paid_stmt: dict[str, float] = defaultdict(float)
-    cov_drafted_stmt: dict[str, float] = defaultdict(float)
+    cov_paid_stmt: dict[tuple, float] = defaultdict(float)
+    cov_drafted_stmt: dict[tuple, float] = defaultdict(float)
     for cov in coverage:
         stmt_id = cov.get("royalty_statement_id")
+        proj_id = cov.get("project_id", "")
         payout_id = cov.get("payout_id")
         payout = payout_by_id.get(payout_id, {})
         st = payout.get("status")
         amt = float(cov.get("covered_amount") or 0)
         if st == "paid":
-            cov_paid_stmt[stmt_id] += amt
+            cov_paid_stmt[(stmt_id, proj_id)] += amt
         elif st == "draft":
-            cov_drafted_stmt[stmt_id] += amt
+            cov_drafted_stmt[(stmt_id, proj_id)] += amt
 
     # Project names
     proj_res = db.table("projects").select("id, name").execute()
@@ -331,8 +350,8 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
             calc_id = slines[0].get("calculation_id")
 
             earned_b = sum(float(sl.get("amount_owed") or 0) for sl in slines)
-            paid_b = cov_paid_stmt.get(sid, 0.0)
-            drafted_b = cov_drafted_stmt.get(sid, 0.0)
+            paid_b = cov_paid_stmt.get((sid, pid), 0.0)
+            drafted_b = cov_drafted_stmt.get((sid, pid), 0.0)
             owed_b = max(0.0, earned_b - paid_b - drafted_b)
 
             if owed_b > 0:
@@ -419,34 +438,39 @@ def periods_ledger(db, user_id: str, base: str = "USD") -> dict:
             continue
 
         # Index payouts
+        # Key: (royalty_statement_id, project_id) — matches the bucket granularity so that
+        # a statement spanning multiple projects does not blur coverage (and thus state)
+        # across them.
         payout_by_id: dict[str, dict] = {p["id"]: p for p in all_payouts}
-        cov_paid: dict[str, float] = defaultdict(float)
-        cov_drafted: dict[str, float] = defaultdict(float)
+        cov_paid: dict[tuple, float] = defaultdict(float)
+        cov_drafted: dict[tuple, float] = defaultdict(float)
         for cov in coverage:
             stmt_id = cov.get("royalty_statement_id")
+            proj_id = cov.get("project_id", "")
             payout_id = cov.get("payout_id")
             payout = payout_by_id.get(payout_id, {})
             st = payout.get("status")
             amt = float(cov.get("covered_amount") or 0)
             if st == "paid":
-                cov_paid[stmt_id] += amt
+                cov_paid[(stmt_id, proj_id)] += amt
             elif st == "draft":
-                cov_drafted[stmt_id] += amt
+                cov_drafted[(stmt_id, proj_id)] += amt
 
-        # Group by statement
-        stmt_lines: dict[str, list[dict]] = defaultdict(list)
+        # Group by (statement, project) bucket
+        stmt_lines: dict[tuple, list[dict]] = defaultdict(list)
         for line in payee_lines:
             stmt_id = line.get("royalty_statement_id", "")
-            stmt_lines[stmt_id].append(line)
+            proj_id = line.get("project_id", "")
+            stmt_lines[(stmt_id, proj_id)].append(line)
 
         cells: list[PeriodCell] = []
         row_total = 0.0
 
-        for stmt_id, slines in stmt_lines.items():
+        for (stmt_id, proj_id), slines in stmt_lines.items():
             ccy = (slines[0].get("statement_currency") or base).upper()
             earned_b = sum(float(sl.get("amount_owed") or 0) for sl in slines)
-            paid_b = cov_paid.get(stmt_id, 0.0)
-            drafted_b = cov_drafted.get(stmt_id, 0.0)
+            paid_b = cov_paid.get((stmt_id, proj_id), 0.0)
+            drafted_b = cov_drafted.get((stmt_id, proj_id), 0.0)
             owed_b = max(0.0, earned_b - paid_b - drafted_b)
 
             if owed_b > 0:
@@ -495,7 +519,7 @@ def payee_owed_buckets(db, user_id: str, payee_id: str) -> list[dict]:
       lines (the bucket's royalty_lines rows).
 
     Coverage is loaded from royalty_payout_coverage for this payee, indexed
-    by statement to compute the per-bucket clamp identical to _aggregate_payee_buckets.
+    by (statement, project) to compute the per-bucket clamp identical to _aggregate_payee_buckets.
     """
     # Load payee lines for this payee only
     lines_res = db.table("royalty_lines").select("*").eq("user_id", user_id).eq("payee_id", payee_id).execute()
@@ -510,38 +534,42 @@ def payee_owed_buckets(db, user_id: str, payee_id: str) -> list[dict]:
     # Load coverage for this payee
     coverage = _load_coverage_for_payee(db, payee_id)
 
-    # Build per-statement coverage sums (paid + drafted = "spoken for")
-    cov_paid: dict[str, float] = defaultdict(float)
-    cov_drafted: dict[str, float] = defaultdict(float)
+    # Build per-(statement, project) coverage sums (paid + drafted = "spoken for")
+    # Key: (royalty_statement_id, project_id) — matches the bucket granularity so that
+    # a statement spanning multiple projects does not blur coverage across them.
+    cov_paid: dict[tuple, float] = defaultdict(float)
+    cov_drafted: dict[tuple, float] = defaultdict(float)
     for cov in coverage:
         stmt_id = cov.get("royalty_statement_id")
+        proj_id = cov.get("project_id", "")
         payout_id = cov.get("payout_id")
         payout = payout_by_id.get(payout_id, {})
         status = payout.get("status")
         amt = float(cov.get("covered_amount") or 0)
         if status == "paid":
-            cov_paid[stmt_id] += amt
+            cov_paid[(stmt_id, proj_id)] += amt
         elif status == "draft":
-            cov_drafted[stmt_id] += amt
+            cov_drafted[(stmt_id, proj_id)] += amt
 
-    # Group lines by statement bucket
-    buckets: dict[str, list[dict]] = defaultdict(list)
+    # Group lines by (statement, project) bucket
+    buckets: dict[tuple, list[dict]] = defaultdict(list)
     for line in all_lines:
         stmt_id = line.get("royalty_statement_id", "")
-        buckets[stmt_id].append(line)
+        proj_id = line.get("project_id", "")
+        buckets[(stmt_id, proj_id)].append(line)
 
     result = []
-    for stmt_id, bucket_lines in buckets.items():
+    for (stmt_id, proj_id), bucket_lines in buckets.items():
         ccy = (bucket_lines[0].get("statement_currency") or "USD").upper()
         earned_b = sum(float(bl.get("amount_owed") or 0) for bl in bucket_lines)
-        paid_b = cov_paid.get(stmt_id, 0.0)
-        drafted_b = cov_drafted.get(stmt_id, 0.0)
+        paid_b = cov_paid.get((stmt_id, proj_id), 0.0)
+        drafted_b = cov_drafted.get((stmt_id, proj_id), 0.0)
         owed_b = max(0.0, earned_b - paid_b - drafted_b)
 
         if owed_b <= 0:
             continue
 
-        project_id = bucket_lines[0].get("project_id", "")
+        project_id = proj_id
         calc_id = bucket_lines[0].get("calculation_id")
 
         result.append(
@@ -912,13 +940,14 @@ def split_payee(db, user_id: str, payee_id: str, line_ids: list[str], new_displa
 
 
 def delete_project_royalty_entries(db, user_id: str, project_id: str) -> dict:
-    """Delete all royalty_calculations for a project (and their payout coverage).
+    """Delete a project's royalty entries: its royalty_calculations, royalty_lines,
+    and payout coverage.
 
-    Cascade notes:
-      - royalty_lines and royalty_statement_rows are removed by DB FK ON DELETE CASCADE
-        when royalty_calculations rows are deleted. Do NOT delete them explicitly.
-      - royalty_payouts and royalty_invoices are intentionally NOT deleted; their
-        orphan_state is derived at read time.
+    Note: royalty_lines.calculation_id is ON DELETE SET NULL (so the ledger survives
+    the deploy cache-wipe), which means lines are NOT swept by the calc deletion —
+    we delete them explicitly by project_id. This also clears any post-cache-wipe
+    lines whose calculation_id is null. royalty_payouts are intentionally kept; their
+    orphan_state is derived at read time.
 
     Returns {"deleted_calculations": N, "project_id": project_id}.
     """
@@ -931,7 +960,12 @@ def delete_project_royalty_entries(db, user_id: str, project_id: str) -> dict:
     # Delete the project's payout coverage
     db.table("royalty_payout_coverage").delete().eq("project_id", project_id).execute()
 
-    # Delete the calculations (lines + statement_rows cascade via FK)
+    # Delete the project's royalty lines directly — under ON DELETE SET NULL they
+    # outlive their calc, so the calc deletion would not remove them (and this also
+    # sweeps null-calc lines left behind by a cache wipe).
+    db.table("royalty_lines").delete().eq("project_id", project_id).eq("user_id", user_id).execute()
+
+    # Delete the calculations (the cache rows)
     if calc_ids:
         db.table("royalty_calculations").delete().in_("id", calc_ids).execute()
 

@@ -23,7 +23,7 @@ interface ArtistFile {
   project_id: string;
 }
 
-const STATEMENT_CURRENCIES = ["USD", "GBP", "EUR", "CAD", "AUD", "NGN", "AED"] as const;
+const STATEMENT_CURRENCIES = ["USD", "GBP", "EUR", "CAD", "AUD"] as const;
 
 interface RoyaltyStatementSelectorProps {
   royaltyStatementTabValue: string;

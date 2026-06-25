@@ -25,7 +25,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_id
-from oneclick.royalties import fx, service
+from oneclick.royalties import service
 from oneclick.royalties.models import CreatePayoutRequest, PatchPayeeRequest, SplitPayeeRequest
 from subscriptions.enforcement import gated_feature
 from subscriptions.models import Action
@@ -198,15 +198,3 @@ def get_payout(
         return service.get_payout(_get_supabase(), user_id, payout_id)
     except PermissionError:
         raise HTTPException(status_code=404, detail="Payout not found")
-
-
-# ---------------------------------------------------------------------------
-# FX reference data
-# ---------------------------------------------------------------------------
-
-
-@router.get("/fx")
-async def get_fx(base: str = "usd", user_id: str = Depends(get_current_user_id)):
-    """Return latest FX rates for the given base currency (public reference data)."""
-    rates = fx.get_rates(_get_supabase(), base)
-    return {"base": base.lower(), "rates": rates}
