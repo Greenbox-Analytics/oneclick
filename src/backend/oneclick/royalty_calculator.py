@@ -17,6 +17,7 @@ import difflib
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -27,7 +28,12 @@ from dotenv import load_dotenv
 from knowledge.reference_search import search_reference
 from utils.contract_parsing.basis_detection import audit_contract_basis, log_basis_finding
 from utils.contract_parsing.models import ContractData
-from utils.contract_parsing.parser import STREAMING_EQUIVALENT_TERMS, MusicContractParser
+from utils.contract_parsing.parser import (
+    NON_STREAMING_PAYOR_CONTEXT_PHRASES,
+    NON_STREAMING_PAYOR_TERMS,
+    STREAMING_EQUIVALENT_TERMS,
+    MusicContractParser,
+)
 from utils.llm.client import get_openai_client
 from utils.text.normalize import find_matching_song, normalize_name, normalize_title, simplify_role
 
@@ -45,9 +51,59 @@ def is_streaming_equivalent_royalty_type(royalty_type: str) -> bool:
         return False
     normalized = royalty_type.lower()
     # Lowercase each term too — STREAMING_EQUIVALENT_TERMS contains mixed-case
-    # entries like "DPD" and "SoundExchange royalties" that would otherwise
-    # never match a lowercased input.
+    # entries like "DPD" that would otherwise never match a lowercased input.
     return any(term.lower() in normalized for term in STREAMING_EQUIVALENT_TERMS)
+
+
+# Build payor-context regexes by substituting each payor name (word-boundary
+# anchored, alternation-grouped) into each phrase template. Word boundaries
+# prevent short-acronym false positives (e.g. "BMI" inside "BMG"). Phrase
+# templates require a payment-direction context so bare mentions like
+# "applies to Direct Monies such as SoundExchange" do not trip the denylist.
+# Built once at import.
+_PAYOR_ALTERNATION = "|".join(re.escape(term) for term in NON_STREAMING_PAYOR_TERMS)
+_PAYOR_GROUP = rf"\b(?:{_PAYOR_ALTERNATION})\b"
+_NON_STREAMING_PAYOR_PATTERNS = [
+    re.compile(phrase.format(payor=_PAYOR_GROUP), re.IGNORECASE) for phrase in NON_STREAMING_PAYOR_CONTEXT_PHRASES
+]
+
+
+def is_streaming_earnable_share(share) -> bool:
+    """A share is streaming-earnable iff its royalty_type matches the
+    streaming-equivalent allowlist AND its terms do not reference a
+    direct-pay collector (SoundExchange, PROs, MLC, etc.) in a payment-
+    direction context (e.g. "payable by X", "via X", "X Letter of Direction").
+
+    Bare mentions of a payor name without payment-direction context are NOT
+    enough to exclude a share — that avoids false positives on phrasings
+    like "applies to Direct Monies (e.g., SoundExchange)" where the payor
+    is named as an income-source example, not the payor of the share.
+    """
+    if not is_streaming_equivalent_royalty_type(share.royalty_type):
+        return False
+    haystack = f"{share.royalty_type or ''} {share.terms or ''}"
+    return not any(p.search(haystack) for p in _NON_STREAMING_PAYOR_PATTERNS)
+
+
+class CalculationError(ValueError):
+    """Raised when a royalty calculation cannot produce results. Carries a
+    machine-readable code, a user-facing message, an actionable suggestion,
+    and optional structured details for the frontend to render.
+
+    Subclasses ValueError so existing broad catchers and pytest.raises(ValueError)
+    assertions continue to work.
+    """
+
+    def __init__(self, code: str, message: str, suggestion: str, details: dict | None = None):
+        self.code = code
+        self.user_message = message
+        self.suggestion = suggestion
+        self.details = details or {}
+        super().__init__(f"[{code}] {message}")
+
+
+# Statement-songs preview cap for NO_SONG_MATCHES details payload.
+_STATEMENT_SONGS_PREVIEW_CAP = 20
 
 
 @dataclass
@@ -62,6 +118,100 @@ class RoyaltyPayment:
     total_royalty: float
     amount_to_pay: float
     terms: str | None = None
+
+
+@dataclass
+class StatementRow:
+    """A single line item from a royalty statement, preserving the dimensional
+    fields (vendor, country, delivery format, sale date) that the song-level
+    aggregator discards. Powers the OneClick Earnings Breakdown tab.
+
+    `sale_date` is normalized to an ISO `YYYY-MM-DD` string, or None if the
+    statement's date couldn't be parsed.
+    """
+
+    song_title: str
+    net_payable: float
+    vendor: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+    delivery_type: str | None = None
+    delivery_format: str | None = None
+    sale_date: str | None = None
+    units_sold: float | None = None
+    net_units: float | None = None
+    sales: float | None = None
+    net_income: float | None = None
+    distribution: float | None = None
+    isrc: str | None = None
+    upc: str | None = None
+    currency: str = "USD"
+
+
+# Normalized statement header -> StatementRow field. Headers are lowercased and
+# stripped before lookup; the first matching alias for a field wins.
+_STATEMENT_DIMENSION_ALIASES: dict[str, list[str]] = {
+    "vendor": ["vendor"],
+    "country": ["country of sale", "country"],
+    "country_code": ["country code"],
+    "delivery_type": ["delivery type"],
+    "delivery_format": ["delivery format"],
+    "sale_date": ["sale date"],
+    "units_sold": ["units sold"],
+    "net_units": ["net units"],
+    "sales": ["sales"],
+    "net_income": ["net income"],
+    "distribution": ["distribution"],
+    "isrc": ["isrc"],
+    "upc": ["upc"],
+    "currency": ["currency"],
+}
+
+# Numeric StatementRow fields parsed best-effort (commas stripped; junk -> None).
+_STATEMENT_NUMERIC_FIELDS = {
+    "units_sold",
+    "net_units",
+    "sales",
+    "net_income",
+    "distribution",
+}
+
+
+def _coerce_iso_date(raw) -> str | None:
+    """Normalize a statement date cell to ISO `YYYY-MM-DD`, or None if unparseable.
+
+    Accepts `M/D/YYYY` (distributor reports) and `YYYY-MM-DD`. A datetime/date
+    value (openpyxl may hand one back) is formatted directly.
+    """
+    if raw is None or raw == "":
+        return None
+    # openpyxl with data_only may return a datetime/date directly.
+    if hasattr(raw, "strftime"):
+        try:
+            return raw.strftime("%Y-%m-%d")
+        except (ValueError, AttributeError):
+            return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    from datetime import datetime
+
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%m/%d/%y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def _coerce_number(raw) -> float | None:
+    """Best-effort float coercion; strips thousands separators. None on failure."""
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(str(raw).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
 
 
 class RoyaltyCalculator:
@@ -123,10 +273,106 @@ class RoyaltyCalculator:
             elif file_ext in [".xlsx", ".xls"]:
                 return self._read_excel_statement(excel_path, title_column, payable_column)
             else:
-                raise ValueError(f"Unsupported file format: {file_ext}. Please use CSV or Excel files.")
+                raise CalculationError(
+                    code="STATEMENT_UNSUPPORTED_FORMAT",
+                    message=f"We can't read {file_ext} files for royalty statements.",
+                    suggestion="Upload the statement as a CSV or Excel (.xlsx / .xls) file.",
+                )
 
+        except CalculationError:
+            # Pass structured errors through unchanged so the endpoint can route
+            # them to the user with their reason code intact.
+            raise
         except Exception as e:
             raise Exception(f"Error reading royalty statement: {str(e)}")
+
+    def read_royalty_statement_rows(self, statement_path: str) -> list[StatementRow]:
+        """Read a royalty statement preserving per-line-item dimensions.
+
+        Unlike `read_royalty_statement` (which sums to song-level totals), this
+        returns one `StatementRow` per statement line, carrying vendor, country,
+        delivery format, and sale date — the fields the Earnings Breakdown tab
+        aggregates over. Rows missing a title or net-payable amount are skipped;
+        a bad sale date downgrades to None rather than dropping the row.
+
+        Supports CSV and Excel. Title and payable columns are auto-detected with
+        the same helpers the aggregator uses.
+        """
+        file_ext = Path(statement_path).suffix.lower()
+        if file_ext == ".csv":
+            normalized_rows = self._iter_csv_rows(statement_path)
+        elif file_ext in [".xlsx", ".xls"]:
+            normalized_rows = self._iter_excel_rows(statement_path)
+        else:
+            raise CalculationError(
+                code="STATEMENT_UNSUPPORTED_FORMAT",
+                message=f"We can't read {file_ext} files for royalty statements.",
+                suggestion="Upload the statement as a CSV or Excel (.xlsx / .xls) file.",
+            )
+
+        normalized_rows = list(normalized_rows)
+        if not normalized_rows:
+            return []
+
+        headers = list(normalized_rows[0].keys())
+        title_key = self._find_title_column(headers)
+        payable_key = self._find_payable_column(headers)
+
+        # Resolve each StatementRow field to a concrete header present in the file.
+        field_to_key: dict[str, str] = {}
+        for field, aliases in _STATEMENT_DIMENSION_ALIASES.items():
+            for alias in aliases:
+                if alias in headers:
+                    field_to_key[field] = alias
+                    break
+
+        rows: list[StatementRow] = []
+        for raw in normalized_rows:
+            title_cell = raw.get(title_key)
+            title = str(title_cell).strip() if title_cell not in (None, "") else ""
+            net_payable = _coerce_number(raw.get(payable_key))
+            if not title or net_payable is None:
+                continue
+
+            values: dict = {}
+            for field, key in field_to_key.items():
+                cell = raw.get(key)
+                if field == "sale_date":
+                    values[field] = _coerce_iso_date(cell)
+                elif field in _STATEMENT_NUMERIC_FIELDS:
+                    values[field] = _coerce_number(cell)
+                elif field == "currency":
+                    values[field] = str(cell).strip() if cell not in (None, "") else "USD"
+                else:
+                    values[field] = str(cell).strip() if cell not in (None, "") else None
+
+            rows.append(StatementRow(song_title=title, net_payable=net_payable, **values))
+
+        return rows
+
+    def _iter_csv_rows(self, csv_path: str) -> list[dict]:
+        """Read a CSV into a list of {normalized_header: value} dicts."""
+        with open(csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                return []
+            field_map = {h: h.strip().lower() for h in reader.fieldnames}
+            return [{field_map[h]: row.get(h) for h in reader.fieldnames} for row in reader]
+
+    def _iter_excel_rows(self, excel_path: str) -> list[dict]:
+        """Read an Excel sheet into a list of {normalized_header: value} dicts."""
+        workbook = openpyxl.load_workbook(excel_path, data_only=True)
+        sheet = workbook.active
+        header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
+        if not header_row:
+            workbook.close()
+            return []
+        headers = [str(h).strip().lower() if h is not None else "" for h in header_row]
+        result = []
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            result.append({headers[i]: row[i] for i in range(len(headers)) if headers[i]})
+        workbook.close()
+        return result
 
     def _read_csv_statement(
         self, csv_path: str, title_column: str | None = None, payable_column: str | None = None
@@ -159,10 +405,17 @@ class RoyaltyCalculator:
             payable_col_original = original_headers.get(payable_column)
 
             if not title_col_original or not payable_col_original:
-                raise ValueError(
-                    f"Could not find required columns.\n"
-                    f"Looking for: '{title_column}' and '{payable_column}'\n"
-                    f"Available columns: {list(original_headers.values())}"
+                raise CalculationError(
+                    code="STATEMENT_COLUMNS_UNDETECTABLE",
+                    message="We couldn't find the song-title or net-payable columns in your statement.",
+                    suggestion=(
+                        "Rename your columns to something we recognize — e.g. 'Title' / 'Song' for "
+                        "the title column, and 'Net Payable' / 'Net Royalty' for the amount."
+                    ),
+                    details={
+                        "looking_for": [title_column, payable_column],
+                        "available_columns": list(original_headers.values()),
+                    },
                 )
 
             # Read data and sum by song title
@@ -191,7 +444,14 @@ class RoyaltyCalculator:
             logger.info(f"   ✓ Found {len(song_totals)} unique songs")
 
             if not song_totals:
-                raise ValueError("No valid royalty data found in statement")
+                raise CalculationError(
+                    code="STATEMENT_EMPTY",
+                    message="We couldn't read any earnings from the royalty statement.",
+                    suggestion=(
+                        "Check that you uploaded the right file. The statement should be a CSV "
+                        "or Excel with one row per song earnings entry."
+                    ),
+                )
 
             return song_totals
 
@@ -228,10 +488,17 @@ class RoyaltyCalculator:
             title_idx = headers.index(title_column)
             payable_idx = headers.index(payable_column)
         except ValueError:
-            raise ValueError(
-                f"Could not find required columns.\n"
-                f"Looking for: '{title_column}' and '{payable_column}'\n"
-                f"Available columns: {headers}"
+            raise CalculationError(
+                code="STATEMENT_COLUMNS_UNDETECTABLE",
+                message="We couldn't find the song-title or net-payable columns in your statement.",
+                suggestion=(
+                    "Rename your columns to something we recognize — e.g. 'Title' / 'Song' for "
+                    "the title column, and 'Net Payable' / 'Net Royalty' for the amount."
+                ),
+                details={
+                    "looking_for": [title_column, payable_column],
+                    "available_columns": list(headers),
+                },
             )
 
         # Read data and sum by song title
@@ -258,7 +525,14 @@ class RoyaltyCalculator:
         logger.info(f"   ✓ Found {len(song_totals)} unique songs")
 
         if not song_totals:
-            raise ValueError("No valid royalty data found in statement")
+            raise CalculationError(
+                code="STATEMENT_EMPTY",
+                message="We couldn't read any earnings from the royalty statement.",
+                suggestion=(
+                    "Check that you uploaded the right file. The statement should be a CSV "
+                    "or Excel with one row per song earnings entry."
+                ),
+            )
 
         return song_totals
 
@@ -282,10 +556,14 @@ class RoyaltyCalculator:
                 if var == header_clean or var in header_clean:
                     return header
 
-        raise ValueError(
-            f"Could not auto-detect title column.\n"
-            f"Available columns: {headers}\n"
-            f"Please specify title_column parameter explicitly."
+        raise CalculationError(
+            code="STATEMENT_COLUMNS_UNDETECTABLE",
+            message="We couldn't identify which column in your statement holds the song titles.",
+            suggestion=(
+                "Rename your title column to something we recognize — e.g. 'Title', 'Song', "
+                "'Track Title', or 'Release Title'."
+            ),
+            details={"available_columns": list(headers)},
         )
 
     def _find_payable_column(self, headers: list[str]) -> str:
@@ -409,10 +687,14 @@ class RoyaltyCalculator:
             except Exception as e:
                 logger.warning(f"   ⚠️  Layer 3 (Semantic) error: {e}")
 
-        raise ValueError(
-            f"Could not auto-detect payable column after 3 layers of search.\\n"
-            f"Available columns: {headers}\\n"
-            f"Please specify payable_column parameter explicitly."
+        raise CalculationError(
+            code="STATEMENT_COLUMNS_UNDETECTABLE",
+            message="We couldn't identify which column in your statement holds the net-payable amounts.",
+            suggestion=(
+                "Rename your amount column to something we recognize — e.g. 'Net Payable', "
+                "'Net Royalty', 'Royalty Payable', or 'Net Income'."
+            ),
+            details={"available_columns": list(headers)},
         )
 
     # ========================================================================
@@ -767,13 +1049,35 @@ class RoyaltyCalculator:
 
         # Validate inputs
         if not contract_data.works:
-            raise ValueError("❌ No works found in contract data")
+            raise CalculationError(
+                code="NO_WORKS_IN_CONTRACT",
+                message="We couldn't find any songs in the contract you uploaded.",
+                suggestion=(
+                    "Double-check the contract file. Make sure it's the right document and "
+                    "lists the songs / compositions / masters it covers."
+                ),
+            )
 
         if not contract_data.royalty_shares:
-            raise ValueError("❌ No royalty shares found in contract data")
+            raise CalculationError(
+                code="NO_ROYALTY_SHARES_IN_CONTRACT",
+                message="We couldn't find any royalty splits in the contract.",
+                suggestion=(
+                    "Re-check the contract — look for a Schedule, Exhibit, or table listing "
+                    "percentage splits. If splits aren't expressed as percentages, royalties "
+                    "can't be calculated automatically."
+                ),
+            )
 
         if not song_totals:
-            raise ValueError("❌ No songs found in royalty statement")
+            raise CalculationError(
+                code="STATEMENT_EMPTY",
+                message="We couldn't read any earnings from the royalty statement.",
+                suggestion=(
+                    "Check that you uploaded the right file. The statement should be a CSV "
+                    "or Excel with one row per song earnings entry."
+                ),
+            )
 
         # Debug: log raw royalty_type vs terms to disambiguate streaming-filter misses
         logger.info("   🔎 Royalty shares before streaming filter:")
@@ -781,14 +1085,35 @@ class RoyaltyCalculator:
             logger.info(f"      {i}. royalty_type={share.royalty_type!r}")
             logger.info(f"         terms={share.terms!r}")
 
-        # Filter for streaming royalties (including equivalent master/producer labels)
-        streaming_shares = [
-            share for share in contract_data.royalty_shares if is_streaming_equivalent_royalty_type(share.royalty_type)
-        ]
+        # Filter for streaming-earnable shares: must pass the streaming-equivalent
+        # allowlist AND not reference a direct-pay collector (SoundExchange, PROs,
+        # MLC) whose royalties are paid outside DSP streaming statements.
+        streaming_shares = [share for share in contract_data.royalty_shares if is_streaming_earnable_share(share)]
+
+        excluded_payor_count = sum(
+            1
+            for share in contract_data.royalty_shares
+            if is_streaming_equivalent_royalty_type(share.royalty_type) and not is_streaming_earnable_share(share)
+        )
+        if excluded_payor_count:
+            logger.info(
+                f"   ↪️  Excluded {excluded_payor_count} share(s) tied to direct-pay "
+                f"collectors (SoundExchange / PRO / MLC) — paid outside DSP statements"
+            )
 
         if not streaming_shares:
             logger.warning("   ⚠️  No streaming royalty shares found in contract")
-            return []
+            raise CalculationError(
+                code="NO_STREAMING_EARNABLE_SHARES",
+                message="The contract has royalty shares, but none of them are earned through streaming.",
+                suggestion=(
+                    "OneClick calculates streaming royalties. If the contract covers publishing, "
+                    "mechanical, sync, or SoundExchange royalties, those are paid through different "
+                    "statements — try uploading the matching statement type, or use a contract that "
+                    "covers streaming/master royalties."
+                ),
+                details={"excluded_payor_count": excluded_payor_count},
+            )
 
         logger.info(f"   Found {len(streaming_shares)} streaming royalty shares")
         logger.info(f"   Found {len(contract_data.works)} works to match")
@@ -848,6 +1173,23 @@ class RoyaltyCalculator:
             for title in unmatched_works:
                 logger.warning(f"         - {title}")
             logger.info("\n      💡 Tip: Check for typos or verify these songs are in the statement")
+
+        if matched_count == 0:
+            statement_song_titles = list(song_totals.keys())
+            raise CalculationError(
+                code="NO_SONG_MATCHES",
+                message="The contract covers songs that don't appear in this royalty statement.",
+                suggestion=(
+                    "Make sure the statement is for the same release as the contract. If a song "
+                    "title is spelled differently in each, edit one to match. The list below shows "
+                    "what we found in each."
+                ),
+                details={
+                    "contract_works": [work.title for work in contract_data.works],
+                    "statement_songs": statement_song_titles[:_STATEMENT_SONGS_PREVIEW_CAP],
+                    "statement_song_total_count": len(statement_song_titles),
+                },
+            )
 
         logger.info(f"\n   ✅ Calculated {len(payments)} total payments")
 

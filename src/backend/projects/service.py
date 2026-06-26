@@ -7,6 +7,8 @@ class DuplicateInviteError(Exception):
 
 async def get_members(db: Client, user_id: str, project_id: str):
     """List all members of a project."""
+    if await get_user_role(db, user_id, project_id) is None:
+        raise PermissionError("denied")
     result = db.table("project_members").select("*").eq("project_id", project_id).order("created_at").execute()
     return result.data or []
 
@@ -145,6 +147,8 @@ async def remove_member(db: Client, user_id: str, project_id: str, member_id: st
 
 async def get_pending_invites(db: Client, user_id: str, project_id: str):
     """List pending invites for non-existing users."""
+    if await get_user_role(db, user_id, project_id) is None:
+        raise PermissionError("denied")
     result = (
         db.table("pending_project_invites")
         .select("*")
@@ -173,5 +177,5 @@ async def delete_pending_invite(db: Client, user_id: str, project_id: str, invit
     caller_role = await get_user_role(db, user_id, project_id)
     if caller_role not in ("owner", "admin"):
         raise PermissionError("Only admins can cancel invites")
-    db.table("pending_project_invites").delete().eq("id", invite_id).execute()
+    db.table("pending_project_invites").delete().eq("id", invite_id).eq("project_id", project_id).execute()
     return {"deleted": invite_id}

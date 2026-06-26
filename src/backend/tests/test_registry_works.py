@@ -10,7 +10,7 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect, grant_owner_access
 
 _SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
@@ -117,7 +117,8 @@ def test_get_work_by_id_returns_work(client, mock_supabase):
     builder.execute.return_value = MagicMock(data=SAMPLE_WORK)
     mock_supabase.table.side_effect = lambda name: builder
 
-    response = client.get(f"/registry/works/{WORK_ID}")
+    with grant_owner_access():
+        response = client.get(f"/registry/works/{WORK_ID}")
 
     assert response.status_code == 200
     body = response.json()
@@ -258,7 +259,8 @@ def test_update_work_success(client, mock_supabase):
     mock_supabase.table.side_effect = table_side_effect
 
     payload = {"title": "Updated Title"}
-    response = client.put(f"/registry/works/{WORK_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/works/{WORK_ID}", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -274,7 +276,8 @@ def test_update_work_not_found(client, mock_supabase):
     )
 
     payload = {"title": "Updated Title"}
-    response = client.put(f"/registry/works/{WORK_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/works/{WORK_ID}", json=payload)
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Work not found"
@@ -311,7 +314,8 @@ def test_delete_work_success(client, mock_supabase):
 
     mock_supabase.table.side_effect = table_side_effect
 
-    response = client.delete(f"/registry/works/{WORK_ID}")
+    with grant_owner_access():
+        response = client.delete(f"/registry/works/{WORK_ID}")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
@@ -342,7 +346,8 @@ def test_delete_work_always_returns_ok(client, mock_supabase):
 
     mock_supabase.table.side_effect = table_side_effect
 
-    response = client.delete(f"/registry/works/{WORK_ID}")
+    with grant_owner_access():
+        response = client.delete(f"/registry/works/{WORK_ID}")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}

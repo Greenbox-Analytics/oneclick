@@ -5,11 +5,19 @@ import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 // --- Types ---
 
+export interface CreditedArtist {
+  name: string;
+  role: string; // "Main artist" | "Featured artist" — display-only, from Spotify
+}
+
 export interface Work {
   id: string; user_id: string; artist_id: string; project_id: string;
   title: string; work_type: string; isrc: string | null; iswc: string | null;
-  upc: string | null; release_date: string | null; status: string;
-  notes: string | null; created_at: string; updated_at: string;
+  upc: string | null; release_date: string | null; is_released: boolean;
+  status: string; notes: string | null;
+  genre: string | null; label: string | null;
+  featured_artists: CreditedArtist[] | null;
+  created_at: string; updated_at: string;
 }
 
 export interface OwnershipStake {
@@ -114,7 +122,8 @@ export function useCreateWork() {
     mutationFn: async (body: {
       artist_id: string; project_id: string; title: string; work_type?: string;
       custom_work_type?: string; isrc?: string; iswc?: string; upc?: string;
-      release_date?: string; notes?: string;
+      release_date?: string; is_released?: boolean; notes?: string;
+      genre?: string; label?: string; featured_artists?: CreditedArtist[];
     }) =>
       apiFetch(`${API_URL}/registry/works`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -136,8 +145,12 @@ export function useCreateWork() {
         iswc: body.iswc || null,
         upc: body.upc || null,
         release_date: body.release_date || null,
+        is_released: body.is_released ?? true,
         status: "draft",
         notes: body.notes || null,
+        genre: body.genre || null,
+        label: body.label || null,
+        featured_artists: body.featured_artists || null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -216,13 +229,15 @@ export function useCreateStake() {
     mutationFn: async (body: {
       work_id: string; stake_type: string; holder_name: string; holder_role: string;
       percentage: number; holder_email?: string; holder_ipi?: string;
-      publisher_or_label?: string; notes?: string;
+      publisher_or_label?: string; notes?: string; is_owner_stake?: boolean;
     }) =>
       apiFetch(`${API_URL}/registry/stakes`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-full"] }); toast.success("Ownership stake added"); },
+    // No per-stake success toast: stake mutations are batched (SplitsSidebar/wizard), so the
+    // batching caller shows ONE consolidated toast ("Royalty splits saved").
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-full"] }); },
     onError: (e: Error) => toast.error(e.message),
   });
 }
@@ -236,7 +251,7 @@ export function useUpdateStake() {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-full"] }); toast.success("Ownership stake updated"); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-full"] }); },
     onError: (e: Error) => toast.error(e.message),
   });
 }
@@ -247,7 +262,7 @@ export function useDeleteStake() {
   return useMutation({
     mutationFn: async (stakeId: string) =>
       apiFetch(`${API_URL}/registry/stakes/${stakeId}`, { method: "DELETE" }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-full"] }); toast.success("Ownership stake removed"); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-full"] }); },
     onError: (e: Error) => toast.error(e.message),
   });
 }
@@ -518,5 +533,162 @@ export function useExportProof() {
     },
     onSuccess: () => toast.success("Proof of ownership downloaded"),
     onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+// --- File downloads (access-checked signed URLs) ---
+
+// Fetches a short-lived signed URL on demand so registry file access is gated
+// by the same WorkAccess checks as the rest of the work's data, instead of
+// relying on direct (public) bucket URLs.
+export function useFileDownloadUrl() {
+  return useMutation({
+    mutationFn: async ({ workId, fileId }: { workId: string; fileId: string }) =>
+      apiFetch<{ url: string }>(
+        `${API_URL}/registry/works/${workId}/files/${fileId}/download-url`
+      ),
+  });
+}
+
+// --- Access & visibility grants (permission UI) ---
+
+export interface WorkAccess {
+  work_role: "owner" | "admin" | "viewer" | "none";
+  project_role: "owner" | "admin" | "editor" | "viewer" | "none";
+  can_view: boolean; can_edit: boolean; can_manage: boolean; can_delete: boolean;
+  can_see_full_ownership: boolean; is_project_member: boolean;
+  my_collaborator_id: string | null; all_visible: boolean;
+  visible_stake_ids: string[]; visible_file_ids: string[]; visible_audio_ids: string[];
+  visible_license_ids: string[]; visible_agreement_ids: string[];
+}
+
+export interface GrantItem { resource_type: "project_file" | "audio_file" | "license" | "agreement"; resource_id: string; }
+
+// Shape returned by the grant-matrix endpoint. The matrix collaborator is a
+// slim projection (id, name, email, role, access_level, status) — not the full
+// Collaborator record — so it gets its own interface.
+export interface GrantRow { resource_type: string; resource_id: string | null; }
+export interface GrantMatrixCollaborator {
+  id: string; name: string; email: string; role: string;
+  access_level: string; status: string;
+}
+export interface GrantMatrix {
+  collaborators: GrantMatrixCollaborator[];
+  grants_by_collaborator: Record<string, GrantRow[]>;
+}
+
+export function useWorkAccess(workId: string | undefined) {
+  const { user } = useAuth();
+  return useQuery<WorkAccess | null>({
+    queryKey: ["registry-work-access", user?.id, workId],
+    queryFn: async () => {
+      if (!user?.id || !workId) return null;
+      return apiFetch<WorkAccess>(`${API_URL}/registry/works/${workId}/access`);
+    },
+    enabled: !!user?.id && !!workId,
+  });
+}
+
+export function useWorkGrants(workId: string | undefined) {
+  const { user } = useAuth();
+  return useQuery<GrantMatrix | null>({
+    queryKey: ["registry-work-grants", user?.id, workId],
+    queryFn: async () => {
+      if (!user?.id || !workId) return null;
+      return apiFetch<GrantMatrix>(
+        `${API_URL}/registry/works/${workId}/grants`);
+    },
+    enabled: !!user?.id && !!workId,
+  });
+}
+
+export function useAddGrants() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ collaboratorId, grants, ownershipBreakdown }:
+      { collaboratorId: string; grants?: GrantItem[]; ownershipBreakdown?: boolean }) =>
+      apiFetch(`${API_URL}/registry/collaborators/${collaboratorId}/grants`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ grants: grants || [], ownership_breakdown: ownershipBreakdown }),
+      }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-grants"] }); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export function useRemoveGrants() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ collaboratorId, grants }: { collaboratorId: string; grants: GrantItem[] }) =>
+      apiFetch(`${API_URL}/registry/collaborators/${collaboratorId}/grants`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ grants }),
+      }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-grants"] }); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export function useSetAccessLevel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ collaboratorId, accessLevel }: { collaboratorId: string; accessLevel: "viewer" | "admin" }) =>
+      apiFetch(`${API_URL}/registry/collaborators/${collaboratorId}/access-level`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access_level: accessLevel }),
+      }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-grants"] }); qc.invalidateQueries({ queryKey: ["registry-work-full"] }); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export function useSetWorkRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ collaboratorId, role }: { collaboratorId: string; role: string }) =>
+      apiFetch(`${API_URL}/registry/collaborators/${collaboratorId}/role`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["registry-work-grants"] }); qc.invalidateQueries({ queryKey: ["registry-work-full"] }); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export interface DeriveResult {
+  found: boolean; confidence: "high" | "low";
+  master_pct: number | null; publishing_pct: number | null;
+  terms: Array<{ label: string; value: string }>; matched_file_ids: string[];
+}
+export function useDeriveFromContracts() {
+  return useMutation({
+    mutationFn: async (body: { work_id: string; name: string; email?: string; contract_file_ids?: string[] }) =>
+      apiFetch<DeriveResult>(`${API_URL}/registry/collaborators/derive-from-contracts`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export interface InvitePreview {
+  expired?: boolean;
+  email_mismatch?: boolean;
+  invite_email?: string;
+  work_title?: string;
+  collaborator?: { name: string; role: string; terms: Array<{ label: string; value: string }> };
+  stakes?: Array<{ stake_type: string; percentage: number; holder_role?: string }>;
+  work?: { title?: string; project_id?: string; artist_id?: string } | null;
+}
+
+export function useInvitePreview(token: string | undefined) {
+  const { user } = useAuth();
+  return useQuery<InvitePreview | null>({
+    queryKey: ["registry-invite-preview", user?.id, token],
+    queryFn: async () => {
+      if (!token) return null;
+      return apiFetch<InvitePreview>(`${API_URL}/registry/collaborators/invite/${token}/preview`);
+    },
+    enabled: !!token,
   });
 }

@@ -561,6 +561,24 @@ export type Database = {
         }
         Relationships: []
       }
+      contract_parse_cache: {
+        Row: {
+          content_hash: string
+          created_at: string
+          parsed: Json
+        }
+        Insert: {
+          content_hash: string
+          created_at?: string
+          parsed: Json
+        }
+        Update: {
+          content_hash?: string
+          created_at?: string
+          parsed?: Json
+        }
+        Relationships: []
+      }
       drive_sync_mappings: {
         Row: {
           created_at: string | null
@@ -947,12 +965,14 @@ export type Database = {
       }
       ownership_stakes: {
         Row: {
+          collaborator_id: string | null
           created_at: string
           holder_email: string | null
           holder_ipi: string | null
           holder_name: string
           holder_role: string
           id: string
+          is_owner_stake: boolean
           notes: string | null
           percentage: number
           publisher_or_label: string | null
@@ -962,12 +982,14 @@ export type Database = {
           work_id: string
         }
         Insert: {
+          collaborator_id?: string | null
           created_at?: string
           holder_email?: string | null
           holder_ipi?: string | null
           holder_name: string
           holder_role: string
           id?: string
+          is_owner_stake?: boolean
           notes?: string | null
           percentage: number
           publisher_or_label?: string | null
@@ -977,12 +999,14 @@ export type Database = {
           work_id: string
         }
         Update: {
+          collaborator_id?: string | null
           created_at?: string
           holder_email?: string | null
           holder_ipi?: string | null
           holder_name?: string
           holder_role?: string
           id?: string
+          is_owner_stake?: boolean
           notes?: string | null
           percentage?: number
           publisher_or_label?: string | null
@@ -992,6 +1016,13 @@ export type Database = {
           work_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "ownership_stakes_collaborator_id_fkey"
+            columns: ["collaborator_id"]
+            isOneToOne: false
+            referencedRelation: "registry_collaborators"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "ownership_stakes_work_id_fkey"
             columns: ["work_id"]
@@ -1098,6 +1129,33 @@ export type Database = {
           },
         ]
       }
+      pro_requests: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          message: string | null
+          status: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id?: string
+          message?: string | null
+          status?: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          message?: string | null
+          status?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -1106,6 +1164,7 @@ export type Database = {
           full_name: string | null
           given_name: string | null
           id: string
+          is_admin: boolean
           last_name: string | null
           onboarding_completed: boolean | null
           phone: string | null
@@ -1113,6 +1172,7 @@ export type Database = {
           updated_at: string | null
           walkthrough_completed: boolean | null
           website: string | null
+          welcome_email_sent_at: string | null
         }
         Insert: {
           avatar_url?: string | null
@@ -1121,6 +1181,7 @@ export type Database = {
           full_name?: string | null
           given_name?: string | null
           id: string
+          is_admin?: boolean
           last_name?: string | null
           onboarding_completed?: boolean | null
           phone?: string | null
@@ -1128,6 +1189,7 @@ export type Database = {
           updated_at?: string | null
           walkthrough_completed?: boolean | null
           website?: string | null
+          welcome_email_sent_at?: string | null
         }
         Update: {
           avatar_url?: string | null
@@ -1136,6 +1198,7 @@ export type Database = {
           full_name?: string | null
           given_name?: string | null
           id?: string
+          is_admin?: boolean
           last_name?: string | null
           onboarding_completed?: boolean | null
           phone?: string | null
@@ -1143,6 +1206,7 @@ export type Database = {
           updated_at?: string | null
           walkthrough_completed?: boolean | null
           website?: string | null
+          welcome_email_sent_at?: string | null
         }
         Relationships: []
       }
@@ -1346,6 +1410,51 @@ export type Database = {
           },
         ]
       }
+      registry_access_grants: {
+        Row: {
+          collaborator_id: string
+          created_at: string
+          granted_by: string
+          id: string
+          resource_id: string | null
+          resource_type: string
+          work_id: string
+        }
+        Insert: {
+          collaborator_id: string
+          created_at?: string
+          granted_by: string
+          id?: string
+          resource_id?: string | null
+          resource_type: string
+          work_id: string
+        }
+        Update: {
+          collaborator_id?: string
+          created_at?: string
+          granted_by?: string
+          id?: string
+          resource_id?: string | null
+          resource_type?: string
+          work_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "registry_access_grants_collaborator_id_fkey"
+            columns: ["collaborator_id"]
+            isOneToOne: false
+            referencedRelation: "registry_collaborators"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "registry_access_grants_work_id_fkey"
+            columns: ["work_id"]
+            isOneToOne: false
+            referencedRelation: "works_registry"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       registry_agreements: {
         Row: {
           agreement_type: string
@@ -1405,6 +1514,7 @@ export type Database = {
       }
       registry_collaborators: {
         Row: {
+          access_level: string
           collaborator_user_id: string | null
           email: string
           expires_at: string
@@ -1417,9 +1527,11 @@ export type Database = {
           role: string
           stake_id: string | null
           status: string
+          terms: Json
           work_id: string
         }
         Insert: {
+          access_level?: string
           collaborator_user_id?: string | null
           email: string
           expires_at?: string
@@ -1432,9 +1544,11 @@ export type Database = {
           role: string
           stake_id?: string | null
           status?: string
+          terms?: Json
           work_id: string
         }
         Update: {
+          access_level?: string
           collaborator_user_id?: string | null
           email?: string
           expires_at?: string
@@ -1447,6 +1561,7 @@ export type Database = {
           role?: string
           stake_id?: string | null
           status?: string
+          terms?: Json
           work_id?: string
         }
         Relationships: [
@@ -1632,6 +1747,75 @@ export type Database = {
           },
         ]
       }
+      stripe_events: {
+        Row: {
+          event_id: string
+          event_type: string
+          payload: Json | null
+          processed_at: string | null
+        }
+        Insert: {
+          event_id: string
+          event_type: string
+          payload?: Json | null
+          processed_at?: string | null
+        }
+        Update: {
+          event_id?: string
+          event_type?: string
+          payload?: Json | null
+          processed_at?: string | null
+        }
+        Relationships: []
+      }
+      subscriptions: {
+        Row: {
+          cancel_at_period_end: boolean | null
+          canceled_at: string | null
+          created_at: string
+          current_period_end: string | null
+          current_period_start: string | null
+          id: string
+          status: string
+          stripe_customer_id: string | null
+          stripe_price_id: string | null
+          stripe_subscription_id: string | null
+          tier: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          cancel_at_period_end?: boolean | null
+          canceled_at?: string | null
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          id?: string
+          status?: string
+          stripe_customer_id?: string | null
+          stripe_price_id?: string | null
+          stripe_subscription_id?: string | null
+          tier?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          cancel_at_period_end?: boolean | null
+          canceled_at?: string | null
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          id?: string
+          status?: string
+          stripe_customer_id?: string | null
+          stripe_price_id?: string | null
+          stripe_subscription_id?: string | null
+          tier?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       sync_log: {
         Row: {
           created_at: string | null
@@ -1734,6 +1918,141 @@ export type Database = {
           user_id?: string
           visible_fields?: Json
           website?: string | null
+        }
+        Relationships: []
+      }
+      tier_entitlements: {
+        Row: {
+          integrations_allowed: Json
+          max_artists: number
+          max_boards: number
+          max_oneclick_runs_per_month: number
+          max_projects: number
+          max_split_sheets_per_month: number
+          max_storage_bytes: number
+          max_tasks: number
+          oneclick_enabled: boolean
+          registry_enabled: boolean
+          tier: string
+          updated_at: string
+          zoe_enabled: boolean
+        }
+        Insert: {
+          integrations_allowed?: Json
+          max_artists: number
+          max_boards: number
+          max_oneclick_runs_per_month?: number
+          max_projects: number
+          max_split_sheets_per_month: number
+          max_storage_bytes: number
+          max_tasks: number
+          oneclick_enabled?: boolean
+          registry_enabled?: boolean
+          tier: string
+          updated_at?: string
+          zoe_enabled?: boolean
+        }
+        Update: {
+          integrations_allowed?: Json
+          max_artists?: number
+          max_boards?: number
+          max_oneclick_runs_per_month?: number
+          max_projects?: number
+          max_split_sheets_per_month?: number
+          max_storage_bytes?: number
+          max_tasks?: number
+          oneclick_enabled?: boolean
+          registry_enabled?: boolean
+          tier?: string
+          updated_at?: string
+          zoe_enabled?: boolean
+        }
+        Relationships: []
+      }
+      tier_overrides: {
+        Row: {
+          expires_at: string | null
+          granted_at: string
+          integrations_allowed: Json | null
+          max_artists: number | null
+          max_boards: number | null
+          max_oneclick_runs_per_month: number | null
+          max_projects: number | null
+          max_split_sheets_per_month: number | null
+          max_storage_bytes: number | null
+          max_tasks: number | null
+          oneclick_enabled: boolean | null
+          reason: string | null
+          registry_enabled: boolean | null
+          user_id: string
+          zoe_enabled: boolean | null
+        }
+        Insert: {
+          expires_at?: string | null
+          granted_at?: string
+          integrations_allowed?: Json | null
+          max_artists?: number | null
+          max_boards?: number | null
+          max_oneclick_runs_per_month?: number | null
+          max_projects?: number | null
+          max_split_sheets_per_month?: number | null
+          max_storage_bytes?: number | null
+          max_tasks?: number | null
+          oneclick_enabled?: boolean | null
+          reason?: string | null
+          registry_enabled?: boolean | null
+          user_id: string
+          zoe_enabled?: boolean | null
+        }
+        Update: {
+          expires_at?: string | null
+          granted_at?: string
+          integrations_allowed?: Json | null
+          max_artists?: number | null
+          max_boards?: number | null
+          max_oneclick_runs_per_month?: number | null
+          max_projects?: number | null
+          max_split_sheets_per_month?: number | null
+          max_storage_bytes?: number | null
+          max_tasks?: number | null
+          oneclick_enabled?: boolean | null
+          reason?: string | null
+          registry_enabled?: boolean | null
+          user_id?: string
+          zoe_enabled?: boolean | null
+        }
+        Relationships: []
+      }
+      usage_counters: {
+        Row: {
+          oneclick_runs_this_period: number
+          period_end: string
+          period_start: string
+          split_sheets_this_period: number
+          total_storage_bytes: number
+          updated_at: string
+          user_id: string
+          zoe_queries_this_period: number
+        }
+        Insert: {
+          oneclick_runs_this_period?: number
+          period_end?: string
+          period_start?: string
+          split_sheets_this_period?: number
+          total_storage_bytes?: number
+          updated_at?: string
+          user_id: string
+          zoe_queries_this_period?: number
+        }
+        Update: {
+          oneclick_runs_this_period?: number
+          period_end?: string
+          period_start?: string
+          split_sheets_this_period?: number
+          total_storage_bytes?: number
+          updated_at?: string
+          user_id?: string
+          zoe_queries_this_period?: number
         }
         Relationships: []
       }
@@ -1859,9 +2178,13 @@ export type Database = {
           artist_id: string
           created_at: string
           custom_work_type: string | null
+          featured_artists: Json
+          genre: string | null
           id: string
+          is_released: boolean
           isrc: string | null
           iswc: string | null
+          label: string | null
           notes: string | null
           project_id: string
           release_date: string | null
@@ -1876,9 +2199,13 @@ export type Database = {
           artist_id: string
           created_at?: string
           custom_work_type?: string | null
+          featured_artists?: Json
+          genre?: string | null
           id?: string
+          is_released?: boolean
           isrc?: string | null
           iswc?: string | null
+          label?: string | null
           notes?: string | null
           project_id: string
           release_date?: string | null
@@ -1893,9 +2220,13 @@ export type Database = {
           artist_id?: string
           created_at?: string
           custom_work_type?: string | null
+          featured_artists?: Json
+          genre?: string | null
           id?: string
+          is_released?: boolean
           isrc?: string | null
           iswc?: string | null
+          label?: string | null
           notes?: string | null
           project_id?: string
           release_date?: string | null
@@ -1970,10 +2301,40 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      _audio_owner_for_af: { Args: { af_folder_id: string }; Returns: string }
+      _project_owner_for_pf: {
+        Args: { pf_project_id: string }
+        Returns: string
+      }
+      admin_search_users_by_email: {
+        Args: { p_limit?: number; p_search: string }
+        Returns: {
+          created_at: string
+          email: string
+          id: string
+        }[]
+      }
+      can_view_audio_file_grant: { Args: { p_audio: string }; Returns: boolean }
+      can_view_grant: {
+        Args: { p_rid: string; p_type: string; p_work: string }
+        Returns: boolean
+      }
+      can_view_project_file_grant: {
+        Args: { p_file: string }
+        Returns: boolean
+      }
+      effective_storage_cap: { Args: { p_user_id: string }; Returns: number }
       execute_readonly_query: { Args: { query_text: string }; Returns: Json }
       get_project_role: { Args: { p_id: string }; Returns: string }
       get_user_id_by_email: { Args: { lookup_email: string }; Returns: string }
+      increment_usage_counter: {
+        Args: { p_counter_name: string; p_user_id: string }
+        Returns: undefined
+      }
       is_project_member: { Args: { p_id: string }; Returns: boolean }
+      recalc_user_storage: { Args: { p_user_id: string }; Returns: undefined }
+      work_project_id: { Args: { p_work: string }; Returns: string }
+      work_role: { Args: { p_work: string }; Returns: string }
     }
     Enums: {
       [_ in never]: never

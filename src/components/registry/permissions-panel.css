@@ -1,0 +1,819 @@
+/* ============================================================
+   Permissions panel — ported from the Claude design handoff
+   (msanii/project/permissions/permissions.css + a few base
+   classes from msanii/project/registry/styles.css).
+
+   All hsl(var(--token)) references resolve against src/index.css,
+   which defines --primary (green), --secondary, --success, --muted,
+   --border, --card, --background, --foreground, --destructive, etc.
+   ============================================================ */
+
+/* ---------- base classes ported from registry/styles.css ---------- */
+/* .file-icon  (styles.css:341) */
+.perm-scope .file-icon,
+.perm-manifest .file-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--secondary));
+  color: hsl(var(--primary));
+}
+.perm-scope .file-icon svg,
+.perm-manifest .file-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* .mono  (styles.css:83) */
+.perm-modal .mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* .hr  (styles.css:329) */
+.perm-modal .hr {
+  height: 1px;
+  background: hsl(var(--border));
+  border: none;
+  margin: 0;
+}
+
+/* .segmented  (styles.css:292) — minimal port */
+.perm-segmented {
+  display: inline-flex;
+  background: hsl(var(--muted));
+  border-radius: 10px;
+  padding: 4px;
+  gap: 2px;
+}
+.perm-segmented button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: 7px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  transition: background 0.15s, color 0.15s;
+  font-family: inherit;
+}
+.perm-segmented button svg {
+  width: 15px;
+  height: 15px;
+}
+.perm-segmented button[data-active="true"] {
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  box-shadow: var(--shadow-sm);
+}
+
+/* ============================================================
+   Permissions panel — additive styles (verbatim from permissions.css)
+   ============================================================ */
+
+.perm-modal {
+  width: 100%;
+}
+
+/* header */
+.perm-head {
+  padding: 20px 22px 0;
+}
+.perm-head-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.perm-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.perm-title .perm-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--secondary));
+  color: hsl(var(--primary));
+}
+.perm-title .perm-mark svg {
+  width: 15px;
+  height: 15px;
+}
+.perm-sub {
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+  margin: 7px 0 0 37px;
+}
+.perm-sub b {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+/* collaborator chip (edit mode identity) */
+.perm-chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 11px;
+  background: hsl(var(--muted));
+}
+.perm-chip-body {
+  flex: 1;
+  min-width: 0;
+}
+.perm-chip-name {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.perm-chip-mail {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 1px;
+}
+
+/* access descriptor line */
+.perm-access-desc {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 9px;
+  line-height: 1.45;
+}
+.perm-access-desc svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: hsl(var(--primary));
+}
+
+/* group label inside scope */
+.perm-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  margin: 0 0 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  flex-wrap: nowrap;
+}
+.perm-group-label .perm-count {
+  font-weight: 600;
+  letter-spacing: 0;
+  color: hsl(var(--muted-foreground) / 0.8);
+  white-space: nowrap;
+}
+.perm-group-allbtn {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: hsl(var(--primary));
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.perm-group-allbtn:hover {
+  background: hsl(var(--secondary));
+}
+
+/* information toggle row */
+.perm-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  transition: background 0.14s, border-color 0.14s;
+}
+.perm-row + .perm-row {
+  margin-top: 2px;
+}
+.perm-row[data-on="true"] {
+  background: hsl(var(--secondary) / 0.6);
+}
+.perm-row-ic {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  transition: background 0.14s, color 0.14s;
+}
+.perm-row-ic svg {
+  width: 16px;
+  height: 16px;
+}
+.perm-row[data-on="true"] .perm-row-ic {
+  background: hsl(var(--secondary));
+  color: hsl(var(--primary));
+}
+.perm-row-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.perm-row-desc {
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.perm-always {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: hsl(var(--primary));
+  background: hsl(var(--secondary));
+  padding: 2px 6px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.perm-always svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* document checkbox row */
+.perm-doc {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: 9px 11px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--card));
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.perm-doc + .perm-doc {
+  margin-top: 7px;
+}
+.perm-doc:hover {
+  background: hsl(var(--muted));
+}
+.perm-doc[data-on="true"] {
+  border-color: hsl(var(--primary) / 0.55);
+  background: hsl(var(--secondary) / 0.55);
+}
+.perm-doc:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.perm-doc .file-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+.perm-doc .file-icon svg {
+  width: 15px;
+  height: 15px;
+}
+.perm-doc-body {
+  flex: 1;
+  min-width: 0;
+}
+.perm-doc-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.perm-doc-meta {
+  display: block;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 1px;
+}
+.perm-check {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  flex-shrink: 0;
+  border: 1.5px solid hsl(var(--border));
+  background: hsl(var(--background));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, border-color 0.12s;
+}
+.perm-check[data-on="true"] {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+}
+.perm-check svg {
+  width: 14px;
+  height: 14px;
+  color: #fff;
+}
+
+/* admin override callout */
+.perm-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid hsl(var(--primary) / 0.25);
+  background: hsl(var(--secondary) / 0.55);
+}
+.perm-callout-ic {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.perm-callout-ic svg {
+  width: 18px;
+  height: 18px;
+}
+.perm-callout-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  margin: 0 0 3px;
+}
+.perm-callout-desc {
+  font-size: 12.5px;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* footer summary */
+.perm-foot {
+  padding: 14px 22px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid hsl(var(--border));
+}
+.perm-summary {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  line-height: 1.4;
+}
+.perm-summary svg {
+  width: 14px;
+  height: 14px;
+  color: hsl(var(--primary));
+  flex-shrink: 0;
+}
+.perm-summary b {
+  color: hsl(var(--foreground));
+  font-weight: 700;
+}
+.perm-foot-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+}
+
+/* meta line (edit mode) */
+.perm-meta {
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.perm-meta svg {
+  width: 12px;
+  height: 12px;
+}
+.perm-meta-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 99px;
+  background: hsl(var(--border));
+}
+
+/* ============================================================
+   Direction B — two-pane: controls + final manifest
+   ============================================================ */
+.perm-two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 296px;
+  gap: 0;
+  height: 560px;
+}
+.perm-two-controls {
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* section: header + search + scroll list */
+.perm-docsec {
+}
+.perm-secicon {
+  width: 19px;
+  height: 19px;
+  border-radius: 5px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--secondary));
+  color: hsl(var(--primary));
+  margin-right: 1px;
+}
+.perm-secicon svg {
+  width: 11px;
+  height: 11px;
+}
+
+.perm-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.perm-search > svg:first-child {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: hsl(var(--muted-foreground));
+  pointer-events: none;
+}
+.perm-search-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: hsl(var(--foreground));
+  padding: 7px 28px 7px 31px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--background));
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.perm-search-input::placeholder {
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+.perm-search-input:focus {
+  border-color: hsl(var(--primary) / 0.6);
+  box-shadow: 0 0 0 3px hsl(var(--primary) / 0.1);
+}
+.perm-search-clear {
+  position: absolute;
+  right: 7px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  cursor: pointer;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.perm-search-clear svg {
+  width: 11px;
+  height: 11px;
+}
+.perm-search-clear:hover {
+  background: hsl(var(--border));
+}
+
+.perm-doclist {
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 2px 2px 2px 0;
+  margin-right: -2px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.perm-doclist-empty {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  padding: 12px 4px;
+  text-align: center;
+}
+
+/* scrollbar polish */
+.perm-doclist::-webkit-scrollbar,
+.perm-two-controls::-webkit-scrollbar,
+.mf-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.perm-doclist::-webkit-scrollbar-thumb,
+.perm-two-controls::-webkit-scrollbar-thumb,
+.mf-scroll::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.perm-doclist::-webkit-scrollbar-thumb:hover,
+.mf-scroll::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+  background-clip: padding-box;
+}
+.perm-doclist .perm-doc + .perm-doc {
+  margin-top: 0;
+} /* gap handles spacing inside list */
+
+/* ---- right manifest pane ---- */
+.perm-manifest {
+  border-left: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.5);
+  padding: 16px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.mf-eyebrow-top {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  margin-bottom: 8px;
+}
+.mf-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.mf-head-body {
+  min-width: 0;
+}
+.mf-head-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mf-head-sub {
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 1px;
+}
+
+.mf-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 2px 4px 0;
+  margin-right: -4px;
+  min-height: 0;
+}
+.mf-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  margin: 16px 0 8px;
+}
+
+.mf-split {
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+}
+.mf-split-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.mf-split-label svg {
+  width: 11px;
+  height: 11px;
+  color: hsl(var(--primary));
+}
+.mf-split-vals {
+  display: flex;
+  gap: 18px;
+  margin-top: 11px;
+}
+.mf-split-vals .mono {
+  font-size: 16px;
+  font-weight: 700;
+}
+.mf-split-vals span small {
+  font-size: 9.5px;
+  color: hsl(var(--muted-foreground));
+  font-weight: 600;
+  display: block;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-top: 1px;
+}
+.mf-split-pending {
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 8px;
+  font-style: italic;
+}
+
+.mf-admin {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: hsl(var(--secondary) / 0.6);
+  border: 1px solid hsl(var(--primary) / 0.25);
+  font-size: 12px;
+  line-height: 1.45;
+  color: hsl(var(--foreground));
+}
+.mf-admin svg {
+  width: 14px;
+  height: 14px;
+  color: hsl(var(--primary));
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.mf-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 0;
+  font-size: 12.5px;
+  color: hsl(var(--foreground));
+}
+.mf-line > svg:first-child {
+  width: 13px;
+  height: 13px;
+  color: hsl(var(--success));
+  flex-shrink: 0;
+}
+.mf-line-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.mf-lockmini svg {
+  width: 11px;
+  height: 11px;
+  color: hsl(var(--muted-foreground));
+}
+
+.mf-empty {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  padding: 6px 0 2px;
+  font-style: italic;
+}
+.mf-group {
+  margin-bottom: 12px;
+}
+.mf-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  margin: 0 0 5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mf-group-label span {
+  font-size: 9.5px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--secondary));
+  color: hsl(var(--primary));
+}
+.mf-doc {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  margin-bottom: 5px;
+}
+.mf-doc .file-icon {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+.mf-doc .file-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.mf-doc-body {
+  flex: 1;
+  min-width: 0;
+}
+.mf-doc-name {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mf-doc-meta {
+  display: block;
+  font-size: 10.5px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 1px;
+}
+.mf-doc > svg:last-child {
+  width: 14px;
+  height: 14px;
+  color: hsl(var(--success));
+  flex-shrink: 0;
+}
+
+.mf-hidden {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding-top: 11px;
+  border-top: 1px solid hsl(var(--border));
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+}
+.mf-hidden svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}

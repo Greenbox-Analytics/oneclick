@@ -5,8 +5,29 @@ export interface ToolRow {
   tool: string;
   opens: number;
   completions: number;
+  openers: number;
+  converters: number;
   completion_rate: number;
   last_used: string | null;
+}
+
+export interface FunnelStep {
+  label: string;
+  users: number;
+}
+
+export interface ToolFunnel {
+  tool: string;
+  steps: FunnelStep[];
+  error_rate: number;
+  completed_events: number;
+  failed_events: number;
+}
+
+export interface RegistryLifecycle {
+  created: number;
+  submitted: number;
+  registered: number;
 }
 
 export interface SparklinePoint {
@@ -26,6 +47,8 @@ export interface AnalyticsSummary {
   funnel_completion_avg: number;
   per_tool: ToolRow[];
   sparkline: SparklinePoint[];
+  funnels: ToolFunnel[];
+  registry_lifecycle: RegistryLifecycle | null;
   reason?: string;
 }
 

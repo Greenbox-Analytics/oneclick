@@ -9,7 +9,7 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect, grant_owner_access
 
 _SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
@@ -51,7 +51,8 @@ def test_list_stakes_returns_stakes_key(client, mock_supabase):
     builder.execute.return_value = MagicMock(data=[SAMPLE_STAKE])
     mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-    response = client.get(f"/registry/stakes?work_id={WORK_ID}")
+    with grant_owner_access():
+        response = client.get(f"/registry/stakes?work_id={WORK_ID}")
 
     assert response.status_code == 200
     body = response.json()
@@ -65,7 +66,8 @@ def test_list_stakes_empty(client, mock_supabase):
     builder.execute.return_value = MagicMock(data=[])
     mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-    response = client.get(f"/registry/stakes?work_id={WORK_ID}")
+    with grant_owner_access():
+        response = client.get(f"/registry/stakes?work_id={WORK_ID}")
 
     assert response.status_code == 200
     body = response.json()
@@ -78,7 +80,8 @@ def test_list_stakes_with_stakes(client, mock_supabase):
     builder.execute.return_value = MagicMock(data=[SAMPLE_STAKE])
     mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-    response = client.get(f"/registry/stakes?work_id={WORK_ID}")
+    with grant_owner_access():
+        response = client.get(f"/registry/stakes?work_id={WORK_ID}")
 
     assert response.status_code == 200
     body = response.json()
@@ -99,6 +102,14 @@ def test_list_stakes_requires_work_id(client, mock_supabase):
 # ============================================================
 
 
+def _work_owner_builder():
+    """works_registry lookup create_stake does to resolve the work owner for user_id
+    stamping. Returns a dict, not a list."""
+    b = MockQueryBuilder()
+    b.execute.return_value = MagicMock(data={"user_id": TEST_USER_ID})
+    return b
+
+
 def test_create_stake_success(client, mock_supabase):
     """POST /registry/stakes creates and returns the new stake."""
     # validate_stake_percentage queries existing stakes, then create_stake inserts
@@ -111,6 +122,8 @@ def test_create_stake_success(client, mock_supabase):
     call_count = [0]
 
     def table_side_effect(name):
+        if name == "works_registry":
+            return _work_owner_builder()
         if name == "ownership_stakes":
             call_count[0] += 1
             if call_count[0] == 1:
@@ -127,7 +140,8 @@ def test_create_stake_success(client, mock_supabase):
         "holder_role": "producer",
         "percentage": 50.0,
     }
-    response = client.post("/registry/stakes", json=payload)
+    with grant_owner_access():
+        response = client.post("/registry/stakes", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -167,6 +181,8 @@ def test_create_stake_insert_fails_returns_500(client, mock_supabase):
     call_count = [0]
 
     def table_side_effect(name):
+        if name == "works_registry":
+            return _work_owner_builder()
         if name == "ownership_stakes":
             call_count[0] += 1
             if call_count[0] == 1:
@@ -183,7 +199,8 @@ def test_create_stake_insert_fails_returns_500(client, mock_supabase):
         "holder_role": "producer",
         "percentage": 50.0,
     }
-    response = client.post("/registry/stakes", json=payload)
+    with grant_owner_access():
+        response = client.post("/registry/stakes", json=payload)
 
     assert response.status_code == 500
     assert "Failed to create stake" in response.json()["detail"]
@@ -201,6 +218,8 @@ def test_create_stake_exactly_at_100_percent(client, mock_supabase):
     call_count = [0]
 
     def table_side_effect(name):
+        if name == "works_registry":
+            return _work_owner_builder()
         if name == "ownership_stakes":
             call_count[0] += 1
             if call_count[0] == 1:
@@ -217,7 +236,8 @@ def test_create_stake_exactly_at_100_percent(client, mock_supabase):
         "holder_role": "producer",
         "percentage": 50.0,
     }
-    response = client.post("/registry/stakes", json=payload)
+    with grant_owner_access():
+        response = client.post("/registry/stakes", json=payload)
 
     assert response.status_code == 200
 
@@ -231,33 +251,39 @@ def test_update_stake_success(client, mock_supabase):
     """PUT /registry/stakes/{stake_id} updates and returns the stake."""
     updated_stake = {**SAMPLE_STAKE, "holder_name": "Updated Name"}
 
-    lookup_builder = MockQueryBuilder()
-    lookup_builder.execute.return_value = MagicMock(data={"work_id": WORK_ID, "stake_type": "master"})
+    # Router lookup (work_id, stake_type), then validate_stake_percentage, then the
+    # service's own row lookup (work_id), then the update.
+    router_lookup = MockQueryBuilder()
+    router_lookup.execute.return_value = MagicMock(data={"work_id": WORK_ID, "stake_type": "master"})
 
     validate_builder = MockQueryBuilder()
     validate_builder.execute.return_value = MagicMock(data=[])
 
+    service_lookup = MockQueryBuilder()
+    service_lookup.execute.return_value = MagicMock(data={"work_id": WORK_ID})
+
     update_builder = MockQueryBuilder()
     update_builder.execute.return_value = MagicMock(data=[updated_stake])
 
-    # update_stake router: first queries existing stake (ownership_stakes for lookup),
-    # then validate_stake_percentage (ownership_stakes again), then update (ownership_stakes)
     call_count = [0]
 
     def table_side_effect(name):
         if name == "ownership_stakes":
             call_count[0] += 1
             if call_count[0] == 1:
-                return lookup_builder
+                return router_lookup
             if call_count[0] == 2:
                 return validate_builder
+            if call_count[0] == 3:
+                return service_lookup
             return update_builder
         return MockQueryBuilder()
 
     mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
     payload = {"holder_name": "Updated Name", "percentage": 40.0}
-    response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -271,23 +297,37 @@ def test_update_stake_not_found(client, mock_supabase):
     mock_supabase.table.side_effect = _sub_wrap(lambda name: lookup_builder)
 
     payload = {"holder_name": "Updated Name", "percentage": 40.0}
-    response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
 
     assert response.status_code == 404
     assert "Stake not found" in response.json()["detail"]
 
 
 def test_update_stake_without_percentage_skips_validation(client, mock_supabase):
-    """PUT /registry/stakes/{stake_id} with no percentage change skips validation."""
+    """PUT /registry/stakes/{stake_id} with no percentage change skips router validation,
+    but the service still resolves the work via the stake row before gating."""
     updated_stake = {**SAMPLE_STAKE, "holder_name": "New Name"}
+
+    service_lookup = MockQueryBuilder()
+    service_lookup.execute.return_value = MagicMock(data={"work_id": WORK_ID})
 
     update_builder = MockQueryBuilder()
     update_builder.execute.return_value = MagicMock(data=[updated_stake])
 
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: update_builder)
+    call_count = [0]
+
+    def table_side_effect(name):
+        if name == "ownership_stakes":
+            call_count[0] += 1
+            return service_lookup if call_count[0] == 1 else update_builder
+        return MockQueryBuilder()
+
+    mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
     payload = {"holder_name": "New Name"}
-    response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -296,13 +336,26 @@ def test_update_stake_without_percentage_skips_validation(client, mock_supabase)
 
 def test_update_stake_not_found_after_update(client, mock_supabase):
     """PUT /registry/stakes/{stake_id} returns 404 when update returns no data."""
+    service_lookup = MockQueryBuilder()
+    service_lookup.execute.return_value = MagicMock(data={"work_id": WORK_ID})
+
     update_builder = MockQueryBuilder()
     update_builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: update_builder)
 
-    # No percentage in body so validation is skipped
+    call_count = [0]
+
+    def table_side_effect(name):
+        if name == "ownership_stakes":
+            call_count[0] += 1
+            return service_lookup if call_count[0] == 1 else update_builder
+        return MockQueryBuilder()
+
+    mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
+
+    # No percentage in body so router validation is skipped
     payload = {"holder_name": "New Name"}
-    response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/stakes/{STAKE_ID}", json=payload)
 
     assert response.status_code == 404
     assert "Stake not found" in response.json()["detail"]
@@ -315,23 +368,37 @@ def test_update_stake_not_found_after_update(client, mock_supabase):
 
 def test_delete_stake_success(client, mock_supabase):
     """DELETE /registry/stakes/{stake_id} returns {"ok": True}."""
-    builder = MockQueryBuilder()
-    builder.execute.return_value = MagicMock(data=[SAMPLE_STAKE])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+    lookup = MockQueryBuilder()
+    lookup.execute.return_value = MagicMock(data={"work_id": WORK_ID})
+    delete_builder = MockQueryBuilder()
+    delete_builder.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[SAMPLE_STAKE])
 
-    response = client.delete(f"/registry/stakes/{STAKE_ID}")
+    call_count = [0]
+
+    def table_side_effect(name):
+        if name == "ownership_stakes":
+            call_count[0] += 1
+            return lookup if call_count[0] == 1 else delete_builder
+        return MockQueryBuilder()
+
+    mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
+
+    with grant_owner_access():
+        response = client.delete(f"/registry/stakes/{STAKE_ID}")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
 
 
-def test_delete_stake_always_returns_ok(client, mock_supabase):
-    """DELETE /registry/stakes/{stake_id} returns {"ok": True} even if nothing deleted."""
-    builder = MockQueryBuilder()
-    builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+def test_delete_stake_row_not_found_returns_ok(client, mock_supabase):
+    """DELETE /registry/stakes/{stake_id} returns {"ok": True} when the row is gone
+    (service returns None before deleting; endpoint still responds ok)."""
+    lookup = MockQueryBuilder()
+    lookup.execute.return_value = MagicMock(data=None)
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: lookup)
 
-    response = client.delete(f"/registry/stakes/{STAKE_ID}")
+    with grant_owner_access():
+        response = client.delete(f"/registry/stakes/{STAKE_ID}")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}

@@ -7,9 +7,26 @@ Acceptance criteria:
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from oneclick.royalty_calculator import CalculationError
 from tests.conftest import MockQueryBuilder, _default_table_side_effect
+
+
+@pytest.fixture(autouse=True)
+def _bypass_oneclick_ownership(monkeypatch):
+    """Bypass the OneClick ownership guard for all tests in this module.
+
+    These tests focus on royalty calculation logic, not access control.
+    Ownership guard correctness is covered by test_oneclick_ownership.py.
+    """
+    monkeypatch.setattr(
+        "main._assert_can_access_oneclick_inputs",
+        AsyncMock(return_value=None),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -177,14 +194,28 @@ class TestOneclickCalculateRoyaltiesStream:
         error_events = [e for e in events if e.get("type") == "error"]
         assert len(error_events) >= 1
 
-    def test_stream_returns_error_event_when_payments_empty(self, client, mock_supabase):
-        """GET /oneclick/calculate-royalties-stream streams error when no payments calculated."""
+    def test_stream_returns_structured_error_when_calculation_error_raised(self, client, mock_supabase):
+        """GET /oneclick/calculate-royalties-stream emits a structured error event
+        (code + message + suggestion + details) when the calculator raises
+        CalculationError — e.g. NO_SONG_MATCHES when contract songs don't
+        appear in the statement."""
         mock_supabase.table.side_effect = lambda name: _sub_table(
             name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
         )
         mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
-        with patch("main.calculate_royalty_payments", return_value=[]):
+        raised = CalculationError(
+            code="NO_SONG_MATCHES",
+            message="The contract covers songs that don't appear in this royalty statement.",
+            suggestion="Make sure the statement is for the same release as the contract.",
+            details={
+                "contract_works": ["No Assumptions"],
+                "statement_songs": ["Like That", "Home"],
+                "statement_song_total_count": 11,
+            },
+        )
+
+        with patch("main.calculate_royalty_payments", side_effect=raised):
             response = client.get(
                 "/oneclick/calculate-royalties-stream",
                 params={
@@ -197,6 +228,12 @@ class TestOneclickCalculateRoyaltiesStream:
         events = _sse_events(response.content)
         error_events = [e for e in events if e.get("type") == "error"]
         assert len(error_events) >= 1
+        err = error_events[0]
+        assert err["error_code"] == "NO_SONG_MATCHES"
+        assert "songs that don't appear" in err["message"]
+        assert err["suggestion"]
+        assert err["details"]["contract_works"] == ["No Assumptions"]
+        assert err["details"]["statement_song_total_count"] == 11
 
     def test_stream_uses_cache_when_available(self, client, mock_supabase):
         """GET /oneclick/calculate-royalties-stream returns cached results without recalculating."""
@@ -313,11 +350,38 @@ class TestOneclickCalculateRoyalties:
         assert first["percentage"] == SAMPLE_PAYMENTS[0]["percentage"]
         assert first["amount_to_pay"] == SAMPLE_PAYMENTS[0]["amount_to_pay"]
 
-    def test_calculate_royalties_returns_404_when_no_payments(self, client, mock_supabase):
-        """POST /oneclick/calculate-royalties returns 404 when calculator finds no payments."""
-        response = self._post(client, mock_supabase, payments=[])
+    def test_calculate_royalties_returns_422_with_structured_detail_on_calc_error(self, client, mock_supabase):
+        """POST /oneclick/calculate-royalties returns 422 with a structured detail
+        body (code/message/suggestion/details) when the calculator raises a
+        CalculationError — replaces the prior 404-on-empty behavior."""
+        payload = {
+            "project_id": PROJECT_ID,
+            "royalty_statement_file_id": STATEMENT_FILE_ID,
+            "contract_ids": [CONTRACT_ID],
+        }
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        )
+        mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
-        assert response.status_code == 404
+        raised = CalculationError(
+            code="NO_SONG_MATCHES",
+            message="The contract covers songs that don't appear in this royalty statement.",
+            suggestion="Make sure the statement is for the same release as the contract.",
+            details={
+                "contract_works": ["No Assumptions"],
+                "statement_songs": ["Like That"],
+                "statement_song_total_count": 1,
+            },
+        )
+        with patch("main.calculate_royalty_payments", side_effect=raised):
+            response = client.post("/oneclick/calculate-royalties", json=payload)
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["detail"]["error_code"] == "NO_SONG_MATCHES"
+        assert body["detail"]["suggestion"]
+        assert body["detail"]["details"]["contract_works"] == ["No Assumptions"]
 
     def test_calculate_royalties_returns_400_when_no_contracts(self, client, mock_supabase):
         """POST /oneclick/calculate-royalties returns 400 when no contracts are specified."""

@@ -47,6 +47,52 @@ def normalize_title(title: str) -> str:
     return clean.strip()
 
 
+def titles_match(title_a: str, title_b: str) -> bool:
+    """
+    Decide whether two song/work titles refer to the same track, using the same
+    fuzzy strategies the royalty calculator relies on. Order-independent.
+
+    Strategies (any one is sufficient):
+      1. Exact match on normalized titles.
+      2. One normalized title contains the other, and the shorter is >= 70% of
+         the longer (guards against short-word false positives).
+      3. First-3-words overlap (>= 2 shared words) with a >= 60% length ratio.
+
+    Args:
+        title_a: A song/work title (e.g. from a contract).
+        title_b: Another song/work title (e.g. from a statement line).
+
+    Returns:
+        True if the titles are considered the same track.
+    """
+    a_norm = normalize_title(title_a)
+    b_norm = normalize_title(title_b)
+    if not a_norm or not b_norm:
+        return False
+
+    # Strategy 1: Exact match (case-insensitive normalized)
+    if a_norm == b_norm:
+        return True
+
+    min_len = min(len(a_norm), len(b_norm))
+    max_len = max(len(a_norm), len(b_norm))
+
+    # Strategy 2: Partial match (contains or is contained)
+    if a_norm in b_norm or b_norm in a_norm:
+        if max_len > 0 and min_len / max_len >= 0.7:
+            return True
+
+    # Strategy 3: Very fuzzy match (first 3 words) - Fallback
+    a_words = a_norm.split()[:3]
+    if len(a_words) >= 2:
+        b_words = b_norm.split()[:3]
+        matches = sum(1 for w in a_words if w in b_words)
+        if matches >= 2 and max_len > 0 and min_len / max_len >= 0.6:
+            return True
+
+    return False
+
+
 def find_matching_song(song_title: str, song_totals: dict[str, float]) -> tuple[str | None, float]:
     """
     Find matching song in royalty statement with fuzzy matching.
@@ -66,42 +112,12 @@ def find_matching_song(song_title: str, song_totals: dict[str, float]) -> tuple[
     if not song_title or not song_totals:
         return (None, 0.0)
 
-    song_title_norm = normalize_title(song_title)
     total_amount = 0.0
     matched_titles = []
 
     # Iterate through all statement entries and sum up matches
     for title, amount in song_totals.items():
-        title_norm = normalize_title(title)
-        is_match = False
-
-        # Strategy 1: Exact match (case-insensitive normalized)
-        if title_norm == song_title_norm:
-            is_match = True
-
-        # Strategy 2: Partial match (contains or is contained)
-        elif song_title_norm in title_norm or title_norm in song_title_norm:
-            # Must be at least 70% of the length to avoid false positives
-            min_len = min(len(song_title_norm), len(title_norm))
-            max_len = max(len(song_title_norm), len(title_norm))
-
-            if max_len > 0 and min_len / max_len >= 0.7:
-                is_match = True
-
-        # Strategy 3: Very fuzzy match (first 3 words) - Fallback
-        if not is_match:
-            song_words = song_title_norm.split()[:3]
-            if len(song_words) >= 2:
-                title_words = title_norm.split()[:3]
-                matches = sum(1 for w in song_words if w in title_words)
-                if matches >= 2:
-                    # Safety check on length ratio
-                    min_len = min(len(song_title_norm), len(title_norm))
-                    max_len = max(len(song_title_norm), len(title_norm))
-                    if max_len > 0 and min_len / max_len >= 0.6:
-                        is_match = True
-
-        if is_match:
+        if titles_match(song_title, title):
             total_amount += amount
             matched_titles.append(title)
 

@@ -45,6 +45,9 @@ from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
+from integrations.spotify.router import router as spotify_router
+from oneclick.breakdown import router as oneclick_breakdown_router
+from oneclick.royalty_calculator import CalculationError, RoyaltyCalculator
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
@@ -60,6 +63,7 @@ from users.router import router as users_router
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
 app.include_router(notion_router, prefix="/integrations/notion", tags=["Notion"])
+app.include_router(spotify_router, prefix="/integrations/spotify", tags=["Spotify"])
 app.include_router(connections_router, prefix="/integrations", tags=["Integrations"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
 app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])
@@ -68,6 +72,7 @@ app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"]
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
+app.include_router(oneclick_breakdown_router, prefix="/oneclick", tags=["OneClick"])
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
@@ -258,6 +263,76 @@ def verify_user_owns_contract(user_id: str, contract_id: str) -> bool:
     if not contract_res.data:
         return False
     return verify_user_owns_project(user_id, contract_res.data[0]["project_id"])
+
+
+async def user_can_access_project(db, user_id: str, project_id: str) -> bool:
+    """True if the caller is a member of the project (owner is auto-enrolled), with an
+    artist-ownership fallback so the creator is never falsely denied."""
+    from projects.service import get_user_role  # lazy import: avoid circular import
+
+    if not project_id:
+        return False
+    if await get_user_role(db, user_id, project_id) is not None:
+        return True
+    return verify_user_owns_project(user_id, project_id)
+
+
+async def user_can_access_file(db, user_id: str, file_id: str) -> bool:
+    """Accessible if the caller is a member of the file's project, OR the file is linked to a
+    work where the caller was specifically granted this file (or is elevated on a work in the
+    file's OWN project). The same-project guard prevents a cross-project work_files link from
+    widening access to a file in another tenant's project."""
+    if not file_id:
+        return False
+    res = db.table("project_files").select("project_id").eq("id", file_id).execute()
+    if not res.data:
+        return False
+    file_project_id = res.data[0]["project_id"]
+    if await user_can_access_project(db, user_id, file_project_id):
+        return True
+    # Per-contract grant: file linked to a work the caller can view this file on.
+    from registry.access import get_work_access  # lazy import to avoid circular import
+
+    links = db.table("work_files").select("work_id").eq("file_id", file_id).execute()
+    for link in links.data or []:
+        work_id = link["work_id"]
+        wa = await get_work_access(db, user_id, work_id)
+        # An explicit per-file grant to this collaborator is always honored.
+        if file_id in wa.visible_file_ids:
+            return True
+        # "Sees everything on the work" (owner/admin/member) is honored ONLY when the file
+        # genuinely belongs to that work's project — never via a cross-project link.
+        if wa.all_visible():
+            wrow = db.table("works_registry").select("project_id").eq("id", work_id).execute()
+            if wrow.data and wrow.data[0].get("project_id") == file_project_id:
+                return True
+    return False
+
+
+async def _assert_can_access_oneclick_inputs(db, user_id, project_id, statement_id, contract_ids) -> None:
+    """Gate on the actual files read: the royalty statement and every contract.
+    project_id is the container, not the security boundary."""
+    if not await user_can_access_file(db, user_id, statement_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    for cid in contract_ids:
+        if cid and not await user_can_access_file(db, user_id, cid):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+
+def verify_user_owns_audio_file(user_id: str, audio_file_id: str) -> dict | None:
+    """Return the audio_files row if it belongs to one of the user's artists, else None."""
+    af = get_supabase_client().table("audio_files").select("id, file_path, folder_id").eq("id", audio_file_id).execute()
+    if not af.data:
+        return None
+    folder_id = af.data[0].get("folder_id")
+    if not folder_id:
+        return None
+    folder = get_supabase_client().table("audio_folders").select("artist_id").eq("id", folder_id).execute()
+    if not folder.data:
+        return None
+    if not verify_user_owns_artist(user_id, folder.data[0]["artist_id"]):
+        return None
+    return af.data[0]
 
 
 def file_name_exists_in_project(project_id: str, file_name: str) -> bool:
@@ -455,6 +530,10 @@ class ZoeAskResponse(BaseModel):
     needs_clarification: bool | None = None  # True if query is ambiguous
     clarification_options: list[str] | None = None  # Options for disambiguation
 
+
+# Maps a Zoe session_id to the user_id that created it (in-memory; same lifetime as
+# the chatbot's own in-memory session state).
+_zoe_session_owners: dict[str, str] = {}
 
 # Initialize Zoe chatbot (singleton)
 zoe_chatbot = None
@@ -858,6 +937,8 @@ async def upload_file(
     """
     try:
         if not verify_user_owns_artist(user_id, artist_id):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if project_id and project_id not in ("none", "") and not verify_user_owns_project(user_id, project_id):
             raise HTTPException(status_code=403, detail="Access denied")
         if not project_id or project_id == "none" or project_id == "":
             # Check if a "General" project exists for this artist, if not create one
@@ -1578,6 +1659,24 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
       complete — instant non-streamed response (tiers 1/2)
       error    — error during generation
     """
+    sb = get_supabase_client()
+    # Contracts are the access gate: each must be accessible (member OR granted).
+    for _cid in request.contract_ids or []:
+        if _cid and not await user_can_access_file(sb, user_id, _cid):
+            raise HTTPException(status_code=403, detail="Access denied")
+    # artist_id / project_id are optional CONTEXT — drop them if the caller can't access
+    # them (never leak another tenant's private artist/project; never block the request).
+    if request.artist_id and not verify_user_owns_artist(user_id, request.artist_id):
+        request.artist_id = None
+    if request.project_id and not await user_can_access_project(sb, user_id, request.project_id):
+        request.project_id = None
+
+    session_id = request.session_id or str(uuid.uuid4())
+    _owner = _zoe_session_owners.get(session_id)
+    if _owner is not None and _owner != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    _zoe_session_owners[session_id] = user_id
+
     # SP3: gate Zoe feature; raises 402 for Free users without a Pro host.
     gated_feature(user_id, Action.USE_ZOE, host_user_id=request.host_user_id)
 
@@ -1610,7 +1709,6 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
             user_id, "tool_used", {"tool": "zoe", "mode": "contract" if request.contract_ids else "general"}
         )
         chatbot = get_zoe_chatbot()
-        session_id = request.session_id or str(uuid.uuid4())
 
         # Fetch artist data if artist_id is provided
         artist_data = None
@@ -1710,11 +1808,13 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
 
 
 @app.delete("/zoe/session/{session_id}")
-async def zoe_clear_session(session_id: str):
+async def zoe_clear_session(session_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Clear conversation history for a session.
     Use this when starting a new conversation or switching projects.
     """
+    if _zoe_session_owners.get(session_id) != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
     try:
         chatbot = get_zoe_chatbot()
         chatbot.clear_session(session_id)
@@ -1725,11 +1825,13 @@ async def zoe_clear_session(session_id: str):
 
 
 @app.get("/zoe/session/{session_id}/history")
-async def zoe_get_session_history(session_id: str):
+async def zoe_get_session_history(session_id: str, user_id: str = Depends(get_current_user_id)):
     """
     Get conversation history for a session.
     Useful for restoring chat state or debugging.
     """
+    if _zoe_session_owners.get(session_id) != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
     try:
         chatbot = get_zoe_chatbot()
         history = chatbot.get_session_history(session_id)
@@ -1777,11 +1879,111 @@ class ConfirmCalculationRequest(BaseModel):
     results: dict[str, Any]
 
 
+def _persist_statement_rows(
+    calculation_id: str, royalty_statement_id: str, user_id: str, contract_song_titles: list[str]
+) -> None:
+    """Parse the royalty statement into per-line-item rows and persist the rows
+    for tracks named in the contract to `royalty_statement_rows`, powering the
+    Earnings Breakdown tab.
+
+    Only statement lines whose song title matches a contract work title (via the
+    same fuzzy `titles_match` logic the calculator uses) are kept, so the
+    breakdown reflects the contract's track(s) rather than the whole statement.
+
+    Best-effort: any failure is logged and swallowed so a parse hiccup never
+    breaks calculation save — the breakdown tab degrades to its empty state.
+    """
+    from utils.text.normalize import titles_match
+
+    statement_path = None
+    try:
+        statement_res = (
+            get_supabase_client().table("project_files").select("*").eq("id", royalty_statement_id).execute()
+        )
+        if not statement_res.data:
+            print(f"[breakdown] statement file {royalty_statement_id} not found; skipping row persistence")
+            return
+
+        statement_file = statement_res.data[0]
+        file_data = get_supabase_client().storage.from_("project-files").download(statement_file["file_path"])
+
+        file_extension = Path(statement_file["file_name"]).suffix.lower()
+        if not file_extension or file_extension not in [".csv", ".xlsx", ".xls"]:
+            file_extension = ".xlsx"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
+            tmp_statement.write(file_data)
+            statement_path = tmp_statement.name
+
+        rows = RoyaltyCalculator().read_royalty_statement_rows(statement_path)
+        if not rows:
+            return
+
+        # Keep only line items for tracks named in the contract. Match at the
+        # unique-title level (statements repeat the same title across thousands
+        # of rows) so we run the fuzzy comparison once per distinct title.
+        contract_titles = {t.strip() for t in contract_song_titles if t and t.strip()}
+        if not contract_titles:
+            print(f"[breakdown] no contract song titles for calculation {calculation_id}; skipping row persistence")
+            return
+
+        statement_titles = {row.song_title for row in rows if row.song_title}
+        matched_titles = {st for st in statement_titles if any(titles_match(st, ct) for ct in contract_titles)}
+        total_rows = len(rows)
+        rows = [row for row in rows if row.song_title in matched_titles]
+        print(f"[breakdown] kept {len(rows)} of {total_rows} statement rows matching contract tracks")
+        if not rows:
+            return
+
+        payload = [
+            {
+                "calculation_id": calculation_id,
+                "user_id": user_id,
+                "song_title": row.song_title,
+                "vendor": row.vendor,
+                "country": row.country,
+                "country_code": row.country_code,
+                "delivery_type": row.delivery_type,
+                "delivery_format": row.delivery_format,
+                "sale_date": row.sale_date,
+                "units_sold": row.units_sold,
+                "net_units": row.net_units,
+                "sales": row.sales,
+                "net_income": row.net_income,
+                "distribution": row.distribution,
+                "net_payable": row.net_payable,
+                "isrc": row.isrc,
+                "upc": row.upc,
+                "currency": row.currency,
+            }
+            for row in rows
+        ]
+
+        # Chunked insert keeps payloads well under PostgREST's request limits on
+        # large statements (distributor reports can run to tens of thousands of rows).
+        chunk_size = 500
+        for i in range(0, len(payload), chunk_size):
+            get_supabase_client().table("royalty_statement_rows").insert(payload[i : i + chunk_size]).execute()
+
+        print(f"[breakdown] persisted {len(payload)} statement rows for calculation {calculation_id}")
+    except Exception as e:
+        print(f"[breakdown] failed to persist statement rows for calculation {calculation_id}: {e}")
+    finally:
+        if statement_path:
+            try:
+                os.unlink(statement_path)
+            except OSError:
+                pass
+
+
 @app.post("/oneclick/confirm")
 async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str = Depends(get_current_user_id)):
     """
     Save confirmed calculation results to the database.
     """
+    await _assert_can_access_oneclick_inputs(
+        get_supabase_client(), user_id, request.project_id, request.royalty_statement_id, request.contract_ids or []
+    )
     try:
         # 0. Delete old cached calculation for same statement + contracts (if any)
         existing = (
@@ -1840,6 +2042,14 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
 
         get_supabase_client().table("royalty_calculation_contracts").insert(junction_rows).execute()
 
+        # 3. Persist per-line-item statement rows (contract tracks only) for the
+        #    Earnings Breakdown tab. Best-effort — failures must not fail the save.
+        #    payment.song_title is the contract work title; the persist step
+        #    fuzzy-matches statement lines against these.
+        payments = (request.results or {}).get("payments", []) or []
+        contract_song_titles = [p.get("song_title", "") for p in payments]
+        _persist_statement_rows(calculation_id, request.royalty_statement_id, user_id, contract_song_titles)
+
         return {"status": "success", "message": "Calculation saved successfully", "id": calculation_id}
 
     except Exception as e:
@@ -1881,6 +2091,13 @@ async def oneclick_calculate_royalties_stream(
     """
     # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
     gated_feature(user_id, Action.USE_ONECLICK, host_user_id=host_user_id)
+    await _assert_can_access_oneclick_inputs(
+        get_supabase_client(),
+        user_id,
+        project_id,
+        royalty_statement_file_id,
+        (contract_ids or []) + ([contract_id] if contract_id else []),
+    )
     # SP2: track per-period OneClick usage; best-effort, never blocks.
     _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
     analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
@@ -1963,6 +2180,10 @@ async def oneclick_calculate_royalties_stream(
                                 result = calc["results"]
                                 # Ensure is_cached flag is set
                                 result["is_cached"] = True
+                                # Expose the calculation id so the Earnings
+                                # Breakdown tab can load on cache hits (no
+                                # confirm round-trip happens for cached results).
+                                result["calculation_id"] = calc["id"]
                                 # Add type field so frontend SSE handler recognizes it
                                 result["type"] = "complete"
 
@@ -2116,14 +2337,10 @@ async def oneclick_calculate_royalties_stream(
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
             await asyncio.sleep(0.3)
 
-            if not payments or len(payments) == 0:
-                analytics_capture(
-                    user_id,
-                    "oneclick_calc_failed",
-                    {"tool": "oneclick", "error_code": "NoPaymentsCalculated", "stage": "calc"},
-                )
-                yield f"data: {json.dumps({'type': 'error', 'message': 'No payments could be calculated. Please verify the contract and royalty statement contain matching songs.'})}\n\n"
-                return
+            # Note: an empty payments list is no longer possible here — the
+            # calculator now raises a CalculationError with a specific reason
+            # code (NO_SONG_MATCHES / NO_STREAMING_EARNABLE_SHARES / etc.)
+            # which is caught below and surfaced to the user.
 
             yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
             await asyncio.sleep(0.2)
@@ -2167,6 +2384,23 @@ async def oneclick_calculate_royalties_stream(
                     "cached": False,
                 },
             )
+
+        except CalculationError as e:
+            # Structured, user-facing reason — surface code/message/suggestion/details
+            # so the frontend can render a rich error panel.
+            analytics_capture(
+                user_id,
+                "oneclick_calc_failed",
+                {"tool": "oneclick", "error_code": e.code, "stage": "calc"},
+            )
+            error_payload = {
+                "type": "error",
+                "error_code": e.code,
+                "message": e.user_message,
+                "suggestion": e.suggestion,
+                "details": e.details,
+            }
+            yield f"data: {json.dumps(error_payload)}\n\n"
 
         except Exception as e:
             import traceback
@@ -2218,6 +2452,14 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
 
     _calc_started_at = _time.perf_counter()
     _contract_count = len(request.contract_ids) if request.contract_ids else (1 if request.contract_id else 0)
+
+    await _assert_can_access_oneclick_inputs(
+        get_supabase_client(),
+        user_id,
+        request.project_id,
+        request.royalty_statement_file_id,
+        (request.contract_ids or []) + ([request.contract_id] if request.contract_id else []),
+    )
 
     try:
         # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
@@ -2319,11 +2561,9 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
                 contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
             )
 
-            if not payments or len(payments) == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail="No payments could be calculated. Please verify the contract and royalty statement contain matching songs.",
-                )
+            # Note: empty payments is no longer possible here — the calculator
+            # now raises CalculationError with a specific reason code, caught
+            # by the dedicated handler below.
 
             print(f"Calculated {len(payments)} payments")
 
@@ -2376,6 +2616,21 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
 
     except HTTPException:
         raise
+    except CalculationError as e:
+        analytics_capture(
+            user_id,
+            "oneclick_calc_failed",
+            {"tool": "oneclick", "error_code": e.code, "stage": "calc"},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": e.code,
+                "message": e.user_message,
+                "suggestion": e.suggestion,
+                "details": e.details,
+            },
+        )
     except Exception as e:
         print(f"Error in OneClick royalty calculation: {str(e)}")
         import traceback
@@ -2421,24 +2676,30 @@ async def share_files(req: ShareFilesRequest, user_id: str = Depends(get_current
         resend.api_key = api_key
         sb = get_supabase_client()
 
-        # All files are stored in the project-files bucket
-        def bucket_for(source: str) -> str:
-            return "project-files"
-
         # Generate signed URLs (7 days = 604800 seconds) with download option
         expiry_seconds = 7 * 24 * 60 * 60
         link_expires_at = datetime.now(UTC) + timedelta(seconds=expiry_seconds)
         file_links: list[dict] = []
 
         for f in req.files:
-            bucket = bucket_for(f.file_source)
-            print(f"DEBUG share: bucket={bucket}, file_path='{f.file_path}', file_name='{f.file_name}'")
-            if not f.file_path:
-                print(f"Warning: Empty file_path for {f.file_name}, skipping")
+            # Resolve + access-check by id; NEVER trust the client-supplied path.
+            if f.file_source == "project_file":
+                row = sb.table("project_files").select("id, project_id, file_path").eq("id", f.file_id).execute()
+                if not row.data or not await user_can_access_project(sb, user_id, row.data[0]["project_id"]):
+                    raise HTTPException(status_code=403, detail="Access denied")
+                server_path = row.data[0]["file_path"]
+                bucket = "project-files"
+            else:  # audio_file — artist-scoped, owner-only
+                audio = verify_user_owns_audio_file(user_id, f.file_id)
+                if not audio:
+                    raise HTTPException(status_code=403, detail="Access denied")
+                server_path = audio["file_path"]
+                bucket = "audio-files"
+            if not server_path:
                 continue
             try:
                 signed = sb.storage.from_(bucket).create_signed_url(
-                    f.file_path, expiry_seconds, options={"download": True}
+                    server_path, expiry_seconds, options={"download": True}
                 )
                 signed_url = signed.get("signedURL") or signed.get("signedUrl") or ""
                 if not signed_url:

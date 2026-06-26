@@ -104,6 +104,12 @@ async def browse_files(
 @router.post("/import")
 async def import_file(body: DriveImportRequest, user_id: str = Depends(get_current_user_id)):
     """Import a file from Google Drive into a project."""
+    from projects.service import get_user_role
+
+    role = await get_user_role(_get_supabase(), user_id, body.project_id)
+    if role not in ("owner", "admin", "editor"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     token = await get_valid_token(_get_supabase(), user_id, "google_drive")
     if not token:
         raise HTTPException(status_code=401, detail="Google Drive not connected")
@@ -132,13 +138,22 @@ async def export_file(body: DriveExportRequest, user_id: str = Depends(get_curre
 
     from integrations.google_drive.service import export_to_drive
 
-    result = await export_to_drive(token, _get_supabase(), user_id, body.model_dump())
+    try:
+        result = await export_to_drive(token, _get_supabase(), user_id, body.model_dump())
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
     return result
 
 
 @router.post("/sync/setup")
 async def setup_sync(body: DriveSyncSetup, user_id: str = Depends(get_current_user_id)):
     """Configure bidirectional sync for a project folder."""
+    from projects.service import get_user_role
+
+    role = await get_user_role(_get_supabase(), user_id, body.project_id)
+    if role not in ("owner", "admin", "editor"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     token = await get_valid_token(_get_supabase(), user_id, "google_drive")
     if not token:
         raise HTTPException(status_code=401, detail="Google Drive not connected")

@@ -264,7 +264,10 @@ async def delete_task(task_id: str, user_id: str = Depends(get_current_user_id))
 @router.post("/tasks/{task_id}/comments")
 async def add_comment(task_id: str, body: CommentCreate, user_id: str = Depends(get_current_user_id)):
     """Add a comment to a task."""
-    comment = await service.create_comment(_get_supabase(), user_id, task_id, body.content)
+    try:
+        comment = await service.create_comment(_get_supabase(), user_id, task_id, body.content)
+    except PermissionError:
+        raise HTTPException(status_code=404, detail="Task not found")
     if not comment:
         raise HTTPException(status_code=500, detail="Failed to add comment")
     return comment

@@ -500,9 +500,10 @@ class TestCreateTask:
 
     def test_create_task_with_artist_ids_calls_junction_table(self, client, mock_supabase):
         """POST /boards/tasks with artist_ids sets junction rows."""
-        # Sequence: 1) board_tasks count (gate), 2) board_tasks insert, 3-4) board_task_artists junction
+        # Sequence: 1) board_tasks count (gate), 2) board_tasks insert,
+        # 3) artists (_owned_artist_ids ownership filter), 4-5) board_task_artists junction
         mock_supabase.table.side_effect = _sequence_side_effect(
-            [[], [SAMPLE_TASK], [{"artist_id": ARTIST_ID}], [{"artist_id": ARTIST_ID}]]
+            [[], [SAMPLE_TASK], [{"id": ARTIST_ID}], [{"artist_id": ARTIST_ID}], [{"artist_id": ARTIST_ID}]]
         )
 
         with patch("boards.service.events.emit"):
@@ -819,7 +820,9 @@ class TestAddComment:
 
     def test_add_comment_returns_500_when_insert_fails(self, client, mock_supabase):
         """POST /boards/tasks/{task_id}/comments returns 500 when insert fails."""
-        mock_supabase.table.side_effect = lambda name: _builder([])
+        # Sequence: 1) board_tasks (ownership check passes — task owned by caller),
+        # 2) board_task_comments insert → empty → 500
+        mock_supabase.table.side_effect = _sequence_side_effect([[SAMPLE_TASK], []])
 
         response = client.post(
             f"/boards/tasks/{TASK_ID}/comments",

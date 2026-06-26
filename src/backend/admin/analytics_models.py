@@ -5,15 +5,36 @@ from pydantic import BaseModel
 
 class ToolRow(BaseModel):
     tool: str
-    opens: int
-    completions: int
-    completion_rate: float  # 0.0 - 1.0
+    opens: int  # raw tool_opened event count (volume)
+    completions: int  # raw completion-event count (volume)
+    openers: int  # distinct users who opened the tool in-window
+    converters: int  # distinct users who opened AND completed >= 1 action (subset of openers)
+    completion_rate: float  # 0.0 - 1.0; converters / openers, bounded by construction
     last_used: str | None  # ISO timestamp
 
 
 class SparklinePoint(BaseModel):
     date: str  # YYYY-MM-DD
     value: int
+
+
+class FunnelStep(BaseModel):
+    label: str  # per-tool: opened/started/completed | opened/submitted/answered | opened/generated
+    users: int  # distinct users at this nested step
+
+
+class ToolFunnel(BaseModel):
+    tool: str
+    steps: list[FunnelStep]  # ordered; first = opened, last = completion step
+    error_rate: float  # 0.0-1.0; failed_events / (completed_events + failed_events); 0.0 when denom is 0
+    completed_events: int  # raw completion-event count (error-rate denominator part; also drives small-N)
+    failed_events: int  # raw *_failed event count (error-rate numerator)
+
+
+class RegistryLifecycle(BaseModel):
+    created: int
+    submitted: int
+    registered: int
 
 
 class AnalyticsSummary(BaseModel):
@@ -28,6 +49,8 @@ class AnalyticsSummary(BaseModel):
     funnel_completion_avg: float  # 0.0 - 1.0
     per_tool: list[ToolRow]
     sparkline: list[SparklinePoint]
+    funnels: list[ToolFunnel] = []
+    registry_lifecycle: RegistryLifecycle | None = None
     reason: str | None = None  # set when available=False
 
 

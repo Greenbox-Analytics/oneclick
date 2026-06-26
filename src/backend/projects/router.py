@@ -24,7 +24,10 @@ def _get_supabase():
 
 @router.get("/{project_id}/members")
 async def list_members(project_id: str, user_id: str = Depends(get_current_user_id)):
-    members = await service.get_members(_get_supabase(), user_id, project_id)
+    try:
+        members = await service.get_members(_get_supabase(), user_id, project_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
     return {"members": members}
 
 
@@ -133,7 +136,10 @@ async def remove_member(project_id: str, member_id: str, user_id: str = Depends(
 
 @router.get("/{project_id}/pending-invites")
 async def list_pending_invites(project_id: str, user_id: str = Depends(get_current_user_id)):
-    invites = await service.get_pending_invites(_get_supabase(), user_id, project_id)
+    try:
+        invites = await service.get_pending_invites(_get_supabase(), user_id, project_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
     return {"invites": invites}
 
 

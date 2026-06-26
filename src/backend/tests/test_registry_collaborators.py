@@ -21,7 +21,7 @@ _REGISTRY_WIP = pytest.mark.skip(
     reason="Rights registry collaborator flow under active development — revisit when stabilized"
 )
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect, grant_owner_access
 
 _SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
@@ -35,6 +35,21 @@ def _sub_wrap(fn):
         return fn(name)
 
     return _wrapped
+
+
+def _grant_invite_manage_access():
+    """Patch registry.router.get_work_access to a manage-capable WorkAccess.
+
+    The plain invite endpoint now gates on can_manage before inviting; the shared
+    MockQueryBuilder can't satisfy that resolver, so the contract tests pin it to
+    an authorized result. The resolver is covered by tests/test_registry_access.py.
+    """
+    from unittest.mock import AsyncMock
+
+    from registry import router as _router
+    from registry.access import WorkAccess
+
+    return patch.object(_router, "get_work_access", AsyncMock(return_value=WorkAccess(work_role="owner")))
 
 
 WORK_ID = "aaaaaaaa-0000-0000-0000-000000000001"
@@ -75,34 +90,15 @@ class TestListCollaborators:
     """GET /registry/collaborators?work_id=..."""
 
     def test_creator_can_list_collaborators(self, client, mock_supabase):
-        """Work creator gets collaborators list."""
-        work_builder = MockQueryBuilder()
-        work_builder.execute.return_value = MagicMock(data={"user_id": TEST_USER_ID}, count=1)
-
-        collab_check_builder = MockQueryBuilder()
-        collab_check_builder.execute.return_value = MagicMock(data=[], count=0)
-
+        """Work creator (owner access) gets the full collaborators list."""
         collaborators_builder = MockQueryBuilder()
         collaborators_builder.execute.return_value = MagicMock(data=[_collab_row()], count=1)
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: collaborators_builder)
 
-        call_count = {"n": 0}
-
-        def table_side_effect(name):
-            call_count["n"] += 1
-            n = call_count["n"]
-            if n == 1:
-                # works_registry ownership check
-                return work_builder
-            elif n == 2:
-                # registry_collaborators existence check for current user
-                return collab_check_builder
-            else:
-                # get_collaborators query
-                return collaborators_builder
-
-        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
-
-        response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
+        # Owner / all-visible access — roster returned unfiltered. Access resolution
+        # itself is covered in test_registry_access.py.
+        with grant_owner_access():
+            response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
         assert response.status_code == 200
         body = response.json()
         assert "collaborators" in body
@@ -110,67 +106,44 @@ class TestListCollaborators:
         assert body["collaborators"][0]["id"] == COLLAB_ID
 
     def test_non_creator_non_collab_gets_403(self, client, mock_supabase):
-        """Someone unrelated to the work gets 403."""
+        """Someone unrelated to the work gets 403 (get_work_access denies)."""
+        # No access patch: the resolver sees a work owned by someone else and the
+        # current user is neither a project member nor a confirmed collaborator,
+        # so get_collaborators_filtered returns None -> 403.
         work_builder = MockQueryBuilder()
-        # Different owner
-        work_builder.execute.return_value = MagicMock(data={"user_id": "other-user-id"}, count=1)
+        work_builder.execute.return_value = MagicMock(data={"user_id": "other-user-id", "project_id": None}, count=1)
 
-        collab_check_builder = MockQueryBuilder()
-        collab_check_builder.execute.return_value = MagicMock(data=[], count=0)
-
-        call_count = {"n": 0}
+        empty_builder = MockQueryBuilder()
+        empty_builder.execute.return_value = MagicMock(data=[], count=0)
 
         def table_side_effect(name):
-            call_count["n"] += 1
-            n = call_count["n"]
-            if n == 1:
+            if name == "works_registry":
                 return work_builder
-            else:
-                return collab_check_builder
+            return empty_builder
 
         mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
         response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
         assert response.status_code == 403
 
-    def test_work_not_found_returns_404(self, client, mock_supabase):
-        """Missing work returns 404."""
+    def test_work_not_found_returns_403(self, client, mock_supabase):
+        """Missing work returns 403 — the endpoint does not leak existence via 404."""
         work_builder = MockQueryBuilder()
         work_builder.execute.return_value = MagicMock(data=None, count=0)
 
         mock_supabase.table.side_effect = _sub_wrap(lambda name: work_builder)
 
         response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
-        assert response.status_code == 404
+        assert response.status_code == 403
 
     def test_existing_collaborator_can_list(self, client, mock_supabase):
-        """An existing collaborator on the work can also view the list."""
-        work_builder = MockQueryBuilder()
-        # Different owner
-        work_builder.execute.return_value = MagicMock(data={"user_id": "other-owner-id"}, count=1)
-
-        collab_check_builder = MockQueryBuilder()
-        # Current user IS a collaborator
-        collab_check_builder.execute.return_value = MagicMock(data=[{"id": COLLAB_ID}], count=1)
-
+        """An existing collaborator on the work can also view the (filtered) list."""
         collaborators_builder = MockQueryBuilder()
         collaborators_builder.execute.return_value = MagicMock(data=[_collab_row()], count=1)
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: collaborators_builder)
 
-        call_count = {"n": 0}
-
-        def table_side_effect(name):
-            call_count["n"] += 1
-            n = call_count["n"]
-            if n == 1:
-                return work_builder
-            elif n == 2:
-                return collab_check_builder
-            else:
-                return collaborators_builder
-
-        mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
-
-        response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
+        with grant_owner_access():
+            response = client.get(f"/registry/collaborators?work_id={WORK_ID}")
         assert response.status_code == 200
         assert "collaborators" in response.json()
 
@@ -218,7 +191,10 @@ class TestInviteCollaborator:
 
         mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
-        with patch("registry.emails.send_invitation_email") as mock_email:
+        with (
+            patch("registry.emails.send_invitation_email") as mock_email,
+            _grant_invite_manage_access(),
+        ):
             response = client.post(
                 "/registry/collaborators/invite",
                 json={
@@ -258,7 +234,7 @@ class TestInviteCollaborator:
 
         mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
-        with patch("registry.emails.send_invitation_email"):
+        with patch("registry.emails.send_invitation_email"), _grant_invite_manage_access():
             response = client.post(
                 "/registry/collaborators/invite",
                 json={
@@ -549,77 +525,81 @@ class TestDeclineInvitation:
 class TestRevokeCollaborator:
     """POST /registry/collaborators/{collaborator_id}/revoke"""
 
-    def test_revoke_by_inviter_succeeds(self, client, mock_supabase):
-        """Work inviter can revoke a collaborator."""
-        # collab lookup (invited_by matches user_id)
+    def test_revoke_by_manager_succeeds(self, client, mock_supabase):
+        """A user with can_manage access can revoke a collaborator. Auth is now gated by
+        get_work_access (owner/admin on work or project), not just the original inviter."""
+        # collab lookup
         collab_builder = MockQueryBuilder()
         collab_builder.execute.return_value = MagicMock(data=_collab_row(status="invited", stake_id=None), count=1)
 
-        # update status to revoked
-        revoke_update_builder = MockQueryBuilder()
-        revoke_update_builder.execute.return_value = MagicMock(data=[], count=0)
-
-        # works_registry status check (no registered revert needed)
-        works_status_builder = MockQueryBuilder()
-        works_status_builder.execute.return_value = MagicMock(data={"status": "draft"}, count=1)
+        # status update + grant delete both flow through generic builders
+        generic_builder = MockQueryBuilder()
+        generic_builder.execute.return_value = MagicMock(data=[], count=0)
 
         call_count = {"n": 0}
 
         def table_side_effect(name):
             call_count["n"] += 1
-            n = call_count["n"]
-            if n == 1:
-                return collab_builder
-            elif n == 2:
-                return revoke_update_builder
-            else:
-                return works_status_builder
+            return collab_builder if call_count["n"] == 1 else generic_builder
 
         mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
-        response = client.post(f"/registry/collaborators/{COLLAB_ID}/revoke")
+        # Patch get_work_access to a manager (owner) result — the revoke gate now uses it.
+        with grant_owner_access():
+            response = client.post(f"/registry/collaborators/{COLLAB_ID}/revoke")
         assert response.status_code == 200
         body = response.json()
         # revoke_collaborator returns collab.data which is our _collab_row dict
         assert body["id"] == COLLAB_ID
 
-    def test_revoke_also_reverts_registered_work_to_draft(self, client, mock_supabase):
-        """If work was registered, revoking a collab reverts it to draft."""
+    def test_revoke_does_not_revert_registered_work(self, client, mock_supabase):
+        """Task 8: revoke removes ACCESS but KEEPS ownership. A registered work is NOT
+        reverted to draft, and the collaborator's stake is NOT deleted. The only table
+        writes revoke performs are the status update and the access-grant delete — so a
+        works_registry status-revert call must never happen."""
         collab_builder = MockQueryBuilder()
-        collab_builder.execute.return_value = MagicMock(data=_collab_row(status="confirmed", stake_id=None), count=1)
+        collab_builder.execute.return_value = MagicMock(
+            data=_collab_row(status="confirmed", stake_id="stake-1"), count=1
+        )
 
-        revoke_update_builder = MockQueryBuilder()
-        revoke_update_builder.execute.return_value = MagicMock(data=[], count=0)
+        generic_builder = MockQueryBuilder()
+        generic_builder.execute.return_value = MagicMock(data=[], count=0)
 
-        # work is registered
-        works_status_builder = MockQueryBuilder()
-        works_status_builder.execute.return_value = MagicMock(data={"status": "registered"}, count=1)
-
-        # works_registry update to draft
-        works_revert_builder = MockQueryBuilder()
-        works_revert_builder.execute.return_value = MagicMock(data=[], count=0)
-
-        call_count = {"n": 0}
+        touched_tables = []
 
         def table_side_effect(name):
-            call_count["n"] += 1
-            n = call_count["n"]
-            if n == 1:
-                return collab_builder
-            elif n == 2:
-                return revoke_update_builder
-            elif n == 3:
-                return works_status_builder
-            else:
-                return works_revert_builder
+            touched_tables.append(name)
+            return collab_builder if len([t for t in touched_tables if t]) == 1 else generic_builder
 
         mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
 
-        response = client.post(f"/registry/collaborators/{COLLAB_ID}/revoke")
+        with grant_owner_access():
+            response = client.post(f"/registry/collaborators/{COLLAB_ID}/revoke")
         assert response.status_code == 200
+        # No stake deletion and no works_registry status-revert: ownership is preserved.
+        assert "ownership_stakes" not in touched_tables, "revoke must not touch ownership_stakes"
+        # works_registry is only read by get_work_access (patched out here), so revoke itself
+        # must not issue any works_registry write to revert status.
+        assert "works_registry" not in touched_tables, "revoke must not revert work status"
+
+    def test_revoke_without_manage_access_returns_403(self, client, mock_supabase):
+        """A user without can_manage access (e.g. work-only viewer) cannot revoke -> 403."""
+        from unittest.mock import AsyncMock
+
+        from registry import service as registry_service
+        from registry.access import WorkAccess
+
+        collab_builder = MockQueryBuilder()
+        collab_builder.execute.return_value = MagicMock(data=_collab_row(status="invited"), count=1)
+        mock_supabase.table.side_effect = _sub_wrap(lambda name: collab_builder)
+
+        viewer = WorkAccess(work_role="viewer")  # can_manage is False
+        with patch.object(registry_service, "get_work_access", AsyncMock(return_value=viewer)):
+            response = client.post(f"/registry/collaborators/{COLLAB_ID}/revoke")
+        assert response.status_code == 403
 
     def test_revoke_not_found_returns_404(self, client, mock_supabase):
-        """Non-inviter or missing record returns 404."""
+        """Missing collaborator record returns 404 (before the access gate)."""
         not_found_builder = MockQueryBuilder()
         not_found_builder.execute.return_value = MagicMock(data=None, count=0)
 

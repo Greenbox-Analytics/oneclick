@@ -17,7 +17,11 @@ class WorkCreate(BaseModel):
     iswc: str | None = None
     upc: str | None = None
     release_date: date | None = None
+    is_released: bool | None = None
     notes: str | None = None
+    genre: str | None = None
+    label: str | None = None
+    featured_artists: list | None = None
 
 
 class WorkUpdate(BaseModel):
@@ -28,8 +32,12 @@ class WorkUpdate(BaseModel):
     iswc: str | None = None
     upc: str | None = None
     release_date: date | None = None
+    is_released: bool | None = None
     status: str | None = None
     notes: str | None = None
+    genre: str | None = None
+    label: str | None = None
+    featured_artists: list | None = None
 
 
 # --- Ownership Stakes ---
@@ -45,6 +53,7 @@ class StakeCreate(BaseModel):
     holder_ipi: str | None = None
     publisher_or_label: str | None = None
     notes: str | None = None
+    is_owner_stake: bool = False
 
 
 class StakeUpdate(BaseModel):
@@ -181,6 +190,27 @@ class StakeInput(BaseModel):
     percentage: float
 
 
+# --- Per-collaborator visibility grants & access level ---
+
+
+class GrantItem(BaseModel):
+    resource_type: str  # project_file | audio_file | license | agreement
+    resource_id: str
+
+
+class GrantsBody(BaseModel):
+    grants: list[GrantItem] = []
+    ownership_breakdown: bool | None = None
+
+
+class AccessLevelUpdate(BaseModel):
+    access_level: str  # viewer | admin
+
+
+class WorkRoleUpdate(BaseModel):
+    role: str
+
+
 class CollaboratorInviteWithStakes(BaseModel):
     work_id: str
     email: EmailStr
@@ -188,3 +218,17 @@ class CollaboratorInviteWithStakes(BaseModel):
     role: str
     stakes: list[StakeInput] = []
     notes: str | None = None
+    access_level: str = "viewer"
+    initial_grants: list[GrantItem] = []
+    ownership_breakdown: bool = False
+    terms: list = []
+
+
+# --- Collaborator-scoped contract derivation ---
+
+
+class DeriveFromContractsBody(BaseModel):
+    work_id: str
+    name: str
+    email: str | None = None
+    contract_file_ids: list[str] | None = None  # None => all linked contracts

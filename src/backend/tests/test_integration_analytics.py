@@ -215,6 +215,8 @@ class TestGoogleDriveImportAnalytics:
             "integrations.google_drive.service.import_drive_file",
             AsyncMock(return_value={"id": "f1", "name": "x.pdf"}),
         )
+        # Caller must be a project member for the import membership guard to pass.
+        monkeypatch.setattr("projects.service.get_user_role", AsyncMock(return_value="editor"))
 
         resp = client.post(
             "/integrations/google-drive/import",

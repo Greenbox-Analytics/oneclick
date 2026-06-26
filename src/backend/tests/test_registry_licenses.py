@@ -9,7 +9,7 @@ Acceptance criteria:
 
 from unittest.mock import MagicMock
 
-from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect, grant_owner_access
 
 _SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
@@ -55,7 +55,8 @@ def test_list_licenses_returns_licenses_key(client, mock_supabase):
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
     mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-    response = client.get(f"/registry/licenses?work_id={WORK_ID}")
+    with grant_owner_access():
+        response = client.get(f"/registry/licenses?work_id={WORK_ID}")
 
     assert response.status_code == 200
     body = response.json()
@@ -69,7 +70,8 @@ def test_list_licenses_empty(client, mock_supabase):
     builder.execute.return_value = MagicMock(data=[])
     mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-    response = client.get(f"/registry/licenses?work_id={WORK_ID}")
+    with grant_owner_access():
+        response = client.get(f"/registry/licenses?work_id={WORK_ID}")
 
     assert response.status_code == 200
     body = response.json()
@@ -82,7 +84,8 @@ def test_list_licenses_with_licenses(client, mock_supabase):
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
     mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
 
-    response = client.get(f"/registry/licenses?work_id={WORK_ID}")
+    with grant_owner_access():
+        response = client.get(f"/registry/licenses?work_id={WORK_ID}")
 
     assert response.status_code == 200
     body = response.json()
@@ -103,11 +106,23 @@ def test_list_licenses_requires_work_id(client, mock_supabase):
 # ============================================================
 
 
+def _work_owner_builder():
+    """Builder for the works_registry lookup create_license/create_agreement does to
+    resolve the work owner for user_id stamping. Returns a dict, not a list."""
+    b = MockQueryBuilder()
+    b.execute.return_value = MagicMock(data={"user_id": TEST_USER_ID})
+    return b
+
+
 def test_create_license_success(client, mock_supabase):
     """POST /registry/licenses creates and returns the new license."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+
+    def _side(name):
+        return _work_owner_builder() if name == "works_registry" else builder
+
+    mock_supabase.table.side_effect = _sub_wrap(_side)
 
     payload = {
         "work_id": WORK_ID,
@@ -116,7 +131,8 @@ def test_create_license_success(client, mock_supabase):
         "territory": "worldwide",
         "start_date": "2026-01-01",
     }
-    response = client.post("/registry/licenses", json=payload)
+    with grant_owner_access():
+        response = client.post("/registry/licenses", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -128,7 +144,11 @@ def test_create_license_with_all_fields(client, mock_supabase):
     """POST /registry/licenses accepts all optional fields."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+
+    def _side(name):
+        return _work_owner_builder() if name == "works_registry" else builder
+
+    mock_supabase.table.side_effect = _sub_wrap(_side)
 
     payload = {
         "work_id": WORK_ID,
@@ -140,7 +160,8 @@ def test_create_license_with_all_fields(client, mock_supabase):
         "end_date": "2027-01-01",
         "terms": "Non-exclusive sync license",
     }
-    response = client.post("/registry/licenses", json=payload)
+    with grant_owner_access():
+        response = client.post("/registry/licenses", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -152,7 +173,11 @@ def test_create_license_insert_fails_returns_500(client, mock_supabase):
     """POST /registry/licenses returns 500 when insert returns no data."""
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+
+    def _side(name):
+        return _work_owner_builder() if name == "works_registry" else builder
+
+    mock_supabase.table.side_effect = _sub_wrap(_side)
 
     payload = {
         "work_id": WORK_ID,
@@ -161,7 +186,8 @@ def test_create_license_insert_fails_returns_500(client, mock_supabase):
         "territory": "worldwide",
         "start_date": "2026-01-01",
     }
-    response = client.post("/registry/licenses", json=payload)
+    with grant_owner_access():
+        response = client.post("/registry/licenses", json=payload)
 
     assert response.status_code == 500
     assert "Failed to create license" in response.json()["detail"]
@@ -184,7 +210,11 @@ def test_create_license_default_territory(client, mock_supabase):
     license_worldwide = {**SAMPLE_LICENSE, "territory": "worldwide"}
     builder = MockQueryBuilder()
     builder.execute.return_value = MagicMock(data=[license_worldwide])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+
+    def _side(name):
+        return _work_owner_builder() if name == "works_registry" else builder
+
+    mock_supabase.table.side_effect = _sub_wrap(_side)
 
     payload = {
         "work_id": WORK_ID,
@@ -193,7 +223,8 @@ def test_create_license_default_territory(client, mock_supabase):
         "start_date": "2026-01-01",
         # territory omitted — should default to "worldwide"
     }
-    response = client.post("/registry/licenses", json=payload)
+    with grant_owner_access():
+        response = client.post("/registry/licenses", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -205,15 +236,33 @@ def test_create_license_default_territory(client, mock_supabase):
 # ============================================================
 
 
+def _license_update_side(update_data):
+    """Side-effect: licensing_rights first returns the row lookup (dict with work_id),
+    then the update result. update_license now resolves the work via the row before
+    gating, so the first call must be a dict."""
+    lookup = MockQueryBuilder()
+    lookup.execute.return_value = MagicMock(data={"work_id": WORK_ID})
+    update = MockQueryBuilder()
+    update.execute.return_value = MagicMock(data=update_data)
+    call_count = [0]
+
+    def _side(name):
+        if name == "licensing_rights":
+            call_count[0] += 1
+            return lookup if call_count[0] == 1 else update
+        return MockQueryBuilder()
+
+    return _side
+
+
 def test_update_license_success(client, mock_supabase):
     """PUT /registry/licenses/{license_id} updates and returns the license."""
     updated_license = {**SAMPLE_LICENSE, "licensee_name": "New Studio LLC"}
-    builder = MockQueryBuilder()
-    builder.execute.return_value = MagicMock(data=[updated_license])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+    mock_supabase.table.side_effect = _sub_wrap(_license_update_side([updated_license]))
 
     payload = {"licensee_name": "New Studio LLC"}
-    response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -221,13 +270,14 @@ def test_update_license_success(client, mock_supabase):
 
 
 def test_update_license_not_found(client, mock_supabase):
-    """PUT /registry/licenses/{license_id} returns 404 when license not found."""
-    builder = MockQueryBuilder()
-    builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+    """PUT /registry/licenses/{license_id} returns 404 when license row not found."""
+    lookup = MockQueryBuilder()
+    lookup.execute.return_value = MagicMock(data=None)
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: lookup)
 
     payload = {"licensee_name": "New Studio LLC"}
-    response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
 
     assert response.status_code == 404
     assert response.json()["detail"] == "License not found"
@@ -236,12 +286,11 @@ def test_update_license_not_found(client, mock_supabase):
 def test_update_license_status(client, mock_supabase):
     """PUT /registry/licenses/{license_id} can update status field."""
     updated_license = {**SAMPLE_LICENSE, "status": "expired"}
-    builder = MockQueryBuilder()
-    builder.execute.return_value = MagicMock(data=[updated_license])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+    mock_supabase.table.side_effect = _sub_wrap(_license_update_side([updated_license]))
 
     payload = {"status": "expired"}
-    response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -251,12 +300,11 @@ def test_update_license_status(client, mock_supabase):
 def test_update_license_with_dates(client, mock_supabase):
     """PUT /registry/licenses/{license_id} accepts date fields."""
     updated_license = {**SAMPLE_LICENSE, "end_date": "2028-01-01"}
-    builder = MockQueryBuilder()
-    builder.execute.return_value = MagicMock(data=[updated_license])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+    mock_supabase.table.side_effect = _sub_wrap(_license_update_side([updated_license]))
 
     payload = {"end_date": "2028-01-01"}
-    response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
+    with grant_owner_access():
+        response = client.put(f"/registry/licenses/{LICENSE_ID}", json=payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -270,23 +318,36 @@ def test_update_license_with_dates(client, mock_supabase):
 
 def test_delete_license_success(client, mock_supabase):
     """DELETE /registry/licenses/{license_id} returns {"ok": True}."""
-    builder = MockQueryBuilder()
-    builder.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+    lookup = MockQueryBuilder()
+    lookup.execute.return_value = MagicMock(data={"work_id": WORK_ID})
+    delete_builder = MockQueryBuilder()
+    delete_builder.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[SAMPLE_LICENSE])
+    call_count = [0]
 
-    response = client.delete(f"/registry/licenses/{LICENSE_ID}")
+    def _side(name):
+        if name == "licensing_rights":
+            call_count[0] += 1
+            return lookup if call_count[0] == 1 else delete_builder
+        return MockQueryBuilder()
+
+    mock_supabase.table.side_effect = _sub_wrap(_side)
+
+    with grant_owner_access():
+        response = client.delete(f"/registry/licenses/{LICENSE_ID}")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
 
 
-def test_delete_license_always_returns_ok(client, mock_supabase):
-    """DELETE /registry/licenses/{license_id} returns {"ok": True} even if nothing deleted."""
-    builder = MockQueryBuilder()
-    builder.execute.return_value = MagicMock(data=[])
-    mock_supabase.table.side_effect = _sub_wrap(lambda name: builder)
+def test_delete_license_row_not_found_returns_ok(client, mock_supabase):
+    """DELETE /registry/licenses/{license_id} returns {"ok": True} when the row is gone
+    (service returns None, endpoint still responds ok)."""
+    lookup = MockQueryBuilder()
+    lookup.execute.return_value = MagicMock(data=None)
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: lookup)
 
-    response = client.delete(f"/registry/licenses/{LICENSE_ID}")
+    with grant_owner_access():
+        response = client.delete(f"/registry/licenses/{LICENSE_ID}")
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
