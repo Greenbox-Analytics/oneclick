@@ -23,7 +23,7 @@ import CalculationResults from "@/components/oneclick/CalculationResults";
 import SongMismatchComparison from "@/components/oneclick/SongMismatchComparison";
 
 interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; }
-interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; }
+interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; calculation_id?: string; }
 interface CalculationErrorState {
   message: string;
   code?: string;
@@ -52,6 +52,9 @@ const OneClickDocuments = () => {
   const [error, setError] = useState<CalculationErrorState | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  // Set once the calculation is saved (or read off a cached result); the
+  // Earnings Breakdown tab needs it to fetch per-dimension aggregates.
+  const [savedCalculationId, setSavedCalculationId] = useState<string | null>(null);
   const [selectedExistingContracts, setSelectedExistingContracts] = useState<string[]>([]);
   const [selectedExistingRoyaltyStatement, setSelectedExistingRoyaltyStatement] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -320,6 +323,14 @@ const OneClickDocuments = () => {
         setCalculationStage("starting");
         setCalculationMessage("Starting calculation...");
         setSaveSuccess(false);
+        // Clear any prior calculation's id so the breakdown tab doesn't show
+        // stale data before this run is saved (or a cached id arrives).
+        setSavedCalculationId(null);
+        // Reset the auto-save guard so this run saves even when the inputs match
+        // the previous one (e.g. force-recalculate of the same statement +
+        // contracts) — otherwise the new calculation_id is never captured and the
+        // breakdown is stuck on "Save the calculation to see the earnings breakdown".
+        autoSaveTriggeredRef.current = null;
 
         // Use fetch + SSE for authenticated streaming
         const queryParams = new URLSearchParams({
@@ -357,7 +368,7 @@ const OneClickDocuments = () => {
                     setCalculationProgress(data.progress || 0); setCalculationStage(data.stage || ""); setCalculationMessage(data.message || "");
                 } else if (data.type === 'complete' || (data.status === 'success' && data.payments)) {
                     clearTimeout(timeout);
-                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached });
+                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached, calculation_id: data.calculation_id });
                     setShowProgressModal(false);
                     toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
                     setContractFiles([]); setRoyaltyStatementFile(null); setIsUploading(false);
@@ -407,7 +418,7 @@ const OneClickDocuments = () => {
       if (!lastCalculationContext || !calculationResult || !user) return;
       setIsSaving(true);
       try {
-          await apiFetch(`${API_URL}/oneclick/confirm`, {
+          const saved = await apiFetch<{ id?: string }>(`${API_URL}/oneclick/confirm`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -417,6 +428,7 @@ const OneClickDocuments = () => {
                   results: calculationResult
               })
           });
+          if (saved?.id) setSavedCalculationId(saved.id);
           setSaveSuccess(true);
       } catch (err) { console.error("Error saving results:", err); toast.error("Failed to save results"); }
       finally { setIsSaving(false); }
@@ -598,6 +610,7 @@ const OneClickDocuments = () => {
           calculationResult={calculationResult}
           isUploading={isUploading}
           handleCalculateRoyalties={openReviewDialog}
+          calculationId={savedCalculationId}
         />
 
         {/* Review Selection Dialog */}

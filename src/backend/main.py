@@ -46,7 +46,8 @@ from integrations.google_drive.router import router as google_drive_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from integrations.spotify.router import router as spotify_router
-from oneclick.royalty_calculator import CalculationError
+from oneclick.breakdown import router as oneclick_breakdown_router
+from oneclick.royalty_calculator import CalculationError, RoyaltyCalculator
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
@@ -71,6 +72,7 @@ app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"]
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
+app.include_router(oneclick_breakdown_router, prefix="/oneclick", tags=["OneClick"])
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
@@ -1877,6 +1879,103 @@ class ConfirmCalculationRequest(BaseModel):
     results: dict[str, Any]
 
 
+def _persist_statement_rows(
+    calculation_id: str, royalty_statement_id: str, user_id: str, contract_song_titles: list[str]
+) -> None:
+    """Parse the royalty statement into per-line-item rows and persist the rows
+    for tracks named in the contract to `royalty_statement_rows`, powering the
+    Earnings Breakdown tab.
+
+    Only statement lines whose song title matches a contract work title (via the
+    same fuzzy `titles_match` logic the calculator uses) are kept, so the
+    breakdown reflects the contract's track(s) rather than the whole statement.
+
+    Best-effort: any failure is logged and swallowed so a parse hiccup never
+    breaks calculation save — the breakdown tab degrades to its empty state.
+    """
+    from utils.text.normalize import titles_match
+
+    statement_path = None
+    try:
+        statement_res = (
+            get_supabase_client().table("project_files").select("*").eq("id", royalty_statement_id).execute()
+        )
+        if not statement_res.data:
+            print(f"[breakdown] statement file {royalty_statement_id} not found; skipping row persistence")
+            return
+
+        statement_file = statement_res.data[0]
+        file_data = get_supabase_client().storage.from_("project-files").download(statement_file["file_path"])
+
+        file_extension = Path(statement_file["file_name"]).suffix.lower()
+        if not file_extension or file_extension not in [".csv", ".xlsx", ".xls"]:
+            file_extension = ".xlsx"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
+            tmp_statement.write(file_data)
+            statement_path = tmp_statement.name
+
+        rows = RoyaltyCalculator().read_royalty_statement_rows(statement_path)
+        if not rows:
+            return
+
+        # Keep only line items for tracks named in the contract. Match at the
+        # unique-title level (statements repeat the same title across thousands
+        # of rows) so we run the fuzzy comparison once per distinct title.
+        contract_titles = {t.strip() for t in contract_song_titles if t and t.strip()}
+        if not contract_titles:
+            print(f"[breakdown] no contract song titles for calculation {calculation_id}; skipping row persistence")
+            return
+
+        statement_titles = {row.song_title for row in rows if row.song_title}
+        matched_titles = {st for st in statement_titles if any(titles_match(st, ct) for ct in contract_titles)}
+        total_rows = len(rows)
+        rows = [row for row in rows if row.song_title in matched_titles]
+        print(f"[breakdown] kept {len(rows)} of {total_rows} statement rows matching contract tracks")
+        if not rows:
+            return
+
+        payload = [
+            {
+                "calculation_id": calculation_id,
+                "user_id": user_id,
+                "song_title": row.song_title,
+                "vendor": row.vendor,
+                "country": row.country,
+                "country_code": row.country_code,
+                "delivery_type": row.delivery_type,
+                "delivery_format": row.delivery_format,
+                "sale_date": row.sale_date,
+                "units_sold": row.units_sold,
+                "net_units": row.net_units,
+                "sales": row.sales,
+                "net_income": row.net_income,
+                "distribution": row.distribution,
+                "net_payable": row.net_payable,
+                "isrc": row.isrc,
+                "upc": row.upc,
+                "currency": row.currency,
+            }
+            for row in rows
+        ]
+
+        # Chunked insert keeps payloads well under PostgREST's request limits on
+        # large statements (distributor reports can run to tens of thousands of rows).
+        chunk_size = 500
+        for i in range(0, len(payload), chunk_size):
+            get_supabase_client().table("royalty_statement_rows").insert(payload[i : i + chunk_size]).execute()
+
+        print(f"[breakdown] persisted {len(payload)} statement rows for calculation {calculation_id}")
+    except Exception as e:
+        print(f"[breakdown] failed to persist statement rows for calculation {calculation_id}: {e}")
+    finally:
+        if statement_path:
+            try:
+                os.unlink(statement_path)
+            except OSError:
+                pass
+
+
 @app.post("/oneclick/confirm")
 async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str = Depends(get_current_user_id)):
     """
@@ -1942,6 +2041,14 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
         junction_rows = [{"calculation_id": calculation_id, "contract_id": cid} for cid in request.contract_ids]
 
         get_supabase_client().table("royalty_calculation_contracts").insert(junction_rows).execute()
+
+        # 3. Persist per-line-item statement rows (contract tracks only) for the
+        #    Earnings Breakdown tab. Best-effort — failures must not fail the save.
+        #    payment.song_title is the contract work title; the persist step
+        #    fuzzy-matches statement lines against these.
+        payments = (request.results or {}).get("payments", []) or []
+        contract_song_titles = [p.get("song_title", "") for p in payments]
+        _persist_statement_rows(calculation_id, request.royalty_statement_id, user_id, contract_song_titles)
 
         return {"status": "success", "message": "Calculation saved successfully", "id": calculation_id}
 
@@ -2073,6 +2180,10 @@ async def oneclick_calculate_royalties_stream(
                                 result = calc["results"]
                                 # Ensure is_cached flag is set
                                 result["is_cached"] = True
+                                # Expose the calculation id so the Earnings
+                                # Breakdown tab can load on cache hits (no
+                                # confirm round-trip happens for cached results).
+                                result["calculation_id"] = calc["id"]
                                 # Add type field so frontend SSE handler recognizes it
                                 result["type"] = "complete"
 

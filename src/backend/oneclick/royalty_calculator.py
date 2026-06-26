@@ -120,6 +120,100 @@ class RoyaltyPayment:
     terms: str | None = None
 
 
+@dataclass
+class StatementRow:
+    """A single line item from a royalty statement, preserving the dimensional
+    fields (vendor, country, delivery format, sale date) that the song-level
+    aggregator discards. Powers the OneClick Earnings Breakdown tab.
+
+    `sale_date` is normalized to an ISO `YYYY-MM-DD` string, or None if the
+    statement's date couldn't be parsed.
+    """
+
+    song_title: str
+    net_payable: float
+    vendor: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+    delivery_type: str | None = None
+    delivery_format: str | None = None
+    sale_date: str | None = None
+    units_sold: float | None = None
+    net_units: float | None = None
+    sales: float | None = None
+    net_income: float | None = None
+    distribution: float | None = None
+    isrc: str | None = None
+    upc: str | None = None
+    currency: str = "USD"
+
+
+# Normalized statement header -> StatementRow field. Headers are lowercased and
+# stripped before lookup; the first matching alias for a field wins.
+_STATEMENT_DIMENSION_ALIASES: dict[str, list[str]] = {
+    "vendor": ["vendor"],
+    "country": ["country of sale", "country"],
+    "country_code": ["country code"],
+    "delivery_type": ["delivery type"],
+    "delivery_format": ["delivery format"],
+    "sale_date": ["sale date"],
+    "units_sold": ["units sold"],
+    "net_units": ["net units"],
+    "sales": ["sales"],
+    "net_income": ["net income"],
+    "distribution": ["distribution"],
+    "isrc": ["isrc"],
+    "upc": ["upc"],
+    "currency": ["currency"],
+}
+
+# Numeric StatementRow fields parsed best-effort (commas stripped; junk -> None).
+_STATEMENT_NUMERIC_FIELDS = {
+    "units_sold",
+    "net_units",
+    "sales",
+    "net_income",
+    "distribution",
+}
+
+
+def _coerce_iso_date(raw) -> str | None:
+    """Normalize a statement date cell to ISO `YYYY-MM-DD`, or None if unparseable.
+
+    Accepts `M/D/YYYY` (distributor reports) and `YYYY-MM-DD`. A datetime/date
+    value (openpyxl may hand one back) is formatted directly.
+    """
+    if raw is None or raw == "":
+        return None
+    # openpyxl with data_only may return a datetime/date directly.
+    if hasattr(raw, "strftime"):
+        try:
+            return raw.strftime("%Y-%m-%d")
+        except (ValueError, AttributeError):
+            return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    from datetime import datetime
+
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%m/%d/%y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def _coerce_number(raw) -> float | None:
+    """Best-effort float coercion; strips thousands separators. None on failure."""
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(str(raw).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
 class RoyaltyCalculator:
     """
     Enhanced calculator for royalty payments from statements and contracts.
@@ -191,6 +285,94 @@ class RoyaltyCalculator:
             raise
         except Exception as e:
             raise Exception(f"Error reading royalty statement: {str(e)}")
+
+    def read_royalty_statement_rows(self, statement_path: str) -> list[StatementRow]:
+        """Read a royalty statement preserving per-line-item dimensions.
+
+        Unlike `read_royalty_statement` (which sums to song-level totals), this
+        returns one `StatementRow` per statement line, carrying vendor, country,
+        delivery format, and sale date — the fields the Earnings Breakdown tab
+        aggregates over. Rows missing a title or net-payable amount are skipped;
+        a bad sale date downgrades to None rather than dropping the row.
+
+        Supports CSV and Excel. Title and payable columns are auto-detected with
+        the same helpers the aggregator uses.
+        """
+        file_ext = Path(statement_path).suffix.lower()
+        if file_ext == ".csv":
+            normalized_rows = self._iter_csv_rows(statement_path)
+        elif file_ext in [".xlsx", ".xls"]:
+            normalized_rows = self._iter_excel_rows(statement_path)
+        else:
+            raise CalculationError(
+                code="STATEMENT_UNSUPPORTED_FORMAT",
+                message=f"We can't read {file_ext} files for royalty statements.",
+                suggestion="Upload the statement as a CSV or Excel (.xlsx / .xls) file.",
+            )
+
+        normalized_rows = list(normalized_rows)
+        if not normalized_rows:
+            return []
+
+        headers = list(normalized_rows[0].keys())
+        title_key = self._find_title_column(headers)
+        payable_key = self._find_payable_column(headers)
+
+        # Resolve each StatementRow field to a concrete header present in the file.
+        field_to_key: dict[str, str] = {}
+        for field, aliases in _STATEMENT_DIMENSION_ALIASES.items():
+            for alias in aliases:
+                if alias in headers:
+                    field_to_key[field] = alias
+                    break
+
+        rows: list[StatementRow] = []
+        for raw in normalized_rows:
+            title_cell = raw.get(title_key)
+            title = str(title_cell).strip() if title_cell not in (None, "") else ""
+            net_payable = _coerce_number(raw.get(payable_key))
+            if not title or net_payable is None:
+                continue
+
+            values: dict = {}
+            for field, key in field_to_key.items():
+                cell = raw.get(key)
+                if field == "sale_date":
+                    values[field] = _coerce_iso_date(cell)
+                elif field in _STATEMENT_NUMERIC_FIELDS:
+                    values[field] = _coerce_number(cell)
+                elif field == "currency":
+                    values[field] = str(cell).strip() if cell not in (None, "") else "USD"
+                else:
+                    values[field] = str(cell).strip() if cell not in (None, "") else None
+
+            rows.append(StatementRow(song_title=title, net_payable=net_payable, **values))
+
+        return rows
+
+    def _iter_csv_rows(self, csv_path: str) -> list[dict]:
+        """Read a CSV into a list of {normalized_header: value} dicts."""
+        with open(csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                return []
+            field_map = {h: h.strip().lower() for h in reader.fieldnames}
+            return [{field_map[h]: row.get(h) for h in reader.fieldnames} for row in reader]
+
+    def _iter_excel_rows(self, excel_path: str) -> list[dict]:
+        """Read an Excel sheet into a list of {normalized_header: value} dicts."""
+        workbook = openpyxl.load_workbook(excel_path, data_only=True)
+        sheet = workbook.active
+        header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
+        if not header_row:
+            workbook.close()
+            return []
+        headers = [str(h).strip().lower() if h is not None else "" for h in header_row]
+        result = []
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            result.append({headers[i]: row[i] for i in range(len(headers)) if headers[i]})
+        workbook.close()
+        return result
 
     def _read_csv_statement(
         self, csv_path: str, title_column: str | None = None, payable_column: str | None = None

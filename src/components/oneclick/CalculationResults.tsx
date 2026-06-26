@@ -10,8 +10,10 @@ import type { PieLabelRenderProps } from "recharts";
 import ExcelJS from "exceljs";
 import { toPng } from "html-to-image";
 import { toast } from "sonner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import EarningsBreakdown from "@/components/oneclick/EarningsBreakdown";
 
 interface RoyaltyPayment {
   song_title: string;
@@ -31,6 +33,7 @@ interface CalculationResult {
   excel_file_url?: string;
   message: string;
   is_cached?: boolean;
+  calculation_id?: string;
 }
 
 interface CalculationResultsProps {
@@ -41,6 +44,7 @@ interface CalculationResultsProps {
   calculationResult: CalculationResult | null;
   isUploading: boolean;
   handleCalculateRoyalties: (forceRecalculate: boolean) => void;
+  calculationId?: string | null;
 }
 
 const formatCurrency = (amount: number) => {
@@ -58,8 +62,12 @@ const CalculationResults = ({
   calculationResult,
   isUploading,
   handleCalculateRoyalties,
+  calculationId,
 }: CalculationResultsProps) => {
   const chartContentRef = useRef<HTMLDivElement>(null);
+  // Prefer the id carried on the result (covers cache hits) and fall back to
+  // the id captured when the calculation was saved.
+  const breakdownCalculationId = calculationResult?.calculation_id ?? calculationId ?? null;
 
   const { connections } = useIntegrations();
   const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
@@ -387,43 +395,56 @@ const CalculationResults = ({
             </Card>
           </div>
 
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Royalty Distribution</CardTitle>
-                <Button variant="outline" size="sm" onClick={handleDownloadChart}>
-                  <Download className="mr-2 h-4 w-4" />
-                  Download Chart
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div ref={chartContentRef} className="h-[450px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      outerRadius={130}
-                      dataKey="value"
-                      nameKey="name"
-                      label={renderPieLabel}
-                      labelLine={true}
-                    >
-                      {pieData.map((entry, index, arr) => {
-                        const isUnallocated = entry.name === UNALLOCATED_LABEL;
-                        const fill = isUnallocated
-                          ? "hsl(150, 8%, 22%)"
-                          : `hsl(150, ${50 + (index / (arr.length || 1)) * 10}%, ${25 + (index / (arr.length || 1)) * 40}%)`;
-                        return <Cell key={`cell-${index}`} fill={fill} />;
-                      })}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
+          <Tabs defaultValue="distribution" className="w-full">
+            <TabsList className="grid grid-cols-2 w-full max-w-md">
+              <TabsTrigger value="distribution">Royalty Distribution</TabsTrigger>
+              <TabsTrigger value="breakdown">Earnings Breakdown</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="distribution" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Royalty Distribution</CardTitle>
+                    <Button variant="outline" size="sm" onClick={handleDownloadChart}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download Chart
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div ref={chartContentRef} className="h-[450px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={130}
+                          dataKey="value"
+                          nameKey="name"
+                          label={renderPieLabel}
+                          labelLine={true}
+                        >
+                          {pieData.map((entry, index, arr) => {
+                            const isUnallocated = entry.name === UNALLOCATED_LABEL;
+                            const fill = isUnallocated
+                              ? "hsl(150, 8%, 22%)"
+                              : `hsl(150, ${50 + (index / (arr.length || 1)) * 10}%, ${25 + (index / (arr.length || 1)) * 40}%)`;
+                            return <Cell key={`cell-${index}`} fill={fill} />;
+                          })}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="breakdown" className="mt-4">
+              <EarningsBreakdown calculationId={breakdownCalculationId} />
+            </TabsContent>
+          </Tabs>
 
           <Card>
               <CardHeader>
