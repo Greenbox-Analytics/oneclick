@@ -43,6 +43,8 @@ const Pricing = lazy(() => import("./pages/Pricing"));
 const Subscription = lazy(() => import("./pages/Subscription"));
 const AdminUsers = lazy(() => import("./pages/AdminUsers"));
 const Team = lazy(() => import("./pages/Team"));
+const About = lazy(() => import("./pages/About"));
+const Features = lazy(() => import("./pages/Features"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const Security = lazy(() => import("./pages/Security"));
 
@@ -212,6 +214,8 @@ const App = () => (
             <Route path="/docs" element={<Documentation />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/team" element={<Team />} />
+            <Route path="/about" element={<About />} />
+            <Route path="/features" element={<Features />} />
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/security" element={<Security />} />
             <Route path="/tools/registry" element={<ProtectedRoute><Registry /></ProtectedRoute>} />
