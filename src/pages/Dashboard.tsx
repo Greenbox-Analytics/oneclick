@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, CreditCard, Shield, Home, type LucideIcon } from "lucide-react";
+import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, CreditCard, Shield, Home, Receipt, type LucideIcon } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
@@ -31,6 +31,7 @@ const TOOL_REGISTRY: Record<string, { icon: typeof Calculator; label: string }> 
   "/artists/new": { icon: Plus, label: "Add Artist" },
   "/tools/oneclick": { icon: Calculator, label: "OneClick" },
   "/tools/zoe": { icon: Bot, label: "Zoe" },
+  "/tools/expense-tracker": { icon: Receipt, label: "Expense Tracker" },
   "/profile": { icon: User, label: "Profile" },
   "/docs": { icon: BookOpen, label: "Documentation" },
 };

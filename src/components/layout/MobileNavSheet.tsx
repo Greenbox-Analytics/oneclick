@@ -31,6 +31,7 @@ import {
   MessageSquare,
   PieChart,
   FileText,
+  Receipt,
 } from "lucide-react";
 
 interface NavItem {
@@ -52,6 +53,7 @@ const TOOLS: NavItem[] = [
   { label: "OneClick", path: "/tools/oneclick", icon: Calculator },
   { label: "Zoe", path: "/tools/zoe", icon: MessageSquare },
   { label: "Split Sheet", path: "/tools/split-sheet", icon: PieChart },
+  { label: "Expense Tracker", path: "/tools/expense-tracker", icon: Receipt },
 ];
 
 const FOOTER: NavItem[] = [

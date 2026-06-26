@@ -35,6 +35,7 @@ const SplitSheet = lazy(() => import("./pages/SplitSheet"));
 const Onboarding = lazy(() => import("./pages/Onboarding"));
 const Documentation = lazy(() => import("./pages/Documentation"));
 const Registry = lazy(() => import("./pages/Registry"));
+const ExpenseTracker = lazy(() => import("./pages/ExpenseTracker"));
 const WorkDetail = lazy(() => import("./pages/WorkDetail"));
 const InviteClaim = lazy(() => import("./pages/InviteClaim"));
 const ProjectDetail = lazy(() => import("./pages/ProjectDetail"));
@@ -215,6 +216,7 @@ const App = () => (
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/security" element={<Security />} />
             <Route path="/tools/registry" element={<ProtectedRoute><Registry /></ProtectedRoute>} />
+            <Route path="/tools/expense-tracker" element={<ProtectedRoute><ExpenseTracker /></ProtectedRoute>} />
             {/* Public: invited collaborators may not be signed in yet — the page
                 shows a sign-in gate and only fetches the (auth-required) preview
                 once a user session exists. */}

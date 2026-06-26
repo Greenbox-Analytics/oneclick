@@ -20,10 +20,12 @@ import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
 import CalculationResults from "@/components/oneclick/CalculationResults";
+import ExpenseReviewDialog from "@/components/oneclick/ExpenseReviewDialog";
 import SongMismatchComparison from "@/components/oneclick/SongMismatchComparison";
 
-interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; }
-interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; calculation_id?: string; }
+interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; basis?: string; gross_amount?: number; expenses_applied?: number; net_amount?: number; }
+interface ReviewExpense { id: string; description?: string; amount: number; category?: string | null; incurred_on?: string | null; work_ids?: string[]; work_titles?: string[]; }
+interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; calculation_id?: string; expense_review_required?: boolean; expenses?: ReviewExpense[]; }
 interface CalculationErrorState {
   message: string;
   code?: string;
@@ -49,6 +51,8 @@ const OneClickDocuments = () => {
   const [royaltyStatementFile, setRoyaltyStatementFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [calculationResult, setCalculationResult] = useState<CalculationResult | null>(null);
+  const [expenseReview, setExpenseReview] = useState<ReviewExpense[] | null>(null);
+  const [isRecalculating, setIsRecalculating] = useState(false);
   const [error, setError] = useState<CalculationErrorState | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -368,9 +372,15 @@ const OneClickDocuments = () => {
                     setCalculationProgress(data.progress || 0); setCalculationStage(data.stage || ""); setCalculationMessage(data.message || "");
                 } else if (data.type === 'complete' || (data.status === 'success' && data.payments)) {
                     clearTimeout(timeout);
-                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached, calculation_id: data.calculation_id });
+                    const needsReview = !!data.expense_review_required && !data.is_cached;
+                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached, calculation_id: data.calculation_id, expense_review_required: needsReview, expenses: data.expenses || [] });
                     setShowProgressModal(false);
-                    toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
+                    if (needsReview) {
+                        setExpenseReview(data.expenses || []);
+                        toast.info("Some collaborators are paid on net income — review the expenses to finalize.");
+                    } else {
+                        toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
+                    }
                     setContractFiles([]); setRoyaltyStatementFile(null); setIsUploading(false);
                 } else if (data.type === 'error') {
                     clearTimeout(timeout); setShowProgressModal(false);
@@ -437,11 +447,36 @@ const OneClickDocuments = () => {
   useEffect(() => {
       if (!calculationResult || !lastCalculationContext || !user) return;
       if (calculationResult.is_cached) return;
+      // Hold off on saving until the user confirms expenses for net-basis rows.
+      if (calculationResult.expense_review_required) return;
       const resultKey = `${lastCalculationContext.statementId}-${lastCalculationContext.contractIds.join(',')}`;
       if (autoSaveTriggeredRef.current === resultKey) return;
       autoSaveTriggeredRef.current = resultKey;
       handleConfirmResultsWithContext();
   }, [calculationResult, lastCalculationContext, user]);
+
+  // Recompute net payouts after the user confirms/edits expenses in the review modal.
+  const handleConfirmExpenses = async (editedExpenses: ReviewExpense[]) => {
+      if (!calculationResult) return;
+      setIsRecalculating(true);
+      try {
+          const resp = await apiFetch<{ payments: RoyaltyPayment[] }>(`${API_URL}/oneclick/recalculate-net`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                  payments: calculationResult.payments,
+                  expenses: editedExpenses.map(e => ({ amount: e.amount, work_titles: e.work_titles || [] })),
+              }),
+          });
+          setCalculationResult({ ...calculationResult, payments: resp.payments, expense_review_required: false });
+          setExpenseReview(null);
+          toast.success("Net royalties finalized");
+      } catch (err) {
+          toast.error(`Recalculation failed: ${(err as Error).message}`);
+      } finally {
+          setIsRecalculating(false);
+      }
+  };
 
   const openReviewDialog = (forceRecalculate: boolean) => {
     const hasContracts = contractFiles.length > 0 || selectedExistingContracts.length > 0;
@@ -611,6 +646,14 @@ const OneClickDocuments = () => {
           isUploading={isUploading}
           handleCalculateRoyalties={openReviewDialog}
           calculationId={savedCalculationId}
+        />
+
+        <ExpenseReviewDialog
+          open={expenseReview !== null}
+          expenses={expenseReview ?? []}
+          isSubmitting={isRecalculating}
+          onConfirm={handleConfirmExpenses}
+          onCancel={() => setExpenseReview(null)}
         />
 
         {/* Review Selection Dialog */}

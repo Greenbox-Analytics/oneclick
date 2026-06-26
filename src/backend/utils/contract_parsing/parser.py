@@ -23,6 +23,15 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+
+def _normalize_basis(value) -> str | None:
+    """Coerce an LLM-provided income basis to "net", "gross", or None."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    return v if v in ("net", "gross") else None
+
+
 # Configuration
 LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5.2")
 STREAMING_EQUIVALENT_TERMS = [
@@ -235,6 +244,7 @@ class MusicContractParser:
         parties = result["parties"]
         works = result["works"]
         royalty_shares = result["royalty_shares"]
+        default_basis = result.get("default_basis")
 
         # Post-processing: simplify roles
         for party in parties:
@@ -267,7 +277,13 @@ class MusicContractParser:
         logger.info(f"✅ Extraction complete in {total_time:.2f}s")
         logger.info(f"   → {len(parties)} parties, {len(works)} works, {len(royalty_shares)} shares")
 
-        return ContractData(parties=parties, works=works, royalty_shares=royalty_shares, contract_summary="")
+        return ContractData(
+            parties=parties,
+            works=works,
+            royalty_shares=royalty_shares,
+            contract_summary="",
+            default_basis=default_basis,
+        )
 
     def _extract_all_unified(self, full_text: str) -> dict:
         """
@@ -318,6 +334,9 @@ EXTRACTION INSTRUCTIONS:
    - CRITICAL: If a royalty split refers to a generic role (e.g., 'Songwriter', 'Producer', 'Artist'), substitute it with the actual party name from step 1.
    - Simplify royalty type to one of: Streaming, Master, Publishing, Producer, Mixer, Remixer. If it doesn't fit, use a short descriptive term (max 3 words).
    - Only include parties with a specific numeric percentage.
+   - INCOME BASIS (per share): set "basis" to "net" if the contract states that party's split is paid on NET income/receipts/profits (i.e. after deducting costs/expenses), or "gross" if paid on GROSS income/receipts/the full amount. If the contract does not state a basis for that specific party, set "basis" to null.
+
+4. DEFAULT BASIS: If the contract states a SINGLE income basis that applies to everyone (e.g. "all royalties are payable on net receipts") without differentiating per party, set the top-level "default_basis" to "net" or "gross". If the contract is silent or specifies basis per party, set "default_basis" to null.
 
 Return your answer as a JSON object with this exact structure:
 {{
@@ -328,8 +347,9 @@ Return your answer as a JSON object with this exact structure:
     {{"title": "Canonical Title", "work_type": "composition|master recording|song|album"}}
   ],
   "royalty_shares": [
-    {{"party_name": "Full Name", "royalty_type": "Streaming|Master|Publishing|Producer|Mixer", "percentage": 50.0, "terms": "optional terms or null"}}
-  ]
+    {{"party_name": "Full Name", "royalty_type": "Streaming|Master|Publishing|Producer|Mixer", "percentage": 50.0, "terms": "optional terms or null", "basis": "net|gross|null"}}
+  ],
+  "default_basis": "net|gross|null"
 }}
 
 Return ONLY valid JSON."""
@@ -396,11 +416,12 @@ Return ONLY valid JSON."""
             royalty_type = item.get("royalty_type", "").strip()
             percentage = item.get("percentage")
             terms = item.get("terms")
+            basis = _normalize_basis(item.get("basis"))
             if party_name and royalty_type and percentage is not None:
                 try:
                     pct_val = float(percentage)
                     terms_str = str(terms) if terms and terms != "null" else None
-                    shares.append(RoyaltyShare(party_name, royalty_type.lower(), pct_val, terms_str))
+                    shares.append(RoyaltyShare(party_name, royalty_type.lower(), pct_val, terms_str, basis))
                 except (ValueError, TypeError):
                     continue
 
@@ -411,4 +432,13 @@ Return ONLY valid JSON."""
                 + (f" | {share.terms}" if share.terms else "")
             )
 
-        return {"parties": parties, "works": works, "royalty_shares": shares}
+        default_basis = _normalize_basis(data.get("default_basis"))
+        if default_basis:
+            logger.info(f"   ⚖️  Contract default income basis: {default_basis}")
+
+        return {
+            "parties": parties,
+            "works": works,
+            "royalty_shares": shares,
+            "default_basis": default_basis,
+        }

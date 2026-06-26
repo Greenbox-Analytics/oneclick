@@ -22,6 +22,7 @@ def calculate_royalty_payments(
     api_key: str = None,
     contract_ids: list[str] = None,
     contract_markdowns: dict[str, str] = None,
+    expenses: list[dict] = None,
 ) -> list[dict]:
     """
     Calculate royalty payments from a contract and royalty statement.
@@ -61,6 +62,7 @@ def calculate_royalty_payments(
             user_id=user_id,
             statement_path=statement_path,
             contract_markdowns=contract_markdowns,
+            expenses=expenses,
         )
     else:
         # Single contract mode
@@ -71,6 +73,7 @@ def calculate_royalty_payments(
             full_text=full_text,
             contract_id=contract_id,
             user_id=user_id,
+            expenses=expenses,
         )
 
     # Convert to dictionaries for easier JSON serialization
@@ -86,6 +89,10 @@ def calculate_royalty_payments(
                 "total_royalty": payment.total_royalty,
                 "amount_to_pay": payment.amount_to_pay,
                 "terms": payment.terms,
+                "basis": payment.basis,
+                "gross_amount": payment.gross_amount,
+                "expenses_applied": payment.expenses_applied,
+                "net_amount": payment.net_amount,
             }
         )
 
