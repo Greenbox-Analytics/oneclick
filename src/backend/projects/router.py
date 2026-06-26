@@ -10,7 +10,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from auth import get_current_user_id
 from projects import service
-from projects.models import MemberAdd, MemberUpdate
+from projects.models import ExpenseCreate, ExpenseUpdate, MemberAdd, MemberUpdate
 from projects.service import DuplicateInviteError
 
 router = APIRouter()
@@ -147,6 +147,45 @@ async def list_pending_invites(project_id: str, user_id: str = Depends(get_curre
 async def cancel_pending_invite(project_id: str, invite_id: str, user_id: str = Depends(get_current_user_id)):
     try:
         return await service.delete_pending_invite(_get_supabase(), user_id, project_id, invite_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@router.get("/{project_id}/expenses")
+async def list_expenses(project_id: str, user_id: str = Depends(get_current_user_id)):
+    try:
+        expenses = await service.get_expenses(_get_supabase(), user_id, project_id)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return {"expenses": expenses}
+
+
+@router.post("/{project_id}/expenses")
+async def create_expense(project_id: str, body: ExpenseCreate, user_id: str = Depends(get_current_user_id)):
+    try:
+        expense = await service.create_expense(_get_supabase(), user_id, project_id, body.model_dump())
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return {"expense": expense}
+
+
+@router.put("/{project_id}/expenses/{expense_id}")
+async def update_expense(
+    project_id: str, expense_id: str, body: ExpenseUpdate, user_id: str = Depends(get_current_user_id)
+):
+    try:
+        expense = await service.update_expense(
+            _get_supabase(), user_id, project_id, expense_id, body.model_dump(exclude_unset=True)
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return {"expense": expense}
+
+
+@router.delete("/{project_id}/expenses/{expense_id}")
+async def delete_expense(project_id: str, expense_id: str, user_id: str = Depends(get_current_user_id)):
+    try:
+        return await service.delete_expense(_get_supabase(), user_id, project_id, expense_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
 

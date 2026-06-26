@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 
 from knowledge.reference_search import search_reference
 from utils.contract_parsing.basis_detection import audit_contract_basis, log_basis_finding
-from utils.contract_parsing.models import ContractData
+from utils.contract_parsing.models import ContractData, effective_basis
 from utils.contract_parsing.parser import (
     NON_STREAMING_PAYOR_CONTEXT_PHRASES,
     NON_STREAMING_PAYOR_TERMS,
@@ -85,6 +85,67 @@ def is_streaming_earnable_share(share) -> bool:
     return not any(p.search(haystack) for p in _NON_STREAMING_PAYOR_PATTERNS)
 
 
+def allocate_expenses(song_totals: dict[str, float], expenses: list[dict] | None) -> dict[str, float]:
+    """Distribute project expenses across the songs present in a statement.
+
+    Each expense is a dict with:
+      - ``amount``: the expense value (>= 0)
+      - ``work_titles``: titles of the tracks this expense is tagged to. Empty
+        list ⇒ project-wide expense.
+
+    Rules:
+      - A tagged expense applies its FULL amount to EACH track it matches in
+        this statement (an expense linked to two tracks counts in full against
+        both). An expense tagged only to tracks NOT in this statement does not
+        apply and is dropped.
+      - Project-wide expenses are allocated across all songs in proportion to
+        each song's gross earnings; if total gross is 0, split equally.
+
+    Returns a mapping of song_title -> attributable expense (keys mirror
+    ``song_totals``; every song present, defaulting to 0.0).
+    """
+    per_song: dict[str, float] = {song: 0.0 for song in song_totals}
+    if not expenses or not song_totals:
+        return per_song
+
+    total_gross = sum(song_totals.values())
+    songs = list(song_totals.keys())
+    untagged_total = 0.0
+
+    for exp in expenses:
+        try:
+            amount = float(exp.get("amount", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if amount <= 0:
+            continue
+
+        titles = exp.get("work_titles") or []
+        if titles:
+            matched = []
+            for title in titles:
+                song, _ = find_matching_song(title, song_totals)
+                if song:
+                    matched.append(song)
+            matched = list(dict.fromkeys(matched))  # dedupe, preserve order
+            for song in matched:
+                per_song[song] += amount  # full amount against each linked track
+            # if nothing matched: tagged only to tracks absent from this statement → does not apply
+        else:
+            untagged_total += amount
+
+    if untagged_total > 0:
+        if total_gross > 0:
+            for song in songs:
+                per_song[song] += untagged_total * (song_totals[song] / total_gross)
+        else:
+            equal = untagged_total / len(songs)
+            for song in songs:
+                per_song[song] += equal
+
+    return per_song
+
+
 class CalculationError(ValueError):
     """Raised when a royalty calculation cannot produce results. Carries a
     machine-readable code, a user-facing message, an actionable suggestion,
@@ -108,7 +169,13 @@ _STATEMENT_SONGS_PREVIEW_CAP = 20
 
 @dataclass
 class RoyaltyPayment:
-    """Represents a calculated royalty payment"""
+    """Represents a calculated royalty payment.
+
+    `basis` is "net" or "gross". For gross rows the payout base is `gross_amount`;
+    for net rows it is `net_amount` (= gross_amount − expenses_applied). `amount_to_pay`
+    is always `base × percentage` for the resolved basis. `total_royalty` mirrors
+    `gross_amount` for backward compatibility with existing consumers.
+    """
 
     song_title: str
     party_name: str
@@ -118,6 +185,10 @@ class RoyaltyPayment:
     total_royalty: float
     amount_to_pay: float
     terms: str | None = None
+    basis: str = "gross"
+    gross_amount: float = 0.0
+    expenses_applied: float = 0.0
+    net_amount: float = 0.0
 
 
 @dataclass
@@ -774,6 +845,12 @@ class RoyaltyCalculator:
 
             # Merge royalty shares with conflict resolution
             for share in contract.royalty_shares:
+                # Resolve the income basis using THIS contract's default before merging,
+                # so a share inherits the basis of the contract it came from (not a
+                # neighbouring contract's default).
+                if share.basis is None and contract.default_basis:
+                    share.basis = contract.default_basis
+
                 norm_name = normalize_name(share.party_name)
 
                 # Check for existing share with same name AND similar type
@@ -837,6 +914,7 @@ class RoyaltyCalculator:
         title_column: str | None = None,
         payable_column: str | None = None,
         full_text: str = None,
+        expenses: list[dict] | None = None,
     ) -> list[RoyaltyPayment]:
         """
         Calculate payments for single contract and statement.
@@ -880,7 +958,7 @@ class RoyaltyCalculator:
             logger.info(f"   → {s}")
 
         t0 = time.time()
-        payments = self._calculate_payments_from_data(contract_data, song_totals)
+        payments = self._calculate_payments_from_data(contract_data, song_totals, expenses)
         logger.info(f"⏱️  Step 3 took: {time.time() - t0:.2f}s")
 
         # Step 4 (log-only): detect an explicit basis/deduction clause and record it for review.
@@ -910,6 +988,7 @@ class RoyaltyCalculator:
         title_column: str | None = None,
         payable_column: str | None = None,
         contract_markdowns: dict[str, str] = None,
+        expenses: list[dict] | None = None,
     ) -> list[RoyaltyPayment]:
         """
         Parse multiple contracts from Pinecone in PARALLEL, merge their data, and calculate payments.
@@ -967,7 +1046,7 @@ class RoyaltyCalculator:
         song_totals = self.read_royalty_statement(statement_path, title_column, payable_column)
 
         # Step 4: Calculate payments
-        payments = self._calculate_payments_from_data(merged_data, song_totals)
+        payments = self._calculate_payments_from_data(merged_data, song_totals, expenses)
         logger.info("[NuanceAudit] multi-contract: basis-nuance detection deferred (v1 single-contract only)")
 
         return payments
@@ -1033,7 +1112,10 @@ class RoyaltyCalculator:
         return payments
 
     def _calculate_payments_from_data(
-        self, contract_data: ContractData, song_totals: dict[str, float]
+        self,
+        contract_data: ContractData,
+        song_totals: dict[str, float],
+        expenses: list[dict] | None = None,
     ) -> list[RoyaltyPayment]:
         """
         Internal method to calculate payments from parsed contract data.
@@ -1041,6 +1123,8 @@ class RoyaltyCalculator:
         Args:
             contract_data: Parsed ContractData object
             song_totals: Dictionary of song titles to amounts
+            expenses: Optional project expenses (each {amount, work_titles}) used
+                to compute net-basis payouts. Gross-basis shares ignore them.
 
         Returns:
             List of RoyaltyPayment objects
@@ -1118,6 +1202,9 @@ class RoyaltyCalculator:
         logger.info(f"   Found {len(streaming_shares)} streaming royalty shares")
         logger.info(f"   Found {len(contract_data.works)} works to match")
 
+        # Allocate project expenses across statement songs (for net-basis shares).
+        song_expenses = allocate_expenses(song_totals, expenses)
+
         # Calculate payments for each work
         payments = []
         matched_count = 0
@@ -1133,9 +1220,16 @@ class RoyaltyCalculator:
                 logger.info(f"      Matched to: '{matching_song}'")
                 logger.info(f"      Total royalties: ${total_royalty:,.2f}")
 
+                expenses_for_song = song_expenses.get(matching_song, 0.0)
+
                 # Calculate payment for each party with streaming shares
                 for share in streaming_shares:
-                    amount_to_pay = total_royalty * (share.percentage / 100.0)
+                    basis = effective_basis(share, contract_data)
+                    if basis == "net":
+                        base = max(total_royalty - expenses_for_song, 0.0)
+                    else:
+                        base = total_royalty
+                    amount_to_pay = base * (share.percentage / 100.0)
 
                     # Find party details
                     party = next(
@@ -1157,10 +1251,16 @@ class RoyaltyCalculator:
                         total_royalty=total_royalty,
                         amount_to_pay=amount_to_pay,
                         terms=share.terms,
+                        basis=basis,
+                        gross_amount=total_royalty,
+                        expenses_applied=expenses_for_song if basis == "net" else 0.0,
+                        net_amount=base,
                     )
                     payments.append(payment)
 
-                    logger.info(f"         → {share.party_name} ({role}): {share.percentage}% = ${amount_to_pay:,.2f}")
+                    logger.info(
+                        f"         → {share.party_name} ({role}): {share.percentage}% [{basis}] = ${amount_to_pay:,.2f}"
+                    )
             else:
                 unmatched_works.append(work.title)
 

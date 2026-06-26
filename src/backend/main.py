@@ -1879,6 +1879,23 @@ class ConfirmCalculationRequest(BaseModel):
     results: dict[str, Any]
 
 
+class RecalcExpense(BaseModel):
+    amount: float
+    work_titles: list[str] = []
+
+
+class RecalculateNetRequest(BaseModel):
+    """Recompute payouts after the user edits expenses in the review modal.
+
+    Pure arithmetic — no LLM, no re-extraction. `payments` are the Pass-1 rows
+    (each carrying basis, gross_amount, percentage, song_title); `expenses` are
+    the confirmed/edited expense set.
+    """
+
+    payments: list[dict[str, Any]]
+    expenses: list[RecalcExpense] = []
+
+
 def _persist_statement_rows(
     calculation_id: str, royalty_statement_id: str, user_id: str, contract_song_titles: list[str]
 ) -> None:
@@ -1976,6 +1993,52 @@ def _persist_statement_rows(
                 pass
 
 
+@app.post("/oneclick/recalculate-net")
+async def oneclick_recalculate_net(request: RecalculateNetRequest, user_id: str = Depends(get_current_user_id)):
+    """Recompute net-basis payouts after the user edits expenses in the review
+    modal. Pure arithmetic over the Pass-1 payments — no LLM, no re-extraction.
+
+    Gross-basis rows are unaffected. Net-basis rows are recomputed as
+    ``(song_gross − allocated_expense) × percentage``.
+    """
+    from oneclick.royalty_calculator import allocate_expenses
+
+    payments = request.payments or []
+    # Per-song gross (gross_amount is identical across a song's rows).
+    song_totals: dict[str, float] = {}
+    for p in payments:
+        title = p.get("song_title")
+        if title is None:
+            continue
+        song_totals[title] = float(p.get("gross_amount", p.get("total_royalty", 0)) or 0)
+
+    expenses = [{"amount": e.amount, "work_titles": e.work_titles} for e in request.expenses]
+    song_expenses = allocate_expenses(song_totals, expenses)
+
+    updated = []
+    for p in payments:
+        out = dict(p)
+        basis = out.get("basis", "gross")
+        gross = float(out.get("gross_amount", out.get("total_royalty", 0)) or 0)
+        pct = float(out.get("percentage", 0) or 0)
+        if basis == "net":
+            exp = song_expenses.get(out.get("song_title"), 0.0)
+            base = max(gross - exp, 0.0)
+            out["expenses_applied"] = exp
+        else:
+            base = gross
+            out["expenses_applied"] = 0.0
+        out["net_amount"] = base
+        out["amount_to_pay"] = base * (pct / 100.0)
+        updated.append(out)
+
+    return {
+        "status": "success",
+        "total_payments": len(updated),
+        "payments": updated,
+    }
+
+
 @app.post("/oneclick/confirm")
 async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str = Depends(get_current_user_id)):
     """
@@ -2055,6 +2118,69 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
     except Exception as e:
         print(f"Error saving calculation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to save calculation: {str(e)}")
+
+
+def _load_oneclick_expenses(db, project_id: str):
+    """Load a project's expenses for OneClick net-basis calculation.
+
+    Returns ``(calc_expenses, review_expenses)``:
+      - ``calc_expenses``: minimal ``{amount, work_titles}`` dicts for allocation.
+      - ``review_expenses``: richer dicts for the confirm/edit modal.
+    Best-effort: any failure yields empty lists so the calc never breaks.
+    """
+    try:
+        exp_res = db.table("project_expenses").select("*").eq("project_id", project_id).execute()
+        expenses = exp_res.data or []
+    except Exception as e:  # noqa: BLE001 — expenses are optional enrichment
+        print(f"Warning: failed to load project expenses for {project_id}: {e}")
+        return [], []
+    if not expenses:
+        return [], []
+
+    expense_ids = [e["id"] for e in expenses]
+    try:
+        links_res = (
+            db.table("project_expense_works").select("expense_id, work_id").in_("expense_id", expense_ids).execute()
+        )
+        links = links_res.data or []
+    except Exception as e:  # noqa: BLE001
+        print(f"Warning: failed to load expense work links for {project_id}: {e}")
+        links = []
+
+    by_expense: dict[str, list[str]] = {}
+    for row in links:
+        by_expense.setdefault(row["expense_id"], []).append(row["work_id"])
+
+    works_res = db.table("works_registry").select("id, title").eq("project_id", project_id).execute()
+    title_by_id = {w["id"]: w["title"] for w in (works_res.data or [])}
+
+    calc_expenses, review_expenses = [], []
+    for e in expenses:
+        work_ids = by_expense.get(e["id"], [])
+        work_titles = [title_by_id[wid] for wid in work_ids if wid in title_by_id]
+        amount = float(e.get("amount") or 0)
+        calc_expenses.append({"amount": amount, "work_titles": work_titles})
+        review_expenses.append(
+            {
+                "id": e["id"],
+                "description": e.get("description"),
+                "amount": amount,
+                "category": e.get("category"),
+                "incurred_on": e.get("incurred_on"),
+                "work_ids": work_ids,
+                "work_titles": work_titles,
+            }
+        )
+    return calc_expenses, review_expenses
+
+
+@app.get("/expenses/summary")
+async def expenses_summary(user_id: str = Depends(get_current_user_id)):
+    """Cross-project expense rollup for the standalone Expense Tracker tool."""
+    from projects.service import get_expenses_summary
+
+    expenses = await get_expenses_summary(get_supabase_client(), user_id)
+    return {"expenses": expenses}
 
 
 @app.get("/oneclick/calculate-royalties-stream")
@@ -2325,6 +2451,9 @@ async def oneclick_calculate_royalties_stream(
             # Calculate payments
             yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
 
+            # Load project expenses so net-basis shares can be calculated.
+            calc_expenses, review_expenses = _load_oneclick_expenses(get_supabase_client(), project_id)
+
             payments = calculate_royalty_payments(
                 contract_path=contract_path,
                 statement_path=statement_path,
@@ -2332,6 +2461,7 @@ async def oneclick_calculate_royalties_stream(
                 contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
                 contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
                 contract_markdowns=contract_markdowns if contract_markdowns else None,
+                expenses=calc_expenses,
             )
 
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
@@ -2358,8 +2488,16 @@ async def oneclick_calculate_royalties_stream(
                         "total_royalty": payment["total_royalty"],
                         "amount_to_pay": payment["amount_to_pay"],
                         "terms": payment.get("terms"),
+                        "basis": payment.get("basis", "gross"),
+                        "gross_amount": payment.get("gross_amount", payment["total_royalty"]),
+                        "expenses_applied": payment.get("expenses_applied", 0.0),
+                        "net_amount": payment.get("net_amount", payment["total_royalty"]),
                     }
                 )
+
+            # Net-basis rows need the user to confirm/edit expenses before the
+            # numbers are final. Surface the gate + the expenses the calc used.
+            expense_review_required = any(p.get("basis") == "net" for p in payment_responses)
 
             result = {
                 "type": "complete",
@@ -2369,6 +2507,8 @@ async def oneclick_calculate_royalties_stream(
                 "message": f"Successfully calculated {len(payments)} royalty payments",
                 "progress": 100,
                 "stage": "complete",
+                "expense_review_required": expense_review_required,
+                "expenses": review_expenses if expense_review_required else [],
             }
 
             yield f"data: {json.dumps(result)}\n\n"
