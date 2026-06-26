@@ -40,9 +40,12 @@ class MockDB:
                       representing every .delete().execute() call.
     """
 
-    def __init__(self, calc_rows=None):
+    def __init__(self, calc_rows=None, payout_rows=None):
         # calc_rows is what royalty_calculations.select().eq().eq().execute() returns
         self.calc_rows = calc_rows if calc_rows is not None else []
+        # payout_rows is what royalty_payouts.select().eq().execute() returns.
+        # Default to one payout so coverage delete is not skipped in baseline tests.
+        self.payout_rows = payout_rows if payout_rows is not None else [{"id": "payout-default", "user_id": USER_ID}]
 
         # Side-effect capture
         self.deleted_tables: list[tuple] = []  # (table, filter_col, filter_val)
@@ -80,17 +83,24 @@ class _TableProxy:
         name = self._name
 
         if self._pending_delete:
+            # Record eq filters
+            for col, val in self._filters.items():
+                db.deleted_tables.append((name, "eq", col, val))
+            # Record in_ filter if present
             if self._in_filter:
                 col, vals = self._in_filter
                 db.deleted_tables.append((name, "in_", col, vals))
-            else:
-                for col, val in self._filters.items():
-                    db.deleted_tables.append((name, "eq", col, val))
             return MagicMock(data=[])
 
-        # SELECT — only royalty_calculations is queried in the service function
+        # SELECT — royalty_calculations and royalty_payouts are queried in the service function
         if name == "royalty_calculations":
             rows = db.calc_rows
+            for col, val in self._filters.items():
+                rows = [r for r in rows if r.get(col) == val]
+            return MagicMock(data=rows)
+
+        if name == "royalty_payouts":
+            rows = db.payout_rows
             for col, val in self._filters.items():
                 rows = [r for r in rows if r.get(col) == val]
             return MagicMock(data=rows)
@@ -122,12 +132,15 @@ class TestDeleteProjectRoyaltyEntries:
         db = MockDB(calc_rows=[_make_calc(CALC_ID_1)])
         service.delete_project_royalty_entries(db, USER_ID, PROJECT_ID)
         cov_deletes = [entry for entry in db.deleted_tables if entry[0] == "royalty_payout_coverage"]
-        assert len(cov_deletes) == 1
-        # Must be filtered by project_id
-        _, filter_type, col, val = cov_deletes[0]
-        assert filter_type == "eq"
-        assert col == "project_id"
-        assert val == PROJECT_ID
+        # There are now two delete filter records: one eq(project_id) and one in_(payout_id)
+        assert len(cov_deletes) >= 1
+        # Must be filtered by project_id (eq filter present)
+        eq_deletes = [e for e in cov_deletes if e[1] == "eq" and e[2] == "project_id"]
+        assert len(eq_deletes) == 1
+        assert eq_deletes[0][3] == PROJECT_ID
+        # Must also be scoped to user's payout ids (in_ filter present)
+        in_deletes = [e for e in cov_deletes if e[1] == "in_" and e[2] == "payout_id"]
+        assert len(in_deletes) == 1
 
     def test_deletes_calcs_by_id_list(self):
         db = MockDB(calc_rows=[_make_calc(CALC_ID_1), _make_calc(CALC_ID_2)])
@@ -148,11 +161,12 @@ class TestDeleteProjectRoyaltyEntries:
         assert result == {"deleted_calculations": 0, "project_id": PROJECT_ID}
 
     def test_no_calcs_still_deletes_coverage(self):
-        """Even with zero calcs, coverage for the project should be cleared."""
-        db = MockDB(calc_rows=[])
+        """Even with zero calcs, coverage for the project should be cleared (when payouts exist)."""
+        db = MockDB(calc_rows=[])  # uses default payout so coverage delete is not skipped
         service.delete_project_royalty_entries(db, USER_ID, PROJECT_ID)
         cov_deletes = [entry for entry in db.deleted_tables if entry[0] == "royalty_payout_coverage"]
-        assert len(cov_deletes) == 1
+        # At least the eq(project_id) filter entry must be present
+        assert any(e[1] == "eq" and e[2] == "project_id" for e in cov_deletes)
 
     def test_deletes_royalty_lines_by_project(self):
         """royalty_lines ARE deleted explicitly by project_id — under ON DELETE SET NULL

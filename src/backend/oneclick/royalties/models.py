@@ -115,6 +115,7 @@ class PeriodLedgerRow(BaseModel):
     display_name: str
     cells: list[PeriodCell]
     total: float
+    unconvertible_count: int = 0
 
 
 class PeriodLedger(BaseModel):

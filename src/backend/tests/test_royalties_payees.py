@@ -497,6 +497,82 @@ class TestSplitPayeePaidBucketGuard:
         result = service.split_payee(db, USER_ID, PAYEE_ID, [LINE_ID_1], "Bob")
         assert result["display_name"] == "Bob"
 
+    def test_multiproject_statement_only_project_a_paid_allows_project_b_split(self):
+        """I2 regression: a multi-project statement where only project A is paid
+        must NOT block splitting lines from project B.
+
+        Before the fix, buckets_to_check was keyed (payee_id, stmt_id) without
+        project_id, so paid coverage for (payee, stmt, proj-A) would falsely match
+        a line in (payee, stmt, proj-B) and raise ValueError.
+        """
+        payee = _make_payee()
+        # Two lines in the same statement, different projects
+        line_a = _make_line(
+            line_id="line-proj-a",
+            payee_id=PAYEE_ID,
+            stmt_id=STMT_ID,
+            project_id="proj-A",
+            amount=100.0,
+        )
+        line_b = _make_line(
+            line_id="line-proj-b",
+            payee_id=PAYEE_ID,
+            stmt_id=STMT_ID,
+            project_id="proj-B",
+            amount=80.0,
+        )
+        paid_payout = _make_payout(status="paid")
+        # Coverage is ONLY for proj-A within stmt-1
+        coverage_a = {
+            "payout_id": PAYOUT_ID,
+            "payee_id": PAYEE_ID,
+            "royalty_statement_id": STMT_ID,
+            "covered_amount": 100.0,
+            "project_id": "proj-A",
+        }
+        db = MockDB(
+            payees=[payee],
+            lines=[line_a, line_b],
+            payouts=[paid_payout],
+            coverage=[coverage_a],
+        )
+        # Splitting line_b (proj-B, not paid) must succeed — proj-A's paid coverage
+        # must NOT block it
+        result = service.split_payee(db, USER_ID, PAYEE_ID, ["line-proj-b"], "Bob")
+        assert result["display_name"] == "Bob", (
+            "proj-B split must succeed when only proj-A is paid in the same statement"
+        )
+
+    def test_multiproject_statement_project_b_paid_blocks_project_b_split(self):
+        """I2 regression (inverse): when the selected line IS in the paid project,
+        the guard must still block the split."""
+        payee = _make_payee()
+        line_b = _make_line(
+            line_id="line-proj-b",
+            payee_id=PAYEE_ID,
+            stmt_id=STMT_ID,
+            project_id="proj-B",
+            amount=80.0,
+        )
+        paid_payout = _make_payout(status="paid")
+        # Coverage for proj-B — the project we're trying to split
+        coverage_b = {
+            "payout_id": PAYOUT_ID,
+            "payee_id": PAYEE_ID,
+            "royalty_statement_id": STMT_ID,
+            "covered_amount": 80.0,
+            "project_id": "proj-B",
+        }
+        db = MockDB(
+            payees=[payee],
+            lines=[line_b],
+            payouts=[paid_payout],
+            coverage=[coverage_b],
+        )
+        # proj-B IS paid → must block
+        with pytest.raises(ValueError, match="paid invoice"):
+            service.split_payee(db, USER_ID, PAYEE_ID, ["line-proj-b"], "Bob")
+
 
 # ---------------------------------------------------------------------------
 # Tests: router HTTP layer (smoke tests)

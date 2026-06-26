@@ -330,7 +330,7 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
             cov_drafted_stmt[(stmt_id, proj_id)] += amt
 
     # Project names
-    proj_res = db.table("projects").select("id, name").execute()
+    proj_res = db.table("projects").select("id, name").eq("user_id", user_id).execute()
     project_name_map: dict[str, str] = {r["id"]: r.get("name", "") for r in (proj_res.data or [])}
 
     # Organise by project → statement
@@ -465,6 +465,7 @@ def periods_ledger(db, user_id: str, base: str = "USD") -> dict:
 
         cells: list[PeriodCell] = []
         row_total = 0.0
+        unconvertible_count = 0
 
         for (stmt_id, proj_id), slines in stmt_lines.items():
             ccy = (slines[0].get("statement_currency") or base).upper()
@@ -480,8 +481,12 @@ def periods_ledger(db, user_id: str, base: str = "USD") -> dict:
             else:
                 state = "settled"
 
-            earned_base = fx.convert(db, earned_b, ccy, base)
-            row_total += earned_base
+            earned_base = fx.convert(db, earned_b, ccy, base, on_missing="none")
+            if earned_base is None:
+                unconvertible_count += 1
+                earned_base = 0.0
+            else:
+                row_total += earned_base
 
             cells.append(
                 PeriodCell(
@@ -499,6 +504,7 @@ def periods_ledger(db, user_id: str, base: str = "USD") -> dict:
                 display_name=payee.get("display_name", ""),
                 cells=cells,
                 total=row_total,
+                unconvertible_count=unconvertible_count,
             )
         )
 
@@ -776,16 +782,17 @@ def create_payouts(
 
 def mark_paid(db, user_id: str, payout_id: str) -> dict:
     """Mark a payout as paid. Raises PermissionError if not the caller's payout."""
-    res = db.table("royalty_payouts").select("*").eq("id", payout_id).execute()
+    res = db.table("royalty_payouts").select("*").eq("id", payout_id).eq("user_id", user_id).execute()
     rows = res.data or []
     if not rows:
         raise PermissionError("Payout not found")
-    payout = rows[0]
-    if payout.get("user_id") != user_id:
-        raise PermissionError("Not your payout")
 
     update_res = (
-        db.table("royalty_payouts").update({"status": "paid", "paid_at": "now()"}).eq("id", payout_id).execute()
+        db.table("royalty_payouts")
+        .update({"status": "paid", "paid_at": "now()"})
+        .eq("id", payout_id)
+        .eq("user_id", user_id)
+        .execute()
     )
     updated = (update_res.data or [{}])[0]
     return updated
@@ -797,17 +804,15 @@ def cancel_payout(db, user_id: str, payout_id: str) -> None:
     Raises PermissionError for ownership violations.
     Raises ValueError if payout is not in 'draft' status.
     """
-    res = db.table("royalty_payouts").select("*").eq("id", payout_id).execute()
+    res = db.table("royalty_payouts").select("*").eq("id", payout_id).eq("user_id", user_id).execute()
     rows = res.data or []
     if not rows:
         raise PermissionError("Payout not found")
     payout = rows[0]
-    if payout.get("user_id") != user_id:
-        raise PermissionError("Not your payout")
     if payout.get("status") != "draft":
         raise ValueError("only drafts can be canceled")
 
-    db.table("royalty_payouts").delete().eq("id", payout_id).execute()
+    db.table("royalty_payouts").delete().eq("id", payout_id).eq("user_id", user_id).execute()
 
 
 def _derive_orphan_state(db, payout_id: str, snapshot: dict) -> str:
@@ -862,9 +867,9 @@ def patch_payee(db, user_id: str, payee_id: str, data: dict) -> dict:
     Raises PermissionError if the payee doesn't belong to user_id.
     """
     # Ownership check
-    res = db.table("royalty_payees").select("*").eq("id", payee_id).execute()
+    res = db.table("royalty_payees").select("*").eq("id", payee_id).eq("user_id", user_id).execute()
     rows = res.data or []
-    if not rows or rows[0].get("user_id") != user_id:
+    if not rows:
         raise PermissionError("Payee not found or not owned by caller")
 
     update: dict = {}
@@ -890,9 +895,9 @@ def split_payee(db, user_id: str, payee_id: str, line_ids: list[str], new_displa
     Returns the target payee row.
     """
     # Ownership check on source payee
-    payee_res = db.table("royalty_payees").select("*").eq("id", payee_id).execute()
+    payee_res = db.table("royalty_payees").select("*").eq("id", payee_id).eq("user_id", user_id).execute()
     payee_rows = payee_res.data or []
-    if not payee_rows or payee_rows[0].get("user_id") != user_id:
+    if not payee_rows:
         raise PermissionError("Payee not found or not owned by caller")
 
     # Load the selected lines owned by this user
@@ -908,8 +913,11 @@ def split_payee(db, user_id: str, payee_id: str, line_ids: list[str], new_displa
         return (target_res.data or [{}])[0]
 
     # Paid-bucket guard
-    # Build set of (payee_id, royalty_statement_id) buckets from selected lines
-    buckets_to_check = {(l.get("payee_id"), l.get("royalty_statement_id")) for l in selected_lines}
+    # Build set of (payee_id, royalty_statement_id, project_id) buckets from selected lines
+    # project_id defaults to "" to match coverage rows that lack a project_id
+    buckets_to_check = {
+        (l.get("payee_id"), l.get("royalty_statement_id"), l.get("project_id") or "") for l in selected_lines
+    }
 
     # Load all payouts for this user to resolve coverage status
     all_payouts = _load_payouts(db, user_id)
@@ -920,11 +928,12 @@ def split_payee(db, user_id: str, payee_id: str, line_ids: list[str], new_displa
 
     for cov in coverage:
         stmt_id = cov.get("royalty_statement_id")
+        proj_id = cov.get("project_id") or ""
         payout_id_cov = cov.get("payout_id")
         payout = payout_by_id.get(payout_id_cov, {})
         if payout.get("status") == "paid":
-            # Check if any of the selected lines fall into this paid bucket
-            if (payee_id, stmt_id) in buckets_to_check:
+            # Check if any of the selected lines fall into this paid (payee, statement, project) bucket
+            if (payee_id, stmt_id, proj_id) in buckets_to_check:
                 raise ValueError("cannot split lines already settled by a paid invoice")
 
     # All clear — upsert the target payee
@@ -957,8 +966,11 @@ def delete_project_royalty_entries(db, user_id: str, project_id: str) -> dict:
     )
     calc_ids = [r["id"] for r in (calc_res.data or [])]
 
-    # Delete the project's payout coverage
-    db.table("royalty_payout_coverage").delete().eq("project_id", project_id).execute()
+    # Delete the project's payout coverage — scoped to the user's own payouts
+    user_payouts = _load_payouts(db, user_id)
+    payout_ids = [p["id"] for p in user_payouts]
+    if payout_ids:
+        db.table("royalty_payout_coverage").delete().eq("project_id", project_id).in_("payout_id", payout_ids).execute()
 
     # Delete the project's royalty lines directly — under ON DELETE SET NULL they
     # outlive their calc, so the calc deletion would not remove them (and this also

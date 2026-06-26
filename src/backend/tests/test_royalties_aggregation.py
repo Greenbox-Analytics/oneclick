@@ -730,3 +730,84 @@ class TestUnconvertibleBucketExcluded:
 
         # Exactly one bucket was unconvertible
         assert s["unconvertible_count"] == 1, f"Expected unconvertible_count=1, got {s['unconvertible_count']}"
+
+
+# ---------------------------------------------------------------------------
+# Test: periods_ledger unconvertible bucket — I1 regression
+# ---------------------------------------------------------------------------
+
+
+class TestPeriodsLedgerUnconvertible:
+    """periods_ledger must exclude unconvertible-currency buckets from row_total
+    and surface unconvertible_count on the row (not fold at 1:1)."""
+
+    def test_ngn_cell_excluded_from_row_total_and_counted(self):
+        """One USD bucket (convertible) + one NGN bucket (unconvertible).
+
+        The NGN cell must have earned=0.0 (listed but not mis-valued),
+        must NOT be added to row_total, and unconvertible_count on the row must be 1.
+        """
+        payee = _make_payee(payout_ccy="USD")
+        line_usd = _make_line(stmt_id="stmt-usd", amount=100.0, ccy="USD", project_id="proj-1", line_id="l-usd")
+        line_ngn = _make_line(stmt_id="stmt-ngn", amount=50000.0, ccy="NGN", project_id="proj-1", line_id="l-ngn")
+
+        db = _build_db(
+            payees=[payee],
+            lines=[line_usd, line_ngn],
+            payouts=[],
+            coverage_by_payee={PAYEE_ID: []},
+        )
+
+        def _fx_with_ngn_none(db, amount, frm, to, **kwargs):
+            on_missing = kwargs.get("on_missing", "amount")
+            if frm.upper() == "NGN" and on_missing == "none":
+                return None
+            return _identity_fx(db, amount, frm, to)
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_fx_with_ngn_none):
+            ledger = service.periods_ledger(db, USER_ID, base="USD")
+
+        assert len(ledger["rows"]) == 1
+        row = ledger["rows"][0]
+
+        # Two cells produced (activity still listed)
+        assert len(row["cells"]) == 2, f"Expected 2 cells (one per bucket), got {len(row['cells'])}"
+
+        # The NGN cell must be present with earned=0.0 (not mis-valued at 1:1)
+        cells_by_stmt = {c["royalty_statement_id"]: c for c in row["cells"]}
+        ngn_cell = cells_by_stmt["stmt-ngn"]
+        assert ngn_cell["earned"] == pytest.approx(0.0), (
+            f"NGN cell earned must be 0.0 (excluded, not 1:1 fold); got {ngn_cell['earned']}"
+        )
+
+        # row_total must only include the USD bucket
+        assert row["total"] == pytest.approx(100.0), (
+            f"row_total must be 100.0 (USD only); got {row['total']} — NGN must not fold at 1:1"
+        )
+
+        # unconvertible_count on the row must be 1
+        assert row["unconvertible_count"] == 1, (
+            f"Expected unconvertible_count=1 on the row, got {row['unconvertible_count']}"
+        )
+
+    def test_all_convertible_row_total_unchanged(self):
+        """When all buckets are convertible, row_total must be unaffected and
+        unconvertible_count must be 0."""
+        payee = _make_payee(payout_ccy="USD")
+        line_usd = _make_line(stmt_id="stmt-usd", amount=100.0, ccy="USD", project_id="proj-1", line_id="l-usd")
+        line_gbp = _make_line(stmt_id="stmt-gbp", amount=100.0, ccy="GBP", project_id="proj-1", line_id="l-gbp")
+
+        db = _build_db(
+            payees=[payee],
+            lines=[line_usd, line_gbp],
+            payouts=[],
+            coverage_by_payee={PAYEE_ID: []},
+        )
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_identity_fx):
+            ledger = service.periods_ledger(db, USER_ID, base="USD")
+
+        row = ledger["rows"][0]
+        # GBP→USD identity = ×1.27, USD→USD = ×1.0 → total = 100 + 127 = 227
+        assert row["total"] == pytest.approx(100.0 + 100.0 * 1.27)
+        assert row["unconvertible_count"] == 0
