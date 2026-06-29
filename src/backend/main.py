@@ -47,6 +47,8 @@ from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from integrations.spotify.router import router as spotify_router
 from oneclick.breakdown import router as oneclick_breakdown_router
+from oneclick.royalties.analytics_router import router as royalties_analytics_router
+from oneclick.royalties.router import router as royalties_router
 from oneclick.royalty_calculator import CalculationError, RoyaltyCalculator
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
@@ -73,6 +75,10 @@ app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
 app.include_router(oneclick_breakdown_router, prefix="/oneclick", tags=["OneClick"])
+app.include_router(royalties_router, prefix="/oneclick/royalties", tags=["OneClick Royalties"])
+app.include_router(
+    royalties_analytics_router, prefix="/oneclick/royalties/analytics", tags=["OneClick Royalties Analytics"]
+)
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
@@ -317,6 +323,40 @@ async def _assert_can_access_oneclick_inputs(db, user_id, project_id, statement_
     for cid in contract_ids:
         if cid and not await user_can_access_file(db, user_id, cid):
             raise HTTPException(status_code=403, detail="Access denied")
+
+
+from oneclick.royalties.ingest import sync_calc_royalties
+
+
+def _statement_currency(statement_id: str) -> str:
+    res = get_supabase_client().table("project_files").select("currency").eq("id", statement_id).execute()
+    cur = res.data[0].get("currency") if res.data else None
+    return cur or "USD"
+
+
+def _parse_statement_rows(db, statement_id: str):
+    """Best-effort parse of a royalty statement file into StatementRow objects.
+
+    Downloads the statement from storage and runs the deterministic row reader.
+    Returns [] on any failure (missing file, download/parse error) so callers can
+    treat statement rows as optional and never block line sync over them.
+    """
+    try:
+        sf = db.table("project_files").select("file_path, file_name").eq("id", statement_id).execute()
+        if not sf.data:
+            return []
+        file_data = db.storage.from_("project-files").download(sf.data[0]["file_path"])
+        suffix = Path(sf.data[0]["file_name"]).suffix.lower() or ".xlsx"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
+        try:
+            return RoyaltyCalculator(api_key=os.getenv("OPENAI_API_KEY")).read_royalty_statement_rows(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+    except Exception as e:
+        print(f"[royalties] statement parse failed for {statement_id}: {e}")
+        return []
 
 
 def verify_user_owns_audio_file(user_id: str, audio_file_id: str) -> dict | None:
@@ -929,6 +969,7 @@ async def upload_file(
     artist_id: str = Form(...),
     category: str = Form(...),  # 'contract' or 'royalty_statement'
     project_id: str | None = Form(None),
+    currency: str | None = Form(None),
     user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -1020,6 +1061,8 @@ async def upload_file(
             "file_size": file.size,
             "file_type": file.content_type,
         }
+        if folder_category == "royalty_statement":
+            db_record["currency"] = currency.upper() if currency else "USD"
 
         try:
             db_res = get_supabase_client().table("project_files").insert(db_record).execute()
@@ -2105,13 +2148,33 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
 
         get_supabase_client().table("royalty_calculation_contracts").insert(junction_rows).execute()
 
-        # 3. Persist per-line-item statement rows (contract tracks only) for the
-        #    Earnings Breakdown tab. Best-effort — failures must not fail the save.
-        #    payment.song_title is the contract work title; the persist step
-        #    fuzzy-matches statement lines against these.
+        # 3a. Persist per-line-item statement rows (contract tracks only, full columns)
+        #     for the Earnings Breakdown tab. Best-effort — failures must not fail the save.
+        #     payment.song_title is the contract work title; the persist step
+        #     fuzzy-matches statement lines against these.
         payments = (request.results or {}).get("payments", []) or []
         contract_song_titles = [p.get("song_title", "") for p in payments]
         _persist_statement_rows(calculation_id, request.royalty_statement_id, user_id, contract_song_titles)
+
+        # 3b. Sync royalty payees/lines for the payments-history feature. Pass
+        #     statement_rows=None so it reuses the rows persisted in 3a (no double-write)
+        #     and derives the period from them; line sync ALWAYS runs so payees/owed are
+        #     never blocked by a statement-rows problem.
+        try:
+            db = get_supabase_client()
+            currency = _statement_currency(request.royalty_statement_id)
+            sync_calc_royalties(
+                db,
+                user_id,
+                calculation_id,
+                request.royalty_statement_id,
+                request.project_id,
+                request.results,
+                currency,
+                statement_rows=None,
+            )
+        except Exception as e:
+            print(f"[royalties] ingestion failed for calc {calculation_id}: {e}")
 
         return {"status": "success", "message": "Calculation saved successfully", "id": calculation_id}
 
@@ -2330,6 +2393,35 @@ async def oneclick_calculate_royalties_stream(
                                         "cached": True,
                                     },
                                 )
+
+                                # Cache-hit: sync royalty_lines. Self-heal statement rows — if this
+                                # cached calc has none persisted yet (e.g. it was first run before
+                                # royalty_statement_rows existed), parse + backfill them so periods/
+                                # totals become real; otherwise skip the re-parse (cheap).
+                                try:
+                                    _db = get_supabase_client()
+                                    _existing_rows = (
+                                        _db.table("royalty_statement_rows")
+                                        .select("id", count="exact")
+                                        .eq("calculation_id", calc["id"])
+                                        .limit(1)
+                                        .execute()
+                                    )
+                                    _rows_for_sync = None
+                                    if not (getattr(_existing_rows, "count", 0) or 0):
+                                        _rows_for_sync = _parse_statement_rows(_db, royalty_statement_file_id)
+                                    sync_calc_royalties(
+                                        _db,
+                                        user_id,
+                                        calc["id"],
+                                        royalty_statement_file_id,
+                                        project_id,
+                                        calc["results"],
+                                        _statement_currency(royalty_statement_file_id),
+                                        statement_rows=_rows_for_sync,
+                                    )
+                                except Exception as e:
+                                    print(f"[royalties] cache-hit sync failed for calc {calc['id']}: {e}")
 
                                 yield f"data: {json.dumps(result)}\n\n"
                                 return

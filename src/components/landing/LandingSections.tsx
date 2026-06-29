@@ -40,17 +40,79 @@ function IconExternal(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconChevron(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
 export const LandingIcons = { arrow: IconArrow, check: IconCheck, external: IconExternal };
 
 // ──────────────────────────────────────────────────────────────────────
 // Header — sticky, auth-aware, reused on every landing-scope page
 // ──────────────────────────────────────────────────────────────────────
-const NAV_LINKS: Array<{ label: string; href: string }> = [
-  { label: "Tools", href: "/#tools" },
-  { label: "Team", href: "/team" },
+type NavLink = { label: string; href: string };
+type NavItem = NavLink | { label: string; children: NavLink[] };
+
+const NAV_LINKS: NavItem[] = [
+  { label: "Tools", href: "/features" },
+  {
+    label: "Company",
+    children: [
+      { label: "About", href: "/about" },
+      { label: "Team", href: "/team" },
+    ],
+  },
   { label: "Pricing", href: "/pricing" },
   { label: "Docs", href: "/docs" },
 ];
+
+const NAV_LINK_STYLE: CSSProperties = {
+  padding: "8px 12px",
+  fontSize: 14,
+  color: "var(--fg)",
+  textDecoration: "none",
+  opacity: 0.78,
+  fontWeight: 500,
+};
+
+const NAV_DROPDOWN_TRIGGER_STYLE: CSSProperties = {
+  ...NAV_LINK_STYLE,
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  fontFamily: "inherit",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+};
+
+// Module-scoped so it isn't re-created on each header render
+// (vercel-react-best-practices: rerender-no-inline-components). Uses real
+// <Link>s inside the menu for accessible, right-click-friendly navigation.
+function NavDropdown({ label, items }: { label: string; items: NavLink[] }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" style={NAV_DROPDOWN_TRIGGER_STYLE}>
+          {label}
+          <IconChevron style={{ width: 14, height: 14, opacity: 0.7 }} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {items.map((it) => (
+          <DropdownMenuItem key={it.label} asChild>
+            <Link to={it.href} className="cursor-pointer">
+              {it.label}
+            </Link>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 export function LandingHeader() {
   const navigate = useNavigate();
@@ -86,22 +148,15 @@ export function LandingHeader() {
         </Link>
 
         <nav className="lp-nav" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {NAV_LINKS.map((item) => (
-            <LinkOrAnchor
-              key={item.label}
-              href={item.href}
-              style={{
-                padding: "8px 12px",
-                fontSize: 14,
-                color: "var(--fg)",
-                textDecoration: "none",
-                opacity: 0.78,
-                fontWeight: 500,
-              }}
-            >
-              {item.label}
-            </LinkOrAnchor>
-          ))}
+          {NAV_LINKS.map((item) =>
+            "children" in item ? (
+              <NavDropdown key={item.label} label={item.label} items={item.children} />
+            ) : (
+              <LinkOrAnchor key={item.label} href={item.href} style={NAV_LINK_STYLE}>
+                {item.label}
+              </LinkOrAnchor>
+            ),
+          )}
         </nav>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -244,11 +299,10 @@ export function Hero({ primaryHref, primaryLabel }: HeroProps) {
             letterSpacing: "-0.04em",
           }}
         >
-          The operating system
+          The Music Business
           <br />
-          for the{" "}
           <span className="lp-hero-gradient" style={{ fontStyle: "italic", fontWeight: 700 }}>
-            music business.
+            Simplified.
           </span>
         </h1>
         <p
@@ -261,7 +315,7 @@ export function Hero({ primaryHref, primaryLabel }: HeroProps) {
             fontWeight: 400,
           }}
         >
-          Streamline your workflow with powerful tools built for music professionals.
+          Streamline your workflow with innovative tools built for music professionals.
         </p>
         <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 36 }}>
           <LinkOrAnchor
@@ -385,44 +439,12 @@ function buildRows(): ToolRow[] {
 
 const TOOL_ROWS = buildRows();
 
-export function ToolsSection() {
+// ToolShowcase — topic-grouped tool rows with live demos. Extracted from the old
+// ToolsSection so it can live on the dedicated /features page (the design's
+// "ToolsShowcase"). The compact landing summary is ToolsOverview, below.
+export function ToolShowcase() {
   return (
-    <>
-      <section id="tools" style={{ padding: "32px 32px 0" }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto", textAlign: "center" }}>
-          <p
-            style={{
-              fontSize: 12,
-              letterSpacing: "0.16em",
-              textTransform: "uppercase",
-              color: "var(--accent)",
-              fontWeight: 600,
-              margin: "0 0 14px",
-            }}
-          >
-            What&apos;s inside
-          </p>
-          <h2
-            className="tighter"
-            style={{ fontSize: "clamp(40px, 6vw, 60px)", lineHeight: 1.02, margin: 0, fontWeight: 700, letterSpacing: "-0.035em" }}
-          >
-            Everything in one suite.
-          </h2>
-          <p
-            style={{
-              maxWidth: 580,
-              margin: "24px auto 0",
-              fontSize: 17,
-              color: "var(--muted-fg)",
-              lineHeight: 1.55,
-            }}
-          >
-            A focused tool for each job. Each one runs live below — no signup required.
-          </p>
-        </div>
-      </section>
-
-      <section style={{ padding: "64px 32px 32px" }}>
+      <section style={{ padding: "24px 32px 32px" }}>
         <div style={{ maxWidth: 1080, margin: "0 auto", display: "grid", gap: 28 }}>
           {TOOL_ROWS.map((row, i) => {
             const { topic, tool, isTopicFirst } = row;
@@ -581,194 +603,87 @@ export function ToolsSection() {
           })}
         </div>
       </section>
-    </>
   );
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// About + stats
+// ToolsOverview — compact landing summary (no live demos) that redirects to
+// the dedicated /features page.
 // ──────────────────────────────────────────────────────────────────────
-const ABOUT_STATS = [
-  { v: "$4.2M", l: "royalties calculated" },
-  { v: "120+", l: "artists onboarded" },
-  { v: "11", l: "integrations" }
-];
-
-export function AboutSection() {
+export function ToolsOverview() {
   return (
-    <section
-      id="about"
-      style={{
-        padding: "96px 32px",
-        background: "var(--muted-bg)",
-        borderTop: "1px solid var(--border)",
-        borderBottom: "1px solid var(--border)",
-      }}
-      className="lp-about"
-    >
-      <div style={{ maxWidth: 1080, margin: "0 auto" }}>
-        <div className="lp-about-grid" style={{ display: "grid", gridTemplateColumns: "0.9fr 1.1fr", gap: 80, alignItems: "start" }}>
-          <div>
-            <p
-              style={{
-                fontSize: 12,
-                letterSpacing: "0.16em",
-                textTransform: "uppercase",
-                color: "var(--accent)",
-                fontWeight: 600,
-                margin: "0 0 16px",
-              }}
-            >
-              The Company
-            </p>
-            <h2
-              className="tighter"
-              style={{
-                fontSize: "clamp(34px, 5vw, 52px)",
-                lineHeight: 1.02,
-                fontWeight: 700,
-                letterSpacing: "-0.035em",
-                margin: 0,
-              }}
-            >
-              Built by music
-              <br />
-              people, for music
-              <br />
-              people.
-            </h2>
-          </div>
-          <div>
-            <p style={{ fontSize: 19, lineHeight: 1.6, margin: 0, color: "var(--fg)" }}>
-              Msanii (&quot;artist&quot; in Swahili) is a product of <strong>Greenbox Analytics Inc.</strong> — a
-              small Toronto-based team building the back-office that independent artists, managers and labels
-              actually need, but rarely have time to build themselves.
-            </p>
-            <p style={{ fontSize: 16, lineHeight: 1.7, marginTop: 20, color: "var(--muted-fg)" }}>
-              We started with one painfully unglamorous question: <em>where did the streaming money go, and
-              who&apos;s owed what?</em> Two years later we have answers — and a suite of tools that compose into a
-              single source of truth for ownership, contracts, and cash.
-            </p>
-            <div
-              style={{
-                marginTop: 36,
-                display: "grid",
-                gridTemplateColumns: "repeat(4, 1fr)",
-                gap: 24,
-                borderTop: "1px solid var(--border)",
-                paddingTop: 28,
-              }}
-              className="lp-stats-grid"
-            >
-              {ABOUT_STATS.map((s) => (
-                <div key={s.l}>
-                  <div className="tighter" style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.03em" }}>
-                    {s.v}
-                  </div>
-                  <div style={{ fontSize: 12.5, color: "var(--muted-fg)", marginTop: 4 }}>{s.l}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// Final CTA
-// ──────────────────────────────────────────────────────────────────────
-type FinalCTAProps = { primaryHref: string; primaryLabel: string };
-
-export function FinalCTA({ primaryHref, primaryLabel }: FinalCTAProps) {
-  return (
-    <section style={{ padding: "24px 32px 96px" }}>
-      <div style={{ maxWidth: 1080, margin: "0 auto" }}>
-        <div
-          className="lp-cta"
+    <section id="tools" style={{ padding: "32px 32px 72px" }}>
+      <div style={{ maxWidth: 1080, margin: "0 auto", textAlign: "center" }}>
+        <p
           style={{
-            position: "relative",
-            overflow: "hidden",
-            borderRadius: "var(--radius-lg)",
-            background: "var(--primary)",
-            color: "var(--bg)",
-            padding: "72px 64px",
-            display: "grid",
-            gridTemplateColumns: "1.4fr 1fr",
-            alignItems: "center",
-            gap: 48,
+            fontSize: 12,
+            letterSpacing: "0.16em",
+            textTransform: "uppercase",
+            color: "var(--accent)",
+            fontWeight: 600,
+            margin: "0 0 14px",
           }}
         >
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: 0,
-              backgroundImage:
-                "radial-gradient(circle, color-mix(in srgb, var(--bg) 18%, transparent) 1px, transparent 1px)",
-              backgroundSize: "20px 20px",
-              opacity: 0.5,
-              maskImage: "radial-gradient(ellipse at 80% 50%, black, transparent 70%)",
-              WebkitMaskImage: "radial-gradient(ellipse at 80% 50%, black, transparent 70%)",
-            }}
-          />
-          <div style={{ position: "relative" }}>
-            <h2 className="tighter" style={{ fontSize: "clamp(36px, 5vw, 56px)", lineHeight: 1.02, margin: 0, fontWeight: 700, letterSpacing: "-0.035em" }}>
-              Stop reconciling.
-              <br />
-              Start releasing.
-            </h2>
-            <p style={{ fontSize: 17, lineHeight: 1.55, marginTop: 20, opacity: 0.78, maxWidth: 440 }}>
-              Set up your first artist project in under two minutes. We&apos;ll import your back-catalog
-              statements for free.
-            </p>
-          </div>
-          <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: 10 }}>
-            <LinkOrAnchor
-              href={primaryHref}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "18px 24px",
-                borderRadius: 999,
-                background: "var(--bg)",
-                color: "var(--primary)",
-                textDecoration: "none",
-                fontWeight: 600,
-                fontSize: 16,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {primaryLabel} <IconArrow style={{ width: 18, height: 18 }} />
-            </LinkOrAnchor>
-            <LinkOrAnchor
-              href="mailto:hello@msanii.app"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "17px 24px",
-                borderRadius: 999,
-                background: "transparent",
-                color: "var(--bg)",
-                border: "1px solid color-mix(in srgb, var(--bg) 30%, transparent)",
-                textDecoration: "none",
-                fontWeight: 600,
-                fontSize: 16,
-                whiteSpace: "nowrap",
-              }}
-            >
-              Get in touch <IconExternal style={{ width: 16, height: 16 }} />
-            </LinkOrAnchor>
-          </div>
+          What&apos;s inside
+        </p>
+        <h2
+          className="tighter"
+          style={{ fontSize: "clamp(40px, 6vw, 60px)", lineHeight: 1.02, margin: 0, fontWeight: 700, letterSpacing: "-0.035em" }}
+        >
+          Your whole operation in one place.
+        </h2>
+        <p
+          style={{
+            maxWidth: 580,
+            margin: "24px auto 0",
+            fontSize: 17,
+            color: "var(--muted-fg)",
+            lineHeight: 1.55,
+          }}
+        >
+          A focused tool for each job. Royalties, contracts, splits, metadata and projects, all sharing one source of
+          truth to streamline your infrastructure.
+        </p>
+        <div
+          className="lp-tools-grid"
+          style={{ marginTop: 44, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}
+        >
+          {TOOLS.map((tool) => (
+            <Link key={tool.id} to={`/features#${tool.id}`} className="lp-tool-card">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span className="tighter" style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.02em" }}>
+                  {tool.name}
+                </span>
+                <IconArrow style={{ width: 15, height: 15, color: "var(--accent)" }} />
+              </div>
+              <span
+                style={{
+                  marginTop: 8,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: "var(--accent)",
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                }}
+              >
+                {tool.tagline}
+              </span>
+            </Link>
+          ))}
         </div>
       </div>
     </section>
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// (The former embedded "About" section now lives as a dedicated page at
+// /about — see src/pages/About.tsx.)
+
+// ──────────────────────────────────────────────────────────────────────
+// (Final CTA removed — the homepage now closes with the clickable tool grid
+//  rendered by ToolsOverview, above.)
+// ──────────────────────────────────────────────────────────────────────
 // ──────────────────────────────────────────────────────────────────────
 // Footer
 // ──────────────────────────────────────────────────────────────────────
@@ -779,6 +694,7 @@ const FOOTER_COLS: Array<[string, Array<[string, string]>]> = [
       ["OneClick", "/tools/oneclick"],
       ["Zoe", "/tools/zoe"],
       ["Split Sheet", "/tools/split-sheet"],
+      ["Rights Registry", "/tools/registry"],
       ["Portfolio", "/portfolio"],
       ["Workspace", "/workspace"],
     ],
@@ -786,7 +702,7 @@ const FOOTER_COLS: Array<[string, Array<[string, string]>]> = [
   [
     "Company",
     [
-      ["About", "/#about"],
+      ["About", "/about"],
       ["Team", "/team"],
       ["Contact", "mailto:hello@msanii.app"],
     ],

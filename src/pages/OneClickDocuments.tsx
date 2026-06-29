@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
@@ -47,6 +47,12 @@ const OneClickDocuments = () => {
   const navigate = useNavigate();
   const { artistId } = useParams<{ artistId: string }>();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const invalidateRoyalties = () => {
+    ["royalty-payees", "royalty-periods", "royalty-payouts"].forEach((k) =>
+      queryClient.invalidateQueries({ queryKey: [k] }),
+    );
+  };
   const [contractFiles, setContractFiles] = useState<File[]>([]);
   const [royaltyStatementFile, setRoyaltyStatementFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -71,6 +77,7 @@ const OneClickDocuments = () => {
   const [contractTabValue, setContractTabValue] = useState<string>("upload");
   const [royaltyStatementTabValue, setRoyaltyStatementTabValue] = useState<string>("upload");
   const [newRoyaltyStatementProjectId, setNewRoyaltyStatementProjectId] = useState<string>("");
+  const [royaltyStatementCurrency, setRoyaltyStatementCurrency] = useState<string>("USD");
   // Artist name fetched via React Query so the result is cached across
   // remounts. Without this, navigating away from /tools/oneclick/.../documents
   // and back would re-fetch and (worse) re-trigger a full-page loader that
@@ -285,6 +292,7 @@ const OneClickDocuments = () => {
              formData.append("file", royaltyStatementFile);
              formData.append("artist_id", artistId);
              formData.append("category", "royalty_statement");
+             formData.append("currency", royaltyStatementCurrency);
              const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
              if (targetProjectId) formData.append("project_id", targetProjectId);
 
@@ -440,13 +448,17 @@ const OneClickDocuments = () => {
           });
           if (saved?.id) setSavedCalculationId(saved.id);
           setSaveSuccess(true);
+          invalidateRoyalties();
       } catch (err) { console.error("Error saving results:", err); toast.error("Failed to save results"); }
       finally { setIsSaving(false); }
   };
 
   useEffect(() => {
       if (!calculationResult || !lastCalculationContext || !user) return;
-      if (calculationResult.is_cached) return;
+      if (calculationResult.is_cached) {
+        invalidateRoyalties();
+        return;
+      }
       // Hold off on saving until the user confirms expenses for net-basis rows.
       if (calculationResult.expense_review_required) return;
       const resultKey = `${lastCalculationContext.statementId}-${lastCalculationContext.contractIds.join(',')}`;
@@ -589,6 +601,8 @@ const OneClickDocuments = () => {
             selectedExistingRoyaltyStatement={selectedExistingRoyaltyStatement}
             setSelectedExistingRoyaltyStatement={setSelectedExistingRoyaltyStatement}
             fetchProjectFilesForValidation={fetchProjectFilesForValidation}
+            currency={royaltyStatementCurrency}
+            onCurrencyChange={setRoyaltyStatementCurrency}
           />
         </div>
 
