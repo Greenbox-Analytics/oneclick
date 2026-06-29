@@ -12,7 +12,7 @@ import {
   AlertTriangle, Copy, Search, Plug, ThumbsUp, ThumbsDown, Wallet,
   DollarSign, Receipt, BarChart3, SplitSquareHorizontal,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -1058,9 +1058,24 @@ interface DocHeading { id: string; label: string; level: number; }
 
 const Documentation = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user, signOut } = useAuth();
-  const [activeSection, setActiveSection] = useState("getting-started");
+  // Deep-linkable: /docs?section=oneclick opens straight to that section.
+  const [activeSection, setActiveSection] = useState(() => {
+    const s = searchParams.get("section");
+    return s && SECTION_INDEX.has(s) ? s : "getting-started";
+  });
   const [navQuery, setNavQuery] = useState("");
+
+  // Keep the active section in sync if the ?section= param changes while the
+  // page is already mounted (e.g. a footer link clicked from elsewhere).
+  useEffect(() => {
+    const s = searchParams.get("section");
+    if (s && SECTION_INDEX.has(s)) {
+      setActiveSection(s);
+      window.scrollTo({ top: 0 });
+    }
+  }, [searchParams]);
 
   const articleRef = useRef<HTMLDivElement>(null);
   const [headings, setHeadings] = useState<DocHeading[]>([]);

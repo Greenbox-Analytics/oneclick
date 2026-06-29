@@ -691,12 +691,12 @@ const FOOTER_COLS: Array<[string, Array<[string, string]>]> = [
   [
     "Product",
     [
-      ["OneClick", "/tools/oneclick"],
-      ["Zoe", "/tools/zoe"],
-      ["Split Sheet", "/tools/split-sheet"],
-      ["Rights Registry", "/tools/registry"],
-      ["Portfolio", "/portfolio"],
-      ["Workspace", "/workspace"],
+      ["OneClick", "/docs?section=oneclick"],
+      ["Zoe", "/docs?section=zoe"],
+      ["Split Sheet", "/docs?section=split-sheet"],
+      ["Rights Registry", "/docs?section=rights-registry"],
+      ["Portfolio", "/docs?section=portfolio"],
+      ["Workspace", "/docs?section=workspace"],
     ],
   ],
   [
@@ -708,7 +708,7 @@ const FOOTER_COLS: Array<[string, Array<[string, string]>]> = [
     ],
   ],
   ["Resources", [["Docs", "/docs"]]],
-  ["Legal", [["Privacy", "/privacy"], ["Security", "/security"]]],
+  ["Legal", [["Privacy & Security", "/security"]]],
 ];
 
 export function LandingFooter() {
@@ -767,12 +767,6 @@ export function LandingFooter() {
         >
           <p style={{ fontSize: 12.5, color: "var(--muted-fg)", margin: 0 }}>
             © {new Date().getFullYear()} Greenbox Analytics Inc.
-          </p>
-          <p
-            className="mono"
-            style={{ fontSize: 12.5, color: "var(--muted-fg)", margin: 0 }}
-          >
-            Made in Toronto 🌿
           </p>
         </div>
       </div>
