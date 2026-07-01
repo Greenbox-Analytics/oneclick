@@ -94,22 +94,16 @@ def _seq_side_effect(sequences: list):
     return _side_effect
 
 
-def _schema_side_effect(user_id: str | None):
-    """Stub ``db.schema('auth').from_('users')…`` used by ``_find_user_id_by_email``.
+def _rpc_side_effect(user_id: str | None):
+    """Stub ``db.rpc('get_user_id_by_email', {...})`` used by ``_find_user_id_by_email``.
 
-    Returns a side_effect for ``mock_supabase.schema`` whose downstream
-    ``.from_('users').select(...).ilike(...).limit(...).execute()`` chain
-    yields ``[{'id': user_id}]`` when ``user_id`` is given, or ``[]`` to
-    simulate "no account found".
+    Returns a side_effect for ``mock_supabase.rpc`` whose ``.execute().data`` yields the
+    given ``user_id`` (existing account) or ``None`` (no account found). The lookup now goes
+    through the SECURITY DEFINER RPC because PostgREST doesn't expose the ``auth`` schema.
     """
-    b = MockQueryBuilder()
-    b.execute.return_value = MagicMock(
-        data=[{"id": user_id}] if user_id else [],
-        count=1 if user_id else 0,
-    )
-    schema_mock = MagicMock()
-    schema_mock.from_.return_value = b
-    return lambda name: schema_mock
+    rpc_result = MagicMock()
+    rpc_result.execute.return_value = MagicMock(data=user_id)
+    return lambda *a, **k: rpc_result
 
 
 # ===========================================================================
@@ -204,8 +198,8 @@ class TestAddMemberExistingUser:
             "invited_by": TEST_USER_ID,
         }
 
-        # _find_user_id_by_email queries db.schema('auth').from_('users')
-        mock_supabase.schema.side_effect = _schema_side_effect(OTHER_USER_ID)
+        # _find_user_id_by_email calls the get_user_id_by_email(lookup_email) RPC
+        mock_supabase.rpc.side_effect = _rpc_side_effect(OTHER_USER_ID)
         # db.table() calls in order: get_user_role, duplicate-membership check, insert
         mock_supabase.table.side_effect = _seq_side_effect(
             [
@@ -235,7 +229,7 @@ class TestAddMemberExistingUser:
             "invited_by": TEST_USER_ID,
         }
 
-        mock_supabase.schema.side_effect = _schema_side_effect(OTHER_USER_ID)
+        mock_supabase.rpc.side_effect = _rpc_side_effect(OTHER_USER_ID)
         mock_supabase.table.side_effect = _seq_side_effect(
             [
                 {"role": "owner"},  # get_user_role (maybe_single)
@@ -330,7 +324,7 @@ class TestAddMemberPendingInvite:
     def test_creates_pending_invite_for_unknown_email(self, client, mock_supabase):
         """Returns type=pending and invite record when email has no auth.users account."""
         # _find_user_id_by_email returns None → skip existing-user branch
-        mock_supabase.schema.side_effect = _schema_side_effect(None)
+        mock_supabase.rpc.side_effect = _rpc_side_effect(None)
         # db.table() calls in order: get_user_role, pending_project_invites insert
         mock_supabase.table.side_effect = _seq_side_effect(
             [
@@ -355,7 +349,7 @@ class TestAddMemberPendingInvite:
         """The pending invite stores the email in lowercase."""
         invite_lower = {**PENDING_INVITE, "email": "newuser@example.com"}
 
-        mock_supabase.schema.side_effect = _schema_side_effect(None)
+        mock_supabase.rpc.side_effect = _rpc_side_effect(None)
         mock_supabase.table.side_effect = _seq_side_effect(
             [
                 {"role": "owner"},  # get_user_role (maybe_single)

@@ -60,6 +60,7 @@ from subscriptions.admin_router import router as subscriptions_admin_router
 from subscriptions.billing_router import router as billing_router
 from subscriptions.pro_requests_router import router as pro_requests_router
 from subscriptions.router import router as subscriptions_router
+from teams.router import router as teams_router
 from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
@@ -86,6 +87,7 @@ app.include_router(subscriptions_admin_router, tags=["Admin"])
 app.include_router(pro_requests_router, tags=["Pro Requests"])
 app.include_router(billing_router)
 app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
+app.include_router(teams_router, prefix="/teams", tags=["Teams"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events

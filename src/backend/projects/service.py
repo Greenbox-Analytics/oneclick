@@ -27,14 +27,21 @@ async def get_user_role(db: Client, user_id: str, project_id: str):
 
 
 def _find_user_id_by_email(db: Client, email: str) -> str | None:
-    """Look up a user id by email via auth.users (service-role client)."""
+    """Look up a user id by email via the get_user_id_by_email(lookup_email) SECURITY DEFINER
+    RPC (pre-existing, registry migration 20260329000000).
+
+    This project's PostgREST does not expose the `auth` schema (PGRST106), so the previous
+    db.schema("auth") approach silently returned None — every invitee was treated as new.
+    """
     try:
-        result = db.schema("auth").from_("users").select("id").ilike("email", email).limit(1).execute()
+        result = db.rpc("get_user_id_by_email", {"lookup_email": email}).execute()
     except Exception as exc:
-        print(f"auth.users lookup failed for {email!r}: {exc}")
+        print(f"get_user_id_by_email failed for {email!r}: {exc}")
         return None
-    rows = result.data or []
-    return rows[0]["id"] if rows else None
+    data = result.data
+    if isinstance(data, list):
+        data = data[0] if data else None
+    return data or None
 
 
 async def add_member(db: Client, user_id: str, project_id: str, email: str, role: str):
