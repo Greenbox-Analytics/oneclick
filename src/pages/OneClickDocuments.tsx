@@ -666,6 +666,7 @@ const OneClickDocuments = () => {
           open={expenseReview !== null}
           expenses={expenseReview ?? []}
           isSubmitting={isRecalculating}
+          projectId={lastCalculationContext?.projectId}
           onConfirm={handleConfirmExpenses}
           onCancel={() => setExpenseReview(null)}
         />

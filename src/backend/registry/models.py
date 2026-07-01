@@ -188,6 +188,9 @@ class ProjectAboutUpdate(BaseModel):
 class StakeInput(BaseModel):
     stake_type: str  # master, publishing
     percentage: float
+    # When set, link/update this pre-existing unlinked stake on the work
+    # instead of inserting a new row (invite of someone already in Royalty Splits).
+    existing_stake_id: str | None = None
 
 
 # --- Per-collaborator visibility grants & access level ---

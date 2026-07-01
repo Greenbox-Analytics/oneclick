@@ -24,6 +24,11 @@ class SplitPayeeRequest(BaseModel):
     new_display_name: str
 
 
+class SaveReceiptRequest(BaseModel):
+    artist_id: str
+    project_id: str
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
@@ -94,6 +99,12 @@ class PayoutOut(BaseModel):
     paid_at: str | None = None
     breakdown_snapshot: dict
     orphan_state: str = "none"  # "none" | "partial" | "orphaned"  (derived)
+    payment_method: str = "manual"  # "manual" | "paypal"
+    paypal_capture_id: str | None = None
+
+
+class PaypalOrderOut(BaseModel):
+    paypal_order_id: str
 
 
 class PayeeDetail(BaseModel):

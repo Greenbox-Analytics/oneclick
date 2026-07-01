@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Send, Coins, CheckCheck, Hourglass, Users, Calendar, Search, Loader2, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { useRoyaltyPayees, useRoyaltyPeriods, useRoyaltyPayouts, useMarkPayoutPaid } from "@/hooks/useRoyalties";
+import { useRoyaltyPayees, useRoyaltyPeriods, useRoyaltyPayouts } from "@/hooks/useRoyalties";
 import type { PeriodLedger } from "@/hooks/useRoyalties";
 import { useReportingCurrency } from "@/hooks/useReportingCurrency";
 import { CurrencySelect, money } from "./shared";
@@ -24,7 +24,17 @@ import { OverviewDashboard } from "./analytics/OverviewDashboard";
 // while consuming real hook data.
 // ---------------------------------------------------------------------------
 
-export function PaymentTracking() {
+/** Normalize a name the same way the backend keys payees (see ingest.normalize_name). */
+const normalizeName = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
+
+interface PaymentTrackingProps {
+  /** Collaborator names from a OneClick calc to pre-select in a new payout. */
+  initialPayoutNames?: string[];
+  /** Called once the pre-selected payout has been opened. */
+  onPayoutConsumed?: () => void;
+}
+
+export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: PaymentTrackingProps = {}) {
   const [view, setView] = useState("overview");
   const [baseCur, setBaseCur] = useReportingCurrency();
   const [selection, setSelection] = useState<string[]>([]);
@@ -33,7 +43,6 @@ export function PaymentTracking() {
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [payoutOpen, setPayoutOpen] = useState<{ initialIds: string[] } | null>(null);
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
-  const markPaid = useMarkPayoutPaid();
 
   // ── Server data ──────────────────────────────────────────────────────────
   const { data: payees = [], isLoading: payeesLoading, isFetching: payeesFetching } = useRoyaltyPayees(baseCur);
@@ -64,6 +73,21 @@ export function PaymentTracking() {
 
   const toggleSel = (id: string) =>
     setSelection((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+
+  // Pre-open the payout modal when arriving from a OneClick calc's "Pay
+  // Royalties" button. Resolve collaborator names -> payee ids (owed > 0 only,
+  // so anyone with net ≤ 0 is never pre-selected), then open the modal.
+  useEffect(() => {
+    if (!initialPayoutNames || initialPayoutNames.length === 0) return;
+    if (payeesLoading && payees.length === 0) return; // wait for first load
+    const wanted = new Set(initialPayoutNames.map(normalizeName));
+    const initialIds = payees
+      .filter((p) => p.owed > 0 && wanted.has(normalizeName(p.display_name)))
+      .map((p) => p.id);
+    setPayoutOpen({ initialIds });
+    onPayoutConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPayoutNames, payees, payeesLoading]);
 
   // Only treat as "first load" skeleton when there's truly no prior data.
   // With keepPreviousData, payeesLoading stays false during a currency switch
@@ -147,7 +171,7 @@ export function PaymentTracking() {
 
         {/* ── Payouts tab ── */}
         <TabsContent value="runs" className="mt-4">
-          <PayoutRuns payouts={payouts} onOpenDetail={setDetailRunId} />
+          <PayoutRuns payouts={payouts} payees={payees} onOpenDetail={setDetailRunId} />
         </TabsContent>
 
         {/* ── Periods tab ── */}
@@ -176,11 +200,7 @@ export function PaymentTracking() {
       {detailRunId && (() => {
         const p = payouts.find((x) => x.id === detailRunId);
         return p ? (
-          <PayoutDetailModal
-            payout={p}
-            onClose={() => setDetailRunId(null)}
-            onMarkPaid={(id) => { markPaid.mutate(id); setDetailRunId(null); }}
-          />
+          <PayoutDetailModal payout={p} onClose={() => setDetailRunId(null)} />
         ) : null;
       })()}
 

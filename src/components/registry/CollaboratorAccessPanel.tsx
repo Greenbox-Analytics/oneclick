@@ -547,11 +547,21 @@ interface InvitePayload {
   email: string;
   name: string;
   role: string;
-  stakes: Array<{ stake_type: string; percentage: number }>;
+  stakes: Array<{ stake_type: string; percentage: number; existing_stake_id?: string }>;
   access_level: AccessLevel;
   initial_grants?: Array<{ resource_type: string; resource_id: string }>;
   ownership_breakdown: boolean;
   terms?: Array<{ label: string; value: string }>;
+}
+
+// A person listed in Royalty Splits who is not yet a collaborator (unlinked,
+// non-owner stakes grouped by holder name). Picking them in the invite form
+// links their existing stake rows instead of creating duplicates.
+interface SplitHolder {
+  name: string;
+  email: string | null;
+  master?: { id: string; pct: number };
+  publishing?: { id: string; pct: number };
 }
 
 // ============================================================
@@ -689,11 +699,29 @@ export default function CollaboratorAccessPanel({
     [seedGrantRows]
   );
 
+  // People already in Royalty Splits who aren't linked to any collaborator yet
+  // (and aren't the owner) — offered as invite targets with their split prefilled.
+  const splitHolders: SplitHolder[] = useMemo(() => {
+    if (mode !== "invite") return [];
+    const byName = new Map<string, SplitHolder>();
+    for (const s of workFullQuery.data?.stakes || []) {
+      if (s.is_owner_stake || s.collaborator_id || !s.holder_name?.trim()) continue;
+      const key = s.holder_name.trim().toLowerCase().replace(/\s+/g, " ");
+      const holder = byName.get(key) || { name: s.holder_name.trim(), email: null };
+      if (!holder.email && s.holder_email) holder.email = s.holder_email;
+      const slot = s.stake_type === "master" ? "master" : s.stake_type === "publishing" ? "publishing" : null;
+      // First row wins per type; genuine duplicates must be fixed in Royalty Splits.
+      if (slot && !holder[slot]) holder[slot] = { id: s.id, pct: Number(s.percentage || 0) };
+      byName.set(key, holder);
+    }
+    return Array.from(byName.values());
+  }, [mode, workFullQuery.data?.stakes]);
+
   // The collaborator's own split from the work's stakes (edit mode).
   const collaboratorSplit: ManifestSplit | null = useMemo(() => {
     if (mode !== "edit" || !collaborator) return null;
     const stakes = (workFullQuery.data?.stakes || []).filter(
-      (s) => (s as { collaborator_id?: string }).collaborator_id === collaborator.id
+      (s) => s.collaborator_id === collaborator.id
     );
     if (stakes.length === 0) return null;
     const master = stakes.find((s) => s.stake_type === "master")?.percentage ?? 0;
@@ -718,6 +746,9 @@ export default function CollaboratorAccessPanel({
   // Invite-only split inputs.
   const [masterPct, setMasterPct] = useState("");
   const [publishingPct, setPublishingPct] = useState("");
+  // When set, this invite links the person's existing Royalty Splits rows
+  // (their stakes get updated/linked instead of new ones being created).
+  const [linkedHolder, setLinkedHolder] = useState<SplitHolder | null>(null);
 
   // Derive-from-contracts (invite only).
   const [useContracts, setUseContracts] = useState(false);
@@ -759,6 +790,7 @@ export default function CollaboratorAccessPanel({
       setDraft(new Set());
       setMasterPct("");
       setPublishingPct("");
+      setLinkedHolder(null);
       setUseContracts(false);
       setTerms([]);
     }
@@ -806,6 +838,17 @@ export default function CollaboratorAccessPanel({
       setEmail(artist.email);
       setName(artist.name);
     }
+  };
+
+  // ---- Royalty Splits prefill (invite) ----
+  const handleSplitHolderSelect = (holderName: string) => {
+    const holder = splitHolders.find((h) => h.name === holderName);
+    if (!holder) return;
+    setLinkedHolder(holder);
+    setName(holder.name);
+    setEmail(holder.email ?? "");
+    setMasterPct(holder.master ? String(holder.master.pct) : "");
+    setPublishingPct(holder.publishing ? String(holder.publishing.pct) : "");
   };
 
   // ---- derive-from-contracts apply (invite) ----
@@ -912,8 +955,16 @@ export default function CollaboratorAccessPanel({
   );
   const newMaster = parseFloat(masterPct) || 0;
   const newPublishing = parseFloat(publishingPct) || 0;
-  const totalMaster = allocatedMaster + newMaster;
-  const totalPublishing = allocatedPublishing + newPublishing;
+  // When linking an existing split row, its current % will be REPLACED (updated in
+  // place), not added on top — exclude it from the allocated total. Only when that
+  // type is actually being sent (pct > 0): a zeroed input leaves the row untouched.
+  const excludedMaster = linkedHolder?.master && newMaster > 0 ? linkedHolder.master.pct : 0;
+  const excludedPublishing =
+    linkedHolder?.publishing && newPublishing > 0 ? linkedHolder.publishing.pct : 0;
+  const baseMaster = allocatedMaster - excludedMaster;
+  const basePublishing = allocatedPublishing - excludedPublishing;
+  const totalMaster = baseMaster + newMaster;
+  const totalPublishing = basePublishing + newPublishing;
   const masterOverflow = mode === "invite" && totalMaster > 100;
   const publishingOverflow = mode === "invite" && totalPublishing > 100;
 
@@ -922,12 +973,21 @@ export default function CollaboratorAccessPanel({
 
   const handleSend = async () => {
     if (!canSend) return;
-    const stakes: Array<{ stake_type: string; percentage: number }> = [];
+    const stakes: Array<{ stake_type: string; percentage: number; existing_stake_id?: string }> = [];
     const m = parseFloat(masterPct);
-    if (!Number.isNaN(m) && m > 0 && m <= 100) stakes.push({ stake_type: "master", percentage: m });
+    if (!Number.isNaN(m) && m > 0 && m <= 100)
+      stakes.push({
+        stake_type: "master",
+        percentage: m,
+        ...(linkedHolder?.master ? { existing_stake_id: linkedHolder.master.id } : {}),
+      });
     const p = parseFloat(publishingPct);
     if (!Number.isNaN(p) && p > 0 && p <= 100)
-      stakes.push({ stake_type: "publishing", percentage: p });
+      stakes.push({
+        stake_type: "publishing",
+        percentage: p,
+        ...(linkedHolder?.publishing ? { existing_stake_id: linkedHolder.publishing.id } : {}),
+      });
 
     const payload: InvitePayload = {
       work_id: workId,
@@ -1009,6 +1069,46 @@ export default function CollaboratorAccessPanel({
               </div>
             ) : (
               <>
+                {splitHolders.length > 0 && (
+                  <div>
+                    <Label className="text-sm font-medium">Add someone from Royalty Splits</Label>
+                    <Select value={linkedHolder?.name ?? ""} onValueChange={handleSplitHolderSelect}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Choose a person from the splits" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {splitHolders.map((h) => (
+                          <SelectItem key={h.name} value={h.name}>
+                            {h.name} (
+                            {[
+                              h.master ? `Master ${h.master.pct}%` : null,
+                              h.publishing ? `Publishing ${h.publishing.pct}%` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                            )
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {linkedHolder && (
+                      <div className="mt-2 flex items-start justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
+                        <p className="text-xs text-muted-foreground">
+                          Linking to <b>{linkedHolder.name}</b>'s existing split row — their
+                          current % is prefilled and will be updated, not duplicated.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setLinkedHolder(null)}
+                          aria-label="Stop linking to this split row"
+                          className="shrink-0 text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {artists && artists.length > 0 && (
                   <div>
                     <Label className="text-sm font-medium">Select from roster</Label>
@@ -1144,7 +1244,8 @@ export default function CollaboratorAccessPanel({
                           className="mt-1"
                         />
                         <p className={`mt-1 text-xs ${masterOverflow ? "text-destructive" : "text-muted-foreground"}`}>
-                          Allocated: {allocatedMaster.toFixed(2)}% + {newMaster.toFixed(2)}% ={" "}
+                          Allocated{excludedMaster > 0 && ` (excl. their current ${excludedMaster.toFixed(2)}%)`}:{" "}
+                          {baseMaster.toFixed(2)}% + {newMaster.toFixed(2)}% ={" "}
                           <span className="font-medium">{totalMaster.toFixed(2)}% / 100%</span>
                           {masterOverflow && ` — over by ${(totalMaster - 100).toFixed(2)}%.`}
                         </p>
@@ -1164,7 +1265,8 @@ export default function CollaboratorAccessPanel({
                           className="mt-1"
                         />
                         <p className={`mt-1 text-xs ${publishingOverflow ? "text-destructive" : "text-muted-foreground"}`}>
-                          Allocated: {allocatedPublishing.toFixed(2)}% + {newPublishing.toFixed(2)}% ={" "}
+                          Allocated{excludedPublishing > 0 && ` (excl. their current ${excludedPublishing.toFixed(2)}%)`}:{" "}
+                          {basePublishing.toFixed(2)}% + {newPublishing.toFixed(2)}% ={" "}
                           <span className="font-medium">{totalPublishing.toFixed(2)}% / 100%</span>
                           {publishingOverflow && ` — over by ${(totalPublishing - 100).toFixed(2)}%.`}
                         </p>

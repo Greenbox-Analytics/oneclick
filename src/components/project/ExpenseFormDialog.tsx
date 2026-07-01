@@ -35,7 +35,8 @@ interface ExpenseFormDialogProps {
   projectId?: string;
   /** Pass an existing expense to edit; omit to add. */
   editing?: ProjectExpense | null;
-  onSaved?: () => void;
+  /** Called after a successful save; receives the created/updated expense. */
+  onSaved?: (expense?: ProjectExpense) => void;
 }
 
 interface FormState {
@@ -113,13 +114,16 @@ export default function ExpenseFormDialog({
       incurred_on: form.incurred_on || null,
       work_ids: form.work_ids,
     };
+    let saved: ProjectExpense | undefined;
     if (editing) {
-      await updateExpense.mutateAsync({ projectId: activeProjectId, expenseId: editing.id, ...payload });
+      const res = await updateExpense.mutateAsync({ projectId: activeProjectId, expenseId: editing.id, ...payload });
+      saved = res?.expense;
     } else {
-      await createExpense.mutateAsync({ projectId: activeProjectId, ...payload });
+      const res = await createExpense.mutateAsync({ projectId: activeProjectId, ...payload });
+      saved = res?.expense;
     }
     onOpenChange(false);
-    onSaved?.();
+    onSaved?.(saved);
   };
 
   return (

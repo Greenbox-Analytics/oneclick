@@ -95,6 +95,8 @@ export interface PayoutOut {
   paid_at?: string;
   breakdown_snapshot: Record<string, unknown>;
   orphan_state: string; // "none" | "partial" | "orphaned"
+  payment_method?: string; // "manual" | "paypal"
+  paypal_capture_id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +239,54 @@ export function useCancelPayout() {
       queryClient.invalidateQueries({ queryKey: ["royalty-payees"] });
       queryClient.invalidateQueries({ queryKey: ["royalty-payouts"] });
       queryClient.invalidateQueries({ queryKey: ["royalty-periods"] });
+    },
+  });
+}
+
+/** POST /oneclick/royalties/payouts/{id}/paypal/order — create a PayPal checkout order for a draft payout. */
+export function useCreatePaypalOrder() {
+  const { user } = useAuth();
+  return useMutation({
+    mutationFn: (id: string) => {
+      if (!user?.id) throw new Error("Not authenticated");
+      return apiFetch<{ paypal_order_id: string }>(
+        `${API_URL}/oneclick/royalties/payouts/${id}/paypal/order`,
+        { method: "POST" },
+      );
+    },
+  });
+}
+
+/** POST /oneclick/royalties/payouts/{id}/paypal/capture — capture the approved order, marks payout paid. */
+export function useCapturePaypalOrder() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => {
+      if (!user?.id) throw new Error("Not authenticated");
+      return apiFetch<PayoutOut>(`${API_URL}/oneclick/royalties/payouts/${id}/paypal/capture`, {
+        method: "POST",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["royalty-payees"] });
+      queryClient.invalidateQueries({ queryKey: ["royalty-payee"] });
+      queryClient.invalidateQueries({ queryKey: ["royalty-payouts"] });
+      queryClient.invalidateQueries({ queryKey: ["royalty-periods"] });
+    },
+  });
+}
+
+/** POST /oneclick/royalties/payouts/{id}/receipt/save — save the receipt PDF into a project's files. */
+export function useSaveReceiptToProject() {
+  const { user } = useAuth();
+  return useMutation({
+    mutationFn: ({ payoutId, artist_id, project_id }: { payoutId: string; artist_id: string; project_id: string }) => {
+      if (!user?.id) throw new Error("Not authenticated");
+      return apiFetch<Record<string, unknown>>(
+        `${API_URL}/oneclick/royalties/payouts/${payoutId}/receipt/save`,
+        { method: "POST", body: JSON.stringify({ artist_id, project_id }) },
+      );
     },
   });
 }

@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertCircle, ArrowLeft, BookOpen, Info, Calculator, Wallet } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -23,7 +23,13 @@ interface Artist {
 
 const OneClick = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
+
+  // When arriving from a OneClick calculation's "Pay Royalties" button, open the
+  // Royalty Tracking tab and pre-select that calc's collaborators in the payout
+  // modal. Consume the state once so it doesn't re-fire on re-render.
+  const [initialPayoutNames, setInitialPayoutNames] = useState<string[] | undefined>(undefined);
 
   // State for fetched artists
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -41,6 +47,17 @@ const OneClick = () => {
     captureToolOpened("oneclick");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const names = (location.state as { openPayoutForNames?: string[] } | null)?.openPayoutForNames;
+    if (names && names.length > 0) {
+      setTab("payments");
+      setInitialPayoutNames(names);
+      // Clear router state so a refresh/re-render doesn't reopen the modal.
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   // Fetch artists from backend on component mount
   useEffect(() => {
@@ -179,7 +196,10 @@ const OneClick = () => {
           </TabsContent>
 
           <TabsContent value="payments" className="mt-6">
-            <PaymentTracking />
+            <PaymentTracking
+              initialPayoutNames={initialPayoutNames}
+              onPayoutConsumed={() => setInitialPayoutNames(undefined)}
+            />
           </TabsContent>
         </Tabs>
       </main>

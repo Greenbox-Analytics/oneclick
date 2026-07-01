@@ -15,7 +15,7 @@ import re
 from collections import defaultdict
 from datetime import UTC, date, datetime
 
-from oneclick.royalties import fx
+from oneclick.royalties import fx, paypal_client
 from oneclick.royalties.ingest import statement_meta, upsert_payee
 from oneclick.royalties.models import (
     PayeeDetail,
@@ -63,11 +63,18 @@ def _load_coverage_for_payee(db, payee_id: str) -> list[dict]:
     return res.data or []
 
 
-def _load_projects(db, user_id: str) -> dict[str, str]:
-    """Return {project_id: name} for all projects visible to user_id."""
-    res = db.table("projects").select("id, name").eq("user_id", user_id).execute()
-    rows = res.data or []
-    return {r["id"]: r.get("name", "") for r in rows}
+def _project_name_map(db, project_ids) -> dict[str, str]:
+    """Return {project_id: name} for the given ids.
+
+    ``projects`` has no ``user_id`` column (ownership is via ``artist_id``), so we
+    look names up by the ids themselves. Callers pass ids sourced from the user's
+    own royalty_lines, which keeps the result correctly user-scoped.
+    """
+    ids = [pid for pid in set(project_ids) if pid]
+    if not ids:
+        return {}
+    res = db.table("projects").select("id, name").in_("id", ids).execute()
+    return {r["id"]: r.get("name", "") for r in (res.data or [])}
 
 
 def _detect_collision(db, user_id: str, normalized_name: str) -> bool:
@@ -329,9 +336,8 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
         elif st == "draft":
             cov_drafted_stmt[(stmt_id, proj_id)] += amt
 
-    # Project names
-    proj_res = db.table("projects").select("id, name").eq("user_id", user_id).execute()
-    project_name_map: dict[str, str] = {r["id"]: r.get("name", "") for r in (proj_res.data or [])}
+    # Project names (looked up by the ids present in this payee's lines)
+    project_name_map: dict[str, str] = _project_name_map(db, (l.get("project_id") for l in payee_lines))
 
     # Organise by project → statement
     proj_stmt_lines: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
@@ -619,9 +625,9 @@ def create_payouts(
     today = date.today().isoformat()
     results = []
 
-    # Load all projects once (for names in snapshot)
-    proj_res = db.table("projects").select("id, name").eq("user_id", user_id).execute()
-    project_name_map: dict[str, str] = {r["id"]: r.get("name", "") for r in (proj_res.data or [])}
+    # Load project names once (for snapshot), keyed by the ids in the user's lines.
+    line_res = db.table("royalty_lines").select("project_id").eq("user_id", user_id).execute()
+    project_name_map: dict[str, str] = _project_name_map(db, (r.get("project_id") for r in (line_res.data or [])))
 
     for payee_id in payee_ids:
         # Ownership check
@@ -1001,3 +1007,166 @@ def get_payout(db, user_id: str, payout_id: str) -> dict:
     if not rows:
         raise PermissionError("Payout not found")
     return _attach_orphan_state(db, rows[0])
+
+
+# ---------------------------------------------------------------------------
+# PayPal checkout for payouts
+# ---------------------------------------------------------------------------
+
+
+class PayoutStateError(ValueError):
+    """Payout is in a state that doesn't allow the requested action (→ 409)."""
+
+
+def _load_owned_payout(db, user_id: str, payout_id: str) -> dict:
+    res = db.table("royalty_payouts").select("*").eq("id", payout_id).eq("user_id", user_id).execute()
+    rows = res.data or []
+    if not rows:
+        raise PermissionError("Payout not found")
+    return rows[0]
+
+
+def _mark_paid_via_paypal(db, user_id: str, payout_id: str, capture_id: str) -> dict:
+    update_res = (
+        db.table("royalty_payouts")
+        .update(
+            {
+                "status": "paid",
+                "paid_at": "now()",
+                "payment_method": "paypal",
+                "paypal_capture_id": capture_id,
+            }
+        )
+        .eq("id", payout_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return (update_res.data or [{}])[0]
+
+
+def _extract_capture(order: dict) -> dict:
+    """Pull the first capture out of an order payload; {} if none exists yet."""
+    units = order.get("purchase_units") or []
+    captures = ((units[0].get("payments") or {}).get("captures") or []) if units else []
+    return captures[0] if captures else {}
+
+
+def get_paid_payout(db, user_id: str, payout_id: str) -> dict:
+    """Return a payout that must be paid (receipts only exist for settled payments).
+
+    Raises PermissionError (→ 404) if not found or not owned by caller,
+    PayoutStateError (→ 409) if the payout is not paid yet.
+    """
+    payout = _load_owned_payout(db, user_id, payout_id)
+    if payout.get("status") != "paid":
+        raise PayoutStateError("Receipts are only available for paid payouts")
+    return payout
+
+
+def create_paypal_order_for_payout(db, user_id: str, payout_id: str) -> dict:
+    """Create a PayPal checkout order for a draft payout.
+
+    The order pays the payee's email directly; the caller approves it with
+    their own PayPal account. The payout stays 'draft' until capture succeeds.
+
+    Raises PermissionError (→ 404), PayoutStateError (→ 409),
+    ValueError (→ 400, actionable message), PayPalError (→ 502).
+    """
+    payout = _load_owned_payout(db, user_id, payout_id)
+    if payout.get("status") != "draft":
+        raise PayoutStateError("Only draft payouts can be paid with PayPal")
+
+    # Reconcile the crash window: a previous capture may have completed on
+    # PayPal's side without our status update landing. Never let that payout
+    # be paid twice.
+    existing_order_id = payout.get("paypal_order_id")
+    if existing_order_id:
+        try:
+            existing = paypal_client.get_order(existing_order_id)
+        except paypal_client.PayPalError:
+            existing = None  # expired/voided order — safe to create a fresh one
+        if existing and existing.get("status") == "COMPLETED":
+            capture = _extract_capture(existing)
+            _mark_paid_via_paypal(db, user_id, payout_id, capture.get("id"))
+            raise PayoutStateError("This payout was already paid via PayPal")
+
+    payee_res = db.table("royalty_payees").select("*").eq("id", payout["payee_id"]).execute()
+    payee_rows = payee_res.data or []
+    payee = payee_rows[0] if payee_rows else {}
+    payee_email = (payee.get("email") or "").strip()
+    if not payee_email:
+        raise ValueError("This payee has no email address yet. Add one in the Parties tab, then try again.")
+
+    currency = (payout.get("pay_currency") or "").upper()
+    if currency not in paypal_client.PAYPAL_SUPPORTED_CURRENCIES:
+        raise ValueError(
+            f"PayPal doesn't support payments in {currency}. "
+            "Change this payee's payout currency in the Parties tab and create a new payout."
+        )
+
+    amount_value = paypal_client.format_amount(payout["total_amount"], currency)
+    display_name = payee.get("display_name") or "collaborator"
+    order = paypal_client.create_order(
+        payee_email=payee_email,
+        amount_value=amount_value,
+        currency=currency,
+        reference_id=payout_id,
+        description=payout.get("note") or f"Royalty payout — {display_name}",
+    )
+
+    # Persist the order id only — payment_method stays 'manual' until capture,
+    # so an abandoned order followed by manual Mark-paid never reads as PayPal.
+    db.table("royalty_payouts").update({"paypal_order_id": order["id"]}).eq("id", payout_id).eq(
+        "user_id", user_id
+    ).execute()
+
+    return {"paypal_order_id": order["id"]}
+
+
+def capture_paypal_order_for_payout(db, user_id: str, payout_id: str) -> dict:
+    """Capture the payout's PayPal order and mark the payout paid.
+
+    The order id always comes from the payout row, never from the client, so
+    a caller can't capture someone else's order onto their payout. Safe to
+    call twice (double-click, retry after crash).
+
+    Raises PermissionError (→ 404), PayoutStateError (→ 409),
+    ValueError (→ 400), PayPalError (→ 502 / payment not completed).
+    """
+    payout = _load_owned_payout(db, user_id, payout_id)
+
+    if payout.get("status") == "paid":
+        if payout.get("payment_method") == "paypal":
+            return payout  # idempotent: capture already recorded
+        raise PayoutStateError("This payout was already marked paid manually")
+
+    order_id = payout.get("paypal_order_id")
+    if not order_id:
+        raise ValueError("No PayPal payment was started for this payout.")
+
+    try:
+        order = paypal_client.capture_order(order_id)
+    except paypal_client.PayPalError as exc:
+        if exc.issue != "ORDER_ALREADY_CAPTURED":
+            raise
+        # Captured previously (e.g. double-click) — recover the capture details.
+        order = paypal_client.get_order(order_id)
+
+    capture = _extract_capture(order)
+    if capture.get("status") != "COMPLETED":
+        raise paypal_client.PayPalError(
+            "PayPal hasn't completed this payment yet — check your PayPal account and try again.",
+            issue=capture.get("status"),
+        )
+
+    # Never mark paid on a mismatched amount or currency.
+    amount = capture.get("amount") or {}
+    expected_currency = (payout.get("pay_currency") or "").upper()
+    expected_value = paypal_client.format_amount(payout["total_amount"], expected_currency)
+    if amount.get("currency_code") != expected_currency or amount.get("value") != expected_value:
+        raise paypal_client.PayPalError(
+            f"PayPal capture amount mismatch for payout {payout_id}: "
+            f"expected {expected_value} {expected_currency}, got {amount.get('value')} {amount.get('currency_code')}"
+        )
+
+    return _mark_paid_via_paypal(db, user_id, payout_id, capture.get("id"))

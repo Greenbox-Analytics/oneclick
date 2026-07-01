@@ -250,6 +250,51 @@ function SplitPanel({ payeeId, statements, onDone }: SplitPanelProps) {
 }
 
 // ---------------------------------------------------------------------------
+// EmailEditor — view/edit the payee's payment email
+// ---------------------------------------------------------------------------
+
+function EmailEditor({ payeeId, currentEmail }: { payeeId: string; currentEmail?: string }) {
+  const patchPayee = useSetPayeeCurrency();
+  const [draft, setDraft] = useState(currentEmail ?? "");
+
+  const trimmed = draft.trim();
+  const dirty = trimmed !== (currentEmail ?? "");
+  const valid = /^\S+@\S+\.\S+$/.test(trimmed);
+
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <Input
+          type="email"
+          placeholder="payee@example.com"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className="h-10 w-[210px]"
+        />
+        {dirty && (
+          <Button
+            size="sm"
+            disabled={!valid || patchPayee.isPending}
+            onClick={() => patchPayee.mutate({ id: payeeId, email: trimmed })}
+          >
+            {patchPayee.isPending ? "Saving…" : "Save"}
+          </Button>
+        )}
+        {!dirty && patchPayee.isSuccess && (
+          <span className="text-[11.5px] text-muted-foreground">Saved</span>
+        )}
+      </div>
+      <p className="mt-1.5 text-[11.5px] text-muted-foreground">
+        Used for PayPal payments and emailed receipts.
+      </p>
+      {patchPayee.isError && (
+        <p className="mt-1 text-[11.5px] text-destructive">Couldn't save the email. Please try again.</p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main drawer
 // ---------------------------------------------------------------------------
 
@@ -259,7 +304,7 @@ export function PartyDrawer({
   onClose,
   onPayout,
 }: PartyDrawerProps) {
-  const { data, isLoading } = useRoyaltyPayee(payeeId, base);
+  const { data, isLoading, isError, refetch } = useRoyaltyPayee(payeeId, base);
   const setCurrency = useSetPayeeCurrency();
 
   const [openProj, setOpenProj] = useState<string | null>(null);
@@ -329,6 +374,19 @@ export function PartyDrawer({
         {/* ── Body ─────────────────────────────────────────────────────────── */}
         {isLoading ? (
           <DrawerSkeleton />
+        ) : isError || !summary ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <AlertTriangle className="h-8 w-8 text-muted-foreground/50" />
+            <p className="text-sm font-medium text-foreground">
+              Couldn't load this party's details
+            </p>
+            <p className="max-w-[36ch] text-xs text-muted-foreground">
+              Something went wrong fetching their royalty history. Please try again.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              Retry
+            </Button>
+          </div>
         ) : (
           <div className="flex flex-1 flex-col gap-[22px] overflow-y-auto p-5 pb-7">
             {/* Balances */}
@@ -413,6 +471,18 @@ export function PartyDrawer({
                     </span>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* Payment email */}
+            {summary && (
+              <div>
+                <SectionLabel>Payment email</SectionLabel>
+                <EmailEditor
+                  key={summary.email ?? ""}
+                  payeeId={payeeId}
+                  currentEmail={summary.email}
+                />
               </div>
             )}
 

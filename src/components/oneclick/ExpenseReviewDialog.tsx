@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -10,7 +10,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Trash2, Receipt } from "lucide-react";
+import { Loader2, Trash2, Receipt, Plus } from "lucide-react";
+import ExpenseFormDialog from "@/components/project/ExpenseFormDialog";
+import { useWorksByProject } from "@/hooks/useRegistry";
+import type { ProjectExpense } from "@/hooks/useProjectExpenses";
 
 export interface ReviewExpense {
   id: string;
@@ -26,6 +29,8 @@ interface ExpenseReviewDialogProps {
   open: boolean;
   expenses: ReviewExpense[];
   isSubmitting: boolean;
+  /** Project this calculation belongs to; enables adding expenses inline. */
+  projectId?: string;
   onConfirm: (expenses: ReviewExpense[]) => void;
   onCancel: () => void;
 }
@@ -42,15 +47,44 @@ const ExpenseReviewDialog = ({
   open,
   expenses,
   isSubmitting,
+  projectId,
   onConfirm,
   onCancel,
 }: ExpenseReviewDialogProps) => {
   const [rows, setRows] = useState<ReviewExpense[]>(expenses);
+  const [addOpen, setAddOpen] = useState(false);
 
   // Re-seed when a new calculation surfaces a fresh expense set.
   useEffect(() => {
     setRows(expenses);
   }, [expenses]);
+
+  // Resolve work_ids -> titles so an inline-added expense allocates to the
+  // right track (the net recalculation keys allocation on work_titles).
+  const { data: works } = useWorksByProject(projectId || undefined);
+  const workTitleById = useMemo(() => {
+    const map = new Map<string, string>();
+    (works ?? []).forEach((w) => map.set(w.id, w.title));
+    return map;
+  }, [works]);
+
+  const handleExpenseAdded = (expense?: ProjectExpense) => {
+    if (!expense) return;
+    const workIds = expense.work_ids ?? [];
+    const reviewRow: ReviewExpense = {
+      id: expense.id,
+      description: expense.description,
+      amount: expense.amount,
+      category: expense.category,
+      incurred_on: expense.incurred_on,
+      work_ids: workIds,
+      work_titles: workIds
+        .map((id) => workTitleById.get(id))
+        .filter((t): t is string => Boolean(t)),
+    };
+    // Avoid duplicates if the same expense id is somehow added twice.
+    setRows((rs) => (rs.some((r) => r.id === reviewRow.id) ? rs : [...rs, reviewRow]));
+  };
 
   const updateAmount = (id: string, value: string) => {
     const amount = parseFloat(value);
@@ -81,6 +115,17 @@ const ExpenseReviewDialog = ({
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <Receipt className="w-8 h-8 text-muted-foreground/40 mb-2" />
               <p className="text-sm text-muted-foreground">No expenses — net rows will equal gross.</p>
+              {projectId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => setAddOpen(true)}
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1.5" />
+                  Add expense
+                </Button>
+              )}
             </div>
           ) : (
             rows.map((row) => (
@@ -133,6 +178,15 @@ const ExpenseReviewDialog = ({
           )}
         </div>
 
+        {projectId && rows.length > 0 && (
+          <div>
+            <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)}>
+              <Plus className="w-3.5 h-3.5 mr-1.5" />
+              Add expense
+            </Button>
+          </div>
+        )}
+
         <div className="flex items-center justify-between text-sm border-t border-border pt-3">
           <span className="text-muted-foreground">Total expenses to apply</span>
           <span className="font-semibold">{formatCurrency(total)}</span>
@@ -148,6 +202,15 @@ const ExpenseReviewDialog = ({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {projectId && (
+        <ExpenseFormDialog
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          projectId={projectId}
+          onSaved={handleExpenseAdded}
+        />
+      )}
     </Dialog>
   );
 };

@@ -633,6 +633,44 @@ async def invite_with_stakes(db: Client, user_id: str, data):
     if prior and prior["status"] in ("invited", "confirmed"):
         raise ValueError("This person is already a collaborator on this work")
 
+    # Pre-validate any explicitly referenced stakes BEFORE any write, so a rejection
+    # leaves no orphan collaborator row. A referenced stake must belong to this work,
+    # must not be the owner's stake, and must be unlinked (or linked to the prior
+    # collaborator row being reactivated).
+    prior_id = prior["id"] if prior else None
+    ref_ids = [s.existing_stake_id for s in data.stakes if getattr(s, "existing_stake_id", None)]
+    if ref_ids:
+        work_stakes = (
+            db.table("ownership_stakes")
+            .select("id, stake_type, collaborator_id, is_owner_stake")
+            .eq("work_id", data.work_id)
+            .execute()
+        ).data or []
+        by_id = {r["id"]: r for r in work_stakes}
+        kept_types = (
+            {r["stake_type"] for r in work_stakes if r.get("collaborator_id") == prior_id} if prior_id else set()
+        )
+        for s in data.stakes:
+            sid = getattr(s, "existing_stake_id", None)
+            if not sid:
+                continue
+            row = by_id.get(sid)  # membership proves the stake belongs to THIS work
+            if row is None:
+                raise ValueError("Selected split row was not found on this work")
+            if row.get("is_owner_stake"):
+                raise ValueError("The owner's own split can't be assigned to a collaborator")
+            if row.get("collaborator_id") not in (None, prior_id):
+                raise ValueError("That split row already belongs to another collaborator")
+            if row["stake_type"] != s.stake_type:
+                raise ValueError("Selected split row doesn't match the stake type")
+            # A reactivated collaborator KEPT a stake of this type while a DIFFERENT
+            # unlinked row was picked — two rows would claim the same person's share.
+            if s.stake_type in kept_types and row.get("collaborator_id") != prior_id:
+                raise ValueError(
+                    f"This person already holds a {s.stake_type} stake from a previous invite. "
+                    "Remove the duplicate row in Royalty Splits first."
+                )
+
     base = {
         "work_id": data.work_id,
         "invited_by": user_id,
@@ -674,8 +712,9 @@ async def invite_with_stakes(db: Client, user_id: str, data):
             "holder_email": data.email,
             "collaborator_id": collab_id,  # link EVERY stake
         }
-        if stake.stake_type in existing_by_type:
-            s = db.table("ownership_stakes").update(payload).eq("id", existing_by_type[stake.stake_type]).execute()
+        target_id = existing_by_type.get(stake.stake_type) or getattr(stake, "existing_stake_id", None)
+        if target_id:
+            s = db.table("ownership_stakes").update(payload).eq("id", target_id).execute()
         else:
             s = db.table("ownership_stakes").insert(payload).execute()
         if s.data:

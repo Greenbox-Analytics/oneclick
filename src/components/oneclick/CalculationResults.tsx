@@ -5,7 +5,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Music, FileText, Users, DollarSign, Download, CheckCircle2, Loader2, RefreshCw, Share2, HardDrive, MessageSquare } from "lucide-react";
+import { Music, FileText, Users, DollarSign, Download, CheckCircle2, Loader2, RefreshCw, Share2, HardDrive, MessageSquare, Wallet } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import type { PieLabelRenderProps } from "recharts";
 import ExcelJS from "exceljs";
@@ -86,9 +87,26 @@ const CalculationResults = ({
   calculationId,
 }: CalculationResultsProps) => {
   const chartContentRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
   // Prefer the id carried on the result (covers cache hits) and fall back to
   // the id captured when the calculation was saved.
   const breakdownCalculationId = calculationResult?.calculation_id ?? calculationId ?? null;
+
+  // Parties from this calc that are actually owed money (net revenue > 0).
+  // Collaborators with net ≤ 0 are excluded so they're never pre-selected for
+  // payment. Names map 1:1 to royalty-tracking payees by normalized name.
+  const payableParties = Object.entries(
+    (calculationResult?.payments ?? []).reduce((acc, p) => {
+      acc[p.party_name] = (acc[p.party_name] ?? 0) + p.amount_to_pay;
+      return acc;
+    }, {} as Record<string, number>),
+  )
+    .filter(([, total]) => total > 0)
+    .map(([name]) => name);
+
+  const handlePayRoyalties = () => {
+    navigate("/tools/oneclick", { state: { openPayoutForNames: payableParties } });
+  };
 
   const { connections } = useIntegrations();
   const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
@@ -563,6 +581,12 @@ const CalculationResults = ({
                         </div>
                       </div>
                     ))}
+                  </div>
+
+                  <div className="mt-6 flex justify-end border-t border-border pt-4">
+                      <Button onClick={handlePayRoyalties} disabled={payableParties.length === 0}>
+                          <Wallet className="mr-2 h-4 w-4" /> Pay Royalties
+                      </Button>
                   </div>
               </CardContent>
           </Card>
