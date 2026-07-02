@@ -1,14 +1,18 @@
 // src/components/oneclick/payments/PayoutRuns.tsx
-import { CheckCheck, Clock, PieChart, X, Send } from "lucide-react";
+import { useState } from "react";
+import { CheckCheck, Clock, PieChart, X, Send, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useMarkPayoutPaid, useCancelPayout } from "@/hooks/useRoyalties";
-import type { PayoutOut } from "@/hooks/useRoyalties";
+import type { PayoutOut, PayeeSummary } from "@/hooks/useRoyalties";
 import { PartyAvatar, StatusBadge, fmtMoney, fmtDate } from "./shared";
+import { PayWithPayPalDialog, isPaypalEnabled } from "./PayWithPayPalDialog";
+import { ReceiptDialog } from "./ReceiptDialog";
 import { useToast } from "@/hooks/use-toast";
 
 interface PayoutRunsProps {
   payouts: PayoutOut[];
+  payees?: PayeeSummary[];
   onOpenDetail: (id: string) => void;
 }
 
@@ -24,7 +28,17 @@ function getPayeeName(payout: PayoutOut): string {
 // ---------------------------------------------------------------------------
 // RunCard
 // ---------------------------------------------------------------------------
-function RunCard({ payout, onOpenDetail }: { payout: PayoutOut; onOpenDetail: (id: string) => void }) {
+function RunCard({
+  payout,
+  onOpenDetail,
+  onPayWithPaypal,
+  onReceipt,
+}: {
+  payout: PayoutOut;
+  onOpenDetail: (id: string) => void;
+  onPayWithPaypal?: (payout: PayoutOut) => void;
+  onReceipt: (payout: PayoutOut) => void;
+}) {
   const { toast } = useToast();
   const markPaid = useMarkPayoutPaid();
   const cancelPayout = useCancelPayout();
@@ -97,9 +111,17 @@ function RunCard({ payout, onOpenDetail }: { payout: PayoutOut; onOpenDetail: (i
           {/* Draft actions */}
           {isDraft && (
             <>
+              {onPayWithPaypal && (
+                <Button size="sm" onClick={() => onPayWithPaypal(payout)}>
+                  <Wallet className="mr-1.5 h-3.5 w-3.5" /> Pay with PayPal
+                </Button>
+              )}
+              {/* Manual fallback for payments made outside PayPal (bank
+                  transfer, unsupported currency, payee without PayPal). */}
               <Button
                 size="sm"
-                variant="outline"
+                variant="ghost"
+                className="text-muted-foreground"
                 disabled={markPaid.isPending}
                 onClick={() =>
                   markPaid.mutate(payout.id, {
@@ -129,13 +151,7 @@ function RunCard({ payout, onOpenDetail }: { payout: PayoutOut; onOpenDetail: (i
 
           {/* Paid action */}
           {isPaid && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                toast({ description: "Receipt download — coming soon." })
-              }
-            >
+            <Button size="sm" variant="outline" onClick={() => onReceipt(payout)}>
               Receipt
             </Button>
           )}
@@ -149,12 +165,18 @@ function RunCard({ payout, onOpenDetail }: { payout: PayoutOut; onOpenDetail: (i
 // PayoutRuns
 // ---------------------------------------------------------------------------
 
-export function PayoutRuns({ payouts, onOpenDetail }: PayoutRunsProps) {
+export function PayoutRuns({ payouts, payees = [], onOpenDetail }: PayoutRunsProps) {
+  const [paypalPayout, setPaypalPayout] = useState<PayoutOut | null>(null);
+  const [receiptPayout, setReceiptPayout] = useState<PayoutOut | null>(null);
+
   const byDate = (a: PayoutOut, b: PayoutOut) =>
     new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
 
   const drafts = payouts.filter((r) => r.status === "draft").sort(byDate);
   const paid = payouts.filter((r) => r.status === "paid").sort(byDate);
+
+  const paypalReady = isPaypalEnabled();
+  const payeeById = new Map(payees.map((p) => [p.id, p]));
 
   if (payouts.length === 0) {
     return (
@@ -174,7 +196,13 @@ export function PayoutRuns({ payouts, onOpenDetail }: PayoutRunsProps) {
         </div>
       )}
       {drafts.map((r) => (
-        <RunCard key={r.id} payout={r} onOpenDetail={onOpenDetail} />
+        <RunCard
+          key={r.id}
+          payout={r}
+          onOpenDetail={onOpenDetail}
+          onPayWithPaypal={paypalReady ? setPaypalPayout : undefined}
+          onReceipt={setReceiptPayout}
+        />
       ))}
 
       {paid.length > 0 && (
@@ -183,8 +211,20 @@ export function PayoutRuns({ payouts, onOpenDetail }: PayoutRunsProps) {
         </div>
       )}
       {paid.map((r) => (
-        <RunCard key={r.id} payout={r} onOpenDetail={onOpenDetail} />
+        <RunCard key={r.id} payout={r} onOpenDetail={onOpenDetail} onReceipt={setReceiptPayout} />
       ))}
+
+      {paypalPayout && (
+        <PayWithPayPalDialog
+          payout={paypalPayout}
+          payee={payeeById.get(paypalPayout.payee_id)}
+          onClose={() => setPaypalPayout(null)}
+        />
+      )}
+
+      {receiptPayout && (
+        <ReceiptDialog payout={receiptPayout} onClose={() => setReceiptPayout(null)} />
+      )}
     </div>
   );
 }

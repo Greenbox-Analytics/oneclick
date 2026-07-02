@@ -62,9 +62,16 @@ def _load_coverage_all(db, user_id: str) -> list[dict]:
     return cov_res.data or []
 
 
-def _load_projects_with_artist(db, user_id: str) -> list[dict]:
-    """Return all projects for user_id, including artist_id."""
-    res = db.table("projects").select("id, name, artist_id").eq("user_id", user_id).execute()
+def _load_projects_with_artist(db, project_ids) -> list[dict]:
+    """Return {id, name, artist_id} for the given project ids.
+
+    ``projects`` has no ``user_id`` column (ownership is via ``artist_id``); callers
+    pass ids sourced from the user's own royalty_lines, keeping this user-scoped.
+    """
+    ids = [pid for pid in set(project_ids) if pid]
+    if not ids:
+        return []
+    res = db.table("projects").select("id, name, artist_id").in_("id", ids).execute()
     return res.data or []
 
 
@@ -233,7 +240,7 @@ def artist_analytics(db, user_id: str, artist_id: str, base: str) -> "ArtistAnal
     """
     all_lines = _load_lines(db, user_id)
     all_payouts = _load_payouts(db, user_id)
-    projects = _load_projects_with_artist(db, user_id)
+    projects = _load_projects_with_artist(db, (l.get("project_id") for l in all_lines))
 
     # Build project_id → artist_id map
     proj_artist: dict[str, str] = {p["id"]: p.get("artist_id", "") for p in projects}

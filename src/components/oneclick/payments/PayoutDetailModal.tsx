@@ -1,16 +1,17 @@
 // src/components/oneclick/payments/PayoutDetailModal.tsx
-import { CheckCheck, Clock, PieChart, Receipt, Download, Music, Users, Banknote, AlertTriangle } from "lucide-react";
+import { useState } from "react";
+import { CheckCheck, Clock, PieChart, Receipt, Download, Music, Users, Banknote, AlertTriangle, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { API_URL } from "@/lib/apiFetch";
 import type { PayoutOut } from "@/hooks/useRoyalties";
-import { StatusBadge, fmtMoney, fmtDate, idToColor } from "./shared";
+import { StatusBadge, fmtMoney, fmtDate, idToColor, downloadPdf } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 
 interface PayoutDetailModalProps {
   payout: PayoutOut;
   onClose: () => void;
-  onMarkPaid: (id: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,8 +104,23 @@ function Donut({ slices, total, payCur }: { slices: DonutSlice[]; total: number;
 // PayoutDetailModal
 // ---------------------------------------------------------------------------
 
-export function PayoutDetailModal({ payout, onClose, onMarkPaid }: PayoutDetailModalProps) {
+export function PayoutDetailModal({ payout, onClose }: PayoutDetailModalProps) {
   const { toast } = useToast();
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      await downloadPdf(
+        `${API_URL}/oneclick/royalties/payouts/${payout.id}/breakdown.pdf`,
+        `Payout_Breakdown_${payout.id}.pdf`,
+      );
+    } catch {
+      toast({ variant: "destructive", title: "Couldn't export the breakdown. Please try again." });
+    } finally {
+      setExporting(false);
+    }
+  };
   const snap = castSnapshot(payout.breakdown_snapshot);
   const isDraft = payout.status === "draft";
   const payCur = payout.pay_currency;
@@ -396,26 +412,17 @@ export function PayoutDetailModal({ payout, onClose, onMarkPaid }: PayoutDetailM
 
         {/* Footer */}
         <div className="flex items-center gap-2 border-t border-border px-5 py-4">
-          <Button
-            variant="ghost"
-            className="mr-auto"
-            onClick={() => toast({ description: "Export breakdown — coming soon." })}
-          >
-            <Download className="mr-1.5 h-4 w-4" /> Export breakdown
+          <Button variant="ghost" className="mr-auto" disabled={exporting} onClick={handleExport}>
+            {exporting ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-1.5 h-4 w-4" />
+            )}
+            Export breakdown
           </Button>
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
-          {isDraft && (
-            <Button
-              onClick={() => {
-                onMarkPaid(payout.id);
-                onClose();
-              }}
-            >
-              <CheckCheck className="mr-1.5 h-4 w-4" /> Mark all paid
-            </Button>
-          )}
         </div>
       </DialogContent>
     </Dialog>

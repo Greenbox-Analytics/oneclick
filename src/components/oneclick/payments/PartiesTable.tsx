@@ -99,8 +99,13 @@ export function PartiesTable({
                     {payee.payout_currency}
                   </span>
                   {payee.project_count > 0 && (
-                    <span className="text-[11px]">
+                    <span className="shrink-0 text-[11px]">
                       {payee.project_count} project{payee.project_count !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                  {payee.email && (
+                    <span className="min-w-0 truncate text-[11px]" title={payee.email}>
+                      · {payee.email}
                     </span>
                   )}
                 </div>

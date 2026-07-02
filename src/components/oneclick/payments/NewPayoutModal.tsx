@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useCreatePayout } from "@/hooks/useRoyalties";
 import type { PayeeSummary } from "@/hooks/useRoyalties";
 import { PartyAvatar, fmtMoney } from "./shared";
+import { isPaypalEnabled } from "./PayWithPayPalDialog";
 import { useToast } from "@/hooks/use-toast";
 
 interface NewPayoutModalProps {
@@ -104,8 +105,18 @@ export function NewPayoutModal({ payees, base, initialIds, onClose }: NewPayoutM
               {resultCount} draft invoice{resultCount !== 1 ? "s" : ""} created
             </div>
             <p className="mx-auto mt-2 max-w-[42ch] text-[13px] text-muted-foreground">
-              Each invoice is in <strong>draft</strong> status. Mark them paid once you have
-              confirmed the transfers in your payment processor.
+              {isPaypalEnabled() ? (
+                <>
+                  Each invoice is in <strong>draft</strong> status. Pay them directly with PayPal
+                  from the Payouts tab, or mark them paid once you've transferred the money
+                  yourself.
+                </>
+              ) : (
+                <>
+                  Each invoice is in <strong>draft</strong> status. Mark them paid once you have
+                  confirmed the transfers in your payment processor.
+                </>
+              )}
             </p>
             <div className="mt-6 flex justify-end">
               <Button onClick={onClose}>Done</Button>
@@ -214,7 +225,7 @@ export function NewPayoutModal({ payees, base, initialIds, onClose }: NewPayoutM
                 ) : (
                   <>
                     <Send className="mr-1.5 h-4 w-4" />
-                    Create invoice{sel.length !== 1 ? "s" : ""} ({sel.length})
+                    Pay Royalties ({sel.length})
                   </>
                 )}
               </Button>

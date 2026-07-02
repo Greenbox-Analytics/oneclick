@@ -3,8 +3,7 @@
 // Portfolio Overview dashboard — the default sub-view in the Royalty Tracking tab.
 // Shows KPI cards, a paid-over-time area chart, and a top-outstanding bar chart.
 
-import { RefreshCw, TrendingUp, Hourglass, FileText, CheckCheck, BarChart2, AlertCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { TrendingUp, BarChart2, AlertCircle } from "lucide-react";
 import {
   ChartContainer,
   ChartTooltip,
@@ -23,7 +22,6 @@ import {
 } from "recharts";
 import { useRoyaltyOverview, type TopOwed } from "@/hooks/useRoyaltyAnalytics";
 import { fmtMoney, idToColor } from "../shared";
-import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -71,55 +69,11 @@ function allZero(values: number[]): boolean {
 // Skeleton block
 // ---------------------------------------------------------------------------
 
-function SkeletonCard() {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-center gap-2">
-        <div className="h-[30px] w-[30px] animate-pulse rounded-lg bg-muted" />
-        <div className="h-[12px] w-28 animate-pulse rounded bg-muted" />
-      </div>
-      <div className="mt-2 h-[27px] w-24 animate-pulse rounded bg-muted" />
-      <div className="mt-1.5 h-[11px] w-20 animate-pulse rounded bg-muted" />
-    </div>
-  );
-}
-
 function ChartSkeleton({ label }: { label: string }) {
   return (
     <div className="flex h-[200px] flex-col items-center justify-center gap-2 rounded-xl border border-border bg-card p-4 shadow-sm">
       <div className="h-[14px] w-32 animate-pulse rounded bg-muted" />
       <p className="text-xs text-muted-foreground">{label}</p>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Error card
-// ---------------------------------------------------------------------------
-
-function ErrorCard({
-  label,
-  onRetry,
-}: {
-  label: string;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5 rounded-xl border border-destructive/40 bg-card p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-destructive">
-        <AlertCircle className="h-[18px] w-[18px]" />
-        <span className="text-[12.5px] font-medium">{label}</span>
-      </div>
-      <div className="font-mono text-[22px] font-bold text-muted-foreground">—</div>
-      <Button
-        size="sm"
-        variant="ghost"
-        className="mt-1 h-7 w-fit gap-1 px-2 text-xs"
-        onClick={onRetry}
-      >
-        <RefreshCw className="h-3.5 w-3.5" />
-        Retry
-      </Button>
     </div>
   );
 }
@@ -142,34 +96,7 @@ function EmptyChart({ icon: Icon, message }: { icon: React.ElementType; message:
 // ---------------------------------------------------------------------------
 
 export function OverviewDashboard({ base }: OverviewDashboardProps) {
-  const { data, isLoading, isError, isFetching, refetch } = useRoyaltyOverview(base);
-
-  // ── KPI cards definition ─────────────────────────────────────────────────
-  const kpiCards = [
-    {
-      icon: Hourglass,
-      tone: "bg-[hsl(var(--pay-out-bg))] text-[hsl(var(--pay-out-fg))]",
-      label: "Outstanding (not yet invoiced)",
-      num: data ? fmtMoney(data.outstanding_total, base, { dp: 0 }) : null,
-      sub: data ? `${data.payees_owed_count} payee${data.payees_owed_count !== 1 ? "s" : ""} owed` : null,
-    },
-    {
-      icon: FileText,
-      tone: "bg-[hsl(var(--pay-sched-bg))] text-[hsl(var(--pay-sched-fg))]",
-      label: "Awaiting payment",
-      num: data ? fmtMoney(data.drafted_total, base, { dp: 0 }) : null,
-      sub: data ? `${data.draft_count} draft${data.draft_count !== 1 ? "s" : ""}` : null,
-    },
-    {
-      icon: CheckCheck,
-      tone: "bg-[hsl(var(--pay-paid-bg))] text-[hsl(var(--pay-paid-fg))]",
-      label: "Paid to date",
-      num: data ? fmtMoney(data.paid_total, base, { dp: 0 }) : null,
-      sub: data && data.paid_last_30d > 0
-        ? `${fmtMoney(data.paid_last_30d, base, { dp: 0 })} in last 30 days`
-        : null,
-    },
-  ];
+  const { data, isLoading, isError } = useRoyaltyOverview(base);
 
   // ── Paid-by-month chart data ─────────────────────────────────────────────
   const monthPoints = data?.paid_by_month ?? [];
@@ -185,48 +112,6 @@ export function OverviewDashboard({ base }: OverviewDashboardProps) {
 
   return (
     <div className="flex flex-col gap-5">
-      {/* ── KPI Cards ──────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
-        {isLoading
-          ? kpiCards.map((c) => <SkeletonCard key={c.label} />)
-          : isError
-          ? kpiCards.map((c) => (
-              <ErrorCard key={c.label} label="Couldn't load" onRetry={refetch} />
-            ))
-          : kpiCards.map((c) => {
-              const Ic = c.icon;
-              return (
-                <div
-                  key={c.label}
-                  className="rounded-xl border border-border bg-card p-4 shadow-sm"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "flex h-[30px] w-[30px] items-center justify-center rounded-lg",
-                        c.tone,
-                      )}
-                    >
-                      <Ic className="h-4 w-4" />
-                    </span>
-                    <span className="text-[12.5px] font-medium text-muted-foreground">
-                      {c.label}
-                    </span>
-                    {isFetching && !isLoading && (
-                      <span className="ml-auto text-[10px] text-muted-foreground">updating…</span>
-                    )}
-                  </div>
-                  <div className="mt-2 font-mono text-[27px] font-bold tabular-nums tracking-tight">
-                    {c.num}
-                  </div>
-                  {c.sub && (
-                    <div className="mt-0.5 text-xs text-muted-foreground">{c.sub}</div>
-                  )}
-                </div>
-              );
-            })}
-      </div>
-
       {/* ── Unconvertible note ──────────────────────────────────────────────── */}
       {data && data.unconvertible_count > 0 && (
         <p className="text-xs text-muted-foreground">

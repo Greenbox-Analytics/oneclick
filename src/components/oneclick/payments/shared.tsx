@@ -2,6 +2,26 @@
 import { useState, useRef, useEffect } from "react";
 import { Check, ChevronDown, Globe, Hourglass, Clock, CheckCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getAuthHeaders } from "@/lib/apiFetch";
+
+// ---------------------------------------------------------------------------
+// Authenticated PDF download (backend StreamingResponse → browser download)
+// ---------------------------------------------------------------------------
+
+export async function downloadPdf(url: string, filename: string): Promise<void> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(objectUrl);
+}
 
 // ---------------------------------------------------------------------------
 // Currency metadata (symbol/flag/name only — NO toUSD conversion rates).
