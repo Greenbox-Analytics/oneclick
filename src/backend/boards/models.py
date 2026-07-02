@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class ColumnCreate(BaseModel):
     title: str
     artist_id: str | None = None
+    board_id: str | None = None
     color: str | None = None
     position: int | None = 0
 
@@ -20,6 +21,7 @@ class ColumnUpdate(BaseModel):
 
 class TaskCreate(BaseModel):
     column_id: str | None = None  # nullable for parent tasks
+    board_id: str | None = None
     title: str
     description: str | None = None
     priority: str | None = None  # low, medium, high, urgent
@@ -54,6 +56,7 @@ class TaskUpdate(BaseModel):
 
 
 class ParentTaskCreate(BaseModel):
+    board_id: str | None = None
     title: str
     description: str | None = None
     priority: str | None = None
@@ -77,3 +80,19 @@ class BatchReorder(BaseModel):
 
 class CommentCreate(BaseModel):
     content: str
+
+
+class BoardCreate(BaseModel):
+    name: str
+    team_id: str | None = None
+    artist_id: str | None = None
+    description: str | None = None
+
+
+class BoardUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class AssigneeAdd(BaseModel):
+    user_id: str

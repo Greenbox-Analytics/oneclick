@@ -14,7 +14,10 @@ from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from boards import service
 from boards.models import (
+    AssigneeAdd,
     BatchReorder,
+    BoardCreate,
+    BoardUpdate,
     ColumnCreate,
     ColumnUpdate,
     CommentCreate,
@@ -33,6 +36,63 @@ def _get_supabase():
     return get_supabase_client()
 
 
+# --- Boards (CRUD) ---
+
+
+@router.post("/boards")
+async def create_board(body: BoardCreate, user_id: str = Depends(get_current_user_id)):
+    """Create a board (personal, or team when team_id is provided)."""
+    try:
+        board = await service.create_board(
+            _get_supabase(),
+            user_id,
+            name=body.name,
+            team_id=body.team_id,
+            artist_id=body.artist_id,
+            description=body.description,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    if not board:
+        raise HTTPException(status_code=500, detail="Failed to create board")
+    return board
+
+
+@router.get("/boards")
+async def list_boards(
+    user_id: str = Depends(get_current_user_id),
+    team_id: str | None = Query(None),
+):
+    """List active (non-archived) boards — the caller's personal boards, or a team's boards."""
+    try:
+        boards = await service.list_boards(_get_supabase(), user_id, team_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return {"boards": boards}
+
+
+@router.put("/boards/{board_id}")
+async def rename_board(board_id: str, body: BoardUpdate, user_id: str = Depends(get_current_user_id)):
+    """Rename/update a board. Raises 404 (via require_board_edit) if the caller can't edit it."""
+    data = body.model_dump(exclude_none=True)
+    board = await service.rename_board(_get_supabase(), user_id, board_id, data)
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    return board
+
+
+@router.delete("/boards/{board_id}")
+async def archive_board(board_id: str, user_id: str = Depends(get_current_user_id)):
+    """Archive a board. Personal owner, or team admin for team boards."""
+    try:
+        result = await service.archive_board(_get_supabase(), user_id, board_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Board not found")
+    return result
+
+
 # --- Columns ---
 
 
@@ -40,9 +100,10 @@ def _get_supabase():
 async def list_columns(
     user_id: str = Depends(get_current_user_id),
     artist_id: str | None = Query(None),
+    board_id: str | None = Query(None),
 ):
-    """Get all board columns for a user."""
-    columns = await service.get_columns(_get_supabase(), user_id, artist_id)
+    """Get all board columns for a user, scoped by board_id (explicit, artist alias, or personal boards)."""
+    columns = await service.get_columns(_get_supabase(), user_id, artist_id, board_id)
     return {"columns": columns}
 
 
@@ -93,9 +154,10 @@ async def list_parents(
     user_id: str = Depends(get_current_user_id),
     search: str | None = Query(None),
     artist_id: str | None = Query(None),
+    board_id: str | None = Query(None),
 ):
     """Get all parent tasks with nested children for the overview tab."""
-    result = await service.get_all_parents_with_children(_get_supabase(), user_id, search, artist_id)
+    result = await service.get_all_parents_with_children(_get_supabase(), user_id, search, artist_id, board_id)
     return result
 
 
@@ -122,9 +184,11 @@ async def calendar_tasks(
     user_id: str = Depends(get_current_user_id),
     start: str = Query(..., description="Start date YYYY-MM-DD"),
     end: str = Query(..., description="End date YYYY-MM-DD"),
+    board_id: str | None = Query(None),
+    artist_id: str | None = Query(None),
 ):
     """Get tasks within a date range for the calendar view."""
-    tasks = await service.get_tasks_by_date_range(_get_supabase(), user_id, start, end)
+    tasks = await service.get_tasks_by_date_range(_get_supabase(), user_id, start, end, board_id, artist_id)
     return {"tasks": tasks}
 
 
@@ -137,9 +201,13 @@ async def period_tasks(
     period_start: str = Query(..., description="Period start date YYYY-MM-DD"),
     period_end: str = Query(..., description="Period end date YYYY-MM-DD"),
     is_current: bool = Query(True, description="Whether this is the current period"),
+    board_id: str | None = Query(None),
+    artist_id: str | None = Query(None),
 ):
     """Get tasks within a period for date-based board views."""
-    tasks = await service.get_tasks_by_period(_get_supabase(), user_id, period_start, period_end, is_current)
+    tasks = await service.get_tasks_by_period(
+        _get_supabase(), user_id, period_start, period_end, is_current, board_id, artist_id
+    )
     return {"tasks": tasks}
 
 
@@ -150,7 +218,10 @@ async def period_tasks(
 async def reorder_tasks(body: BatchReorder, user_id: str = Depends(get_current_user_id)):
     """Batch reorder tasks (drag-and-drop)."""
     reorders = [r.model_dump() for r in body.reorders]
-    await service.batch_reorder(_get_supabase(), user_id, reorders)
+    try:
+        await service.batch_reorder(_get_supabase(), user_id, reorders)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"success": True}
 
 
@@ -163,9 +234,11 @@ async def list_tasks(
     column_id: str | None = Query(None),
     page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    board_id: str | None = Query(None),
+    artist_id: str | None = Query(None),
 ):
-    """Get all tasks for a user, optionally filtered by column."""
-    result = await service.get_tasks(_get_supabase(), user_id, column_id, page, page_size)
+    """Get all tasks for a user, scoped by board_id, optionally filtered by column."""
+    result = await service.get_tasks(_get_supabase(), user_id, column_id, page, page_size, board_id, artist_id)
     if isinstance(result, list):
         return {"tasks": result}
     return result
@@ -280,3 +353,28 @@ async def remove_comment(comment_id: str, user_id: str = Depends(get_current_use
     if not success:
         raise HTTPException(status_code=404, detail="Comment not found")
     return {"success": True}
+
+
+# --- Assignees (spec §5.6) ---
+
+
+@router.post("/tasks/{task_id}/assignees")
+async def add_assignee(task_id: str, body: AssigneeAdd, user_id: str = Depends(get_current_user_id)):
+    """Assign a user to a task (personal board -> owner only, team board -> member only)."""
+    try:
+        return await service.add_assignee(_get_supabase(), user_id, task_id, body.user_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/tasks/{task_id}/assignees/{target_user_id}")
+async def remove_assignee(task_id: str, target_user_id: str, user_id: str = Depends(get_current_user_id)):
+    """Unassign a user from a task."""
+    try:
+        return await service.remove_assignee(_get_supabase(), user_id, task_id, target_user_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

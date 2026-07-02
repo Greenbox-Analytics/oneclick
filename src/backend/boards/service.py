@@ -5,7 +5,8 @@ from datetime import UTC, date, datetime
 from supabase import Client
 
 from integrations import events
-from pagination import paginate_query
+from pagination import PaginatedResponse, paginate_query
+from teams import authz
 
 # --- Junction table helpers ---
 
@@ -105,35 +106,98 @@ def _enrich_tasks(supabase: Client, tasks: list) -> list:
     return tasks
 
 
+# --- Board resolution ---
+
+
+def ensure_personal_board(db: Client, user_id: str, artist_id: str | None = None) -> str:
+    """Find (or create) the caller's PERSONAL board for artist_id (NULL = unscoped 'Personal').
+    Personal boards have team_id NULL and a persisted boards.artist_id (Phase 1). on_conflict
+    tolerates the create race guarded by the Task-2 partial unique index (artist boards)."""
+    q = db.table("boards").select("id").eq("owner_id", user_id).is_("team_id", "null")
+    q = q.eq("artist_id", artist_id) if artist_id else q.is_("artist_id", "null")
+    existing = q.limit(1).execute()
+    if existing.data:
+        return existing.data[0]["id"]
+    name = "Personal"
+    if artist_id:
+        a = db.table("artists").select("name").eq("id", artist_id).limit(1).execute()
+        if a.data:
+            name = a.data[0]["name"]
+    ins = db.table("boards").insert({"owner_id": user_id, "artist_id": artist_id, "name": name}).execute()
+    if ins.data:
+        return ins.data[0]["id"]
+    # lost the race → re-read
+    again = q.limit(1).execute()
+    return again.data[0]["id"]
+
+
+def _column_board_id(db: Client, column_id: str) -> str | None:
+    r = db.table("board_columns").select("board_id").eq("id", column_id).limit(1).execute()
+    return r.data[0]["board_id"] if r.data else None
+
+
+def _task_board_id(db: Client, task_id: str) -> str | None:
+    r = db.table("board_tasks").select("board_id").eq("id", task_id).limit(1).execute()
+    return r.data[0]["board_id"] if r.data else None
+
+
+def _personal_board_ids(db: Client, user_id: str) -> list[str]:
+    rows = db.table("boards").select("id").eq("owner_id", user_id).is_("team_id", "null").execute().data or []
+    return [r["id"] for r in rows]
+
+
+def _resolve_read_board_ids(db: Client, user_id: str, artist_id: str | None, board_id: str | None) -> list[str]:
+    """Reads: explicit board_id (gated) → [board_id]; artist_id → [personal board];
+    neither → the caller's personal boards (backward-compat default)."""
+    if board_id:
+        authz.require_board_access(db, user_id, board_id)
+        return [board_id]
+    if artist_id:
+        return [ensure_personal_board(db, user_id, artist_id)]
+    return _personal_board_ids(db, user_id)
+
+
 # --- Columns ---
 
 
-async def get_columns(supabase: Client, user_id: str, artist_id: str | None = None) -> list:
-    """Get board columns for a user, optionally filtered by artist."""
-    query = supabase.table("board_columns").select("*").eq("user_id", user_id).order("position")
-    if artist_id:
-        query = query.eq("artist_id", artist_id)
-    result = query.execute()
-    return result.data or []
+async def get_columns(
+    supabase: Client, user_id: str, artist_id: str | None = None, board_id: str | None = None
+) -> list:
+    """Get board columns for a user, scoped by board_id (explicit, artist alias, or personal boards)."""
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    if not board_ids:
+        return []
+    return supabase.table("board_columns").select("*").in_("board_id", board_ids).order("position").execute().data or []
 
 
 async def create_column(supabase: Client, user_id: str, data: dict) -> dict:
     """Create a new board column."""
+    board_id = data.get("board_id") or ensure_personal_board(supabase, user_id, data.get("artist_id"))
+    authz.require_board_edit(supabase, user_id, board_id)  # personal owner passes; foreign board → 404
+    data["board_id"] = board_id
     data["user_id"] = user_id
     result = supabase.table("board_columns").insert(data).execute()
     return result.data[0] if result.data else {}
 
 
 async def update_column(supabase: Client, user_id: str, column_id: str, data: dict) -> dict:
-    """Update a board column."""
+    """Update a board column. Gated on the column's board (require_board_edit)."""
+    board_id = _column_board_id(supabase, column_id)
+    if not board_id:
+        return {}
+    authz.require_board_edit(supabase, user_id, board_id)
     clean = {k: v for k, v in data.items() if v is not None}
-    result = supabase.table("board_columns").update(clean).eq("id", column_id).eq("user_id", user_id).execute()
+    result = supabase.table("board_columns").update(clean).eq("id", column_id).execute()
     return result.data[0] if result.data else {}
 
 
 async def delete_column(supabase: Client, user_id: str, column_id: str) -> bool:
-    """Delete a board column and all its tasks."""
-    result = supabase.table("board_columns").delete().eq("id", column_id).eq("user_id", user_id).execute()
+    """Delete a board column and all its tasks. Gated on the column's board (require_board_edit)."""
+    board_id = _column_board_id(supabase, column_id)
+    if not board_id:
+        return False
+    authz.require_board_edit(supabase, user_id, board_id)
+    result = supabase.table("board_columns").delete().eq("id", column_id).execute()
     return bool(result.data)
 
 
@@ -141,13 +205,22 @@ async def delete_column(supabase: Client, user_id: str, column_id: str) -> bool:
 
 
 async def get_tasks(
-    supabase: Client, user_id: str, column_id: str | None = None, page: int = None, page_size: int = 50
+    supabase: Client,
+    user_id: str,
+    column_id: str | None = None,
+    page: int = None,
+    page_size: int = 50,
+    board_id: str | None = None,
+    artist_id: str | None = None,
 ):
-    """Get board tasks (non-parent) with junction data, optionally filtered by column."""
+    """Get board tasks (non-parent) with junction data, scoped by board_id, optionally filtered by column."""
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    if not board_ids:
+        return PaginatedResponse(data=[], total=0, page=page, page_size=page_size) if page else []
     query = (
         supabase.table("board_tasks")
         .select("*", count="exact")
-        .eq("user_id", user_id)
+        .in_("board_id", board_ids)
         .or_("is_parent.eq.false,is_parent.is.null")
         .order("position")
     )
@@ -181,6 +254,21 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
         if first_col.data:
             data["column_id"] = first_col.data[0]["id"]
 
+    # Resolve the authoritative board and gate on it (owned artists only for personal boards).
+    owned_first_artist = None
+    if artist_ids:
+        owned = _owned_artist_ids(supabase, user_id, artist_ids)
+        owned_first_artist = owned[0] if owned else None
+    if data.get("board_id"):
+        board_id = data["board_id"]
+    elif data.get("column_id"):
+        board_id = _column_board_id(supabase, data["column_id"])
+        if not board_id:
+            raise ValueError("Column not found")
+    else:
+        board_id = ensure_personal_board(supabase, user_id, owned_first_artist)
+    authz.require_board_edit(supabase, user_id, board_id)
+    data["board_id"] = board_id
     data["user_id"] = user_id
     result = supabase.table("board_tasks").insert(data).execute()
     task = result.data[0] if result.data else {}
@@ -208,8 +296,45 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
     return task
 
 
+def _apply_cross_board_move(db: Client, user_id: str, task: dict, dst_board: str) -> None:
+    """Validate + perform a task's board change (§7.3). task = {id, board_id, parent_task_id}."""
+    if task.get("parent_task_id"):
+        raise ValueError("A subtask cannot be moved to another board on its own")
+    boards = {
+        r["id"]: r
+        for r in (
+            db.table("boards").select("id, team_id, owner_id").in_("id", [task["board_id"], dst_board]).execute().data
+            or []
+        )
+    }
+    s, d = boards.get(task["board_id"]), boards.get(dst_board)
+    if not s or not d:
+        raise ValueError("Board not found")
+    authz.require_board_edit(db, user_id, s["id"])
+    authz.require_board_edit(db, user_id, d["id"])
+    if s["team_id"] != d["team_id"]:
+        raise ValueError("Cannot move a task across teams")
+    if s["team_id"] is None and s["owner_id"] != d["owner_id"]:
+        raise ValueError("Cannot move a task across personal boards")
+    # Move the subtree (direct children — single-level per the UI) with the parent.
+    db.table("board_tasks").update({"board_id": dst_board}).eq("parent_task_id", task["id"]).execute()
+
+
 async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) -> dict:
-    """Update a task and its junction relations."""
+    """Update a task and its junction relations. Gated on the task's board (require_board_edit)."""
+    task_row = supabase.table("board_tasks").select("id, board_id, parent_task_id").eq("id", task_id).limit(1).execute()
+    if not task_row.data:
+        return {}
+    src_board = task_row.data[0]["board_id"]
+    authz.require_board_edit(supabase, user_id, src_board)
+
+    # §7.3 — a column change that crosses boards routes through the move rules.
+    if data.get("column_id"):
+        dst_board = _column_board_id(supabase, data["column_id"])
+        if dst_board and dst_board != src_board:
+            _apply_cross_board_move(supabase, user_id, task_row.data[0], dst_board)
+            data["board_id"] = dst_board
+
     artist_ids = data.pop("artist_ids", None)
     project_ids = data.pop("project_ids", None)
     contract_ids = data.pop("contract_ids", None)
@@ -236,10 +361,10 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
         elif v is not None:
             clean[k] = v
     if clean:
-        result = supabase.table("board_tasks").update(clean).eq("id", task_id).eq("user_id", user_id).execute()
+        result = supabase.table("board_tasks").update(clean).eq("id", task_id).execute()
         task = result.data[0] if result.data else {}
     else:
-        result = supabase.table("board_tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
+        result = supabase.table("board_tasks").select("*").eq("id", task_id).single().execute()
         task = result.data or {}
 
     if task:
@@ -261,16 +386,21 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
 
 async def delete_task(supabase: Client, user_id: str, task_id: str) -> bool:
     """Delete a task (junction rows cascade). Children get parent_task_id set to NULL."""
-    result = supabase.table("board_tasks").delete().eq("id", task_id).eq("user_id", user_id).execute()
+    board_id = _task_board_id(supabase, task_id)
+    if not board_id:
+        return False
+    authz.require_board_edit(supabase, user_id, board_id)
+    result = supabase.table("board_tasks").delete().eq("id", task_id).execute()
     return bool(result.data)
 
 
 async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
     """Get a single task with full related data including children and parent."""
-    result = supabase.table("board_tasks").select("*").eq("id", task_id).eq("user_id", user_id).single().execute()
-    task = result.data
+    result = supabase.table("board_tasks").select("*").eq("id", task_id).limit(1).execute()
+    task = result.data[0] if result.data else None
     if not task:
         return {}
+    authz.require_board_access(supabase, user_id, task["board_id"])
 
     # Junction data
     artists_result = supabase.table("board_task_artists").select("artist_id").eq("task_id", task_id).execute()
@@ -305,12 +435,7 @@ async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
     children = []
     if task.get("is_parent"):
         children_result = (
-            supabase.table("board_tasks")
-            .select("*")
-            .eq("parent_task_id", task_id)
-            .eq("user_id", user_id)
-            .order("position")
-            .execute()
+            supabase.table("board_tasks").select("*").eq("parent_task_id", task_id).order("position").execute()
         )
         children = _enrich_tasks(supabase, children_result.data or [])
 
@@ -332,15 +457,27 @@ async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
     task["children"] = children
     task["parent"] = parent
 
+    _attach_assignees(supabase, task)
+
     return task
 
 
-async def get_tasks_by_date_range(supabase: Client, user_id: str, start: str, end: str) -> list:
+async def get_tasks_by_date_range(
+    supabase: Client,
+    user_id: str,
+    start: str,
+    end: str,
+    board_id: str | None = None,
+    artist_id: str | None = None,
+) -> list:
     """Get non-parent tasks that have due_date or start_date within a date range."""
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    if not board_ids:
+        return []
     due_result = (
         supabase.table("board_tasks")
         .select("*")
-        .eq("user_id", user_id)
+        .in_("board_id", board_ids)
         .or_("is_parent.eq.false,is_parent.is.null")
         .gte("due_date", start)
         .lte("due_date", end)
@@ -349,7 +486,7 @@ async def get_tasks_by_date_range(supabase: Client, user_id: str, start: str, en
     start_result = (
         supabase.table("board_tasks")
         .select("*")
-        .eq("user_id", user_id)
+        .in_("board_id", board_ids)
         .or_("is_parent.eq.false,is_parent.is.null")
         .gte("start_date", start)
         .lte("start_date", end)
@@ -370,16 +507,25 @@ async def get_tasks_by_date_range(supabase: Client, user_id: str, start: str, en
 
 
 async def get_tasks_by_period(
-    supabase: Client, user_id: str, period_start: str, period_end: str, is_current: bool = True
+    supabase: Client,
+    user_id: str,
+    period_start: str,
+    period_end: str,
+    is_current: bool = True,
+    board_id: str | None = None,
+    artist_id: str | None = None,
 ) -> list:
     """Get tasks filtered by period for date-based board views."""
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    if not board_ids:
+        return []
     try:
         if is_current:
             # Current period: single query — all tasks except those completed before this period
             result = (
                 supabase.table("board_tasks")
                 .select("*")
-                .eq("user_id", user_id)
+                .in_("board_id", board_ids)
                 .or_("is_parent.eq.false,is_parent.is.null")
                 .or_(f"completed_at.is.null,completed_at.gte.{period_start}")
                 .order("position")
@@ -391,7 +537,7 @@ async def get_tasks_by_period(
             done_result = (
                 supabase.table("board_tasks")
                 .select("*")
-                .eq("user_id", user_id)
+                .in_("board_id", board_ids)
                 .or_("is_parent.eq.false,is_parent.is.null")
                 .filter("completed_at", "not.is", "null")
                 .gte("completed_at", period_start)
@@ -401,7 +547,7 @@ async def get_tasks_by_period(
             created_result = (
                 supabase.table("board_tasks")
                 .select("*")
-                .eq("user_id", user_id)
+                .in_("board_id", board_ids)
                 .or_("is_parent.eq.false,is_parent.is.null")
                 .gte("created_at", period_start)
                 .lte("created_at", period_end)
@@ -415,7 +561,7 @@ async def get_tasks_by_period(
                     tasks.append(task)
     except Exception:
         # Fallback: if completed_at column missing or other error, return all tasks
-        return await get_tasks(supabase, user_id)
+        return await get_tasks(supabase, user_id, board_id=board_id, artist_id=artist_id)
 
     return _enrich_tasks(supabase, tasks)
 
@@ -431,6 +577,10 @@ async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict
     if not data.get("start_date"):
         data["start_date"] = str(date.today())
 
+    owned = _owned_artist_ids(supabase, user_id, artist_ids) if artist_ids else []
+    board_id = data.get("board_id") or ensure_personal_board(supabase, user_id, owned[0] if owned else None)
+    authz.require_board_edit(supabase, user_id, board_id)
+    data["board_id"] = board_id
     data["user_id"] = user_id
     data["is_parent"] = True
     result = supabase.table("board_tasks").insert(data).execute()
@@ -449,25 +599,33 @@ async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict
 
 
 async def get_all_parents_with_children(
-    supabase: Client, user_id: str, search: str | None = None, artist_id: str | None = None
-) -> list:
+    supabase: Client,
+    user_id: str,
+    search: str | None = None,
+    artist_id: str | None = None,
+    board_id: str | None = None,
+) -> dict:
     """Get all parent tasks with nested children for the overview tab."""
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    if not board_ids:
+        return {"parents": [], "ungrouped": []}
+
     # Fetch parent tasks
     query = (
         supabase.table("board_tasks")
         .select("*")
-        .eq("user_id", user_id)
+        .in_("board_id", board_ids)
         .eq("is_parent", True)
         .order("created_at", desc=True)
     )
     parents_result = query.execute()
     parents = parents_result.data or []
 
-    # Fetch ALL child tasks for this user (we'll group them)
+    # Fetch ALL child tasks on these boards (we'll group them)
     children_result = (
         supabase.table("board_tasks")
         .select("*")
-        .eq("user_id", user_id)
+        .in_("board_id", board_ids)
         .or_("is_parent.eq.false,is_parent.is.null")
         .order("position")
         .execute()
@@ -488,7 +646,7 @@ async def get_all_parents_with_children(
             enriched_children.append(t)
 
     # Get column names for child task display
-    columns_result = supabase.table("board_columns").select("id, title").eq("user_id", user_id).execute()
+    columns_result = supabase.table("board_columns").select("id, title").in_("board_id", board_ids).execute()
     column_names = {c["id"]: c["title"] for c in (columns_result.data or [])}
 
     # Add column_title to parents (for status display) and children
@@ -549,10 +707,12 @@ async def get_all_parents_with_children(
 
 
 async def create_comment(supabase: Client, user_id: str, task_id: str, content: str) -> dict:
-    """Add a comment to a task. Raises PermissionError if the task is not owned by the caller."""
-    ownership = supabase.table("board_tasks").select("id").eq("id", task_id).eq("user_id", user_id).execute()
-    if not ownership.data:
+    """Add a comment to a task. Raises PermissionError if the task doesn't exist, or
+    HTTPException(404) (via require_board_edit) if the caller can't edit its board."""
+    board_id = _task_board_id(supabase, task_id)
+    if not board_id:
         raise PermissionError("denied")
+    authz.require_board_edit(supabase, user_id, board_id)
 
     result = (
         supabase.table("board_task_comments")
@@ -574,23 +734,143 @@ async def delete_comment(supabase: Client, user_id: str, comment_id: str) -> boo
     return bool(result.data)
 
 
+# --- Assignees (spec §5.6, multiple assignees per task) ---
+
+
+def _attach_assignees(db: Client, task: dict) -> dict:
+    """Attach task["assignees"] = [{user_id, full_name, avatar_url}, ...] to a task dict."""
+    rows = db.table("board_task_assignees").select("user_id").eq("task_id", task["id"]).execute().data or []
+    user_ids = [r["user_id"] for r in rows]
+    profiles_by_id = {}
+    if user_ids:
+        profiles_result = db.table("profiles").select("id, full_name, avatar_url").in_("id", user_ids).execute()
+        profiles_by_id = {p["id"]: p for p in (profiles_result.data or [])}
+    task["assignees"] = [
+        {
+            "user_id": uid,
+            "full_name": profiles_by_id.get(uid, {}).get("full_name"),
+            "avatar_url": profiles_by_id.get(uid, {}).get("avatar_url"),
+        }
+        for uid in user_ids
+    ]
+    return task
+
+
+async def add_assignee(db: Client, actor_id: str, task_id: str, target_user_id: str) -> dict:
+    """Assign target_user_id to a task. Gated on the task's board (require_board_edit), then
+    validated per §5.6 (personal board -> owner only, team board -> target must be a member)."""
+    board_id = _task_board_id(db, task_id)
+    if not board_id:
+        raise ValueError("Task not found")
+    authz.require_board_edit(db, actor_id, board_id)
+    if not authz.can_assign_user(db, target_user_id, board_id):
+        raise PermissionError("This user cannot be assigned to this board")
+    db.table("board_task_assignees").upsert(
+        {"task_id": task_id, "user_id": target_user_id, "assigned_by": actor_id},
+        on_conflict="task_id,user_id",
+        ignore_duplicates=True,
+    ).execute()
+    return {"task_id": task_id, "user_id": target_user_id}
+
+
+async def remove_assignee(db: Client, actor_id: str, task_id: str, target_user_id: str) -> dict:
+    """Unassign target_user_id from a task. Gated on the task's board (require_board_edit)."""
+    board_id = _task_board_id(db, task_id)
+    if not board_id:
+        raise ValueError("Task not found")
+    authz.require_board_edit(db, actor_id, board_id)
+    db.table("board_task_assignees").delete().eq("task_id", task_id).eq("user_id", target_user_id).execute()
+    return {"unassigned": target_user_id}
+
+
 # --- Reorder + Defaults ---
 
 
 async def batch_reorder(supabase: Client, user_id: str, reorders: list[dict]) -> bool:
-    """Batch reorder tasks (used for drag-and-drop)."""
+    """Batch reorder (drag-and-drop). If a task's target column is on a different board, move
+    the task (and its subtree) to that board — but only within the same team/owner scope
+    (cross-team moves are rejected, §7.3). A subtask's board always follows its parent."""
     for reorder in reorders:
-        supabase.table("board_tasks").update(
-            {
-                "column_id": reorder["target_column_id"],
-                "position": reorder["position"],
-            }
-        ).eq("id", reorder["task_id"]).eq("user_id", user_id).execute()
+        task_id, target_col = reorder["task_id"], reorder["target_column_id"]
+        task = supabase.table("board_tasks").select("id, board_id, parent_task_id").eq("id", task_id).limit(1).execute()
+        col = supabase.table("board_columns").select("board_id").eq("id", target_col).limit(1).execute()
+        if not task.data or not col.data:
+            continue
+        t = task.data[0]
+        src_board, dst_board = t["board_id"], col.data[0]["board_id"]
+        update = {"column_id": target_col, "position": reorder["position"]}
+        if dst_board != src_board:
+            _apply_cross_board_move(supabase, user_id, t, dst_board)  # validates + gates both boards
+            update["board_id"] = dst_board
+        else:
+            authz.require_board_edit(supabase, user_id, src_board)
+        supabase.table("board_tasks").update(update).eq("id", task_id).execute()  # scoped by id, not user_id
     return True
+
+
+# --- Board CRUD ---
+
+
+async def create_board(
+    db: Client,
+    user_id: str,
+    name: str,
+    team_id: str | None = None,
+    artist_id: str | None = None,
+    description: str | None = None,
+) -> dict:
+    if team_id is not None and not authz.is_team_member(db, user_id, team_id):
+        raise PermissionError("Not a team member")
+    res = (
+        db.table("boards")
+        .insert(
+            {"owner_id": user_id, "team_id": team_id, "artist_id": artist_id, "name": name, "description": description}
+        )
+        .execute()
+    )
+    return res.data[0] if res.data else {}
+
+
+async def list_boards(db: Client, user_id: str, team_id: str | None = None) -> list[dict]:
+    if team_id is not None:
+        if not authz.is_team_member(db, user_id, team_id):
+            raise PermissionError("Not a team member")
+        # §5.8: an archived team's boards are hidden.
+        team = db.table("teams").select("archived_at").eq("id", team_id).limit(1).execute()
+        if team.data and team.data[0].get("archived_at"):
+            return []
+        q = db.table("boards").select("*").eq("team_id", team_id)
+    else:
+        q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
+    return q.eq("archived", False).order("position").order("created_at").execute().data or []
+
+
+async def rename_board(db: Client, user_id: str, board_id: str, fields: dict) -> dict:
+    authz.require_board_edit(db, user_id, board_id)
+    clean = {k: v for k, v in fields.items() if v is not None}
+    if not clean:
+        return authz.get_board(db, board_id) or {}
+    return (db.table("boards").update(clean).eq("id", board_id).execute().data or [{}])[0]
+
+
+async def archive_board(db: Client, user_id: str, board_id: str) -> dict:
+    """Archive a board. Personal → owner; team → team admin (destructive for all members)."""
+    board = authz.get_board(db, board_id)
+    if not board:
+        raise ValueError("Board not found")
+    if board["team_id"] is None:
+        if board["owner_id"] != user_id:
+            raise PermissionError("Not your board")
+    elif not authz.is_team_admin(db, user_id, board["team_id"]):
+        raise PermissionError("Admin access required to archive a team board")
+    db.table("boards").update({"archived": True}).eq("id", board_id).execute()
+    return {"archived": board_id}
 
 
 async def create_default_columns(supabase: Client, user_id: str, artist_id: str | None = None) -> list:
     """Create default Kanban columns for a new board."""
+    board_id = ensure_personal_board(supabase, user_id, artist_id)
+    authz.require_board_edit(supabase, user_id, board_id)
     defaults = [
         {"title": "Backlog", "position": 0, "color": "#8b5cf6"},
         {"title": "To Do", "position": 1, "color": "#6366f1"},
@@ -600,9 +880,7 @@ async def create_default_columns(supabase: Client, user_id: str, artist_id: str 
     ]
     columns = []
     for col in defaults:
-        col["user_id"] = user_id
-        if artist_id:
-            col["artist_id"] = artist_id
+        col.update({"user_id": user_id, "artist_id": artist_id, "board_id": board_id})
         result = supabase.table("board_columns").insert(col).execute()
         if result.data:
             columns.append(result.data[0])

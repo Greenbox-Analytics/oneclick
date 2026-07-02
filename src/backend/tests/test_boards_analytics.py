@@ -10,10 +10,13 @@ Verifies that the boards router fires the right PostHog events:
 from unittest.mock import patch
 
 from tests.test_boards import (
+    BOARD_ID,
     COLUMN_ID,
+    SAMPLE_COLUMN,
     SAMPLE_PARENT,
     SAMPLE_TASK,
     TASK_ID,
+    _authz_board_builder,
     _builder,
     _pro_sub_builder,
     _sequence_side_effect_mixed,
@@ -43,7 +46,7 @@ def _capture():
 
 def test_create_parent_board_fires_board_created(client, mock_supabase):
     """POST /boards/parents fires board_created with tool=boards on success."""
-    mock_supabase.table.side_effect = lambda name: _builder([SAMPLE_PARENT])
+    mock_supabase.table.side_effect = lambda name: _authz_board_builder(name) or _builder([SAMPLE_PARENT])
 
     sink, fake = _capture()
     with patch("boards.router.analytics_capture", side_effect=fake):
@@ -57,7 +60,7 @@ def test_create_parent_board_fires_board_created(client, mock_supabase):
 
 def test_create_parent_board_no_event_on_failure(client, mock_supabase):
     """POST /boards/parents does NOT fire board_created on insert failure (500)."""
-    mock_supabase.table.side_effect = lambda name: _builder([])
+    mock_supabase.table.side_effect = lambda name: _authz_board_builder(name) or _builder([])
 
     sink, fake = _capture()
     with patch("boards.router.analytics_capture", side_effect=fake):
@@ -74,13 +77,16 @@ def test_create_parent_board_no_event_on_failure(client, mock_supabase):
 
 def test_create_task_fires_task_created(client, mock_supabase):
     """POST /boards/tasks fires task_created with tool=boards, source=manual."""
-    # Sequence: 1) board_tasks count (gate) → 0, 2) board_tasks insert → row, 3) junction
-    seq = [[], [SAMPLE_TASK], []]
+    # Sequence: 1) board_tasks count (gate) → 0, 2) board_columns (_column_board_id), 3) board_tasks insert → row
+    seq = [[], [SAMPLE_COLUMN], [SAMPLE_TASK]]
     idx = [0]
 
     def _stateful(name):
         if name in _SUBSCRIPTION_TABLES:
             return _pro_sub_builder(name)
+        _b = _authz_board_builder(name)
+        if _b is not None:
+            return _b
         data = seq[idx[0]] if idx[0] < len(seq) else []
         idx[0] += 1
         return _builder(data)
@@ -106,13 +112,16 @@ def test_create_task_fires_task_created(client, mock_supabase):
 
 def test_create_task_no_event_on_failure(client, mock_supabase):
     """No task_created event if the insert fails (500)."""
-    # gate count → 0, insert → empty → 500
-    seq = [[], []]
+    # gate count → 0, board_columns (_column_board_id) → row, insert → empty → 500
+    seq = [[], [SAMPLE_COLUMN], []]
     idx = [0]
 
     def _stateful(name):
         if name in _SUBSCRIPTION_TABLES:
             return _pro_sub_builder(name)
+        _b = _authz_board_builder(name)
+        if _b is not None:
+            return _b
         data = seq[idx[0]] if idx[0] < len(seq) else []
         idx[0] += 1
         return _builder(data)
@@ -146,13 +155,17 @@ def test_update_task_fires_status_changed_when_column_changes(client, mock_supab
     # Router order:
     #   1. board_tasks .select("column_id").eq("id").single()  -> old column lookup
     # Then service.update_task runs:
-    #   2. board_columns .select("title").eq("id").single()    -> "In Progress"
-    #   3. board_tasks   .update().eq().eq().execute()         -> [updated_task]
-    # Then router post-update:
+    #   2. board_tasks   .select("id, board_id, parent_task_id").limit(1)  -> task_row (gates require_board_edit)
+    #   3. board_columns .select("board_id").limit(1)          -> _column_board_id (§7.3; same board, no move)
     #   4. board_columns .select("title").eq("id").single()    -> "In Progress"
+    #   5. board_tasks   .update().eq().execute()               -> [updated_task]
+    # Then router post-update:
+    #   6. board_columns .select("title").eq("id").single()    -> "In Progress"
     mock_supabase.table.side_effect = _sequence_side_effect_mixed(
         [
             {"column_id": OLD_COLUMN_ID},  # router pre-read of existing task
+            [{"id": TASK_ID, "board_id": BOARD_ID, "parent_task_id": None}],  # service task_row fetch
+            [{"board_id": BOARD_ID}],  # service _column_board_id (dst == src, no cross-board move)
             {"id": NEW_COLUMN_ID, "title": "In Progress"},  # service done-check
             [updated_task],  # service update result
             {"id": NEW_COLUMN_ID, "title": "In Progress"},  # router post-read for done-check
@@ -188,6 +201,8 @@ def test_update_task_fires_completed_when_moved_to_done(client, mock_supabase):
     mock_supabase.table.side_effect = _sequence_side_effect_mixed(
         [
             {"column_id": OLD_COLUMN_ID},  # router pre-read
+            [{"id": TASK_ID, "board_id": BOARD_ID, "parent_task_id": None}],  # service task_row fetch
+            [{"board_id": BOARD_ID}],  # service _column_board_id (dst == src, no cross-board move)
             {"id": DONE_COLUMN_ID, "title": "Done"},  # service done-check → matches
             [updated_task],  # service update
             {"id": DONE_COLUMN_ID, "title": "Done"},  # router post-read → matches "done"
@@ -218,11 +233,12 @@ def test_update_task_no_event_when_column_unchanged(client, mock_supabase):
 
     # Router pre-read returns the same column_id as the task already has, and
     # since the request body omits column_id we expect NO status/completed events.
-    # Service in this path: no "column_id" in data → no board_columns lookup.
+    # Service in this path: no "column_id" in data → no §7.3 lookup, no board_columns lookup.
     # Then: board_tasks update.
     mock_supabase.table.side_effect = _sequence_side_effect_mixed(
         [
             {"column_id": COLUMN_ID},  # router pre-read
+            [{"id": TASK_ID, "board_id": BOARD_ID, "parent_task_id": None}],  # service task_row fetch
             [updated_task],  # service update (no done-check because no column_id)
         ]
     )
@@ -251,6 +267,8 @@ def test_update_task_no_event_when_same_column_id_in_body(client, mock_supabase)
     mock_supabase.table.side_effect = _sequence_side_effect_mixed(
         [
             {"column_id": COLUMN_ID},  # router pre-read
+            [{"id": TASK_ID, "board_id": BOARD_ID, "parent_task_id": None}],  # service task_row fetch
+            [{"board_id": BOARD_ID}],  # service _column_board_id (dst == src, no cross-board move)
             {"id": COLUMN_ID, "title": "In Progress"},  # service done-check
             [updated_task],  # service update
             # No router post-read because column didn't change → skip

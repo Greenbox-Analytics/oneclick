@@ -5,6 +5,8 @@ import hashlib
 import httpx
 from supabase import Client
 
+from boards.service import ensure_personal_board
+
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 
@@ -70,10 +72,12 @@ async def sync_tasks_with_notion(token: str, supabase: Client, user_id: str, dat
 
     # Pull Notion pages that don't exist locally
     existing_external_ids = {t.get("external_id") for t in local_tasks if t.get("external_id")}
+    personal_board_id = ensure_personal_board(supabase, user_id, None)
     for page in notion_pages:
         if page["id"] not in existing_external_ids:
             task_data = _notion_page_to_task(page, user_id)
             if task_data:
+                task_data["board_id"] = personal_board_id
                 supabase.table("board_tasks").insert(task_data).execute()
                 pulled += 1
 
