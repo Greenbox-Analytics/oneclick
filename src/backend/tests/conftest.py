@@ -111,6 +111,12 @@ class MockQueryBuilder:
     def or_(self, *args, **kwargs):
         return self
 
+    @property
+    def not_(self):
+        # supabase-py exposes `.not_.is_(...)` — `not_` is a property returning the
+        # builder so the following filter method chains normally.
+        return self
+
 
 class MockStorageBucket:
     """Mock for Supabase storage bucket operations."""

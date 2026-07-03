@@ -18,3 +18,7 @@ class InviteCreate(BaseModel):
 
 class MemberRoleUpdate(BaseModel):
     role: str  # 'admin' | 'member'
+
+
+class DeleteConfirm(BaseModel):
+    confirm_name: str

@@ -96,3 +96,7 @@ class BoardUpdate(BaseModel):
 
 class AssigneeAdd(BaseModel):
     user_id: str
+
+
+class DeleteConfirm(BaseModel):
+    confirm_name: str

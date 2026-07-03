@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 from supabase import Client
 
+from confirm import ConfirmationError, normalize_name  # shared trim+NFC + confirmation error
 from teams import authz
 
 
@@ -23,6 +24,10 @@ class LastAdminError(Exception):
 
 class InviteInvalidError(Exception):
     """Invite is expired, declined, or otherwise no longer actionable."""
+
+
+class NotArchivedError(Exception):
+    """Team must be archived before it can be permanently deleted."""
 
 
 def _now_iso() -> str:
@@ -129,6 +134,71 @@ async def archive_team(db: Client, user_id: str, team_id: str) -> dict:
         "tasks": task_count,
         "members": members.count or 0,
     }
+
+
+async def delete_team(db: Client, user_id: str, team_id: str, confirm_name: str) -> dict:
+    """Permanently delete an ALREADY-ARCHIVED team (cascade removes boards/columns/tasks/
+    assignees/members/invites). Admin-only + normalized typed-name confirmation. Requires
+    migration 20260703000000 for the ≥2-member cascade (last-admin trigger 27000 fix)."""
+    if not authz.is_team_admin(db, user_id, team_id):
+        raise PermissionError("Admin access required")
+    team = db.table("teams").select("id, name, archived_at").eq("id", team_id).limit(1).execute()
+    if not team.data:
+        raise ValueError("Team not found")
+    row = team.data[0]
+    if not row.get("archived_at"):
+        raise NotArchivedError("Archive the team before deleting it")
+    if normalize_name(confirm_name) != normalize_name(row.get("name")):
+        raise ConfirmationError("Confirmation does not match")
+
+    boards = db.table("boards").select("id", count="exact").eq("team_id", team_id).execute()
+    board_ids = [b["id"] for b in (boards.data or [])]
+    task_count = 0
+    if board_ids:
+        tasks = db.table("board_tasks").select("id", count="exact").in_("board_id", board_ids).execute()
+        task_count = tasks.count or 0
+    members = db.table("team_members").select("id", count="exact").eq("team_id", team_id).execute()
+
+    # team_member_removal_cleanup handles member notifications during the cascade; this mop-up
+    # covers invitee (non-member) team notifications the trigger can't reach. (spec §2.1)
+    db.table("notifications").delete().eq("entity_type", "team").eq("entity_id", team_id).execute()
+    db.table("teams").delete().eq("id", team_id).execute()  # FK cascade
+    return {"deleted": team_id, "boards": boards.count or 0, "tasks": task_count, "members": members.count or 0}
+
+
+async def restore_team(db: Client, user_id: str, team_id: str) -> dict:
+    """Un-archive a team. Admin-only."""
+    if not authz.is_team_admin(db, user_id, team_id):
+        raise PermissionError("Admin access required")
+    db.table("teams").update({"archived_at": None}).eq("id", team_id).execute()
+    return {"restored": team_id}
+
+
+async def list_archived_teams(db: Client, user_id: str) -> list[dict]:
+    """Archived teams where the caller is an ADMIN, each with boards/tasks/members counts."""
+    memberships = (
+        db.table("team_members").select("team_id").eq("user_id", user_id).eq("role", "admin").execute().data or []
+    )
+    team_ids = [m["team_id"] for m in memberships]
+    if not team_ids:
+        return []
+    teams = (
+        db.table("teams")
+        .select("*")
+        .in_("id", team_ids)
+        .not_.is_("archived_at", "null")
+        .order("archived_at", desc=True)
+        .execute()
+    ).data or []
+    for t in teams:
+        b = db.table("boards").select("id", count="exact").eq("team_id", t["id"]).execute()
+        board_ids = [x["id"] for x in (b.data or [])]
+        tc = 0
+        if board_ids:
+            tc = db.table("board_tasks").select("id", count="exact").in_("board_id", board_ids).execute().count or 0
+        m = db.table("team_members").select("id", count="exact").eq("team_id", t["id"]).execute()
+        t["boards"], t["tasks"], t["members"] = b.count or 0, tc, m.count or 0
+    return teams
 
 
 async def list_members(db: Client, user_id: str, team_id: str) -> list[dict]:

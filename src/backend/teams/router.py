@@ -13,8 +13,14 @@ if str(BACKEND_DIR) not in sys.path:
 
 from auth import get_current_user_email, get_current_user_id
 from teams import service
-from teams.models import InviteCreate, MemberRoleUpdate, TeamCreate, TeamUpdate
-from teams.service import DuplicateInviteError, InviteInvalidError, LastAdminError
+from teams.models import DeleteConfirm, InviteCreate, MemberRoleUpdate, TeamCreate, TeamUpdate
+from teams.service import (
+    ConfirmationError,
+    DuplicateInviteError,
+    InviteInvalidError,
+    LastAdminError,
+    NotArchivedError,
+)
 
 router = APIRouter()
 
@@ -25,7 +31,9 @@ def _get_supabase():
     return get_supabase_client()
 
 
-def _send_team_invite_email_background(db_url: str, db_key: str, team_id: str, user_id: str, email: str, role: str):
+def _send_team_invite_email_background(
+    db_url: str, db_key: str, team_id: str, user_id: str, email: str, role: str, existing_user: bool = False
+):
     from supabase import create_client
 
     from teams.emails import send_team_invite_email
@@ -39,12 +47,15 @@ def _send_team_invite_email_background(db_url: str, db_key: str, team_id: str, u
             team_name=team.data["name"] if team.data else "a team",
             inviter_name=(inviter.data or {}).get("full_name", "Someone"),
             role=role,
+            existing_user=existing_user,
         )
     except Exception as exc:
         print(f"Background: failed to send team invite email: {exc}")
 
 
-def _schedule_invite_email(bg: BackgroundTasks, team_id: str, user_id: str, email: str, role: str):
+def _schedule_invite_email(
+    bg: BackgroundTasks, team_id: str, user_id: str, email: str, role: str, existing_user: bool = False
+):
     bg.add_task(
         _send_team_invite_email_background,
         db_url=os.getenv("VITE_SUPABASE_URL"),
@@ -53,6 +64,7 @@ def _schedule_invite_email(bg: BackgroundTasks, team_id: str, user_id: str, emai
         user_id=user_id,
         email=email,
         role=role,
+        existing_user=existing_user,
     )
 
 
@@ -98,6 +110,13 @@ async def create_team(body: TeamCreate, user_id: str = Depends(get_current_user_
     return await service.create_team(_get_supabase(), user_id, body.name, body.description)
 
 
+# NOTE: must be registered BEFORE GET /{team_id} — otherwise FastAPI matches "archived"
+# as a team_id and routes it to get_team.
+@router.get("/archived")
+async def list_archived_teams(user_id: str = Depends(get_current_user_id)):
+    return {"teams": await service.list_archived_teams(_get_supabase(), user_id)}
+
+
 @router.get("/{team_id}")
 async def get_team(team_id: str, user_id: str = Depends(get_current_user_id)):
     try:
@@ -120,6 +139,28 @@ async def update_team(team_id: str, body: TeamUpdate, user_id: str = Depends(get
 async def archive_team(team_id: str, user_id: str = Depends(get_current_user_id)):
     try:
         return await service.archive_team(_get_supabase(), user_id, team_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@router.post("/{team_id}/delete")
+async def delete_team(team_id: str, body: DeleteConfirm, user_id: str = Depends(get_current_user_id)):
+    try:
+        return await service.delete_team(_get_supabase(), user_id, team_id, body.confirm_name)
+    except NotArchivedError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ConfirmationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+
+@router.post("/{team_id}/restore")
+async def restore_team(team_id: str, user_id: str = Depends(get_current_user_id)):
+    try:
+        return await service.restore_team(_get_supabase(), user_id, team_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
 
@@ -180,8 +221,8 @@ async def invite_member(
 
     invite = result.get("invite") or {}
     if result.get("notify_user_id"):
-        # Existing user → in-app Accept/Decline notification ONLY. No signup email — its
-        # "Sign Up to Join" copy + tokenless /auth link is wrong for an existing account.
+        # Existing user → in-app Accept/Decline notification AND an existing-user email
+        # (deep-links to /notifications, not the signup /auth flow).
         try:
             team = db.table("teams").select("name").eq("id", team_id).single().execute()
             inviter = db.table("profiles").select("full_name").eq("id", user_id).maybe_single().execute()
@@ -195,9 +236,15 @@ async def invite_member(
             )
         except Exception as exc:
             print(f"Failed to create team_invite notification: {exc}")
+        # ALSO email the existing user (deep-link to /notifications, not signup)
+        _schedule_invite_email(
+            background_tasks, team_id=team_id, user_id=user_id, email=body.email, role=body.role, existing_user=True
+        )
     else:
         # New user (no account yet) → email invite; the signup trigger auto-converts on join.
-        _schedule_invite_email(background_tasks, team_id=team_id, user_id=user_id, email=body.email, role=body.role)
+        _schedule_invite_email(
+            background_tasks, team_id=team_id, user_id=user_id, email=body.email, role=body.role, existing_user=False
+        )
     return result
 
 

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
+import { NotificationBell } from "@/components/layout/NotificationBell";
 import { cn } from "@/lib/utils";
 
 interface PageHeaderProps {
@@ -52,6 +53,8 @@ export function PageHeader({
     </Button>
   ) : null;
 
+  const notificationBell = user ? <NotificationBell /> : null;
+
   const handleBack = () => {
     if (typeof backTo === "function") backTo();
     else if (typeof backTo === "string") navigate(backTo);
@@ -83,9 +86,10 @@ export function PageHeader({
               </div>
             ) : null}
           </div>
-          {(actions || billingButton || userMenu) && (
+          {(actions || notificationBell || billingButton || userMenu) && (
             <div className="flex items-center gap-1 shrink-0">
               {actions}
+              {notificationBell}
               {billingButton}
               {userMenu}
             </div>
@@ -130,9 +134,10 @@ export function PageHeader({
             </div>
           )}
         </div>
-        {(actions || billingButton || userMenu) && (
+        {(actions || notificationBell || billingButton || userMenu) && (
           <div className="flex items-center gap-2 shrink-0">
             {actions}
+            {notificationBell}
             {billingButton}
             {userMenu}
           </div>

@@ -60,3 +60,47 @@ export function useArchiveBoard() {
     onError: (e: Error) => toast.error(e.message),
   });
 }
+
+export function useDeleteBoard() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ boardId, confirmName }: { boardId: string; confirmName: string }) =>
+      apiFetch<{ deleted: string; tasks: number }>(`${API_URL}/boards/boards/${boardId}/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm_name: confirmName }),
+      }),
+    onSuccess: (d) => {
+      qc.invalidateQueries({ queryKey: ["boards-list"] });
+      qc.invalidateQueries({ queryKey: ["archived-boards"] });
+      toast.success(`Board deleted (${d?.tasks ?? 0} tasks removed)`);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export function useRestoreBoard() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (boardId: string) =>
+      apiFetch(`${API_URL}/boards/boards/${boardId}/restore`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["boards-list"] });
+      qc.invalidateQueries({ queryKey: ["archived-boards"] });
+      toast.success("Board restored");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export function useArchivedBoards(teamId?: string | null) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["archived-boards", user?.id, teamId ?? "personal"],
+    queryFn: async () => {
+      const qs = teamId ? `?team_id=${teamId}` : "";
+      return (await apiFetch<{ boards: Board[] }>(`${API_URL}/boards/archived${qs}`)).boards;
+    },
+    enabled: !!user?.id,
+  });
+}

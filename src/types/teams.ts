@@ -6,6 +6,9 @@ export interface Team {
   archived_at?: string | null;
   created_at?: string;
   my_role?: "admin" | "member";
+  boards?: number;
+  tasks?: number;
+  members?: number;
 }
 
 export interface TeamMember {
@@ -37,4 +40,5 @@ export interface Board {
   description?: string | null;
   archived?: boolean;
   position?: number;
+  task_count?: number;
 }

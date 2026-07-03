@@ -1059,14 +1059,12 @@ async def list_notifications(user_id: str = Depends(get_current_user_id), unread
 
 @router.post("/notifications/{notification_id}/read")
 async def mark_read(notification_id: str, user_id: str = Depends(get_current_user_id)):
-    gated_feature(user_id, Action.USE_REGISTRY)
     await service.mark_notification_read(_get_supabase(), user_id, notification_id)
     return {"ok": True}
 
 
 @router.post("/notifications/read-all")
 async def mark_all_read(user_id: str = Depends(get_current_user_id)):
-    gated_feature(user_id, Action.USE_REGISTRY)
     await service.mark_all_notifications_read(_get_supabase(), user_id)
     return {"ok": True}
 

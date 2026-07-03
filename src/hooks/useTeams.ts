@@ -49,6 +49,51 @@ export function useArchiveTeam() {
   });
 }
 
+export function useDeleteTeam() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ teamId, confirmName }: { teamId: string; confirmName: string }) =>
+      apiFetch<{ deleted: string; boards: number; tasks: number; members: number }>(
+        `${API_URL}/teams/${teamId}/delete`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm_name: confirmName }),
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["teams"] });
+      qc.invalidateQueries({ queryKey: ["archived-teams"] });
+      toast.success("Team permanently deleted");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export function useRestoreTeam() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (teamId: string) =>
+      apiFetch(`${API_URL}/teams/${teamId}/restore`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["teams"] });
+      qc.invalidateQueries({ queryKey: ["archived-teams"] });
+      qc.invalidateQueries({ queryKey: ["boards-list"] });
+      toast.success("Team restored");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export function useArchivedTeams() {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ["archived-teams", user?.id],
+    queryFn: async () => (await apiFetch<{ teams: Team[] }>(`${API_URL}/teams/archived`)).teams,
+    enabled: !!user?.id,
+  });
+}
+
 export function useTeamMembers(teamId?: string) {
   const { user } = useAuth();
   return useQuery({

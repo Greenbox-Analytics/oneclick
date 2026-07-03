@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 
 from supabase import Client
 
+from confirm import ConfirmationError, normalize_name
 from integrations import events
 from pagination import PaginatedResponse, paginate_query
 from teams import authz
@@ -883,6 +884,57 @@ async def archive_board(db: Client, user_id: str, board_id: str) -> dict:
         raise PermissionError("Admin access required to archive a team board")
     db.table("boards").update({"archived": True}).eq("id", board_id).execute()
     return {"archived": board_id}
+
+
+def _can_archive_board(db, user_id: str, board: dict) -> bool:
+    """Same gate as archive_board: personal → owner; team board → team admin."""
+    if board.get("team_id") is None:
+        return board.get("owner_id") == user_id
+    return authz.is_team_admin(db, user_id, board["team_id"])
+
+
+async def delete_board(db: Client, user_id: str, board_id: str, confirm_name: str) -> dict:
+    """Permanently delete a board (cascade removes its columns/tasks/assignees/junction rows).
+    Gated identically to archive_board, plus a normalized typed-name confirmation.
+    Reads the row directly (authz.get_board omits `name`)."""
+    res = db.table("boards").select("id, name, team_id, owner_id").eq("id", board_id).limit(1).execute()
+    board = (res.data or [None])[0]
+    if not board:
+        raise ValueError("Board not found")
+    if not _can_archive_board(db, user_id, board):
+        raise PermissionError("Not allowed to delete this board")
+    if normalize_name(confirm_name) != normalize_name(board.get("name")):
+        raise ConfirmationError("Confirmation does not match")
+    tasks = db.table("board_tasks").select("id", count="exact").eq("board_id", board_id).execute()
+    db.table("boards").delete().eq("id", board_id).execute()  # FK cascade: columns/tasks/assignees/junctions
+    return {"deleted": board_id, "tasks": tasks.count or 0}
+
+
+async def restore_board(db: Client, user_id: str, board_id: str) -> dict:
+    """Un-archive a board. Same gate as archive (no name needed → authz.get_board is fine)."""
+    board = authz.get_board(db, board_id)
+    if not board:
+        raise ValueError("Board not found")
+    if not _can_archive_board(db, user_id, board):
+        raise PermissionError("Not allowed to restore this board")
+    db.table("boards").update({"archived": False}).eq("id", board_id).execute()
+    return {"restored": board_id}
+
+
+async def list_archived_boards(db: Client, user_id: str, team_id: str | None = None) -> list[dict]:
+    """Archived boards with a task_count each. Team context → team admin only; else the
+    caller's archived personal boards. Same gate as restore/delete (no view-vs-act split)."""
+    if team_id is not None:
+        if not authz.is_team_admin(db, user_id, team_id):
+            raise PermissionError("Admin access required")
+        q = db.table("boards").select("*").eq("team_id", team_id)
+    else:
+        q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
+    boards = q.eq("archived", True).order("created_at").execute().data or []
+    for b in boards:
+        c = db.table("board_tasks").select("id", count="exact").eq("board_id", b["id"]).execute()
+        b["task_count"] = c.count or 0
+    return boards
 
 
 async def create_default_columns(

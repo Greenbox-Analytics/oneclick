@@ -21,6 +21,7 @@ from boards.models import (
     ColumnCreate,
     ColumnUpdate,
     CommentCreate,
+    DeleteConfirm,
     ParentTaskCreate,
     TaskCreate,
     TaskUpdate,
@@ -91,6 +92,40 @@ async def archive_board(board_id: str, user_id: str = Depends(get_current_user_i
     except ValueError:
         raise HTTPException(status_code=404, detail="Board not found")
     return result
+
+
+@router.get("/archived")
+async def list_archived_boards(
+    user_id: str = Depends(get_current_user_id),
+    team_id: str | None = Query(None),
+):
+    try:
+        boards = await service.list_archived_boards(_get_supabase(), user_id, team_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    return {"boards": boards}
+
+
+@router.post("/boards/{board_id}/delete")
+async def delete_board(board_id: str, body: DeleteConfirm, user_id: str = Depends(get_current_user_id)):
+    try:
+        return await service.delete_board(_get_supabase(), user_id, board_id, body.confirm_name)
+    except service.ConfirmationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Board not found")
+
+
+@router.post("/boards/{board_id}/restore")
+async def restore_board(board_id: str, user_id: str = Depends(get_current_user_id)):
+    try:
+        return await service.restore_board(_get_supabase(), user_id, board_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Board not found")
 
 
 # --- Columns ---

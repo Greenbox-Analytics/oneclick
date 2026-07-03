@@ -25,7 +25,19 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Loader2, Plus, X, UserPlus, Users, LogOut, Archive } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Loader2,
+  Plus,
+  X,
+  UserPlus,
+  Users,
+  LogOut,
+  Archive,
+  ChevronDown,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import {
   useTeams,
   useCreateTeam,
@@ -36,8 +48,12 @@ import {
   useUpdateTeamMemberRole,
   useRemoveTeamMember,
   useCancelTeamInvite,
+  useArchivedTeams,
+  useRestoreTeam,
+  useDeleteTeam,
 } from "@/hooks/useTeams";
 import type { TeamMember } from "@/types/teams";
+import { DeleteConfirmDialog } from "@/components/workspace/boards/DeleteConfirmDialog";
 import { useAuth } from "@/contexts/AuthContext";
 
 const ROLE_COLORS: Record<string, string> = {
@@ -64,6 +80,9 @@ export default function TeamsPanel() {
   const updateRole = useUpdateTeamMemberRole();
   const removeMember = useRemoveTeamMember();
   const cancelInvite = useCancelTeamInvite();
+  const { data: archivedTeams } = useArchivedTeams();
+  const restoreTeam = useRestoreTeam();
+  const deleteTeam = useDeleteTeam();
 
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -72,6 +91,13 @@ export default function TeamsPanel() {
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [deleteTeamId, setDeleteTeamId] = useState<string | null>(null);
+
+  // Derive the team targeted for permanent deletion from the archived list. If the list
+  // refetches away this id while the dialog is open, target becomes undefined and onConfirm
+  // no-ops (guarded below).
+  const deleteTarget = archivedTeams?.find((t) => t.id === deleteTeamId);
 
   // Fall back to the first team when nothing is selected (or the selection went away
   // after a leave/archive).
@@ -435,6 +461,84 @@ export default function TeamsPanel() {
           )}
         </div>
       )}
+
+      {/* Archived teams (admin-only — endpoint returns only teams the caller admins).
+          Hidden entirely when the caller has no archived teams; auto-hides once the last
+          archived team is restored/deleted (driven by the useArchivedTeams refetch). */}
+      {archivedTeams && archivedTeams.length > 0 && (
+        <Collapsible
+          open={archivedOpen}
+          onOpenChange={setArchivedOpen}
+          className="pt-4 border-t border-border"
+        >
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" className="text-muted-foreground">
+              <Archive className="w-4 h-4 mr-2" /> Archived
+              <span className="ml-1.5 text-xs text-muted-foreground/70">
+                ({archivedTeams.length})
+              </span>
+              <ChevronDown
+                className={`w-4 h-4 ml-2 transition-transform ${archivedOpen ? "rotate-180" : ""}`}
+              />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-3 space-y-2">
+            {archivedTeams.map((t) => (
+              <Card key={t.id} className="p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{t.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t.boards ?? 0} boards · {t.tasks ?? 0} tasks · {t.members ?? 0} members
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => restoreTeam.mutate(t.id)}
+                      disabled={restoreTeam.isPending}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 mr-2" /> Restore
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setDeleteTeamId(t.id)}
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete team permanently…
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+
+      {/* Single permanent-delete dialog, bound to the row-selected archived team.
+          confirmName is the BARE team name — the dialog gates the typed delete-<name> locally,
+          the server re-compares normalized names. */}
+      <DeleteConfirmDialog
+        open={!!deleteTeamId}
+        onOpenChange={(o) => !o && setDeleteTeamId(null)}
+        name={deleteTarget?.name ?? ""}
+        resourceType="team"
+        impact={
+          deleteTarget
+            ? `${deleteTarget.boards ?? 0} boards, ${deleteTarget.tasks ?? 0} tasks, ${deleteTarget.members ?? 0} members`
+            : undefined
+        }
+        isPending={deleteTeam.isPending}
+        onConfirm={() =>
+          deleteTarget &&
+          deleteTeam.mutate(
+            { teamId: deleteTarget.id, confirmName: deleteTarget.name },
+            { onSuccess: () => setDeleteTeamId(null) }
+          )
+        }
+      />
 
       {/* Invite Dialog */}
       <Dialog open={inviteDialogOpen} onOpenChange={handleInviteDialogOpenChange}>

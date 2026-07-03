@@ -29,6 +29,7 @@ const OneClickDocuments = lazy(() => import("./pages/OneClickDocuments"));
 const Zoe = lazy(() => import("./pages/Zoe"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Workspace = lazy(() => import("./pages/Workspace"));
+const Notifications = lazy(() => import("./pages/Notifications"));
 const WorkspaceBoards = lazy(() => import("./pages/WorkspaceBoards"));
 const Portfolio = lazy(() => import("./pages/Portfolio"));
 const SplitSheet = lazy(() => import("./pages/SplitSheet"));
@@ -177,6 +178,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Workspace />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/notifications"
+              element={
+                <ProtectedRoute>
+                  <Notifications />
                 </ProtectedRoute>
               }
             />

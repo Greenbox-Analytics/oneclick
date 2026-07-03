@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { MoreHorizontal, Pencil, Plus, Trash2, Loader2 } from "lucide-react";
+import { Archive, History, MoreHorizontal, Pencil, Plus, Trash2, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,10 +34,14 @@ import {
 import { useTeams } from "@/hooks/useTeams";
 import {
   useArchiveBoard,
+  useArchivedBoards,
   useBoardsList,
   useCreateBoard,
+  useDeleteBoard,
   useRenameBoard,
+  useRestoreBoard,
 } from "@/hooks/useBoardsList";
+import { DeleteConfirmDialog } from "@/components/workspace/boards/DeleteConfirmDialog";
 
 const PERSONAL = "personal";
 
@@ -64,14 +68,23 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
   const createBoard = useCreateBoard();
   const renameBoard = useRenameBoard();
   const archiveBoard = useArchiveBoard();
+  const deleteBoard = useDeleteBoard();
 
   const [newDialogOpen, setNewDialogOpen] = useState(false);
   const [newBoardName, setNewBoardName] = useState("");
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameName, setRenameName] = useState("");
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
   const selectedBoard = boards?.find((b) => b.id === boardId);
+
+  // Delete/Restore + the archived-boards list are gated to the same permission as
+  // archiving a team board: Personal (owner) or a team admin. Non-admin team members
+  // never see these affordances (the backend enforces the same gate).
+  const activeTeam = teams?.find((t) => t.id === teamId);
+  const canManage = teamId == null || activeTeam?.my_role === "admin";
   // The empty state is a TEAM concept only. Personal keeps boardId undefined = the
   // personal-boards union (today's behavior), so it never shows "No boards yet".
   const hasNoBoards =
@@ -202,6 +215,16 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
             <Plus className="mr-2 h-4 w-4" />
             New board
           </Button>
+          {/* Keep Restore reachable even with zero active boards: the board-actions
+              menu (the other entry point to the archived list) is hidden in this
+              empty state, so an admin who archived the last board could otherwise
+              never get back in. */}
+          {canManage && (
+            <Button size="sm" variant="ghost" onClick={() => setArchivedOpen(true)}>
+              <History className="mr-2 h-4 w-4" />
+              Archived boards…
+            </Button>
+          )}
         </div>
       ) : (
         <Select value={boardId ?? ""} onValueChange={handleBoardChange}>
@@ -241,9 +264,28 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
               className="text-destructive focus:text-destructive"
               onSelect={() => setArchiveDialogOpen(true)}
             >
-              <Trash2 className="mr-2 h-4 w-4" />
+              <Archive className="mr-2 h-4 w-4" />
               Archive board
             </DropdownMenuItem>
+            {canManage && (
+              <DropdownMenuItem
+                disabled={!selectedBoard}
+                className="text-destructive focus:text-destructive"
+                onSelect={() => setDeleteOpen(true)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete board permanently…
+              </DropdownMenuItem>
+            )}
+            {canManage && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setArchivedOpen(true)}>
+                  <History className="mr-2 h-4 w-4" />
+                  Archived boards…
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       )}
@@ -341,6 +383,131 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Permanently delete the ACTIVE board. Active boards carry no task_count
+          (list_boards doesn't compute it), so no impact count is passed — the dialog's
+          base "…and everything in it" copy already conveys the scope. The mutation
+          sends the BARE name; the dialog validates the typed `delete-<name>` locally
+          and the server re-compares. */}
+      <DeleteConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        name={selectedBoard?.name ?? ""}
+        resourceType="board"
+        isPending={deleteBoard.isPending}
+        onConfirm={() =>
+          selectedBoard &&
+          deleteBoard.mutate(
+            { boardId, confirmName: selectedBoard.name },
+            {
+              onSuccess: () => {
+                setDeleteOpen(false);
+                onBoardChange(undefined, teamId);
+              },
+            },
+          )
+        }
+      />
+
+      {/* Archived boards list (admin/owner only) — mounted only when canManage so a
+          non-admin team member never fires the (would-be 403) archived fetch. */}
+      {canManage && (
+        <ArchivedBoardsDialog open={archivedOpen} onOpenChange={setArchivedOpen} teamId={teamId} />
+      )}
     </div>
+  );
+}
+
+interface ArchivedBoardsDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  teamId: string | null;
+}
+
+/**
+ * Lists archived boards for the current context with Restore + permanent Delete.
+ * Archived boards DO carry `task_count` (from `list_archived_boards`), so their
+ * delete impact shows the real number. Per-row delete state is a single id.
+ */
+function ArchivedBoardsDialog({ open, onOpenChange, teamId }: ArchivedBoardsDialogProps) {
+  const { data: archivedBoards, isLoading } = useArchivedBoards(teamId);
+  const restoreBoard = useRestoreBoard();
+  const deleteBoard = useDeleteBoard();
+  const [archivedDeleteId, setArchivedDeleteId] = useState<string | null>(null);
+
+  const target = archivedBoards?.find((b) => b.id === archivedDeleteId);
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Archived boards</DialogTitle>
+            <DialogDescription>Restore a board or delete it permanently.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+            {isLoading ? (
+              <div className="flex items-center gap-2 px-1 py-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading…
+              </div>
+            ) : !archivedBoards || archivedBoards.length === 0 ? (
+              <p className="px-1 py-2 text-sm text-muted-foreground">No archived boards.</p>
+            ) : (
+              archivedBoards.map((b) => (
+                <div
+                  key={b.id}
+                  className="flex items-center justify-between gap-2 rounded-md border p-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{b.name}</p>
+                    <p className="text-xs text-muted-foreground">{b.task_count ?? 0} tasks</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={restoreBoard.isPending}
+                      onClick={() => restoreBoard.mutate(b.id)}
+                    >
+                      Restore
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setArchivedDeleteId(b.id)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <DeleteConfirmDialog
+        open={!!archivedDeleteId}
+        onOpenChange={(o) => !o && setArchivedDeleteId(null)}
+        name={target?.name ?? ""}
+        resourceType="board"
+        impact={target ? `${target.task_count ?? 0} tasks` : undefined}
+        isPending={deleteBoard.isPending}
+        onConfirm={() =>
+          target &&
+          deleteBoard.mutate(
+            { boardId: target.id, confirmName: target.name },
+            { onSuccess: () => setArchivedDeleteId(null) },
+          )
+        }
+      />
+    </>
   );
 }
