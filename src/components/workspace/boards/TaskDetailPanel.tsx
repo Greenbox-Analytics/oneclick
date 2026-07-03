@@ -28,6 +28,10 @@ interface TaskDetailPanelProps {
   mode?: "create" | "edit";
   createColumnId?: string;
   timezone?: string;
+  boardId?: string;
+  // Threaded from the board switcher so TaskFields can pick the assignee UI
+  // (get_task_detail returns board_id only, not team_id).
+  teamId?: string | null;
 }
 
 export function TaskDetailPanel({
@@ -37,13 +41,15 @@ export function TaskDetailPanel({
   mode = "edit",
   createColumnId,
   timezone,
+  boardId,
+  teamId,
 }: TaskDetailPanelProps) {
   const isCreateMode = mode === "create";
   const { task, isLoading, addComment, deleteComment } = useTaskDetail(
     isCreateMode ? null : taskId
   );
-  const { columns, tasks: allBoardTasks, updateTask, deleteTask, createTask } = useBoards();
-  const { parents } = useParentTasks();
+  const { columns, tasks: allBoardTasks, updateTask, deleteTask, createTask } = useBoards({ boardId });
+  const { parents } = useParentTasks(undefined, undefined, boardId);
 
   const { data: ent } = useEntitlements();
   const taskCap = ent?.caps.maxTasks ?? 0;
@@ -55,7 +61,6 @@ export function TaskDetailPanel({
   const [startDate, setStartDate] = useState<Date | undefined>();
   const [dueDate, setDueDate] = useState<Date | undefined>();
   const [color, setColor] = useState<string>("");
-  const [assigneeName, setAssigneeName] = useState("");
   const [selectedArtistIds, setSelectedArtistIds] = useState<string[]>([]);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedContractIds, setSelectedContractIds] = useState<string[]>([]);
@@ -75,7 +80,6 @@ export function TaskDetailPanel({
       setStartDate(task.start_date ? parseDateString(task.start_date) : undefined);
       setDueDate(task.due_date ? parseDateString(task.due_date) : undefined);
       setColor(task.color || "");
-      setAssigneeName(task.assignee_name || "");
       setSelectedArtistIds(task.artist_ids || []);
       setSelectedProjectIds(task.project_ids || []);
       setSelectedContractIds(task.contract_ids || []);
@@ -94,7 +98,6 @@ export function TaskDetailPanel({
       setStartDate(parseDateString(todayStr));
       setDueDate(undefined);
       setColor("");
-      setAssigneeName("");
       setSelectedArtistIds([]);
       setSelectedProjectIds([]);
       setSelectedContractIds([]);
@@ -121,6 +124,7 @@ export function TaskDetailPanel({
     start_date?: string;
     due_date?: string;
     color?: string;
+    board_id?: string;
     artist_ids?: string[];
     project_ids?: string[];
     contract_ids?: string[];
@@ -153,6 +157,7 @@ export function TaskDetailPanel({
       start_date: startDate ? format(startDate, "yyyy-MM-dd") : undefined,
       due_date: dueDate ? format(dueDate, "yyyy-MM-dd") : undefined,
       color: color || undefined,
+      board_id: boardId,
       artist_ids: selectedArtistIds.length > 0 ? selectedArtistIds : undefined,
       project_ids: selectedProjectIds.length > 0 ? selectedProjectIds : undefined,
       contract_ids: selectedContractIds.length > 0 ? selectedContractIds : undefined,
@@ -236,8 +241,7 @@ export function TaskDetailPanel({
                   setDueDate={setDueDate}
                   color={color}
                   setColor={setColor}
-                  assigneeName={assigneeName}
-                  setAssigneeName={setAssigneeName}
+                  teamId={teamId}
                   statusColumnId={statusColumnId}
                   setStatusColumnId={setStatusColumnId}
                   columns={columns}

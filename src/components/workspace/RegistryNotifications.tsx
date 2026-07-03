@@ -5,6 +5,7 @@ import {
   useMarkAllRead,
   type RegistryNotification,
 } from "@/hooks/useRegistryNotifications";
+import { useAcceptTeamInvite, useDeclineTeamInvite } from "@/hooks/useTeams";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Bell, CheckCheck, Shield, ExternalLink } from "lucide-react";
@@ -15,6 +16,7 @@ const TYPE_COLORS: Record<string, string> = {
   confirmation: "bg-green-100 text-green-800",
   dispute: "bg-red-100 text-red-800",
   status_change: "bg-purple-100 text-purple-800",
+  team_invite: "bg-indigo-100 text-indigo-700",
 };
 
 export function RegistryNotifications() {
@@ -22,9 +24,13 @@ export function RegistryNotifications() {
   const { data: notifications, isLoading } = useRegistryNotifications();
   const markRead = useMarkNotificationRead();
   const markAllRead = useMarkAllRead();
+  const accept = useAcceptTeamInvite();
+  const decline = useDeclineTeamInvite();
 
   const handleClick = (n: RegistryNotification) => {
-    if (!n.read) markRead.mutate(n.id);
+    // team_invite: Accept/Decline buttons are gated on !n.read, so marking read on a
+    // row click would hide them — only the Accept/Decline success paths mark it read.
+    if (!n.read && n.type !== "team_invite") markRead.mutate(n.id);
     if (n.work_id) navigate(`/tools/registry/${n.work_id}`);
   };
 
@@ -86,6 +92,33 @@ export function RegistryNotifications() {
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1 ml-4">{n.message}</p>
+                {n.type === "team_invite" && !n.read && (
+                  <div className="mt-2 ml-4 flex gap-2" onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      size="sm"
+                      disabled={accept.isPending || decline.isPending}
+                      onClick={() => {
+                        const token = n.metadata?.token;
+                        if (!token) return;
+                        accept.mutate(String(token), { onSuccess: () => markRead.mutate(n.id) });
+                      }}
+                    >
+                      Accept
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={accept.isPending || decline.isPending}
+                      onClick={() => {
+                        const token = n.metadata?.token;
+                        if (!token) return;
+                        decline.mutate(String(token), { onSuccess: () => markRead.mutate(n.id) });
+                      }}
+                    >
+                      Decline
+                    </Button>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
                 <span>{new Date(n.created_at).toLocaleDateString()}</span>

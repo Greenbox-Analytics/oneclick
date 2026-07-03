@@ -69,3 +69,25 @@ async def test_remove_assignee_ok(monkeypatch):
     result = await service.remove_assignee(db, USER, TASK, TARGET)
 
     assert result == {"unassigned": TARGET}
+
+
+def test_enrich_tasks_attaches_assignees_batched():
+    """_enrich_tasks attaches assignees to list-path tasks (one board_task_assignees
+    query for all task_ids, one profiles query for all users) — no N+1, [] when none."""
+    t1 = "task-0000-0000-0000-0000-000000000001"
+    t2 = "task-0000-0000-0000-0000-000000000002"
+    db = _db(
+        {
+            "board_task_artists": MagicMock(data=[]),
+            "board_task_projects": MagicMock(data=[]),
+            "board_task_contracts": MagicMock(data=[]),
+            "board_task_assignees": MagicMock(data=[{"task_id": t1, "user_id": TARGET}]),
+            "profiles": MagicMock(data=[{"id": TARGET, "full_name": "Jane", "avatar_url": None}]),
+        }
+    )
+
+    out = service._enrich_tasks(db, [{"id": t1}, {"id": t2}])
+
+    by_id = {t["id"]: t for t in out}
+    assert by_id[t1]["assignees"] == [{"user_id": TARGET, "full_name": "Jane", "avatar_url": None}]
+    assert by_id[t2]["assignees"] == []

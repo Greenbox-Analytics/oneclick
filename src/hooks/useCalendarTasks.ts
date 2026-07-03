@@ -3,14 +3,15 @@ import { useAuth } from "@/contexts/AuthContext";
 import type { BoardTask } from "@/types/integrations";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
-export function useCalendarTasks(start: string, end: string) {
+export function useCalendarTasks(start: string, end: string, boardId?: string) {
   const { user } = useAuth();
 
   const query = useQuery<BoardTask[]>({
-    queryKey: ["board-tasks-calendar", start, end],
+    queryKey: ["board-tasks-calendar", start, end, boardId],
     queryFn: async () => {
       if (!user?.id) return [];
       const params = new URLSearchParams({ start, end });
+      if (boardId) params.set("board_id", boardId);
       const data = await apiFetch<{ tasks: BoardTask[] }>(`${API_URL}/boards/calendar?${params}`);
       return data.tasks;
     },

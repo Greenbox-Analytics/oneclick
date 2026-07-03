@@ -27,10 +27,12 @@ import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 
 interface KanbanBoardProps {
   artistId?: string;
+  boardId?: string;
+  teamId?: string | null;
   initialSelectedTaskId?: string;
 }
 
-export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProps) {
+export function KanbanBoard({ artistId, boardId, teamId, initialSelectedTaskId }: KanbanBoardProps) {
   const { settings } = useWorkspaceSettings();
   const {
     periodStart,
@@ -58,12 +60,13 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
     createDefaults,
   } = useBoards({
     artistId,
+    boardId,
     periodStart,
     periodEnd,
     isCurrentPeriod,
   });
 
-  const { parents, createParent } = useParentTasks();
+  const { parents, createParent } = useParentTasks(undefined, undefined, boardId);
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialSelectedTaskId || null);
   const [creatingInColumnId, setCreatingInColumnId] = useState<string | null>(null);
@@ -100,7 +103,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
         updateColumn({ id: col.id, position: (col.position ?? 0) + 1 });
       });
       // Create Backlog at position 0
-      createColumn({ title: "Backlog", color: "#8b5cf6", position: 0, artist_id: artistId });
+      createColumn({ title: "Backlog", color: "#8b5cf6", position: 0, artist_id: artistId, board_id: boardId });
     }
     setBacklogChecked(true);
   }, [columns, isLoading, backlogChecked]);
@@ -212,6 +215,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
     createColumn({
       title: newColumnTitle.trim(),
       artist_id: artistId,
+      board_id: boardId,
     });
     setNewColumnTitle("");
     setIsAddingColumn(false);
@@ -429,7 +433,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
           Group and organize subtasks under campaigns
         </p>
       </div>
-      <TasksOverview />
+      <TasksOverview boardId={boardId} teamId={teamId} />
 
       {/* Task detail side panel — edit mode */}
       <TaskDetailPanel
@@ -438,6 +442,8 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
         onNavigateToTask={(id) => { setCreatingInColumnId(null); setSelectedTaskId(id); }}
         mode="edit"
         timezone={settings?.timezone}
+        boardId={boardId}
+        teamId={teamId}
       />
 
       {/* Task detail side panel — create mode */}
@@ -447,6 +453,8 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
         mode="create"
         createColumnId={creatingInColumnId || undefined}
         timezone={settings?.timezone}
+        boardId={boardId}
+        teamId={teamId}
       />
     </>
   );

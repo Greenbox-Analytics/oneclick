@@ -441,6 +441,36 @@ class TestCreateDefaultColumns:
         assert response.status_code == 200
         assert "columns" in response.json()
 
+    def test_create_defaults_with_board_id_targets_that_board(self, client, mock_supabase):
+        """POST /boards/columns/defaults?board_id=... seeds the given board directly and does
+        NOT fall back to the personal board — ensure_personal_board must be bypassed."""
+        default_columns = [
+            {**SAMPLE_COLUMN, "id": f"col-{i}", "title": t, "position": i, "board_id": BOARD_ID}
+            for i, t in enumerate(["Backlog", "To Do", "In Progress", "Review", "Done"])
+        ]
+
+        call_count = [0]
+
+        def _side_effect(name):
+            _b = _authz_board_builder(name)
+            if _b is not None:
+                return _b
+            idx = call_count[0] % len(default_columns)
+            data = [default_columns[idx]]
+            call_count[0] += 1
+            return _builder(data)
+
+        mock_supabase.table.side_effect = _side_effect
+
+        with patch(
+            "boards.service.ensure_personal_board",
+            side_effect=AssertionError("ensure_personal_board must not run when board_id is provided"),
+        ):
+            response = client.post(f"/boards/columns/defaults?board_id={BOARD_ID}")
+
+        assert response.status_code == 200
+        assert len(response.json()["columns"]) == 5
+
 
 # ===========================================================================
 # Tasks

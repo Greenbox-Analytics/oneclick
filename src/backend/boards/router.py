@@ -140,9 +140,11 @@ async def delete_column(column_id: str, user_id: str = Depends(get_current_user_
 async def create_defaults(
     user_id: str = Depends(get_current_user_id),
     artist_id: str | None = Query(None),
+    board_id: str | None = Query(None),
 ):
-    """Create default columns (To Do, In Progress, Review, Done)."""
-    columns = await service.create_default_columns(_get_supabase(), user_id, artist_id)
+    """Create default columns (To Do, In Progress, Review, Done). board_id targets a specific
+    board (e.g. a team board); omit it to seed the caller's personal board (legacy default)."""
+    columns = await service.create_default_columns(_get_supabase(), user_id, artist_id, board_id)
     return {"columns": columns}
 
 

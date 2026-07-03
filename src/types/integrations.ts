@@ -28,6 +28,7 @@ export interface BoardColumn {
   id: string;
   user_id: string;
   artist_id?: string;
+  board_id?: string;
   title: string;
   position: number;
   color?: string;
@@ -50,6 +51,7 @@ export interface BoardTask {
   is_parent?: boolean;
   parent_title?: string;
   column_title?: string;
+  board_id?: string;
   artist_id?: string;
   project_id?: string;
   artist_ids?: string[];
@@ -57,6 +59,7 @@ export interface BoardTask {
   contract_ids?: string[];
   artists?: { id: string; name: string }[];
   assignee_name?: string;
+  assignees?: { user_id: string; full_name?: string | null; avatar_url?: string | null }[];
   labels?: string[];
   external_id?: string;
   external_provider?: string;

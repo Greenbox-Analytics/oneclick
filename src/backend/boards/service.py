@@ -71,7 +71,7 @@ def _get_junction_ids(supabase: Client, table: str, fk_column: str, task_ids: li
 
 
 def _enrich_tasks(supabase: Client, tasks: list) -> list:
-    """Add artist_ids, project_ids, contract_ids, artist names, and parent_title to tasks."""
+    """Add artist_ids, project_ids, contract_ids, artist names, assignees, and parent_title to tasks."""
     if not tasks:
         return tasks
     task_ids = [t["id"] for t in tasks]
@@ -79,6 +79,14 @@ def _enrich_tasks(supabase: Client, tasks: list) -> list:
     artist_map = _get_junction_ids(supabase, "board_task_artists", "artist_id", task_ids)
     project_map = _get_junction_ids(supabase, "board_task_projects", "project_id", task_ids)
     contract_map = _get_junction_ids(supabase, "board_task_contracts", "project_file_id", task_ids)
+
+    # Batched assignees (spec §5.6): one query for all task rows, one for their profiles.
+    assignee_map = _get_junction_ids(supabase, "board_task_assignees", "user_id", task_ids)
+    assignee_user_ids = list({uid for uids in assignee_map.values() for uid in uids})
+    assignee_profiles = {}
+    if assignee_user_ids:
+        presult = supabase.table("profiles").select("id, full_name, avatar_url").in_("id", assignee_user_ids).execute()
+        assignee_profiles = {p["id"]: p for p in (presult.data or [])}
 
     # Fetch artist names for display
     all_artist_ids = list({aid for ids in artist_map.values() for aid in ids})
@@ -100,6 +108,14 @@ def _enrich_tasks(supabase: Client, tasks: list) -> list:
         task["project_ids"] = project_map.get(tid, [])
         task["contract_ids"] = contract_map.get(tid, [])
         task["artists"] = [{"id": aid, "name": artist_names.get(aid, "Unknown")} for aid in task["artist_ids"]]
+        task["assignees"] = [
+            {
+                "user_id": uid,
+                "full_name": assignee_profiles.get(uid, {}).get("full_name"),
+                "avatar_url": assignee_profiles.get(uid, {}).get("avatar_url"),
+            }
+            for uid in assignee_map.get(tid, [])
+        ]
         if task.get("parent_task_id"):
             task["parent_title"] = parent_titles.get(task["parent_task_id"], "")
 
@@ -246,11 +262,13 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
     if not data.get("start_date"):
         data["start_date"] = str(date.today())
 
-    # Auto-assign subtasks to the first board column so they appear on the main board
+    # Auto-assign subtasks to the first board column so they appear on the main board.
+    # Board-scoped when the caller specified a board (a team-board subtask must not land in
+    # one of the caller's personal columns); legacy user-scoped fallback otherwise.
     if data.get("parent_task_id") and not data.get("column_id"):
-        first_col = (
-            supabase.table("board_columns").select("id").eq("user_id", user_id).order("position").limit(1).execute()
-        )
+        col_q = supabase.table("board_columns").select("id")
+        col_q = col_q.eq("board_id", data["board_id"]) if data.get("board_id") else col_q.eq("user_id", user_id)
+        first_col = col_q.order("position").limit(1).execute()
         if first_col.data:
             data["column_id"] = first_col.data[0]["id"]
 
@@ -867,10 +885,17 @@ async def archive_board(db: Client, user_id: str, board_id: str) -> dict:
     return {"archived": board_id}
 
 
-async def create_default_columns(supabase: Client, user_id: str, artist_id: str | None = None) -> list:
-    """Create default Kanban columns for a new board."""
-    board_id = ensure_personal_board(supabase, user_id, artist_id)
-    authz.require_board_edit(supabase, user_id, board_id)
+async def create_default_columns(
+    supabase: Client, user_id: str, artist_id: str | None = None, board_id: str | None = None
+) -> list:
+    """Create default Kanban columns for a new board. When board_id is given (e.g. a team
+    board), target it directly (gated by require_board_edit); otherwise resolve/create the
+    caller's personal board for artist_id (legacy default)."""
+    if board_id:
+        authz.require_board_edit(supabase, user_id, board_id)
+    else:
+        board_id = ensure_personal_board(supabase, user_id, artist_id)
+        authz.require_board_edit(supabase, user_id, board_id)
     defaults = [
         {"title": "Backlog", "position": 0, "color": "#8b5cf6"},
         {"title": "To Do", "position": 1, "color": "#6366f1"},

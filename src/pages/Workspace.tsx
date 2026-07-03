@@ -1,7 +1,7 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, HardDrive, Bell, CalendarDays, Settings, BookOpen } from "lucide-react";
+import { LayoutGrid, HardDrive, Bell, CalendarDays, Settings, BookOpen, Users } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,9 @@ import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 import { IntegrationHub } from "@/components/workspace/IntegrationHub";
 import { WorkspaceSettings } from "@/components/workspace/WorkspaceSettings";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
+import { BoardSwitcher } from "@/components/workspace/boards/BoardSwitcher";
 import { CalendarView } from "@/components/workspace/boards/CalendarView";
+import TeamsPanel from "@/components/workspace/teams/TeamsPanel";
 import { toast } from "sonner";
 import { RegistryNotifications } from "@/components/workspace/RegistryNotifications";
 import { useUnreadCount } from "@/hooks/useRegistryNotifications";
@@ -81,6 +83,10 @@ const Workspace = () => {
   const defaultTab = searchParams.get("tab") || "integrations";
   const [activeTab, setActiveTab] = useState(defaultTab);
   const initialTaskId = searchParams.get("taskId") || undefined;
+
+  // Board switcher selection (Personal vs. a team + a board within it).
+  const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>(undefined);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
 
   // Fire tool_opened when the active tab corresponds to a tool surface.
   // integrations / notifications / settings are NOT tools — skip them.
@@ -157,6 +163,11 @@ const Workspace = () => {
                     <LayoutGrid className="w-4 h-4" /> Project Boards
                   </span>
                 </SelectItem>
+                <SelectItem value="teams">
+                  <span className="inline-flex items-center gap-2">
+                    <Users className="w-4 h-4" /> Teams
+                  </span>
+                </SelectItem>
                 <SelectItem value="calendar">
                   <span className="inline-flex items-center gap-2">
                     <CalendarDays className="w-4 h-4" /> Calendar
@@ -189,6 +200,10 @@ const Workspace = () => {
                 <LayoutGrid className="w-4 h-4" />
                 Project Boards
               </TabsTrigger>
+              <TabsTrigger value="teams" className="gap-2">
+                <Users className="w-4 h-4" />
+                Teams
+              </TabsTrigger>
               <TabsTrigger value="calendar" className="gap-2">
                 <CalendarDays className="w-4 h-4" />
                 Calendar
@@ -214,7 +229,28 @@ const Workspace = () => {
           </TabsContent>
 
           <TabsContent value="boards" data-walkthrough="workspace-boards">
-            <KanbanBoard initialSelectedTaskId={initialTaskId} />
+            <BoardSwitcher
+              teamId={selectedTeamId}
+              boardId={selectedBoardId}
+              onBoardChange={(b, t) => {
+                setSelectedBoardId(b);
+                setSelectedTeamId(t);
+              }}
+            />
+            {/* Under a team context with no board selected, don't fall through to the
+                personal-boards union — the switcher shows its "No boards yet" state instead. */}
+            {selectedTeamId && !selectedBoardId ? null : (
+              <KanbanBoard
+                key={selectedBoardId ?? "personal"}
+                boardId={selectedBoardId}
+                teamId={selectedTeamId}
+                initialSelectedTaskId={initialTaskId}
+              />
+            )}
+          </TabsContent>
+
+          <TabsContent value="teams">
+            <TeamsPanel />
           </TabsContent>
 
           <TabsContent value="calendar" data-walkthrough="workspace-calendar">

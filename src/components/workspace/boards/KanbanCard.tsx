@@ -2,6 +2,7 @@ import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Calendar, MoreHorizontal, Trash2, ExternalLink, Users, CornerDownRight, AlertCircle, ArrowRightLeft } from "lucide-react";
 import { parseDateString, getTodayString } from "@/lib/dateUtils";
 import {
@@ -33,6 +34,19 @@ interface KanbanCardProps {
   disableDrag?: boolean;
   moveOptions?: MoveOption[];
   onMove?: (taskId: string, targetColumnId: string) => void;
+}
+
+function initials(name?: string | null): string {
+  if (!name) return "?";
+  return (
+    name
+      .split(" ")
+      .map((w) => w[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "?"
+  );
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -205,6 +219,23 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
               <Calendar className="h-3 w-3" />
               {dateDisplay}
             </span>
+          )}
+          {task.assignees && task.assignees.length > 0 && (
+            <div className="flex items-center -space-x-1.5">
+              {task.assignees.slice(0, 3).map((a) => (
+                <Avatar key={a.user_id} className="h-5 w-5 border border-background">
+                  <AvatarImage src={a.avatar_url ?? undefined} />
+                  <AvatarFallback className="text-[9px]">
+                    {initials(a.full_name)}
+                  </AvatarFallback>
+                </Avatar>
+              ))}
+              {task.assignees.length > 3 && (
+                <span className="text-[10px] text-muted-foreground pl-2">
+                  +{task.assignees.length - 3}
+                </span>
+              )}
+            </div>
           )}
           {(task.artist_ids?.length || 0) > 0 && (
             <span className="flex items-center gap-0.5 ml-auto">

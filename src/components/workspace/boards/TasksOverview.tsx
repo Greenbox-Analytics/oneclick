@@ -31,7 +31,12 @@ import { ParentKanbanCard } from "./ParentKanbanCard";
 import { TaskDetailPanel } from "./TaskDetailPanel";
 import type { BoardColumn, ParentTaskWithChildren } from "@/types/integrations";
 
-export function TasksOverview() {
+interface TasksOverviewProps {
+  boardId?: string;
+  teamId?: string | null;
+}
+
+export function TasksOverview({ boardId, teamId }: TasksOverviewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [artistFilter, setArtistFilter] = useState<string>("");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -48,9 +53,10 @@ export function TasksOverview() {
 
   const { parents, ungrouped, isLoading, createParent, deleteParent } = useParentTasks(
     debouncedSearch || undefined,
-    artistFilter || undefined
+    artistFilter || undefined,
+    boardId
   );
-  const { columns, createTask, updateTask } = useBoards();
+  const { columns, createTask, updateTask } = useBoards({ boardId });
   const { artists } = useArtistsList();
 
   const sensors = useSensors(
@@ -287,6 +293,8 @@ export function TasksOverview() {
       <TaskDetailPanel
         taskId={selectedTaskId}
         onClose={() => setSelectedTaskId(null)}
+        boardId={boardId}
+        teamId={teamId}
       />
     </>
   );

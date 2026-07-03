@@ -5,6 +5,7 @@ import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 interface UseBoardsOptions {
   artistId?: string;
+  boardId?: string;
   periodStart?: string;
   periodEnd?: string;
   isCurrentPeriod?: boolean;
@@ -14,17 +15,18 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const options: UseBoardsOptions = typeof artistIdOrOptions === "string"
     ? { artistId: artistIdOrOptions }
     : artistIdOrOptions || {};
-  const { artistId, periodStart, periodEnd, isCurrentPeriod } = options;
+  const { artistId, boardId, periodStart, periodEnd, isCurrentPeriod } = options;
 
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
   const columnsQuery = useQuery<BoardColumn[]>({
-    queryKey: ["board-columns", user?.id, artistId],
+    queryKey: ["board-columns", user?.id, artistId, boardId],
     queryFn: async () => {
       if (!user?.id) return [];
       const params = new URLSearchParams();
       if (artistId) params.set("artist_id", artistId);
+      if (boardId) params.set("board_id", boardId);
       const qs = params.toString();
       const data = await apiFetch<{ columns: BoardColumn[] }>(`${API_URL}/boards/columns${qs ? `?${qs}` : ""}`);
       return data.columns;
@@ -35,8 +37,8 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const hasPeriod = !!(periodStart && periodEnd);
 
   const tasksQueryKey = hasPeriod
-    ? ["board-tasks", user?.id, periodStart, periodEnd, isCurrentPeriod]
-    : ["board-tasks", user?.id];
+    ? ["board-tasks", user?.id, periodStart, periodEnd, isCurrentPeriod, boardId]
+    : ["board-tasks", user?.id, boardId];
 
   const tasksQuery = useQuery<BoardTask[]>({
     queryKey: tasksQueryKey,
@@ -48,10 +50,13 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
           period_end: periodEnd!,
           is_current: String(isCurrentPeriod ?? true),
         });
+        if (boardId) params.set("board_id", boardId);
         const data = await apiFetch<{ tasks: BoardTask[] }>(`${API_URL}/boards/tasks/period?${params}`);
         return data.tasks;
       }
-      const data = await apiFetch<{ tasks: BoardTask[] }>(`${API_URL}/boards/tasks`);
+      const data = await apiFetch<{ tasks: BoardTask[] }>(
+        `${API_URL}/boards/tasks${boardId ? `?board_id=${boardId}` : ""}`,
+      );
       return data.tasks;
     },
     enabled: !!user?.id,
@@ -59,12 +64,12 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   });
 
   const createColumnMutation = useMutation({
-    mutationFn: async (data: { title: string; color?: string; artist_id?: string; position?: number }) => {
+    mutationFn: async (data: { title: string; color?: string; artist_id?: string; board_id?: string; position?: number }) => {
       if (!user?.id) throw new Error("Not authenticated");
       return apiFetch(`${API_URL}/boards/columns`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, board_id: data.board_id ?? boardId }),
       });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["board-columns"] }),
@@ -109,6 +114,7 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       color?: string;
       parent_task_id?: string;
       is_parent?: boolean;
+      board_id?: string;
       artist_ids?: string[];
       project_ids?: string[];
       contract_ids?: string[];
@@ -118,7 +124,7 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       return apiFetch(`${API_URL}/boards/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, board_id: data.board_id ?? boardId }),
       });
     },
     onMutate: async (data) => {
@@ -142,6 +148,7 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
         is_parent: data.is_parent,
         priority: data.priority as BoardTask["priority"],
         color: data.color,
+        board_id: data.board_id ?? boardId,
         start_date: data.start_date,
         due_date: data.due_date,
         description: data.description,
@@ -364,6 +371,7 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       if (!user?.id) throw new Error("Not authenticated");
       const params = new URLSearchParams();
       if (artistId) params.set("artist_id", artistId);
+      if (boardId) params.set("board_id", boardId);
       const qs = params.toString();
       return apiFetch(`${API_URL}/boards/columns/defaults${qs ? `?${qs}` : ""}`, {
         method: "POST",
