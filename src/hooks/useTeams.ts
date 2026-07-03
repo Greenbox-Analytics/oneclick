@@ -126,7 +126,8 @@ export function useInviteTeamMember() {
     onSuccess: (data, { teamId }) => {
       qc.invalidateQueries({ queryKey: ["team-invites", teamId] });
       qc.invalidateQueries({ queryKey: ["team-members", teamId] });
-      toast.success(data?.notify_user_id ? "Invitation sent (in-app)" : "Invitation email sent");
+      // Existing user → both channels (dual-channel invites); new user → email only.
+      toast.success(data?.notify_user_id ? "Invitation sent (email + in-app)" : "Invitation email sent");
     },
     onError: (e: Error) => toast.error(e.message),
   });
