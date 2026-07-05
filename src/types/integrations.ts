@@ -28,6 +28,7 @@ export interface BoardColumn {
   id: string;
   user_id: string;
   artist_id?: string;
+  board_id?: string;
   title: string;
   position: number;
   color?: string;
@@ -50,13 +51,18 @@ export interface BoardTask {
   is_parent?: boolean;
   parent_title?: string;
   column_title?: string;
+  board_id?: string;
   artist_id?: string;
   project_id?: string;
   artist_ids?: string[];
   project_ids?: string[];
   contract_ids?: string[];
-  artists?: { id: string; name: string }[];
+  artists?: { id: string; name: string; can_open: boolean }[];
+  projects?: { id: string; name: string; can_open: boolean }[];
+  documents?: { id: string; name: string; can_open: boolean }[];
+  creator?: { user_id: string; full_name: string | null; avatar_url: string | null };
   assignee_name?: string;
+  assignees?: { user_id: string; full_name?: string | null; avatar_url?: string | null }[];
   labels?: string[];
   external_id?: string;
   external_provider?: string;
@@ -69,9 +75,9 @@ export interface BoardTask {
 }
 
 export interface BoardTaskDetail extends BoardTask {
-  artists: { id: string; name: string; avatar?: string }[];
-  projects: { id: string; name: string }[];
-  contracts: { id: string; file_name: string }[];
+  artists: { id: string; name: string; can_open: boolean }[];
+  projects: { id: string; name: string; can_open: boolean }[];
+  documents: { id: string; name: string; can_open: boolean }[];
   comments: TaskComment[];
   children?: BoardTask[];
   parent?: { id: string; title: string } | null;

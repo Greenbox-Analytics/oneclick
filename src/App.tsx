@@ -29,12 +29,14 @@ const OneClickDocuments = lazy(() => import("./pages/OneClickDocuments"));
 const Zoe = lazy(() => import("./pages/Zoe"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Workspace = lazy(() => import("./pages/Workspace"));
+const Notifications = lazy(() => import("./pages/Notifications"));
 const WorkspaceBoards = lazy(() => import("./pages/WorkspaceBoards"));
 const Portfolio = lazy(() => import("./pages/Portfolio"));
 const SplitSheet = lazy(() => import("./pages/SplitSheet"));
 const Onboarding = lazy(() => import("./pages/Onboarding"));
 const Documentation = lazy(() => import("./pages/Documentation"));
 const Registry = lazy(() => import("./pages/Registry"));
+const ExpenseTracker = lazy(() => import("./pages/ExpenseTracker"));
 const WorkDetail = lazy(() => import("./pages/WorkDetail"));
 const InviteClaim = lazy(() => import("./pages/InviteClaim"));
 const ProjectDetail = lazy(() => import("./pages/ProjectDetail"));
@@ -43,6 +45,8 @@ const Pricing = lazy(() => import("./pages/Pricing"));
 const Subscription = lazy(() => import("./pages/Subscription"));
 const AdminUsers = lazy(() => import("./pages/AdminUsers"));
 const Team = lazy(() => import("./pages/Team"));
+const About = lazy(() => import("./pages/About"));
+const Features = lazy(() => import("./pages/Features"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const Security = lazy(() => import("./pages/Security"));
 
@@ -178,6 +182,14 @@ const App = () => (
               }
             />
             <Route
+              path="/notifications"
+              element={
+                <ProtectedRoute>
+                  <Notifications />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/workspace/boards"
               element={
                 <ProtectedRoute>
@@ -212,9 +224,12 @@ const App = () => (
             <Route path="/docs" element={<Documentation />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/team" element={<Team />} />
+            <Route path="/about" element={<About />} />
+            <Route path="/features" element={<Features />} />
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/security" element={<Security />} />
             <Route path="/tools/registry" element={<ProtectedRoute><Registry /></ProtectedRoute>} />
+            <Route path="/tools/expense-tracker" element={<ProtectedRoute><ExpenseTracker /></ProtectedRoute>} />
             {/* Public: invited collaborators may not be signed in yet — the page
                 shows a sign-in gate and only fetches the (auth-required) preview
                 once a user session exists. */}

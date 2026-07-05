@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
-export type BreakdownDimension = "country" | "month" | "format" | "vendor";
+export type BreakdownDimension = "country" | "month" | "year" | "format" | "vendor";
 
 export interface BreakdownRow {
   key: string;
@@ -34,6 +34,9 @@ export function useEarningsBreakdown(
       );
     },
     enabled: !!user?.id && !!calculationId,
-    staleTime: 60_000,
+    // A calculation's rows are immutable once saved, so each (calculation,
+    // dimension) result never goes stale — fetch each category at most once
+    // per session instead of refetching when you toggle back to a tab.
+    staleTime: Infinity,
   });
 }

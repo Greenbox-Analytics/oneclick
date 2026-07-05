@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 
 from knowledge.reference_search import search_reference
 from utils.contract_parsing.basis_detection import audit_contract_basis, log_basis_finding
-from utils.contract_parsing.models import ContractData
+from utils.contract_parsing.models import ContractData, effective_basis
 from utils.contract_parsing.parser import (
     NON_STREAMING_PAYOR_CONTEXT_PHRASES,
     NON_STREAMING_PAYOR_TERMS,
@@ -85,6 +85,67 @@ def is_streaming_earnable_share(share) -> bool:
     return not any(p.search(haystack) for p in _NON_STREAMING_PAYOR_PATTERNS)
 
 
+def allocate_expenses(song_totals: dict[str, float], expenses: list[dict] | None) -> dict[str, float]:
+    """Distribute project expenses across the songs present in a statement.
+
+    Each expense is a dict with:
+      - ``amount``: the expense value (>= 0)
+      - ``work_titles``: titles of the tracks this expense is tagged to. Empty
+        list ⇒ project-wide expense.
+
+    Rules:
+      - A tagged expense applies its FULL amount to EACH track it matches in
+        this statement (an expense linked to two tracks counts in full against
+        both). An expense tagged only to tracks NOT in this statement does not
+        apply and is dropped.
+      - Project-wide expenses are allocated across all songs in proportion to
+        each song's gross earnings; if total gross is 0, split equally.
+
+    Returns a mapping of song_title -> attributable expense (keys mirror
+    ``song_totals``; every song present, defaulting to 0.0).
+    """
+    per_song: dict[str, float] = {song: 0.0 for song in song_totals}
+    if not expenses or not song_totals:
+        return per_song
+
+    total_gross = sum(song_totals.values())
+    songs = list(song_totals.keys())
+    untagged_total = 0.0
+
+    for exp in expenses:
+        try:
+            amount = float(exp.get("amount", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if amount <= 0:
+            continue
+
+        titles = exp.get("work_titles") or []
+        if titles:
+            matched = []
+            for title in titles:
+                song, _ = find_matching_song(title, song_totals)
+                if song:
+                    matched.append(song)
+            matched = list(dict.fromkeys(matched))  # dedupe, preserve order
+            for song in matched:
+                per_song[song] += amount  # full amount against each linked track
+            # if nothing matched: tagged only to tracks absent from this statement → does not apply
+        else:
+            untagged_total += amount
+
+    if untagged_total > 0:
+        if total_gross > 0:
+            for song in songs:
+                per_song[song] += untagged_total * (song_totals[song] / total_gross)
+        else:
+            equal = untagged_total / len(songs)
+            for song in songs:
+                per_song[song] += equal
+
+    return per_song
+
+
 class CalculationError(ValueError):
     """Raised when a royalty calculation cannot produce results. Carries a
     machine-readable code, a user-facing message, an actionable suggestion,
@@ -108,7 +169,13 @@ _STATEMENT_SONGS_PREVIEW_CAP = 20
 
 @dataclass
 class RoyaltyPayment:
-    """Represents a calculated royalty payment"""
+    """Represents a calculated royalty payment.
+
+    `basis` is "net" or "gross". For gross rows the payout base is `gross_amount`;
+    for net rows it is `net_amount` (= gross_amount − expenses_applied). `amount_to_pay`
+    is always `base × percentage` for the resolved basis. `total_royalty` mirrors
+    `gross_amount` for backward compatibility with existing consumers.
+    """
 
     song_title: str
     party_name: str
@@ -118,6 +185,104 @@ class RoyaltyPayment:
     total_royalty: float
     amount_to_pay: float
     terms: str | None = None
+    basis: str = "gross"
+    gross_amount: float = 0.0
+    expenses_applied: float = 0.0
+    net_amount: float = 0.0
+
+
+@dataclass
+class StatementRow:
+    """A single line item from a royalty statement, preserving the dimensional
+    fields (vendor, country, delivery format, sale date) that the song-level
+    aggregator discards. Powers the OneClick Earnings Breakdown tab.
+
+    `sale_date` is normalized to an ISO `YYYY-MM-DD` string, or None if the
+    statement's date couldn't be parsed.
+    """
+
+    song_title: str
+    net_payable: float
+    vendor: str | None = None
+    country: str | None = None
+    country_code: str | None = None
+    delivery_type: str | None = None
+    delivery_format: str | None = None
+    sale_date: str | None = None
+    units_sold: float | None = None
+    net_units: float | None = None
+    sales: float | None = None
+    net_income: float | None = None
+    distribution: float | None = None
+    isrc: str | None = None
+    upc: str | None = None
+    currency: str = "USD"
+
+
+# Normalized statement header -> StatementRow field. Headers are lowercased and
+# stripped before lookup; the first matching alias for a field wins.
+_STATEMENT_DIMENSION_ALIASES: dict[str, list[str]] = {
+    "vendor": ["vendor"],
+    "country": ["country of sale", "country"],
+    "country_code": ["country code"],
+    "delivery_type": ["delivery type"],
+    "delivery_format": ["delivery format"],
+    "sale_date": ["sale date"],
+    "units_sold": ["units sold"],
+    "net_units": ["net units"],
+    "sales": ["sales"],
+    "net_income": ["net income"],
+    "distribution": ["distribution"],
+    "isrc": ["isrc"],
+    "upc": ["upc"],
+    "currency": ["currency"],
+}
+
+# Numeric StatementRow fields parsed best-effort (commas stripped; junk -> None).
+_STATEMENT_NUMERIC_FIELDS = {
+    "units_sold",
+    "net_units",
+    "sales",
+    "net_income",
+    "distribution",
+}
+
+
+def _coerce_iso_date(raw) -> str | None:
+    """Normalize a statement date cell to ISO `YYYY-MM-DD`, or None if unparseable.
+
+    Accepts `M/D/YYYY` (distributor reports) and `YYYY-MM-DD`. A datetime/date
+    value (openpyxl may hand one back) is formatted directly.
+    """
+    if raw is None or raw == "":
+        return None
+    # openpyxl with data_only may return a datetime/date directly.
+    if hasattr(raw, "strftime"):
+        try:
+            return raw.strftime("%Y-%m-%d")
+        except (ValueError, AttributeError):
+            return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    from datetime import datetime
+
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%m/%d/%y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def _coerce_number(raw) -> float | None:
+    """Best-effort float coercion; strips thousands separators. None on failure."""
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(str(raw).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
 
 
 class RoyaltyCalculator:
@@ -191,6 +356,94 @@ class RoyaltyCalculator:
             raise
         except Exception as e:
             raise Exception(f"Error reading royalty statement: {str(e)}")
+
+    def read_royalty_statement_rows(self, statement_path: str) -> list[StatementRow]:
+        """Read a royalty statement preserving per-line-item dimensions.
+
+        Unlike `read_royalty_statement` (which sums to song-level totals), this
+        returns one `StatementRow` per statement line, carrying vendor, country,
+        delivery format, and sale date — the fields the Earnings Breakdown tab
+        aggregates over. Rows missing a title or net-payable amount are skipped;
+        a bad sale date downgrades to None rather than dropping the row.
+
+        Supports CSV and Excel. Title and payable columns are auto-detected with
+        the same helpers the aggregator uses.
+        """
+        file_ext = Path(statement_path).suffix.lower()
+        if file_ext == ".csv":
+            normalized_rows = self._iter_csv_rows(statement_path)
+        elif file_ext in [".xlsx", ".xls"]:
+            normalized_rows = self._iter_excel_rows(statement_path)
+        else:
+            raise CalculationError(
+                code="STATEMENT_UNSUPPORTED_FORMAT",
+                message=f"We can't read {file_ext} files for royalty statements.",
+                suggestion="Upload the statement as a CSV or Excel (.xlsx / .xls) file.",
+            )
+
+        normalized_rows = list(normalized_rows)
+        if not normalized_rows:
+            return []
+
+        headers = list(normalized_rows[0].keys())
+        title_key = self._find_title_column(headers)
+        payable_key = self._find_payable_column(headers)
+
+        # Resolve each StatementRow field to a concrete header present in the file.
+        field_to_key: dict[str, str] = {}
+        for field, aliases in _STATEMENT_DIMENSION_ALIASES.items():
+            for alias in aliases:
+                if alias in headers:
+                    field_to_key[field] = alias
+                    break
+
+        rows: list[StatementRow] = []
+        for raw in normalized_rows:
+            title_cell = raw.get(title_key)
+            title = str(title_cell).strip() if title_cell not in (None, "") else ""
+            net_payable = _coerce_number(raw.get(payable_key))
+            if not title or net_payable is None:
+                continue
+
+            values: dict = {}
+            for field, key in field_to_key.items():
+                cell = raw.get(key)
+                if field == "sale_date":
+                    values[field] = _coerce_iso_date(cell)
+                elif field in _STATEMENT_NUMERIC_FIELDS:
+                    values[field] = _coerce_number(cell)
+                elif field == "currency":
+                    values[field] = str(cell).strip() if cell not in (None, "") else "USD"
+                else:
+                    values[field] = str(cell).strip() if cell not in (None, "") else None
+
+            rows.append(StatementRow(song_title=title, net_payable=net_payable, **values))
+
+        return rows
+
+    def _iter_csv_rows(self, csv_path: str) -> list[dict]:
+        """Read a CSV into a list of {normalized_header: value} dicts."""
+        with open(csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                return []
+            field_map = {h: h.strip().lower() for h in reader.fieldnames}
+            return [{field_map[h]: row.get(h) for h in reader.fieldnames} for row in reader]
+
+    def _iter_excel_rows(self, excel_path: str) -> list[dict]:
+        """Read an Excel sheet into a list of {normalized_header: value} dicts."""
+        workbook = openpyxl.load_workbook(excel_path, data_only=True)
+        sheet = workbook.active
+        header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
+        if not header_row:
+            workbook.close()
+            return []
+        headers = [str(h).strip().lower() if h is not None else "" for h in header_row]
+        result = []
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            result.append({headers[i]: row[i] for i in range(len(headers)) if headers[i]})
+        workbook.close()
+        return result
 
     def _read_csv_statement(
         self, csv_path: str, title_column: str | None = None, payable_column: str | None = None
@@ -592,6 +845,12 @@ class RoyaltyCalculator:
 
             # Merge royalty shares with conflict resolution
             for share in contract.royalty_shares:
+                # Resolve the income basis using THIS contract's default before merging,
+                # so a share inherits the basis of the contract it came from (not a
+                # neighbouring contract's default).
+                if share.basis is None and contract.default_basis:
+                    share.basis = contract.default_basis
+
                 norm_name = normalize_name(share.party_name)
 
                 # Check for existing share with same name AND similar type
@@ -655,6 +914,7 @@ class RoyaltyCalculator:
         title_column: str | None = None,
         payable_column: str | None = None,
         full_text: str = None,
+        expenses: list[dict] | None = None,
     ) -> list[RoyaltyPayment]:
         """
         Calculate payments for single contract and statement.
@@ -698,7 +958,7 @@ class RoyaltyCalculator:
             logger.info(f"   → {s}")
 
         t0 = time.time()
-        payments = self._calculate_payments_from_data(contract_data, song_totals)
+        payments = self._calculate_payments_from_data(contract_data, song_totals, expenses)
         logger.info(f"⏱️  Step 3 took: {time.time() - t0:.2f}s")
 
         # Step 4 (log-only): detect an explicit basis/deduction clause and record it for review.
@@ -728,6 +988,7 @@ class RoyaltyCalculator:
         title_column: str | None = None,
         payable_column: str | None = None,
         contract_markdowns: dict[str, str] = None,
+        expenses: list[dict] | None = None,
     ) -> list[RoyaltyPayment]:
         """
         Parse multiple contracts from Pinecone in PARALLEL, merge their data, and calculate payments.
@@ -785,7 +1046,7 @@ class RoyaltyCalculator:
         song_totals = self.read_royalty_statement(statement_path, title_column, payable_column)
 
         # Step 4: Calculate payments
-        payments = self._calculate_payments_from_data(merged_data, song_totals)
+        payments = self._calculate_payments_from_data(merged_data, song_totals, expenses)
         logger.info("[NuanceAudit] multi-contract: basis-nuance detection deferred (v1 single-contract only)")
 
         return payments
@@ -851,7 +1112,10 @@ class RoyaltyCalculator:
         return payments
 
     def _calculate_payments_from_data(
-        self, contract_data: ContractData, song_totals: dict[str, float]
+        self,
+        contract_data: ContractData,
+        song_totals: dict[str, float],
+        expenses: list[dict] | None = None,
     ) -> list[RoyaltyPayment]:
         """
         Internal method to calculate payments from parsed contract data.
@@ -859,6 +1123,8 @@ class RoyaltyCalculator:
         Args:
             contract_data: Parsed ContractData object
             song_totals: Dictionary of song titles to amounts
+            expenses: Optional project expenses (each {amount, work_titles}) used
+                to compute net-basis payouts. Gross-basis shares ignore them.
 
         Returns:
             List of RoyaltyPayment objects
@@ -936,6 +1202,9 @@ class RoyaltyCalculator:
         logger.info(f"   Found {len(streaming_shares)} streaming royalty shares")
         logger.info(f"   Found {len(contract_data.works)} works to match")
 
+        # Allocate project expenses across statement songs (for net-basis shares).
+        song_expenses = allocate_expenses(song_totals, expenses)
+
         # Calculate payments for each work
         payments = []
         matched_count = 0
@@ -951,9 +1220,16 @@ class RoyaltyCalculator:
                 logger.info(f"      Matched to: '{matching_song}'")
                 logger.info(f"      Total royalties: ${total_royalty:,.2f}")
 
+                expenses_for_song = song_expenses.get(matching_song, 0.0)
+
                 # Calculate payment for each party with streaming shares
                 for share in streaming_shares:
-                    amount_to_pay = total_royalty * (share.percentage / 100.0)
+                    basis = effective_basis(share, contract_data)
+                    if basis == "net":
+                        base = max(total_royalty - expenses_for_song, 0.0)
+                    else:
+                        base = total_royalty
+                    amount_to_pay = base * (share.percentage / 100.0)
 
                     # Find party details
                     party = next(
@@ -975,10 +1251,16 @@ class RoyaltyCalculator:
                         total_royalty=total_royalty,
                         amount_to_pay=amount_to_pay,
                         terms=share.terms,
+                        basis=basis,
+                        gross_amount=total_royalty,
+                        expenses_applied=expenses_for_song if basis == "net" else 0.0,
+                        net_amount=base,
                     )
                     payments.append(payment)
 
-                    logger.info(f"         → {share.party_name} ({role}): {share.percentage}% = ${amount_to_pay:,.2f}")
+                    logger.info(
+                        f"         → {share.party_name} ({role}): {share.percentage}% [{basis}] = ${amount_to_pay:,.2f}"
+                    )
             else:
                 unmatched_works.append(work.title)
 

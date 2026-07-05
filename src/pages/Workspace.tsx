@@ -1,7 +1,7 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, HardDrive, Bell, CalendarDays, Settings, BookOpen } from "lucide-react";
+import { LayoutGrid, HardDrive, CalendarDays, Settings, BookOpen, Users } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -12,10 +12,10 @@ import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 import { IntegrationHub } from "@/components/workspace/IntegrationHub";
 import { WorkspaceSettings } from "@/components/workspace/WorkspaceSettings";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
+import { BoardSwitcher } from "@/components/workspace/boards/BoardSwitcher";
 import { CalendarView } from "@/components/workspace/boards/CalendarView";
+import TeamsPanel from "@/components/workspace/teams/TeamsPanel";
 import { toast } from "sonner";
-import { RegistryNotifications } from "@/components/workspace/RegistryNotifications";
-import { useUnreadCount } from "@/hooks/useRegistryNotifications";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -31,8 +31,14 @@ const Workspace = () => {
   const [now, setNow] = useState(new Date());
   const { settings } = useWorkspaceSettings();
   const queryClient = useQueryClient();
-  const unreadNotifications = useUnreadCount();
   const isMobile = useIsMobile();
+
+  // The Notifications tab moved to its own /notifications page — redirect legacy deep links.
+  useEffect(() => {
+    if (searchParams.get("tab") === "notifications") {
+      navigate("/notifications", { replace: true });
+    }
+  }, [searchParams, navigate]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -82,8 +88,12 @@ const Workspace = () => {
   const [activeTab, setActiveTab] = useState(defaultTab);
   const initialTaskId = searchParams.get("taskId") || undefined;
 
+  // Board switcher selection (Personal vs. a team + a board within it).
+  const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>(undefined);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+
   // Fire tool_opened when the active tab corresponds to a tool surface.
-  // integrations / notifications / settings are NOT tools — skip them.
+  // integrations / settings are NOT tools — skip them.
   const { captureToolOpened } = useAnalytics();
   useEffect(() => {
     if (activeTab === "boards") captureToolOpened("boards");
@@ -136,7 +146,7 @@ const Workspace = () => {
             {formattedDateTime}
           </p>
           <p className="text-muted-foreground mt-1">
-            Manage integrations, project boards, and notifications
+            Manage integrations, project boards, and teams
           </p>
         </div>
 
@@ -157,19 +167,14 @@ const Workspace = () => {
                     <LayoutGrid className="w-4 h-4" /> Project Boards
                   </span>
                 </SelectItem>
+                <SelectItem value="teams">
+                  <span className="inline-flex items-center gap-2">
+                    <Users className="w-4 h-4" /> Teams
+                  </span>
+                </SelectItem>
                 <SelectItem value="calendar">
                   <span className="inline-flex items-center gap-2">
                     <CalendarDays className="w-4 h-4" /> Calendar
-                  </span>
-                </SelectItem>
-                <SelectItem value="notifications">
-                  <span className="inline-flex items-center gap-2">
-                    <Bell className="w-4 h-4" /> Notifications
-                    {unreadNotifications > 0 && (
-                      <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-destructive text-destructive-foreground rounded-full">
-                        {unreadNotifications}
-                      </span>
-                    )}
                   </span>
                 </SelectItem>
                 <SelectItem value="settings">
@@ -189,18 +194,13 @@ const Workspace = () => {
                 <LayoutGrid className="w-4 h-4" />
                 Project Boards
               </TabsTrigger>
+              <TabsTrigger value="teams" className="gap-2">
+                <Users className="w-4 h-4" />
+                Teams
+              </TabsTrigger>
               <TabsTrigger value="calendar" className="gap-2">
                 <CalendarDays className="w-4 h-4" />
                 Calendar
-              </TabsTrigger>
-              <TabsTrigger value="notifications" className="gap-2">
-                <Bell className="w-4 h-4" />
-                Notifications
-                {unreadNotifications > 0 && (
-                  <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-destructive text-destructive-foreground rounded-full">
-                    {unreadNotifications}
-                  </span>
-                )}
               </TabsTrigger>
               <TabsTrigger value="settings" className="gap-2">
                 <Settings className="w-4 h-4" />
@@ -214,15 +214,32 @@ const Workspace = () => {
           </TabsContent>
 
           <TabsContent value="boards" data-walkthrough="workspace-boards">
-            <KanbanBoard initialSelectedTaskId={initialTaskId} />
+            <BoardSwitcher
+              teamId={selectedTeamId}
+              boardId={selectedBoardId}
+              onBoardChange={(b, t) => {
+                setSelectedBoardId(b);
+                setSelectedTeamId(t);
+              }}
+            />
+            {/* Under a team context with no board selected, don't fall through to the
+                personal-boards union — the switcher shows its "No boards yet" state instead. */}
+            {selectedTeamId && !selectedBoardId ? null : (
+              <KanbanBoard
+                key={selectedBoardId ?? "personal"}
+                boardId={selectedBoardId}
+                teamId={selectedTeamId}
+                initialSelectedTaskId={initialTaskId}
+              />
+            )}
+          </TabsContent>
+
+          <TabsContent value="teams">
+            <TeamsPanel />
           </TabsContent>
 
           <TabsContent value="calendar" data-walkthrough="workspace-calendar">
             <CalendarView />
-          </TabsContent>
-
-          <TabsContent value="notifications">
-            <RegistryNotifications />
           </TabsContent>
 
           <TabsContent value="settings" data-walkthrough="workspace-settings">

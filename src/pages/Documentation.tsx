@@ -9,9 +9,10 @@ import {
   Users, LayoutGrid, Folder, FolderOpen, Shield, Lightbulb, Rocket,
   Info, CheckCircle2, Zap, Volume2, StickyNote, Settings, Lock,
   Scale, FileCheck, UserPlus, Pencil, User, LogOut,
-  AlertTriangle, Copy, Search, Plug, ThumbsUp, ThumbsDown,
+  AlertTriangle, Copy, Search, Plug, ThumbsUp, ThumbsDown, Wallet,
+  DollarSign, Receipt, BarChart3, SplitSquareHorizontal,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -30,7 +31,7 @@ interface SectionMeta { id: string; label: string; icon: React.ElementType; grou
 const NAV_GROUPS: { group: string; ids: string[] }[] = [
   { group: "Getting started", ids: ["getting-started"] },
   { group: "Roster & projects", ids: ["artist-management", "portfolio", "project-detail", "work-detail", "rights-registry"] },
-  { group: "Tools", ids: ["oneclick", "zoe", "split-sheet"] },
+  { group: "Tools", ids: ["oneclick", "royalty-tracking", "zoe", "split-sheet"] },
   { group: "Platform", ids: ["workspace", "integrations", "best-practices"] },
 ];
 
@@ -42,6 +43,7 @@ const SECTION_LABELS: Record<string, { label: string; icon: React.ElementType }>
   "work-detail": { label: "Work Detail", icon: FileText },
   "rights-registry": { label: "Rights Registry", icon: Shield },
   oneclick: { label: "OneClick", icon: Calculator },
+  "royalty-tracking": { label: "Royalty Tracking", icon: Wallet },
   zoe: { label: "Zoe AI", icon: Bot },
   "split-sheet": { label: "Split Sheet", icon: Scale },
   workspace: { label: "Workspace", icon: LayoutGrid },
@@ -69,6 +71,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   "work-detail": "Manage a single work — ownership splits, collaborators, licensing, agreements, and industry codes.",
   "rights-registry": "Track ownership, manage collaborator invitations, and confirm rights across all your works.",
   oneclick: "Calculate royalty splits and payments from your contracts in one click using AI.",
+  "royalty-tracking": "Turn every OneClick run into an ongoing record of who's owed what — per collaborator, per period, per project.",
   zoe: "Your AI contract assistant. Ask questions and get answers grounded in your documents.",
   "split-sheet": "Create split sheet agreements and generate clean PDF or Word documents ready for signing.",
   "artist-management": "Manage your roster with profiles, streaming links, and organized projects.",
@@ -873,6 +876,110 @@ const BestPracticesContent = () => (
   </div>
 );
 
+const RoyaltyTrackingContent = () => (
+  <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
+    <div>
+      <SectionHeading>Overview</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+        Royalty Tracking is the second tab on the OneClick page (<strong>Tools → OneClick → Royalty Tracking</strong>). Every time you run OneClick on a royalty statement, it records what each collaborator earned — per project and per statement period — and tracks paid vs. still-owed over time. You can issue per-collaborator invoices and see exactly how each amount was derived.
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <FeatureCard
+          icon={Users}
+          title="Parties"
+          description="Every collaborator with their earned, paid, and outstanding totals plus a status badge at a glance."
+        />
+        <FeatureCard
+          icon={Receipt}
+          title="Payouts"
+          description="The invoices you've created — draft or paid — with full breakdowns of how each amount was calculated."
+        />
+        <FeatureCard
+          icon={BarChart3}
+          title="Periods"
+          description="A collaborator × statement-period ledger of earnings, so you can see every figure across time."
+        />
+      </div>
+    </div>
+
+    <div>
+      <SectionHeading>Getting data in</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+        No extra steps required. Run OneClick on a royalty statement from the <strong>Calculate</strong> tab and the Royalty Tracking tab populates automatically. When you upload the statement, choose its <strong>currency</strong> so all amounts are labelled correctly from the start.
+      </p>
+      <Callout type="tip" title="Re-running a statement">
+        If you upload a revised statement, re-running OneClick refreshes the figures for that period automatically. Already-issued invoices are kept for your records.
+      </Callout>
+    </div>
+
+    <div>
+      <SectionHeading>Reporting currency</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-3">
+        The currency selector in the top-right of the Royalty Tracking tab re-expresses all totals in the currency you pick. Supported currencies are <strong>USD, GBP, EUR, CAD, AUD, NGN,</strong> and <strong>AED</strong>. Conversions use <strong>Bank of Canada</strong> official daily rates where available, with a free mid-market fallback for the rest (rates are cached).
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <FeatureCard
+          icon={DollarSign}
+          title="Per-collaborator payout currency"
+          description="Each collaborator can have their own payout currency set in their drawer — invoices are converted to that currency automatically."
+        />
+        <FeatureCard
+          icon={Wallet}
+          title="Display currency"
+          description="The top-right selector changes how all totals are displayed on screen without affecting the underlying figures."
+        />
+      </div>
+    </div>
+
+    <div>
+      <SectionHeading>Collaborator drawer</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+        Click any collaborator in the <strong>Parties</strong> view to open their drawer. It shows:
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        <FeatureCard icon={BarChart3} title="Balance summary" description="Current earned, paid, and outstanding totals in their payout currency." />
+        <FeatureCard icon={FileText} title="Earnings breakdown" description="Earnings drilled down by project → statement → line item, so every figure is traceable." />
+        <FeatureCard icon={Receipt} title="Payment history" description="A log of every payout invoice created for this collaborator." />
+        <FeatureCard icon={SplitSquareHorizontal} title="Split a profile" description="If one name was matched to two different people, use Split to separate them into distinct records." />
+      </div>
+      <p className="text-sm text-muted-foreground leading-relaxed">
+        You can also set the collaborator's <strong>payout currency</strong> directly from the drawer — it applies to all future invoices for that person.
+      </p>
+    </div>
+
+    <div>
+      <SectionHeading>Creating a payout (invoice)</SectionHeading>
+      <div className="space-y-0">
+        <Step num={1} title="Click 'New payout'">
+          Opens the payout dialog. You'll see all collaborators who currently have an outstanding balance.
+        </Step>
+        <Step num={2} title="Select collaborators">
+          Check each person you want to pay out in this batch. Their outstanding balance is shown next to their name.
+        </Step>
+        <Step num={3} title="Confirm">
+          Each selected collaborator gets their own <strong>draft invoice</strong> with a detailed breakdown — the statement total per project at each period, the contract split that was applied, and the amount owed converted to their payout currency.
+        </Step>
+        <Step num={4} title="Mark paid or cancel" isLast>
+          Open the invoice and click <strong>Mark as paid</strong> to record the payout, or <strong>Cancel</strong> to discard the draft and release the balance back to outstanding.
+        </Step>
+      </div>
+      <Callout type="info" title="Payment recording">
+        Marking an invoice paid records the payout inside Msanii. Sending money (e.g. via PayPal or bank transfer) happens outside the app for now — direct payment integrations are a planned addition.
+      </Callout>
+    </div>
+
+    <div>
+      <SectionHeading>Deleting royalty entries</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-3">
+        To remove a project's royalty data, go to <strong>Project Detail → Settings → Delete royalty entries</strong>. Any invoices already issued for that project are kept for your records — only the underlying earnings data is removed.
+      </p>
+      <Callout type="important" title="Invoices are preserved">
+        Deleting royalty entries does not delete invoices. If you need to clean up a payout record, cancel the draft invoice before deleting entries.
+      </Callout>
+    </div>
+  </div>
+);
+
 // ---------------------------------------------------------------------------
 // Map section id -> content component (module-level, stable reference)
 // ---------------------------------------------------------------------------
@@ -884,6 +991,7 @@ const SECTION_CONTENT: Record<string, React.FC> = {
   "work-detail": WorkDetailContent,
   "rights-registry": RightsRegistryContent,
   oneclick: OneClickContent,
+  "royalty-tracking": RoyaltyTrackingContent,
   zoe: ZoeContent,
   "split-sheet": SplitSheetContent,
   "artist-management": ArtistManagementContent,
@@ -950,9 +1058,24 @@ interface DocHeading { id: string; label: string; level: number; }
 
 const Documentation = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user, signOut } = useAuth();
-  const [activeSection, setActiveSection] = useState("getting-started");
+  // Deep-linkable: /docs?section=oneclick opens straight to that section.
+  const [activeSection, setActiveSection] = useState(() => {
+    const s = searchParams.get("section");
+    return s && SECTION_INDEX.has(s) ? s : "getting-started";
+  });
   const [navQuery, setNavQuery] = useState("");
+
+  // Keep the active section in sync if the ?section= param changes while the
+  // page is already mounted (e.g. a footer link clicked from elsewhere).
+  useEffect(() => {
+    const s = searchParams.get("section");
+    if (s && SECTION_INDEX.has(s)) {
+      setActiveSection(s);
+      window.scrollTo({ top: 0 });
+    }
+  }, [searchParams]);
 
   const articleRef = useRef<HTMLDivElement>(null);
   const [headings, setHeadings] = useState<DocHeading[]>([]);

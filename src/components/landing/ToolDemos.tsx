@@ -1186,6 +1186,203 @@ const SPLIT_TOTAL_BOX: CSSProperties = {
   justifyContent: "space-between",
 };
 
+// ======================================================================
+// 6. Rights Registry — works & ownership splits
+// ======================================================================
+const REGISTRY_COLORS = ["var(--primary)", "var(--accent)", "hsl(168 55% 52%)", "hsl(150 22% 72%)"];
+
+type RegistryWork = {
+  title: string;
+  artist: string;
+  status: "Registered" | "Pending" | "Draft";
+  splits: { name: string; master: number; pub: number }[];
+};
+
+// Master + publishing each sum to 100 per work — splits must always balance.
+const REGISTRY_WORKS: RegistryWork[] = [
+  {
+    title: "Cold Mornings",
+    artist: "Mara Greene",
+    status: "Registered",
+    splits: [
+      { name: "Mara Greene", master: 50, pub: 45 },
+      { name: "Sasha Lin", master: 30, pub: 35 },
+      { name: "Kibet", master: 20, pub: 20 },
+    ],
+  },
+  {
+    title: "Lila",
+    artist: "Jane Doe",
+    status: "Pending",
+    splits: [
+      { name: "Jane Doe", master: 60, pub: 50 },
+      { name: "Owen Bly", master: 40, pub: 50 },
+    ],
+  },
+  {
+    title: "Nine to Six",
+    artist: "Jane Doe",
+    status: "Registered",
+    splits: [
+      { name: "Jane Doe", master: 70, pub: 60 },
+      { name: "Kibet", master: 30, pub: 40 },
+    ],
+  },
+  {
+    title: "Afterglow",
+    artist: "Owen Bly",
+    status: "Draft",
+    splits: [{ name: "Owen Bly", master: 100, pub: 100 }],
+  },
+];
+
+function registryStatusStyle(status: RegistryWork["status"]): CSSProperties {
+  if (status === "Registered") {
+    return { background: "color-mix(in srgb, var(--accent) 16%, transparent)", color: "var(--accent)" };
+  }
+  if (status === "Pending") {
+    return { background: "color-mix(in srgb, #f59e0b 16%, transparent)", color: "#b45309" };
+  }
+  return { background: "var(--muted-bg)", color: "var(--muted-fg)" };
+}
+
+function OwnershipBar({ label, splits, field }: { label: string; splits: RegistryWork["splits"]; field: "master" | "pub" }) {
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--muted-fg)", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+          {label}
+        </span>
+        <span className="mono" style={{ fontSize: 10, color: "var(--accent)", fontWeight: 600 }}>
+          100%
+        </span>
+      </div>
+      <div style={{ display: "flex", height: 10, borderRadius: 999, overflow: "hidden", background: "var(--muted-bg)" }}>
+        {splits.map((s, i) => (
+          <div
+            key={i}
+            style={{
+              width: `${s[field]}%`,
+              background: REGISTRY_COLORS[i % REGISTRY_COLORS.length],
+              transition: "width 0.45s ease",
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DemoRegistryInner({ playing, height }: DemoBodyProps) {
+  const t = useDemoClock(8500, playing);
+  const focused = Math.floor(t * REGISTRY_WORKS.length) % REGISTRY_WORKS.length;
+  const work = REGISTRY_WORKS[focused];
+  const registered = REGISTRY_WORKS.filter((w) => w.status === "Registered").length;
+  return (
+    <DemoFrame tab="/tools/registry" title="Rights Registry" height={height}>
+      <div style={{ padding: 18, height: "100%", display: "grid", gridTemplateRows: "auto 1fr", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.01em" }}>Works registry</div>
+            <div style={{ fontSize: 12, color: "var(--muted-fg)" }}>
+              {REGISTRY_WORKS.length} works · {registered} registered
+            </div>
+          </div>
+          <button
+            type="button"
+            style={{
+              padding: "7px 12px",
+              borderRadius: 8,
+              background: "var(--primary)",
+              color: "var(--bg)",
+              fontSize: 12,
+              fontWeight: 600,
+              border: "none",
+            }}
+          >
+            + Register work
+          </button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, minHeight: 0 }}>
+          <div style={{ display: "grid", gap: 8, alignContent: "start" }}>
+            {REGISTRY_WORKS.map((w, i) => (
+              <div
+                key={w.title}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid",
+                  borderColor: focused === i ? "color-mix(in srgb, var(--accent) 45%, var(--border))" : "var(--border)",
+                  background: "var(--card)",
+                  transition: "all 0.35s",
+                  transform: focused === i ? "translateY(-2px)" : "translateY(0)",
+                  boxShadow:
+                    focused === i ? "0 12px 24px -10px color-mix(in srgb, var(--primary) 25%, transparent)" : "none",
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  >
+                    {w.title}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--muted-fg)" }}>
+                    {w.artist} · {w.splits.length} stakeholders
+                  </div>
+                </div>
+                <div style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 600, ...registryStatusStyle(w.status) }}>
+                  {w.status}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              padding: 14,
+              borderRadius: 12,
+              border: "1px solid var(--border)",
+              background: "var(--card)",
+              minHeight: 0,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>{work.title}</div>
+              <div
+                style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 600, ...registryStatusStyle(work.status) }}
+              >
+                {work.status}
+              </div>
+            </div>
+            <OwnershipBar label="Master" splits={work.splits} field="master" />
+            <OwnershipBar label="Publishing" splits={work.splits} field="pub" />
+            <div style={{ display: "grid", gap: 6, marginTop: 2 }}>
+              {work.splits.map((s, i) => (
+                <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
+                  <span
+                    style={{ width: 9, height: 9, borderRadius: 3, background: REGISTRY_COLORS[i % REGISTRY_COLORS.length] }}
+                  />
+                  <span style={{ flex: 1, fontWeight: 600 }}>{s.name}</span>
+                  <span className="mono" style={{ color: "var(--muted-fg)" }}>
+                    {s.master}% / {s.pub}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </DemoFrame>
+  );
+}
+
+const DemoRegistry = makeLazyDemo(DemoRegistryInner);
+
 // ──────────────────────────────────────────────────────────────────────
 // Tool registry + topic grouping
 // ──────────────────────────────────────────────────────────────────────
@@ -1247,6 +1444,21 @@ export const TOOLS: Tool[] = [
     Demo: DemoSplitSheet,
   },
   {
+    id: "registry",
+    name: "Rights Registry",
+    tagline: "Works & ownership",
+    blurb:
+      "Register every work and lock in who owns what — master and publishing splits, per collaborator. Track each work from draft to registered, with an auditable record of the stakes, roles and agreements behind every percentage.",
+    bullets: [
+      "Master & publishing splits per work",
+      "Draft → pending → registered lifecycle",
+      "Per-collaborator stakes, roles & terms",
+    ],
+    cta: "Open the registry",
+    href: "/tools/registry",
+    Demo: DemoRegistry,
+  },
+  {
     id: "portfolio",
     name: "Portfolio",
     tagline: "Artists & projects",
@@ -1303,5 +1515,11 @@ export const TOPICS: Topic[] = [
     label: "Projects",
     headline: "Build and manage your projects.",
     toolIds: ["splitsheet", "portfolio", "workspace"],
+  },
+  {
+    id: "rights",
+    label: "Rights",
+    headline: "Register works and track who owns what.",
+    toolIds: ["registry"],
   },
 ];

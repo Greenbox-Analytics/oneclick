@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -24,13 +25,17 @@ import { useBoards } from "@/hooks/useBoards";
 import { useParentTasks } from "@/hooks/useParentTasks";
 import { useBoardPeriod } from "@/hooks/useBoardPeriod";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
+import { useTeamMembers } from "@/hooks/useTeams";
+import { BoardFilterBar, type BoardFilterValue } from "./BoardFilterBar";
 
 interface KanbanBoardProps {
   artistId?: string;
+  boardId?: string;
+  teamId?: string | null;
   initialSelectedTaskId?: string;
 }
 
-export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProps) {
+export function KanbanBoard({ artistId, boardId, teamId, initialSelectedTaskId }: KanbanBoardProps) {
   const { settings } = useWorkspaceSettings();
   const {
     periodStart,
@@ -58,12 +63,93 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
     createDefaults,
   } = useBoards({
     artistId,
+    boardId,
     periodStart,
     periodEnd,
     isCurrentPeriod,
   });
 
-  const { parents, createParent } = useParentTasks();
+  const { parents, createParent } = useParentTasks(undefined, undefined, boardId);
+
+  // --- Filter bar (Created by + By artist), persisted in the URL ---
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { data: teamMembers } = useTeamMembers(teamId ?? undefined);
+
+  const filterValue = useMemo<BoardFilterValue>(
+    () => ({
+      createdBy: (searchParams.get("createdBy") ?? "").split(",").filter(Boolean),
+      artist: (searchParams.get("artist") ?? "").split(",").filter(Boolean),
+    }),
+    [searchParams],
+  );
+
+  const handleFilterChange = useCallback(
+    (next: BoardFilterValue) => {
+      // Merge with existing params so tab/taskId/etc. survive.
+      setSearchParams(
+        (prev) => {
+          const params = new URLSearchParams(prev);
+          if (next.createdBy.length) params.set("createdBy", next.createdBy.join(","));
+          else params.delete("createdBy");
+          if (next.artist.length) params.set("artist", next.artist.join(","));
+          else params.delete("artist");
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  // Reconcile the stale "Created by" filter when the board/team changes (e.g.
+  // arriving via a shared URL): drop createdBy ids not in the current members,
+  // and clear it entirely on personal boards. `teamMembers` is board-scoped and
+  // period-independent, so this is safe.
+  //
+  // NOTE: the `artist` filter is intentionally NOT reconciled here. `useBoards`
+  // fetches PERIOD-scoped tasks (with placeholder data across period switches),
+  // so the visible tasks only reflect the current period — pruning artist ids
+  // against them would silently drop a valid filter whenever it happens to match
+  // nothing in the landing period. A no-match artist filter is surfaced via the
+  // empty state instead.
+  useEffect(() => {
+    let nextCreatedBy = filterValue.createdBy;
+    let createdByChanged = false;
+    if (!teamId) {
+      // Personal board has no "Created by" filter — drop any carried-over ids.
+      if (filterValue.createdBy.length) {
+        nextCreatedBy = [];
+        createdByChanged = true;
+      }
+    } else if (teamMembers !== undefined) {
+      const memberIds = new Set(teamMembers.map((m) => m.user_id));
+      nextCreatedBy = filterValue.createdBy.filter((id) => memberIds.has(id));
+      createdByChanged = nextCreatedBy.length !== filterValue.createdBy.length;
+    }
+
+    if (createdByChanged) {
+      handleFilterChange({ ...filterValue, createdBy: nextCreatedBy });
+    }
+  }, [teamMembers, teamId, filterValue, handleFilterChange]);
+
+  const filteredTasks = useMemo(() => {
+    const { createdBy, artist } = filterValue;
+    if (createdBy.length === 0 && artist.length === 0) return tasks;
+    return tasks.filter(
+      (t) =>
+        (createdBy.length === 0 ||
+          (t.creator?.user_id != null && createdBy.includes(t.creator.user_id))) &&
+        (artist.length === 0 || (t.artist_ids ?? []).some((id) => artist.includes(id))),
+    );
+  }, [tasks, filterValue]);
+
+  const hasActiveFilters = filterValue.createdBy.length > 0 || filterValue.artist.length > 0;
+  const showNoMatches = hasActiveFilters && filteredTasks.length === 0;
+
+  const clearFilters = useCallback(
+    () => handleFilterChange({ createdBy: [], artist: [] }),
+    [handleFilterChange],
+  );
 
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialSelectedTaskId || null);
   const [creatingInColumnId, setCreatingInColumnId] = useState<string | null>(null);
@@ -100,7 +186,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
         updateColumn({ id: col.id, position: (col.position ?? 0) + 1 });
       });
       // Create Backlog at position 0
-      createColumn({ title: "Backlog", color: "#8b5cf6", position: 0, artist_id: artistId });
+      createColumn({ title: "Backlog", color: "#8b5cf6", position: 0, artist_id: artistId, board_id: boardId });
     }
     setBacklogChecked(true);
   }, [columns, isLoading, backlogChecked]);
@@ -212,6 +298,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
     createColumn({
       title: newColumnTitle.trim(),
       artist_id: artistId,
+      board_id: boardId,
     });
     setNewColumnTitle("");
     setIsAddingColumn(false);
@@ -260,6 +347,24 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
         )}
       </div>
 
+      <BoardFilterBar
+        teamId={teamId ?? null}
+        tasks={tasks}
+        value={filterValue}
+        onChange={handleFilterChange}
+      />
+
+      {showNoMatches && (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-10 text-center mb-4">
+          <p className="text-sm text-muted-foreground mb-3">
+            No tasks match your filters
+          </p>
+          <Button variant="outline" size="sm" onClick={clearFilters}>
+            Clear filters
+          </Button>
+        </div>
+      )}
+
       {isMobile ? (
         // Mobile: single-column with picker, no drag-and-drop
         <div className="space-y-4">
@@ -286,7 +391,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
                         <SelectItem key={c.id} value={c.id}>
                           {c.title}
                           <span className="ml-2 text-xs text-muted-foreground">
-                            ({tasks.filter((t) => t.column_id === c.id).length})
+                            ({filteredTasks.filter((t) => t.column_id === c.id).length})
                           </span>
                         </SelectItem>
                       ))}
@@ -329,7 +434,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
                   <KanbanColumn
                     key={selected.id}
                     column={selected}
-                    tasks={tasks}
+                    tasks={filteredTasks}
                     parentTasks={parents}
                     onDeleteTask={deleteTask}
                     onDeleteColumn={deleteColumn}
@@ -340,6 +445,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
                     variant="mobile"
                     moveOptions={moveOptions}
                     onMoveTask={handleMoveTask}
+                    showCreator={teamId != null}
                   />
                 )}
               </>
@@ -361,7 +467,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
                 <KanbanColumn
                   key={column.id}
                   column={column}
-                  tasks={tasks}
+                  tasks={filteredTasks}
                   parentTasks={parents}
                   onDeleteTask={deleteTask}
                   onDeleteColumn={deleteColumn}
@@ -369,6 +475,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
                   onTaskClick={handleTaskClick}
                   onCreateTaskSidebar={handleCreateTaskSidebar}
                   timezone={settings?.timezone}
+                  showCreator={teamId != null}
                 />
               ))}
 
@@ -413,7 +520,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
               const t = tasks.find((t) => t.id === activeTaskId);
               return t ? (
                 <div className="w-72 shadow-xl">
-                  <KanbanCard task={t} onDelete={() => {}} onClick={() => {}} timezone={settings?.timezone} />
+                  <KanbanCard task={t} onDelete={() => {}} onClick={() => {}} timezone={settings?.timezone} showCreator={teamId != null} />
                 </div>
               ) : null;
             })() : null}
@@ -429,7 +536,7 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
           Group and organize subtasks under campaigns
         </p>
       </div>
-      <TasksOverview />
+      <TasksOverview boardId={boardId} teamId={teamId} />
 
       {/* Task detail side panel — edit mode */}
       <TaskDetailPanel
@@ -438,6 +545,8 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
         onNavigateToTask={(id) => { setCreatingInColumnId(null); setSelectedTaskId(id); }}
         mode="edit"
         timezone={settings?.timezone}
+        boardId={boardId}
+        teamId={teamId}
       />
 
       {/* Task detail side panel — create mode */}
@@ -447,6 +556,8 @@ export function KanbanBoard({ artistId, initialSelectedTaskId }: KanbanBoardProp
         mode="create"
         createColumnId={creatingInColumnId || undefined}
         timezone={settings?.timezone}
+        boardId={boardId}
+        teamId={teamId}
       />
     </>
   );

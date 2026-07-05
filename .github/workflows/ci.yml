@@ -48,7 +48,7 @@ jobs:
           OPENAI_API_KEY: "fake-key-for-ci"
           RESEND_API_KEY: "fake-key-for-ci"
       - name: Publish test report
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
         if: always() # run even when tests fail, so failures show up in the report
         with:
           name: Backend Test Report
@@ -75,3 +75,12 @@ jobs:
           VITE_SUPABASE_URL: "https://fake.supabase.co"
           VITE_SUPABASE_ANON_KEY: "fake-key-for-ci"
           VITE_BACKEND_API_URL: "https://fake-backend.example.com"
+      - name: Unit tests
+        run: npm run test
+      - name: Publish frontend test report
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        if: always() # run even when tests fail, so failures show up in the report
+        with:
+          name: Frontend Test Report
+          path: junit.xml
+          reporter: java-junit

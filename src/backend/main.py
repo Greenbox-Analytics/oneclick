@@ -46,7 +46,10 @@ from integrations.google_drive.router import router as google_drive_router
 from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from integrations.spotify.router import router as spotify_router
-from oneclick.royalty_calculator import CalculationError
+from oneclick.breakdown import router as oneclick_breakdown_router
+from oneclick.royalties.analytics_router import router as royalties_analytics_router
+from oneclick.royalties.router import router as royalties_router
+from oneclick.royalty_calculator import CalculationError, RoyaltyCalculator
 from oneclick.share import router as oneclick_share_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
@@ -57,6 +60,7 @@ from subscriptions.admin_router import router as subscriptions_admin_router
 from subscriptions.billing_router import router as billing_router
 from subscriptions.pro_requests_router import router as pro_requests_router
 from subscriptions.router import router as subscriptions_router
+from teams.router import router as teams_router
 from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
@@ -71,6 +75,11 @@ app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"]
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
+app.include_router(oneclick_breakdown_router, prefix="/oneclick", tags=["OneClick"])
+app.include_router(royalties_router, prefix="/oneclick/royalties", tags=["OneClick Royalties"])
+app.include_router(
+    royalties_analytics_router, prefix="/oneclick/royalties/analytics", tags=["OneClick Royalties Analytics"]
+)
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
@@ -78,6 +87,7 @@ app.include_router(subscriptions_admin_router, tags=["Admin"])
 app.include_router(pro_requests_router, tags=["Pro Requests"])
 app.include_router(billing_router)
 app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
+app.include_router(teams_router, prefix="/teams", tags=["Teams"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -315,6 +325,40 @@ async def _assert_can_access_oneclick_inputs(db, user_id, project_id, statement_
     for cid in contract_ids:
         if cid and not await user_can_access_file(db, user_id, cid):
             raise HTTPException(status_code=403, detail="Access denied")
+
+
+from oneclick.royalties.ingest import sync_calc_royalties
+
+
+def _statement_currency(statement_id: str) -> str:
+    res = get_supabase_client().table("project_files").select("currency").eq("id", statement_id).execute()
+    cur = res.data[0].get("currency") if res.data else None
+    return cur or "USD"
+
+
+def _parse_statement_rows(db, statement_id: str):
+    """Best-effort parse of a royalty statement file into StatementRow objects.
+
+    Downloads the statement from storage and runs the deterministic row reader.
+    Returns [] on any failure (missing file, download/parse error) so callers can
+    treat statement rows as optional and never block line sync over them.
+    """
+    try:
+        sf = db.table("project_files").select("file_path, file_name").eq("id", statement_id).execute()
+        if not sf.data:
+            return []
+        file_data = db.storage.from_("project-files").download(sf.data[0]["file_path"])
+        suffix = Path(sf.data[0]["file_name"]).suffix.lower() or ".xlsx"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
+        try:
+            return RoyaltyCalculator(api_key=os.getenv("OPENAI_API_KEY")).read_royalty_statement_rows(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+    except Exception as e:
+        print(f"[royalties] statement parse failed for {statement_id}: {e}")
+        return []
 
 
 def verify_user_owns_audio_file(user_id: str, audio_file_id: str) -> dict | None:
@@ -927,6 +971,7 @@ async def upload_file(
     artist_id: str = Form(...),
     category: str = Form(...),  # 'contract' or 'royalty_statement'
     project_id: str | None = Form(None),
+    currency: str | None = Form(None),
     user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -1018,6 +1063,8 @@ async def upload_file(
             "file_size": file.size,
             "file_type": file.content_type,
         }
+        if folder_category == "royalty_statement":
+            db_record["currency"] = currency.upper() if currency else "USD"
 
         try:
             db_res = get_supabase_client().table("project_files").insert(db_record).execute()
@@ -1877,6 +1924,166 @@ class ConfirmCalculationRequest(BaseModel):
     results: dict[str, Any]
 
 
+class RecalcExpense(BaseModel):
+    amount: float
+    work_titles: list[str] = []
+
+
+class RecalculateNetRequest(BaseModel):
+    """Recompute payouts after the user edits expenses in the review modal.
+
+    Pure arithmetic — no LLM, no re-extraction. `payments` are the Pass-1 rows
+    (each carrying basis, gross_amount, percentage, song_title); `expenses` are
+    the confirmed/edited expense set.
+    """
+
+    payments: list[dict[str, Any]]
+    expenses: list[RecalcExpense] = []
+
+
+def _persist_statement_rows(
+    calculation_id: str, royalty_statement_id: str, user_id: str, contract_song_titles: list[str]
+) -> None:
+    """Parse the royalty statement into per-line-item rows and persist the rows
+    for tracks named in the contract to `royalty_statement_rows`, powering the
+    Earnings Breakdown tab.
+
+    Only statement lines whose song title matches a contract work title (via the
+    same fuzzy `titles_match` logic the calculator uses) are kept, so the
+    breakdown reflects the contract's track(s) rather than the whole statement.
+
+    Best-effort: any failure is logged and swallowed so a parse hiccup never
+    breaks calculation save — the breakdown tab degrades to its empty state.
+    """
+    from utils.text.normalize import titles_match
+
+    statement_path = None
+    try:
+        statement_res = (
+            get_supabase_client().table("project_files").select("*").eq("id", royalty_statement_id).execute()
+        )
+        if not statement_res.data:
+            print(f"[breakdown] statement file {royalty_statement_id} not found; skipping row persistence")
+            return
+
+        statement_file = statement_res.data[0]
+        file_data = get_supabase_client().storage.from_("project-files").download(statement_file["file_path"])
+
+        file_extension = Path(statement_file["file_name"]).suffix.lower()
+        if not file_extension or file_extension not in [".csv", ".xlsx", ".xls"]:
+            file_extension = ".xlsx"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
+            tmp_statement.write(file_data)
+            statement_path = tmp_statement.name
+
+        rows = RoyaltyCalculator().read_royalty_statement_rows(statement_path)
+        if not rows:
+            return
+
+        # Keep only line items for tracks named in the contract. Match at the
+        # unique-title level (statements repeat the same title across thousands
+        # of rows) so we run the fuzzy comparison once per distinct title.
+        contract_titles = {t.strip() for t in contract_song_titles if t and t.strip()}
+        if not contract_titles:
+            print(f"[breakdown] no contract song titles for calculation {calculation_id}; skipping row persistence")
+            return
+
+        statement_titles = {row.song_title for row in rows if row.song_title}
+        matched_titles = {st for st in statement_titles if any(titles_match(st, ct) for ct in contract_titles)}
+        total_rows = len(rows)
+        rows = [row for row in rows if row.song_title in matched_titles]
+        print(f"[breakdown] kept {len(rows)} of {total_rows} statement rows matching contract tracks")
+        if not rows:
+            return
+
+        payload = [
+            {
+                "calculation_id": calculation_id,
+                "user_id": user_id,
+                "song_title": row.song_title,
+                "vendor": row.vendor,
+                "country": row.country,
+                "country_code": row.country_code,
+                "delivery_type": row.delivery_type,
+                "delivery_format": row.delivery_format,
+                "sale_date": row.sale_date,
+                "units_sold": row.units_sold,
+                "net_units": row.net_units,
+                "sales": row.sales,
+                "net_income": row.net_income,
+                "distribution": row.distribution,
+                "net_payable": row.net_payable,
+                "isrc": row.isrc,
+                "upc": row.upc,
+                "currency": row.currency,
+            }
+            for row in rows
+        ]
+
+        # Chunked insert keeps payloads well under PostgREST's request limits on
+        # large statements (distributor reports can run to tens of thousands of rows).
+        chunk_size = 500
+        for i in range(0, len(payload), chunk_size):
+            get_supabase_client().table("royalty_statement_rows").insert(payload[i : i + chunk_size]).execute()
+
+        print(f"[breakdown] persisted {len(payload)} statement rows for calculation {calculation_id}")
+    except Exception as e:
+        print(f"[breakdown] failed to persist statement rows for calculation {calculation_id}: {e}")
+    finally:
+        if statement_path:
+            try:
+                os.unlink(statement_path)
+            except OSError:
+                pass
+
+
+@app.post("/oneclick/recalculate-net")
+async def oneclick_recalculate_net(request: RecalculateNetRequest, user_id: str = Depends(get_current_user_id)):
+    """Recompute net-basis payouts after the user edits expenses in the review
+    modal. Pure arithmetic over the Pass-1 payments — no LLM, no re-extraction.
+
+    Gross-basis rows are unaffected. Net-basis rows are recomputed as
+    ``(song_gross − allocated_expense) × percentage``.
+    """
+    from oneclick.royalty_calculator import allocate_expenses
+
+    payments = request.payments or []
+    # Per-song gross (gross_amount is identical across a song's rows).
+    song_totals: dict[str, float] = {}
+    for p in payments:
+        title = p.get("song_title")
+        if title is None:
+            continue
+        song_totals[title] = float(p.get("gross_amount", p.get("total_royalty", 0)) or 0)
+
+    expenses = [{"amount": e.amount, "work_titles": e.work_titles} for e in request.expenses]
+    song_expenses = allocate_expenses(song_totals, expenses)
+
+    updated = []
+    for p in payments:
+        out = dict(p)
+        basis = out.get("basis", "gross")
+        gross = float(out.get("gross_amount", out.get("total_royalty", 0)) or 0)
+        pct = float(out.get("percentage", 0) or 0)
+        if basis == "net":
+            exp = song_expenses.get(out.get("song_title"), 0.0)
+            base = max(gross - exp, 0.0)
+            out["expenses_applied"] = exp
+        else:
+            base = gross
+            out["expenses_applied"] = 0.0
+        out["net_amount"] = base
+        out["amount_to_pay"] = base * (pct / 100.0)
+        updated.append(out)
+
+    return {
+        "status": "success",
+        "total_payments": len(updated),
+        "payments": updated,
+    }
+
+
 @app.post("/oneclick/confirm")
 async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str = Depends(get_current_user_id)):
     """
@@ -1943,11 +2150,102 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
 
         get_supabase_client().table("royalty_calculation_contracts").insert(junction_rows).execute()
 
+        # 3a. Persist per-line-item statement rows (contract tracks only, full columns)
+        #     for the Earnings Breakdown tab. Best-effort — failures must not fail the save.
+        #     payment.song_title is the contract work title; the persist step
+        #     fuzzy-matches statement lines against these.
+        payments = (request.results or {}).get("payments", []) or []
+        contract_song_titles = [p.get("song_title", "") for p in payments]
+        _persist_statement_rows(calculation_id, request.royalty_statement_id, user_id, contract_song_titles)
+
+        # 3b. Sync royalty payees/lines for the payments-history feature. Pass
+        #     statement_rows=None so it reuses the rows persisted in 3a (no double-write)
+        #     and derives the period from them; line sync ALWAYS runs so payees/owed are
+        #     never blocked by a statement-rows problem.
+        try:
+            db = get_supabase_client()
+            currency = _statement_currency(request.royalty_statement_id)
+            sync_calc_royalties(
+                db,
+                user_id,
+                calculation_id,
+                request.royalty_statement_id,
+                request.project_id,
+                request.results,
+                currency,
+                statement_rows=None,
+            )
+        except Exception as e:
+            print(f"[royalties] ingestion failed for calc {calculation_id}: {e}")
+
         return {"status": "success", "message": "Calculation saved successfully", "id": calculation_id}
 
     except Exception as e:
         print(f"Error saving calculation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to save calculation: {str(e)}")
+
+
+def _load_oneclick_expenses(db, project_id: str):
+    """Load a project's expenses for OneClick net-basis calculation.
+
+    Returns ``(calc_expenses, review_expenses)``:
+      - ``calc_expenses``: minimal ``{amount, work_titles}`` dicts for allocation.
+      - ``review_expenses``: richer dicts for the confirm/edit modal.
+    Best-effort: any failure yields empty lists so the calc never breaks.
+    """
+    try:
+        exp_res = db.table("project_expenses").select("*").eq("project_id", project_id).execute()
+        expenses = exp_res.data or []
+    except Exception as e:  # noqa: BLE001 — expenses are optional enrichment
+        print(f"Warning: failed to load project expenses for {project_id}: {e}")
+        return [], []
+    if not expenses:
+        return [], []
+
+    expense_ids = [e["id"] for e in expenses]
+    try:
+        links_res = (
+            db.table("project_expense_works").select("expense_id, work_id").in_("expense_id", expense_ids).execute()
+        )
+        links = links_res.data or []
+    except Exception as e:  # noqa: BLE001
+        print(f"Warning: failed to load expense work links for {project_id}: {e}")
+        links = []
+
+    by_expense: dict[str, list[str]] = {}
+    for row in links:
+        by_expense.setdefault(row["expense_id"], []).append(row["work_id"])
+
+    works_res = db.table("works_registry").select("id, title").eq("project_id", project_id).execute()
+    title_by_id = {w["id"]: w["title"] for w in (works_res.data or [])}
+
+    calc_expenses, review_expenses = [], []
+    for e in expenses:
+        work_ids = by_expense.get(e["id"], [])
+        work_titles = [title_by_id[wid] for wid in work_ids if wid in title_by_id]
+        amount = float(e.get("amount") or 0)
+        calc_expenses.append({"amount": amount, "work_titles": work_titles})
+        review_expenses.append(
+            {
+                "id": e["id"],
+                "description": e.get("description"),
+                "amount": amount,
+                "category": e.get("category"),
+                "incurred_on": e.get("incurred_on"),
+                "work_ids": work_ids,
+                "work_titles": work_titles,
+            }
+        )
+    return calc_expenses, review_expenses
+
+
+@app.get("/expenses/summary")
+async def expenses_summary(user_id: str = Depends(get_current_user_id)):
+    """Cross-project expense rollup for the standalone Expense Tracker tool."""
+    from projects.service import get_expenses_summary
+
+    expenses = await get_expenses_summary(get_supabase_client(), user_id)
+    return {"expenses": expenses}
 
 
 @app.get("/oneclick/calculate-royalties-stream")
@@ -2073,6 +2371,10 @@ async def oneclick_calculate_royalties_stream(
                                 result = calc["results"]
                                 # Ensure is_cached flag is set
                                 result["is_cached"] = True
+                                # Expose the calculation id so the Earnings
+                                # Breakdown tab can load on cache hits (no
+                                # confirm round-trip happens for cached results).
+                                result["calculation_id"] = calc["id"]
                                 # Add type field so frontend SSE handler recognizes it
                                 result["type"] = "complete"
 
@@ -2093,6 +2395,35 @@ async def oneclick_calculate_royalties_stream(
                                         "cached": True,
                                     },
                                 )
+
+                                # Cache-hit: sync royalty_lines. Self-heal statement rows — if this
+                                # cached calc has none persisted yet (e.g. it was first run before
+                                # royalty_statement_rows existed), parse + backfill them so periods/
+                                # totals become real; otherwise skip the re-parse (cheap).
+                                try:
+                                    _db = get_supabase_client()
+                                    _existing_rows = (
+                                        _db.table("royalty_statement_rows")
+                                        .select("id", count="exact")
+                                        .eq("calculation_id", calc["id"])
+                                        .limit(1)
+                                        .execute()
+                                    )
+                                    _rows_for_sync = None
+                                    if not (getattr(_existing_rows, "count", 0) or 0):
+                                        _rows_for_sync = _parse_statement_rows(_db, royalty_statement_file_id)
+                                    sync_calc_royalties(
+                                        _db,
+                                        user_id,
+                                        calc["id"],
+                                        royalty_statement_file_id,
+                                        project_id,
+                                        calc["results"],
+                                        _statement_currency(royalty_statement_file_id),
+                                        statement_rows=_rows_for_sync,
+                                    )
+                                except Exception as e:
+                                    print(f"[royalties] cache-hit sync failed for calc {calc['id']}: {e}")
 
                                 yield f"data: {json.dumps(result)}\n\n"
                                 return
@@ -2214,6 +2545,9 @@ async def oneclick_calculate_royalties_stream(
             # Calculate payments
             yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
 
+            # Load project expenses so net-basis shares can be calculated.
+            calc_expenses, review_expenses = _load_oneclick_expenses(get_supabase_client(), project_id)
+
             payments = calculate_royalty_payments(
                 contract_path=contract_path,
                 statement_path=statement_path,
@@ -2221,6 +2555,7 @@ async def oneclick_calculate_royalties_stream(
                 contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
                 contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
                 contract_markdowns=contract_markdowns if contract_markdowns else None,
+                expenses=calc_expenses,
             )
 
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
@@ -2247,8 +2582,16 @@ async def oneclick_calculate_royalties_stream(
                         "total_royalty": payment["total_royalty"],
                         "amount_to_pay": payment["amount_to_pay"],
                         "terms": payment.get("terms"),
+                        "basis": payment.get("basis", "gross"),
+                        "gross_amount": payment.get("gross_amount", payment["total_royalty"]),
+                        "expenses_applied": payment.get("expenses_applied", 0.0),
+                        "net_amount": payment.get("net_amount", payment["total_royalty"]),
                     }
                 )
+
+            # Net-basis rows need the user to confirm/edit expenses before the
+            # numbers are final. Surface the gate + the expenses the calc used.
+            expense_review_required = any(p.get("basis") == "net" for p in payment_responses)
 
             result = {
                 "type": "complete",
@@ -2258,6 +2601,8 @@ async def oneclick_calculate_royalties_stream(
                 "message": f"Successfully calculated {len(payments)} royalty payments",
                 "progress": 100,
                 "stage": "complete",
+                "expense_review_required": expense_review_required,
+                "expenses": review_expenses if expense_review_required else [],
             }
 
             yield f"data: {json.dumps(result)}\n\n"

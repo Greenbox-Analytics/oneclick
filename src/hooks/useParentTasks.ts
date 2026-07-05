@@ -8,17 +8,18 @@ interface ParentsResponse {
   ungrouped: BoardTask[];
 }
 
-export function useParentTasks(search?: string, artistId?: string) {
+export function useParentTasks(search?: string, artistId?: string, boardId?: string) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
   const query = useQuery<ParentsResponse>({
-    queryKey: ["parent-tasks", user?.id, search, artistId],
+    queryKey: ["parent-tasks", user?.id, search, artistId, boardId],
     queryFn: async () => {
       if (!user?.id) return { parents: [], ungrouped: [] };
       const params = new URLSearchParams();
       if (search) params.set("search", search);
       if (artistId) params.set("artist_id", artistId);
+      if (boardId) params.set("board_id", boardId);
       const qs = params.toString();
       return apiFetch<ParentsResponse>(`${API_URL}/boards/parents${qs ? `?${qs}` : ""}`);
     },
@@ -33,6 +34,7 @@ export function useParentTasks(search?: string, artistId?: string) {
       start_date?: string;
       due_date?: string;
       color?: string;
+      board_id?: string;
       artist_ids?: string[];
       project_ids?: string[];
       labels?: string[];
@@ -41,7 +43,7 @@ export function useParentTasks(search?: string, artistId?: string) {
       return apiFetch(`${API_URL}/boards/parents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, board_id: data.board_id ?? boardId }),
       });
     },
     onSuccess: () => {

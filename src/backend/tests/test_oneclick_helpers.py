@@ -29,6 +29,7 @@ from utils.text.normalize import (
     normalize_name,
     normalize_title,
     simplify_role,
+    titles_match,
 )
 
 # ---------------------------------------------------------------------------
@@ -61,6 +62,48 @@ def test_label_prefix_is_stripped():
 
 def test_punctuation_is_stripped():
     assert normalize_title("Rude Gyal!") == "rude gyal"
+
+
+# ---------------------------------------------------------------------------
+# titles_match — predicate the Earnings Breakdown filter reuses to keep only
+# statement rows whose track is named in the contract.
+# ---------------------------------------------------------------------------
+
+
+def test_titles_match_exact_normalized():
+    assert titles_match("Rude Gyal", "rude gyal") is True
+
+
+def test_titles_match_parenthetical_variant():
+    # Statement carries a remix/master suffix the contract title doesn't.
+    assert titles_match("Like That", "Like That (Remix)") is True
+
+
+def test_titles_match_is_order_independent():
+    assert titles_match("Like That (Remix)", "Like That") is True
+
+
+def test_titles_match_distinct_songs_do_not_match():
+    assert titles_match("Like That", "Home") is False
+
+
+def test_titles_match_short_word_not_false_positive():
+    # "Sky" must not match a much longer title that merely contains it.
+    assert titles_match("Sky", "Blue Sky on a Sunday Afternoon") is False
+
+
+def test_titles_match_empty_titles_never_match():
+    assert titles_match("", "Like That") is False
+    assert titles_match("Like That", "") is False
+
+
+def test_titles_match_powers_contract_row_filter():
+    # Mirrors how _persist_statement_rows filters statement titles to the
+    # contract's tracks: keep only statement titles matching some contract work.
+    contract_titles = {"Like That", "Home"}
+    statement_titles = {"Like That", "Like That (Remix)", "Home", "Unrelated Single"}
+    kept = {s for s in statement_titles if any(titles_match(s, c) for c in contract_titles)}
+    assert kept == {"Like That", "Like That (Remix)", "Home"}
 
 
 # ---------------------------------------------------------------------------

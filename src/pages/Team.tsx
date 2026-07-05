@@ -7,9 +7,9 @@ const TEAM = [
 ];
 
 const VALUES = [
-  { v: "Correct", l: "Down to the cent. Every calculation gets a paper trail." },
-  { v: "Composable", l: "Each tool feeds the next. No re-keying, no exports." },
-  { v: "Quiet", l: "Built to disappear into your week. No tabs, no theatre." },
+  { v: "Accuracy", l: "Correct down to the cent, so your figures always hold up to scrutiny." },
+  { v: "Transparency", l: "Clear numbers, visible splits, and a paper trail behind every calculation." },
+  { v: "Infrastructure", l: "One connected foundation your whole catalog and team can rely on." },
 ];
 
 function TeamHero() {

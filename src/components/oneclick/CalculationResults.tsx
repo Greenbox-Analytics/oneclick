@@ -2,16 +2,20 @@ import { useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Music, FileText, Users, DollarSign, Download, CheckCircle2, Loader2, RefreshCw, Share2, HardDrive, MessageSquare } from "lucide-react";
+import { Music, FileText, Users, DollarSign, Download, CheckCircle2, Loader2, RefreshCw, Share2, HardDrive, MessageSquare, Wallet } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import type { PieLabelRenderProps } from "recharts";
 import ExcelJS from "exceljs";
 import { toPng } from "html-to-image";
 import { toast } from "sonner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import EarningsBreakdown from "@/components/oneclick/EarningsBreakdown";
 
 interface RoyaltyPayment {
   song_title: string;
@@ -22,6 +26,10 @@ interface RoyaltyPayment {
   total_royalty: number;
   amount_to_pay: number;
   terms?: string;
+  basis?: string;
+  gross_amount?: number;
+  expenses_applied?: number;
+  net_amount?: number;
 }
 
 interface CalculationResult {
@@ -31,6 +39,8 @@ interface CalculationResult {
   excel_file_url?: string;
   message: string;
   is_cached?: boolean;
+  calculation_id?: string;
+  expense_review_required?: boolean;
 }
 
 interface CalculationResultsProps {
@@ -41,6 +51,7 @@ interface CalculationResultsProps {
   calculationResult: CalculationResult | null;
   isUploading: boolean;
   handleCalculateRoyalties: (forceRecalculate: boolean) => void;
+  calculationId?: string | null;
 }
 
 const formatCurrency = (amount: number) => {
@@ -50,6 +61,21 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
+const isNet = (p: RoyaltyPayment) => p.basis === "net";
+const grossOf = (p: RoyaltyPayment) => (p.gross_amount ?? p.total_royalty);
+const netOf = (p: RoyaltyPayment) => (p.net_amount ?? p.gross_amount ?? p.total_royalty);
+
+const BasisBadge = ({ payment }: { payment: RoyaltyPayment }) => (
+  <Badge
+    variant="outline"
+    className={isNet(payment)
+      ? "text-amber-600 border-amber-500/40 bg-amber-500/10"
+      : "text-emerald-600 border-emerald-500/40 bg-emerald-500/10"}
+  >
+    {isNet(payment) ? "Net" : "Gross"}
+  </Badge>
+);
+
 const CalculationResults = ({
   showProgressModal,
   calculationProgress,
@@ -58,8 +84,29 @@ const CalculationResults = ({
   calculationResult,
   isUploading,
   handleCalculateRoyalties,
+  calculationId,
 }: CalculationResultsProps) => {
   const chartContentRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+  // Prefer the id carried on the result (covers cache hits) and fall back to
+  // the id captured when the calculation was saved.
+  const breakdownCalculationId = calculationResult?.calculation_id ?? calculationId ?? null;
+
+  // Parties from this calc that are actually owed money (net revenue > 0).
+  // Collaborators with net ≤ 0 are excluded so they're never pre-selected for
+  // payment. Names map 1:1 to royalty-tracking payees by normalized name.
+  const payableParties = Object.entries(
+    (calculationResult?.payments ?? []).reduce((acc, p) => {
+      acc[p.party_name] = (acc[p.party_name] ?? 0) + p.amount_to_pay;
+      return acc;
+    }, {} as Record<string, number>),
+  )
+    .filter(([, total]) => total > 0)
+    .map(([name]) => name);
+
+  const handlePayRoyalties = () => {
+    navigate("/tools/oneclick", { state: { openPayoutForNames: payableParties } });
+  };
 
   const { connections } = useIntegrations();
   const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
@@ -90,13 +137,16 @@ const CalculationResults = ({
 
   const handleExportCSV = () => {
     if (!calculationResult) return;
-    const headers = ["Song Title", "Payee", "Role", "Royalty Type", "Total Song(s) Revenue", "Share %", "Amount Owed"];
+    const headers = ["Song Title", "Payee", "Role", "Royalty Type", "Basis", "Gross Revenue", "Expenses", "Net Revenue", "Share %", "Amount Owed"];
     const rows = calculationResult.payments.map(p => [
       p.song_title,
       p.party_name,
       p.role,
       p.royalty_type,
-      p.total_royalty,
+      isNet(p) ? "Net" : "Gross",
+      grossOf(p),
+      isNet(p) ? (p.expenses_applied ?? 0) : 0,
+      netOf(p),
       `${p.percentage}%`,
       p.amount_to_pay
     ]);
@@ -114,9 +164,10 @@ const CalculationResults = ({
   const handleExportExcel = async () => {
     if (!calculationResult) return;
     const excelData = [
-      ["Song Title", "Payee", "Role", "Royalty Type", "Total Song(s) Revenue", "Share %", "Amount Owed"],
+      ["Song Title", "Payee", "Role", "Royalty Type", "Basis", "Gross Revenue", "Expenses", "Net Revenue", "Share %", "Amount Owed"],
       ...calculationResult.payments.map(p => [
-        p.song_title, p.party_name, p.role, p.royalty_type, p.total_royalty, p.percentage, p.amount_to_pay
+        p.song_title, p.party_name, p.role, p.royalty_type, isNet(p) ? "Net" : "Gross",
+        grossOf(p), isNet(p) ? (p.expenses_applied ?? 0) : 0, netOf(p), p.percentage, p.amount_to_pay
       ])
     ];
     const wb = new ExcelJS.Workbook();
@@ -387,50 +438,71 @@ const CalculationResults = ({
             </Card>
           </div>
 
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Royalty Distribution</CardTitle>
-                <Button variant="outline" size="sm" onClick={handleDownloadChart}>
-                  <Download className="mr-2 h-4 w-4" />
-                  Download Chart
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div ref={chartContentRef} className="h-[450px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      outerRadius={130}
-                      dataKey="value"
-                      nameKey="name"
-                      label={renderPieLabel}
-                      labelLine={true}
-                    >
-                      {pieData.map((entry, index, arr) => {
-                        const isUnallocated = entry.name === UNALLOCATED_LABEL;
-                        const fill = isUnallocated
-                          ? "hsl(150, 8%, 22%)"
-                          : `hsl(150, ${50 + (index / (arr.length || 1)) * 10}%, ${25 + (index / (arr.length || 1)) * 40}%)`;
-                        return <Cell key={`cell-${index}`} fill={fill} />;
-                      })}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
+          <Tabs defaultValue="distribution" className="w-full">
+            <TabsList className="grid grid-cols-2 w-full max-w-md">
+              <TabsTrigger value="distribution">Royalty Distribution</TabsTrigger>
+              <TabsTrigger value="breakdown">Earnings Breakdown</TabsTrigger>
+            </TabsList>
 
+            <TabsContent value="distribution" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Royalty Distribution</CardTitle>
+                    <Button variant="outline" size="sm" onClick={handleDownloadChart}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download Chart
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div ref={chartContentRef} className="h-[450px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={130}
+                          dataKey="value"
+                          nameKey="name"
+                          label={renderPieLabel}
+                          labelLine={true}
+                        >
+                          {pieData.map((entry, index, arr) => {
+                            const isUnallocated = entry.name === UNALLOCATED_LABEL;
+                            const fill = isUnallocated
+                              ? "hsl(150, 8%, 22%)"
+                              : `hsl(150, ${50 + (index / (arr.length || 1)) * 10}%, ${25 + (index / (arr.length || 1)) * 40}%)`;
+                            return <Cell key={`cell-${index}`} fill={fill} />;
+                          })}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="breakdown" className="mt-4">
+              <EarningsBreakdown calculationId={breakdownCalculationId} />
+            </TabsContent>
+          </Tabs>
+
+          {/* Royalty Breakdown breaks out of the narrow page container on large
+              screens so all columns fit without horizontal scrolling. */}
+          <div className="xl:relative xl:left-1/2 xl:right-1/2 xl:-mx-[50vw] xl:w-screen">
+          <div className="xl:mx-auto xl:max-w-6xl xl:px-6">
           <Card>
               <CardHeader>
                   <div className="flex items-center justify-between">
                       <div>
                           <CardTitle>Royalty Breakdown</CardTitle>
-                          <p className="text-sm text-muted-foreground mt-1">All calculations are based on net revenue from the uploaded royalty statement.</p>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {payments.some(isNet)
+                              ? "Net-basis rows deduct each track's expenses from gross before applying the share; gross-basis rows apply the share to full earnings."
+                              : "All rows are paid on gross revenue from the uploaded royalty statement."}
+                          </p>
                       </div>
                       <DropdownMenu>
                           <DropdownMenuTrigger asChild><Button variant="outline" size="sm"><Download className="mr-2 h-4 w-4"/> Export</Button></DropdownMenuTrigger>
@@ -444,22 +516,25 @@ const CalculationResults = ({
               <CardContent>
                   {/* Desktop: table */}
                   <div className="hidden sm:block overflow-x-auto">
-                    <Table>
+                    <Table className="w-full">
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Song</TableHead><TableHead>Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Total Song(s) Revenue</TableHead><TableHead>Share %</TableHead><TableHead>Amount Owed</TableHead>
+                                <TableHead className="min-w-[140px]">Song</TableHead><TableHead className="min-w-[200px]">Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Basis</TableHead><TableHead className="whitespace-nowrap text-right">Gross Revenue</TableHead><TableHead className="whitespace-nowrap text-right">Expenses</TableHead><TableHead className="whitespace-nowrap text-right">Net Revenue</TableHead><TableHead className="whitespace-nowrap text-right">Share %</TableHead><TableHead className="whitespace-nowrap text-right">Amount Owed</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {calculationResult.payments.map((row, i) => (
                                 <TableRow key={i}>
-                                    <TableCell>{row.song_title}</TableCell>
-                                    <TableCell>{row.party_name}</TableCell>
+                                    <TableCell className="min-w-[140px]">{row.song_title}</TableCell>
+                                    <TableCell className="min-w-[200px] font-medium">{row.party_name}</TableCell>
                                     <TableCell className="capitalize">{row.role}</TableCell>
                                     <TableCell className="capitalize">{row.royalty_type}</TableCell>
-                                    <TableCell>{formatCurrency(row.total_royalty)}</TableCell>
-                                    <TableCell>{row.percentage}%</TableCell>
-                                    <TableCell>{formatCurrency(row.amount_to_pay)}</TableCell>
+                                    <TableCell><BasisBadge payment={row} /></TableCell>
+                                    <TableCell className="whitespace-nowrap text-right">{formatCurrency(grossOf(row))}</TableCell>
+                                    <TableCell className="whitespace-nowrap text-right">{isNet(row) ? `-${formatCurrency(row.expenses_applied ?? 0)}` : "—"}</TableCell>
+                                    <TableCell className="whitespace-nowrap text-right">{formatCurrency(netOf(row))}</TableCell>
+                                    <TableCell className="whitespace-nowrap text-right">{row.percentage}%</TableCell>
+                                    <TableCell className="whitespace-nowrap text-right font-medium">{formatCurrency(row.amount_to_pay)}</TableCell>
                                 </TableRow>
                             ))}
                         </TableBody>
@@ -469,9 +544,12 @@ const CalculationResults = ({
                   <div className="sm:hidden space-y-3">
                     {calculationResult.payments.map((row, i) => (
                       <div key={i} className="rounded-lg border border-border p-3 space-y-2 bg-card">
-                        <div>
-                          <p className="text-sm font-semibold text-foreground">{row.song_title}</p>
-                          <p className="text-xs text-muted-foreground">{row.party_name} • <span className="capitalize">{row.role}</span></p>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">{row.song_title}</p>
+                            <p className="text-xs text-muted-foreground">{row.party_name} • <span className="capitalize">{row.role}</span></p>
+                          </div>
+                          <BasisBadge payment={row} />
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <div>
@@ -483,8 +561,18 @@ const CalculationResults = ({
                             <p className="font-medium">{row.percentage}%</p>
                           </div>
                           <div>
-                            <p className="text-muted-foreground">Total Song(s) Revenue</p>
-                            <p className="font-medium">{formatCurrency(row.total_royalty)}</p>
+                            <p className="text-muted-foreground">Gross Revenue</p>
+                            <p className="font-medium">{formatCurrency(grossOf(row))}</p>
+                          </div>
+                          {isNet(row) && (
+                            <div>
+                              <p className="text-muted-foreground">Expenses</p>
+                              <p className="font-medium">-{formatCurrency(row.expenses_applied ?? 0)}</p>
+                            </div>
+                          )}
+                          <div>
+                            <p className="text-muted-foreground">Net Revenue</p>
+                            <p className="font-medium">{formatCurrency(netOf(row))}</p>
                           </div>
                           <div>
                             <p className="text-muted-foreground">Amount Owed</p>
@@ -494,8 +582,16 @@ const CalculationResults = ({
                       </div>
                     ))}
                   </div>
+
+                  <div className="mt-6 flex justify-end border-t border-border pt-4">
+                      <Button onClick={handlePayRoyalties} disabled={payableParties.length === 0}>
+                          <Wallet className="mr-2 h-4 w-4" /> Pay Royalties
+                      </Button>
+                  </div>
               </CardContent>
           </Card>
+          </div>
+          </div>
         </div>
       )}
     </>

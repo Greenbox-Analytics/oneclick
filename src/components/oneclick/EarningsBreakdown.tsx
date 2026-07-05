@@ -2,12 +2,14 @@ import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Download, Globe, CalendarDays, Layers, Store } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
+import { Download, FileDown, Globe, CalendarDays, Layers, Store, Loader2 } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import ExcelJS from "exceljs";
 import { toast } from "sonner";
+import { API_URL, getAuthHeaders } from "@/lib/apiFetch";
 import {
   useEarningsBreakdown,
   type BreakdownDimension,
@@ -19,33 +21,45 @@ const formatCurrency = (amount: number) =>
 
 const DIMENSION_META: Record<
   BreakdownDimension,
-  { label: string; columnHeader: string; icon: React.ComponentType<{ className?: string }>; emptyHint: string }
+  { label: string; columnHeader: string; emptyHint: string }
 > = {
   country: {
     label: "By Country",
     columnHeader: "Country",
-    icon: Globe,
     emptyHint: "Statement didn't include a country column.",
   },
   month: {
     label: "By Month",
     columnHeader: "Month",
-    icon: CalendarDays,
+    emptyHint: "Statement didn't include a sale date column.",
+  },
+  year: {
+    label: "By Year",
+    columnHeader: "Year",
     emptyHint: "Statement didn't include a sale date column.",
   },
   format: {
-    label: "By Format",
-    columnHeader: "Delivery Format",
-    icon: Layers,
+    label: "By Source",
+    columnHeader: "Source",
     emptyHint: "Statement didn't include a delivery format column.",
   },
   vendor: {
     label: "By Vendor",
     columnHeader: "Vendor",
-    icon: Store,
     emptyHint: "Statement didn't include a vendor column.",
   },
 };
+
+type TimeGrain = "month" | "year";
+
+// Outer tabs. "time" is synthetic — it hosts a Month/Year toggle that switches
+// the panel's dimension; the others map straight to a single dimension.
+const TABS: { id: string; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: "time", label: "Time period", icon: CalendarDays },
+  { id: "vendor", label: "Vendor", icon: Store },
+  { id: "country", label: "Country", icon: Globe },
+  { id: "format", label: "Source", icon: Layers },
+];
 
 interface EarningsBreakdownProps {
   calculationId: string | null | undefined;
@@ -63,8 +77,8 @@ const DimensionPanel = ({
 
   const handleExport = async (kind: "csv" | "xlsx") => {
     if (!data || data.rows.length === 0) return;
-    const headers = [meta.columnHeader, "Net Payable", "Row Count", "% of Total"];
-    const rows = data.rows.map((r) => [r.key, r.net_payable, r.row_count, `${r.percent_of_total}%`]);
+    const headers = [meta.columnHeader, "Net Payable", "% of Total"];
+    const rows = data.rows.map((r) => [r.key, r.net_payable, `${r.percent_of_total}%`]);
 
     if (kind === "csv") {
       const csv = [headers, ...rows]
@@ -135,7 +149,6 @@ const DimensionPanel = ({
 
   const chartData = result.rows.slice(0, 12).map((r) => ({
     name: r.key.length > 18 ? `${r.key.slice(0, 17)}…` : r.key,
-    fullName: r.key,
     value: r.net_payable,
   }));
 
@@ -144,8 +157,7 @@ const DimensionPanel = ({
       <div className="flex items-center justify-between gap-4">
         <div className="text-sm text-muted-foreground">
           Total {meta.label.toLowerCase()}:{" "}
-          <span className="font-semibold text-foreground">{formatCurrency(result.total)}</span>{" "}
-          across {result.row_count.toLocaleString()} line items
+          <span className="font-semibold text-foreground">{formatCurrency(result.total)}</span>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => handleExport("csv")}>
@@ -169,12 +181,6 @@ const DimensionPanel = ({
               height={60}
             />
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => formatCurrency(v)} width={80} />
-            <Tooltip
-              formatter={(v: number) => formatCurrency(Number(v))}
-              labelFormatter={(_, payload) =>
-                payload && payload[0]?.payload?.fullName ? payload[0].payload.fullName : ""
-              }
-            />
             <Bar dataKey="value" fill="hsl(150, 50%, 35%)" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
@@ -186,7 +192,6 @@ const DimensionPanel = ({
             <TableRow>
               <TableHead>{meta.columnHeader}</TableHead>
               <TableHead>Net Payable</TableHead>
-              <TableHead>Line items</TableHead>
               <TableHead>% of total</TableHead>
             </TableRow>
           </TableHeader>
@@ -195,7 +200,6 @@ const DimensionPanel = ({
               <TableRow key={row.key}>
                 <TableCell>{row.key}</TableCell>
                 <TableCell>{formatCurrency(row.net_payable)}</TableCell>
-                <TableCell>{row.row_count.toLocaleString()}</TableCell>
                 <TableCell>{row.percent_of_total.toFixed(2)}%</TableCell>
               </TableRow>
             ))}
@@ -207,32 +211,93 @@ const DimensionPanel = ({
 };
 
 const EarningsBreakdown = ({ calculationId }: EarningsBreakdownProps) => {
-  const [active, setActive] = useState<BreakdownDimension>("country");
+  const [active, setActive] = useState<string>("time");
+  const [timeGrain, setTimeGrain] = useState<TimeGrain>("month");
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportPdf = async () => {
+    if (!calculationId) return;
+    setIsExporting(true);
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(
+        `${API_URL}/oneclick/calculations/${calculationId}/breakdown/pdf?time_grain=${timeGrain}`,
+        { headers },
+      );
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      const blob = await res.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "earnings-breakdown.pdf";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      console.error("Error exporting breakdown PDF:", err);
+      toast.error("Failed to export breakdown PDF");
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Earnings Breakdown</CardTitle>
-        <CardDescription>
-          Where your royalties came from — drilled by country, month, delivery format, and vendor.
-        </CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+        <div className="space-y-1.5">
+          <CardTitle>Earnings Breakdown</CardTitle>
+          <CardDescription>
+            Where your royalties came from — drilled by time period, vendor, country, and source.
+          </CardDescription>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleExportPdf}
+          disabled={!calculationId || isExporting}
+          className="shrink-0"
+        >
+          {isExporting ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          ) : (
+            <FileDown className="w-4 h-4 mr-2" />
+          )}
+          Export PDF
+        </Button>
       </CardHeader>
       <CardContent>
-        <Tabs value={active} onValueChange={(v) => setActive(v as BreakdownDimension)}>
+        <Tabs value={active} onValueChange={setActive}>
           <TabsList className="grid grid-cols-4 w-full max-w-xl">
-            {(Object.keys(DIMENSION_META) as BreakdownDimension[]).map((dim) => {
-              const Icon = DIMENSION_META[dim].icon;
+            {TABS.map((tab) => {
+              const Icon = tab.icon;
               return (
-                <TabsTrigger key={dim} value={dim} className="gap-1.5">
+                <TabsTrigger key={tab.id} value={tab.id} className="gap-1.5">
                   <Icon className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">{DIMENSION_META[dim].label}</span>
+                  <span className="hidden sm:inline">{tab.label}</span>
                 </TabsTrigger>
               );
             })}
           </TabsList>
-          {(Object.keys(DIMENSION_META) as BreakdownDimension[]).map((dim) => (
-            <TabsContent key={dim} value={dim} className="mt-4">
-              <DimensionPanel calculationId={calculationId} dimension={dim} />
+
+          <TabsContent value="time" className="mt-4 space-y-4">
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={timeGrain}
+              onValueChange={(v) => v && setTimeGrain(v as TimeGrain)}
+              className="justify-start"
+            >
+              <ToggleGroupItem value="month" size="sm">
+                Month
+              </ToggleGroupItem>
+              <ToggleGroupItem value="year" size="sm">
+                Year
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <DimensionPanel calculationId={calculationId} dimension={timeGrain} />
+          </TabsContent>
+
+          {TABS.filter((tab) => tab.id !== "time").map((tab) => (
+            <TabsContent key={tab.id} value={tab.id} className="mt-4">
+              <DimensionPanel calculationId={calculationId} dimension={tab.id as BreakdownDimension} />
             </TabsContent>
           ))}
         </Tabs>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
@@ -20,10 +20,12 @@ import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
 import CalculationResults from "@/components/oneclick/CalculationResults";
+import ExpenseReviewDialog from "@/components/oneclick/ExpenseReviewDialog";
 import SongMismatchComparison from "@/components/oneclick/SongMismatchComparison";
 
-interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; }
-interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; }
+interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; basis?: string; gross_amount?: number; expenses_applied?: number; net_amount?: number; }
+interface ReviewExpense { id: string; description?: string; amount: number; category?: string | null; incurred_on?: string | null; work_ids?: string[]; work_titles?: string[]; }
+interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; calculation_id?: string; expense_review_required?: boolean; expenses?: ReviewExpense[]; }
 interface CalculationErrorState {
   message: string;
   code?: string;
@@ -45,13 +47,24 @@ const OneClickDocuments = () => {
   const navigate = useNavigate();
   const { artistId } = useParams<{ artistId: string }>();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const invalidateRoyalties = () => {
+    ["royalty-payees", "royalty-periods", "royalty-payouts"].forEach((k) =>
+      queryClient.invalidateQueries({ queryKey: [k] }),
+    );
+  };
   const [contractFiles, setContractFiles] = useState<File[]>([]);
   const [royaltyStatementFile, setRoyaltyStatementFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [calculationResult, setCalculationResult] = useState<CalculationResult | null>(null);
+  const [expenseReview, setExpenseReview] = useState<ReviewExpense[] | null>(null);
+  const [isRecalculating, setIsRecalculating] = useState(false);
   const [error, setError] = useState<CalculationErrorState | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  // Set once the calculation is saved (or read off a cached result); the
+  // Earnings Breakdown tab needs it to fetch per-dimension aggregates.
+  const [savedCalculationId, setSavedCalculationId] = useState<string | null>(null);
   const [selectedExistingContracts, setSelectedExistingContracts] = useState<string[]>([]);
   const [selectedExistingRoyaltyStatement, setSelectedExistingRoyaltyStatement] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -64,6 +77,7 @@ const OneClickDocuments = () => {
   const [contractTabValue, setContractTabValue] = useState<string>("upload");
   const [royaltyStatementTabValue, setRoyaltyStatementTabValue] = useState<string>("upload");
   const [newRoyaltyStatementProjectId, setNewRoyaltyStatementProjectId] = useState<string>("");
+  const [royaltyStatementCurrency, setRoyaltyStatementCurrency] = useState<string>("USD");
   // Artist name fetched via React Query so the result is cached across
   // remounts. Without this, navigating away from /tools/oneclick/.../documents
   // and back would re-fetch and (worse) re-trigger a full-page loader that
@@ -278,6 +292,7 @@ const OneClickDocuments = () => {
              formData.append("file", royaltyStatementFile);
              formData.append("artist_id", artistId);
              formData.append("category", "royalty_statement");
+             formData.append("currency", royaltyStatementCurrency);
              const targetProjectId = newRoyaltyStatementProjectId || finalProjectId;
              if (targetProjectId) formData.append("project_id", targetProjectId);
 
@@ -320,6 +335,14 @@ const OneClickDocuments = () => {
         setCalculationStage("starting");
         setCalculationMessage("Starting calculation...");
         setSaveSuccess(false);
+        // Clear any prior calculation's id so the breakdown tab doesn't show
+        // stale data before this run is saved (or a cached id arrives).
+        setSavedCalculationId(null);
+        // Reset the auto-save guard so this run saves even when the inputs match
+        // the previous one (e.g. force-recalculate of the same statement +
+        // contracts) — otherwise the new calculation_id is never captured and the
+        // breakdown is stuck on "Save the calculation to see the earnings breakdown".
+        autoSaveTriggeredRef.current = null;
 
         // Use fetch + SSE for authenticated streaming
         const queryParams = new URLSearchParams({
@@ -357,9 +380,15 @@ const OneClickDocuments = () => {
                     setCalculationProgress(data.progress || 0); setCalculationStage(data.stage || ""); setCalculationMessage(data.message || "");
                 } else if (data.type === 'complete' || (data.status === 'success' && data.payments)) {
                     clearTimeout(timeout);
-                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached });
+                    const needsReview = !!data.expense_review_required && !data.is_cached;
+                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached, calculation_id: data.calculation_id, expense_review_required: needsReview, expenses: data.expenses || [] });
                     setShowProgressModal(false);
-                    toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
+                    if (needsReview) {
+                        setExpenseReview(data.expenses || []);
+                        toast.info("Some collaborators are paid on net income — review the expenses to finalize.");
+                    } else {
+                        toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
+                    }
                     setContractFiles([]); setRoyaltyStatementFile(null); setIsUploading(false);
                 } else if (data.type === 'error') {
                     clearTimeout(timeout); setShowProgressModal(false);
@@ -407,7 +436,7 @@ const OneClickDocuments = () => {
       if (!lastCalculationContext || !calculationResult || !user) return;
       setIsSaving(true);
       try {
-          await apiFetch(`${API_URL}/oneclick/confirm`, {
+          const saved = await apiFetch<{ id?: string }>(`${API_URL}/oneclick/confirm`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -417,19 +446,49 @@ const OneClickDocuments = () => {
                   results: calculationResult
               })
           });
+          if (saved?.id) setSavedCalculationId(saved.id);
           setSaveSuccess(true);
+          invalidateRoyalties();
       } catch (err) { console.error("Error saving results:", err); toast.error("Failed to save results"); }
       finally { setIsSaving(false); }
   };
 
   useEffect(() => {
       if (!calculationResult || !lastCalculationContext || !user) return;
-      if (calculationResult.is_cached) return;
+      if (calculationResult.is_cached) {
+        invalidateRoyalties();
+        return;
+      }
+      // Hold off on saving until the user confirms expenses for net-basis rows.
+      if (calculationResult.expense_review_required) return;
       const resultKey = `${lastCalculationContext.statementId}-${lastCalculationContext.contractIds.join(',')}`;
       if (autoSaveTriggeredRef.current === resultKey) return;
       autoSaveTriggeredRef.current = resultKey;
       handleConfirmResultsWithContext();
   }, [calculationResult, lastCalculationContext, user]);
+
+  // Recompute net payouts after the user confirms/edits expenses in the review modal.
+  const handleConfirmExpenses = async (editedExpenses: ReviewExpense[]) => {
+      if (!calculationResult) return;
+      setIsRecalculating(true);
+      try {
+          const resp = await apiFetch<{ payments: RoyaltyPayment[] }>(`${API_URL}/oneclick/recalculate-net`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                  payments: calculationResult.payments,
+                  expenses: editedExpenses.map(e => ({ amount: e.amount, work_titles: e.work_titles || [] })),
+              }),
+          });
+          setCalculationResult({ ...calculationResult, payments: resp.payments, expense_review_required: false });
+          setExpenseReview(null);
+          toast.success("Net royalties finalized");
+      } catch (err) {
+          toast.error(`Recalculation failed: ${(err as Error).message}`);
+      } finally {
+          setIsRecalculating(false);
+      }
+  };
 
   const openReviewDialog = (forceRecalculate: boolean) => {
     const hasContracts = contractFiles.length > 0 || selectedExistingContracts.length > 0;
@@ -542,6 +601,8 @@ const OneClickDocuments = () => {
             selectedExistingRoyaltyStatement={selectedExistingRoyaltyStatement}
             setSelectedExistingRoyaltyStatement={setSelectedExistingRoyaltyStatement}
             fetchProjectFilesForValidation={fetchProjectFilesForValidation}
+            currency={royaltyStatementCurrency}
+            onCurrencyChange={setRoyaltyStatementCurrency}
           />
         </div>
 
@@ -598,6 +659,16 @@ const OneClickDocuments = () => {
           calculationResult={calculationResult}
           isUploading={isUploading}
           handleCalculateRoyalties={openReviewDialog}
+          calculationId={savedCalculationId}
+        />
+
+        <ExpenseReviewDialog
+          open={expenseReview !== null}
+          expenses={expenseReview ?? []}
+          isSubmitting={isRecalculating}
+          projectId={lastCalculationContext?.projectId}
+          onConfirm={handleConfirmExpenses}
+          onCancel={() => setExpenseReview(null)}
         />
 
         {/* Review Selection Dialog */}

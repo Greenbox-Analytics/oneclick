@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class ColumnCreate(BaseModel):
     title: str
     artist_id: str | None = None
+    board_id: str | None = None
     color: str | None = None
     position: int | None = 0
 
@@ -20,6 +21,7 @@ class ColumnUpdate(BaseModel):
 
 class TaskCreate(BaseModel):
     column_id: str | None = None  # nullable for parent tasks
+    board_id: str | None = None
     title: str
     description: str | None = None
     priority: str | None = None  # low, medium, high, urgent
@@ -31,6 +33,9 @@ class TaskCreate(BaseModel):
     artist_ids: list[str] | None = []
     project_ids: list[str] | None = []
     contract_ids: list[str] | None = []
+    artist_labels: dict[str, str] | None = None
+    project_labels: dict[str, str] | None = None
+    contract_labels: dict[str, str] | None = None
     assignee_name: str | None = None
     labels: list[str] | None = []
 
@@ -48,12 +53,16 @@ class TaskUpdate(BaseModel):
     artist_ids: list[str] | None = None
     project_ids: list[str] | None = None
     contract_ids: list[str] | None = None
+    artist_labels: dict[str, str] | None = None
+    project_labels: dict[str, str] | None = None
+    contract_labels: dict[str, str] | None = None
     assignee_name: str | None = None
     labels: list[str] | None = None
     position: int | None = None
 
 
 class ParentTaskCreate(BaseModel):
+    board_id: str | None = None
     title: str
     description: str | None = None
     priority: str | None = None
@@ -62,6 +71,8 @@ class ParentTaskCreate(BaseModel):
     color: str | None = None
     artist_ids: list[str] | None = []
     project_ids: list[str] | None = []
+    artist_labels: dict[str, str] | None = None
+    project_labels: dict[str, str] | None = None
     labels: list[str] | None = []
 
 
@@ -77,3 +88,23 @@ class BatchReorder(BaseModel):
 
 class CommentCreate(BaseModel):
     content: str
+
+
+class BoardCreate(BaseModel):
+    name: str
+    team_id: str | None = None
+    artist_id: str | None = None
+    description: str | None = None
+
+
+class BoardUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class AssigneeAdd(BaseModel):
+    user_id: str
+
+
+class DeleteConfirm(BaseModel):
+    confirm_name: str

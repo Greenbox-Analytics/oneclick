@@ -2,7 +2,8 @@ import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Calendar, MoreHorizontal, Trash2, ExternalLink, Users, CornerDownRight, AlertCircle, ArrowRightLeft } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Calendar, MoreHorizontal, Trash2, ExternalLink, CornerDownRight, AlertCircle, ArrowRightLeft } from "lucide-react";
 import { parseDateString, getTodayString } from "@/lib/dateUtils";
 import {
   DropdownMenu,
@@ -33,6 +34,23 @@ interface KanbanCardProps {
   disableDrag?: boolean;
   moveOptions?: MoveOption[];
   onMove?: (taskId: string, targetColumnId: string) => void;
+  // Only shown on team boards — on personal boards every task is the owner's,
+  // so the creator avatar is redundant clutter (and mirrors Task 5 hiding the
+  // "Created by" filter on personal boards).
+  showCreator?: boolean;
+}
+
+function initials(name?: string | null): string {
+  if (!name) return "?";
+  return (
+    name
+      .split(" ")
+      .map((w) => w[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "?"
+  );
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -42,7 +60,7 @@ const PRIORITY_COLORS: Record<string, string> = {
   urgent: "bg-red-100 text-red-700",
 };
 
-export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onClick, timezone, disableDrag, moveOptions, onMove }: KanbanCardProps) {
+export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onClick, timezone, disableDrag, moveOptions, onMove, showCreator }: KanbanCardProps) {
   const {
     attributes,
     listeners,
@@ -80,6 +98,18 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
     if (start) return `From ${start}`;
     return null;
   })();
+
+  // Bounded, cross-kind linked-entity chips (artists → projects → documents),
+  // capped at 3 with a "+N" overflow. Uses the server-shared names so teammates
+  // without access still see them. Full list lives in the detail panel.
+  const LINKED_CHIP_CAP = 3;
+  const linkedEntities = [
+    ...(task.artists ?? []).map((a) => ({ key: `a-${a.id}`, name: a.name })),
+    ...(task.projects ?? []).map((p) => ({ key: `p-${p.id}`, name: p.name })),
+    ...(task.documents ?? []).map((d) => ({ key: `d-${d.id}`, name: d.name })),
+  ];
+  const shownLinkedEntities = linkedEntities.slice(0, LINKED_CHIP_CAP);
+  const linkedOverflow = linkedEntities.length - shownLinkedEntities.length;
 
   return (
     <Card
@@ -199,6 +229,25 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
           })}
         </div>
 
+        {linkedEntities.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            {shownLinkedEntities.map((e) => (
+              <Badge
+                key={e.key}
+                variant="outline"
+                className="text-[10px] px-1.5 py-0 font-normal max-w-[140px] truncate"
+              >
+                {e.name}
+              </Badge>
+            ))}
+            {linkedOverflow > 0 && (
+              <span className="text-[10px] text-muted-foreground">
+                +{linkedOverflow}
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
           {dateDisplay && (
             <span className="flex items-center gap-0.5">
@@ -206,17 +255,41 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
               {dateDisplay}
             </span>
           )}
-          {(task.artist_ids?.length || 0) > 0 && (
-            <span className="flex items-center gap-0.5 ml-auto">
-              <Users className="h-3 w-3" />
-              {task.artist_ids!.length}
-            </span>
+          {task.assignees && task.assignees.length > 0 && (
+            <div className="flex items-center gap-1">
+              {task.assignees.slice(0, 3).map((a) => (
+                <Avatar key={a.user_id} className="h-5 w-5" title={a.full_name ?? undefined}>
+                  <AvatarImage src={a.avatar_url ?? undefined} />
+                  <AvatarFallback className="bg-green-100 text-green-700 text-[9px] font-medium dark:bg-green-900/40 dark:text-green-300">
+                    {initials(a.full_name)}
+                  </AvatarFallback>
+                </Avatar>
+              ))}
+              {task.assignees.length > 3 && (
+                <span className="text-[10px] text-muted-foreground pl-0.5">
+                  +{task.assignees.length - 3}
+                </span>
+              )}
+            </div>
           )}
-          {task.external_provider && (
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 ml-auto">
-              Synced
-            </Badge>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {task.external_provider && (
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                Synced
+              </Badge>
+            )}
+            {showCreator && task.creator?.user_id && (
+              <Avatar
+                className="h-5 w-5 border border-background"
+                title={`Created by ${task.creator.full_name || "Unknown"}`}
+              >
+                <AvatarImage src={task.creator.avatar_url ?? undefined} />
+                <AvatarFallback className="text-[9px]">
+                  {initials(task.creator.full_name)}
+                </AvatarFallback>
+              </Avatar>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>

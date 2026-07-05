@@ -19,13 +19,14 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Loader2, Trash2, LogOut, Settings, UserMinus, AlertTriangle } from "lucide-react";
+import { Loader2, Trash2, LogOut, Settings, UserMinus, AlertTriangle, BarChart2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useRemoveProjectMember, useProjectMembers } from "@/hooks/useProjectMembers";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { ProjectSlackSettings } from "./integrations/ProjectSlackSettings";
+import { useDeleteProjectRoyalties } from "@/hooks/useRoyalties";
 
 interface SettingsTabProps {
   projectId: string;
@@ -135,6 +136,8 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
     );
   };
 
+  const deleteProjectRoyalties = useDeleteProjectRoyalties();
+
   const isOwner = userRole === "owner";
   const { connections } = useIntegrations();
   const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
@@ -226,6 +229,70 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
                   >
                     {removeMember.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                     Leave
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </Card>
+          <Separator />
+        </>
+      )}
+
+      {/* Royalty tracking (owner only) */}
+      {isOwner && (
+        <>
+          <Card className="p-6 space-y-3">
+            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <BarChart2 className="w-4 h-4 text-muted-foreground" />
+              Royalty tracking
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Remove all royalty entries for this project. The next OneClick run will recompute them from scratch.
+            </p>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={deleteProjectRoyalties.isPending}
+                  className="text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                >
+                  {deleteProjectRoyalties.isPending && (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  )}
+                  Delete royalty entries
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete royalty entries for this project?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This removes all royalty tracking entries <strong>and the cached OneClick calculations</strong> for
+                    this project. The next OneClick run will recompute. Already-issued invoices are kept but may show as
+                    orphaned. This can't be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleteProjectRoyalties.isPending}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={deleteProjectRoyalties.isPending}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      deleteProjectRoyalties.mutate(projectId, {
+                        onSuccess: (res) => {
+                          toast.success(
+                            `Removed ${res.deleted_calculations} calculation(s).`,
+                          );
+                        },
+                        onError: (err: Error) => toast.error(err.message),
+                      });
+                    }}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {deleteProjectRoyalties.isPending && (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    )}
+                    Delete entries
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>

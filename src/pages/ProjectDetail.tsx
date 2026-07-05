@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Music, ArrowLeft, Loader2,
-  FileText, Volume2, Users, Settings, StickyNote, BookOpen, MessageSquare,
+  FileText, Volume2, Users, Settings, StickyNote, BookOpen, MessageSquare, Receipt,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -18,6 +18,7 @@ import WorksTab from "@/components/project/WorksTab";
 import FilesTab from "@/components/project/FilesTab";
 import AudioTab from "@/components/project/AudioTab";
 import MembersTab from "@/components/project/MembersTab";
+import ExpenseTrackerTab from "@/components/project/ExpenseTrackerTab";
 import SettingsTab from "@/components/project/SettingsTab";
 import NotesView from "@/components/notes/NotesView";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
@@ -49,7 +50,12 @@ const ProjectDetail = () => {
   const queryClient = useQueryClient();
   const userRole = useMyRole(projectId);
 
-  const [activeTab, setActiveTab] = useState("files");
+  const [searchParams] = useSearchParams();
+  const VALID_TABS = ["works", "files", "expenses", "audio", "members", "notes", "settings"];
+  const initialTab = VALID_TABS.includes(searchParams.get("tab") ?? "")
+    ? (searchParams.get("tab") as string)
+    : "files";
+  const [activeTab, setActiveTab] = useState(initialTab);
   const isMobile = useIsMobile();
 
   const { connections } = useIntegrations();
@@ -217,6 +223,7 @@ const ProjectDetail = () => {
               <SelectContent>
                 <SelectItem value="works"><span className="inline-flex items-center gap-2"><Music className="w-4 h-4" /> Works</span></SelectItem>
                 <SelectItem value="files"><span className="inline-flex items-center gap-2"><FileText className="w-4 h-4" /> Files</span></SelectItem>
+                <SelectItem value="expenses"><span className="inline-flex items-center gap-2"><Receipt className="w-4 h-4" /> Expenses</span></SelectItem>
                 <SelectItem value="audio"><span className="inline-flex items-center gap-2"><Volume2 className="w-4 h-4" /> Audio</span></SelectItem>
                 <SelectItem value="members"><span className="inline-flex items-center gap-2"><Users className="w-4 h-4" /> Members</span></SelectItem>
                 <SelectItem value="notes"><span className="inline-flex items-center gap-2"><StickyNote className="w-4 h-4" /> Notes</span></SelectItem>
@@ -230,6 +237,9 @@ const ProjectDetail = () => {
               </TabsTrigger>
               <TabsTrigger value="files" className="gap-1.5">
                 <FileText className="w-4 h-4" /> Files
+              </TabsTrigger>
+              <TabsTrigger value="expenses" className="gap-1.5">
+                <Receipt className="w-4 h-4" /> Expenses
               </TabsTrigger>
               <TabsTrigger value="audio" className="gap-1.5">
                 <Volume2 className="w-4 h-4" /> Audio
@@ -272,6 +282,10 @@ const ProjectDetail = () => {
 
           <TabsContent value="members">
             {projectId && <MembersTab projectId={projectId} userRole={userRole} />}
+          </TabsContent>
+
+          <TabsContent value="expenses">
+            {projectId && <ExpenseTrackerTab projectId={projectId} userRole={userRole} />}
           </TabsContent>
 
           <TabsContent value="notes">

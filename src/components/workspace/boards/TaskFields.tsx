@@ -1,8 +1,9 @@
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -17,6 +18,9 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { ColorPicker } from "./ColorPicker";
 import { MultiSelectCombobox } from "./MultiSelectCombobox";
+import { useTeamMembers } from "@/hooks/useTeams";
+import { useAddAssignee, useRemoveAssignee } from "@/hooks/useTaskAssignees";
+import { useAuth } from "@/contexts/AuthContext";
 import type { BoardColumn, BoardTaskDetail, ParentTaskWithChildren } from "@/types/integrations";
 
 interface TaskFieldsProps {
@@ -31,8 +35,9 @@ interface TaskFieldsProps {
   setDueDate: (v: Date | undefined) => void;
   color: string;
   setColor: (v: string) => void;
-  assigneeName: string;
-  setAssigneeName: (v: string) => void;
+  // Team context from the board switcher (get_task_detail returns board_id only).
+  // Set → team board (member multi-select); null/undefined → personal board (self-assign only).
+  teamId?: string | null;
   statusColumnId: string;
   setStatusColumnId: (v: string) => void;
   columns: BoardColumn[];
@@ -47,6 +52,9 @@ interface TaskFieldsProps {
   selectedContractIds: string[];
   setSelectedContractIds: (ids: string[]) => void;
   saveField: (field: string, value: unknown) => void;
+  // Batches multiple fields into a single updateTask mutation so the backend
+  // merge sees <kind>_ids and <kind>_labels together. No-op in create mode.
+  saveFields: (fields: Record<string, unknown>) => void;
   onNavigateToTask?: (taskId: string) => void;
 }
 
@@ -62,8 +70,7 @@ export function TaskFields({
   setDueDate,
   color,
   setColor,
-  assigneeName,
-  setAssigneeName,
+  teamId,
   statusColumnId,
   setStatusColumnId,
   columns,
@@ -78,8 +85,87 @@ export function TaskFields({
   selectedContractIds,
   setSelectedContractIds,
   saveField,
+  saveFields,
   onNavigateToTask,
 }: TaskFieldsProps) {
+  const { user } = useAuth();
+  // Only fetches when teamId is set (hook is enabled-gated on teamId).
+  const { data: members } = useTeamMembers(teamId ?? undefined);
+  const addAssignee = useAddAssignee();
+  const removeAssignee = useRemoveAssignee();
+
+  // Assignment mutations need a real task id — in create mode (task.id is
+  // empty) the section is hidden; assignment happens after creation.
+  const canAssign = !!task.id;
+  const assignPending = addAssignee.isPending || removeAssignee.isPending;
+  const assigneeIds = task.assignees?.map((a) => a.user_id) ?? [];
+
+  const handleAssigneesChange = (ids: string[]) => {
+    const memberById = new Map((members ?? []).map((m) => [m.user_id, m]));
+    ids
+      .filter((id) => !assigneeIds.includes(id))
+      .forEach((userId) => {
+        const m = memberById.get(userId);
+        // Pass the display object so the optimistic assignee shows the right
+        // name/avatar immediately (falls back to id-only if not a known member).
+        addAssignee.mutate({
+          taskId: task.id,
+          userId,
+          assignee: m
+            ? { user_id: userId, full_name: m.full_name, avatar_url: m.avatar_url }
+            : undefined,
+        });
+      });
+    assigneeIds
+      .filter((id) => !ids.includes(id))
+      .forEach((userId) => removeAssignee.mutate({ taskId: task.id, userId }));
+  };
+
+  // For each linked kind, split the server's linked set into:
+  //   - options: the viewer's own list + synthetic options for can_open linked
+  //     ids not already in the own list (e.g. a project the viewer is a member
+  //     of). Non-can_open ids are intentionally excluded so they can't be
+  //     toggled in the dropdown.
+  //   - readonly: non-can_open linked entities, shown as plain (unremovable)
+  //     chips. The backend merge preserves these server-side.
+  // `nameFor` resolves a selected id's label from the option set (own +
+  // synthetic) so the write can snapshot <kind>_labels.
+  const buildLinkedField = (
+    ownOptions: { id: string; label: string }[],
+    linked: { id: string; name: string; can_open: boolean }[]
+  ) => {
+    const ownIds = new Set(ownOptions.map((o) => o.id));
+    const synthetic = linked
+      .filter((l) => l.can_open && !ownIds.has(l.id))
+      .map((l) => ({ id: l.id, label: l.name }));
+    const options = [...ownOptions, ...synthetic];
+    const nameByIdEntries = new Map(options.map((o) => [o.id, o.label]));
+    return {
+      options,
+      readonly: linked.filter((l) => !l.can_open),
+      nameFor: (id: string) =>
+        nameByIdEntries.get(id) ??
+        linked.find((l) => l.id === id)?.name ??
+        id,
+    };
+  };
+
+  const artistField = buildLinkedField(
+    artists.map((a) => ({ id: a.id, label: a.name })),
+    task.artists ?? []
+  );
+  const projectField = buildLinkedField(
+    projects.map((p) => ({ id: p.id, label: p.name })),
+    task.projects ?? []
+  );
+  const documentField = buildLinkedField(
+    contracts.map((c) => ({ id: c.id, label: c.file_name })),
+    task.documents ?? []
+  );
+
+  const labelsFor = (ids: string[], nameFor: (id: string) => string) =>
+    Object.fromEntries(ids.map((id) => [id, nameFor(id)]));
+
   return (
     <>
       {/* Status (for parent tasks) */}
@@ -327,18 +413,60 @@ export function TaskFields({
         />
       </div>
 
-      {/* Assignee */}
-      <div className="space-y-2">
-        <Label className="text-xs text-muted-foreground uppercase tracking-wider">
-          Assignee
-        </Label>
-        <Input
-          value={assigneeName}
-          onChange={(e) => setAssigneeName(e.target.value)}
-          onBlur={() => saveField("assignee_name", assigneeName)}
-          placeholder="Assignee name"
-        />
-      </div>
+      {/* Assignees */}
+      {canAssign && (
+        <div className="space-y-2">
+          <Label className="text-xs text-muted-foreground uppercase tracking-wider">
+            Assignees
+          </Label>
+          {teamId ? (
+            // MultiSelectCombobox has no `disabled` prop — soft-disable while
+            // assignee mutations are in flight so the picker doesn't read as broken.
+            <div className={assignPending ? "opacity-60 pointer-events-none" : ""}>
+              <MultiSelectCombobox
+                options={[
+                  ...(members ?? []).map((m) => ({
+                    id: m.user_id,
+                    label: m.full_name || "Unnamed member",
+                  })),
+                  // Assignees who have since left the team: keep them in the
+                  // options so their chip renders and can be deselected.
+                  ...(task.assignees ?? [])
+                    .filter((a) => !(members ?? []).some((m) => m.user_id === a.user_id))
+                    .map((a) => ({
+                      id: a.user_id,
+                      label: `${a.full_name || "Unnamed member"} (no longer in team)`,
+                    })),
+                ]}
+                selected={assigneeIds}
+                onChange={handleAssigneesChange}
+                placeholder="Assign members..."
+              />
+            </div>
+          ) : (
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <Checkbox
+                disabled={assignPending}
+                checked={!!user?.id && assigneeIds.includes(user.id)}
+                onCheckedChange={(checked) => {
+                  if (!user?.id) return;
+                  if (checked) {
+                    addAssignee.mutate({ taskId: task.id, userId: user.id });
+                  } else {
+                    removeAssignee.mutate({ taskId: task.id, userId: user.id });
+                  }
+                }}
+              />
+              Assign to me
+            </label>
+          )}
+          {task.assignee_name && !task.assignees?.length && (
+            <p className="text-xs text-muted-foreground">
+              Previously assigned to: {task.assignee_name}
+            </p>
+          )}
+        </div>
+      )}
 
       <Separator />
 
@@ -348,14 +476,18 @@ export function TaskFields({
           Involved Artists
         </Label>
         <MultiSelectCombobox
-          options={artists.map((a) => ({ id: a.id, label: a.name }))}
+          options={artistField.options}
           selected={selectedArtistIds}
           onChange={(ids) => {
             setSelectedArtistIds(ids);
-            saveField("artist_ids", ids);
+            saveFields({
+              artist_ids: ids,
+              artist_labels: labelsFor(ids, artistField.nameFor),
+            });
           }}
           placeholder="Select artists..."
         />
+        <ReadonlyLinkChips items={artistField.readonly} />
       </div>
 
       {/* Projects */}
@@ -364,14 +496,18 @@ export function TaskFields({
           Linked Projects
         </Label>
         <MultiSelectCombobox
-          options={projects.map((p) => ({ id: p.id, label: p.name }))}
+          options={projectField.options}
           selected={selectedProjectIds}
           onChange={(ids) => {
             setSelectedProjectIds(ids);
-            saveField("project_ids", ids);
+            saveFields({
+              project_ids: ids,
+              project_labels: labelsFor(ids, projectField.nameFor),
+            });
           }}
           placeholder="Select projects..."
         />
+        <ReadonlyLinkChips items={projectField.readonly} />
       </div>
 
       {/* Contracts */}
@@ -380,18 +516,43 @@ export function TaskFields({
           Linked Contracts
         </Label>
         <MultiSelectCombobox
-          options={contracts.map((c) => ({
-            id: c.id,
-            label: c.file_name,
-          }))}
+          options={documentField.options}
           selected={selectedContractIds}
           onChange={(ids) => {
             setSelectedContractIds(ids);
-            saveField("contract_ids", ids);
+            saveFields({
+              contract_ids: ids,
+              contract_labels: labelsFor(ids, documentField.nameFor),
+            });
           }}
           placeholder="Select contracts..."
         />
+        <ReadonlyLinkChips items={documentField.readonly} />
       </div>
     </>
+  );
+}
+
+// Display-only chips for linked entities the viewer can't access. No remove
+// affordance and no click-through — the backend preserves these links on write.
+function ReadonlyLinkChips({
+  items,
+}: {
+  items: { id: string; name: string }[];
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.map((item) => (
+        <Badge
+          key={item.id}
+          variant="secondary"
+          className="text-xs font-normal opacity-70"
+          title="Shared by a teammate — you don't have access"
+        >
+          {item.name}
+        </Badge>
+      ))}
+    </div>
   );
 }

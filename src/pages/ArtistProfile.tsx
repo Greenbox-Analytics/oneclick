@@ -17,6 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import NotesView from "@/components/notes/NotesView";
 import CredentialsVault from "@/components/profile/CredentialsVault";
+import { ArtistRoyaltiesSection } from "@/components/profile/ArtistRoyaltiesSection";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1162,6 +1163,9 @@ const ArtistProfile = () => {
 
           {/* Credentials Vault -- per-artist platform logins, encrypted at rest */}
           {id && <CredentialsVault artistId={id} />}
+
+          {/* Royalties -- earned/owed/paid summary; hidden when no activity */}
+          {id && <ArtistRoyaltiesSection artistId={id} />}
 
           {/* My Notes -- private to you */}
           <Card className="border border-border shadow-sm hover:shadow-md transition-shadow overflow-hidden">

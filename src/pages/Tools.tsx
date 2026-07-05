@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calculator, ArrowRight, Bot, FileText, Shield, BookOpen } from "lucide-react";
+import { Calculator, ArrowRight, Bot, FileText, Shield, BookOpen, Receipt } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
@@ -14,6 +14,7 @@ const ROUTE_FOR_TOOL: Partial<Record<ToolId, string>> = {
   zoe: "/tools/zoe",
   splitsheet: "/tools/split-sheet",
   registry: "/tools/registry",
+  "expense-tracker": "/tools/expense-tracker",
 };
 
 const ICON_FOR_TOOL: Partial<Record<ToolId, LucideIcon>> = {
@@ -21,6 +22,7 @@ const ICON_FOR_TOOL: Partial<Record<ToolId, LucideIcon>> = {
   zoe: Bot,
   splitsheet: FileText,
   registry: Shield,
+  "expense-tracker": Receipt,
 };
 
 const DESC_FOR_TOOL: Partial<Record<ToolId, string>> = {
@@ -28,6 +30,7 @@ const DESC_FOR_TOOL: Partial<Record<ToolId, string>> = {
   zoe: "Ask questions about your contracts and get AI-powered answers with source citations.",
   splitsheet: "Generate professional split sheet agreements to document royalty ownership for your music.",
   registry: "Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents.",
+  "expense-tracker": "Track project expenses by category and link them to tracks for accurate net royalty calculations.",
 };
 
 // Keep the toggle external to TOOL_REGISTRY because "coming soon" is a UI

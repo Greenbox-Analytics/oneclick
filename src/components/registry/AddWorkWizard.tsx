@@ -82,6 +82,92 @@ const TYPES = [
   ["other", "Other"],
 ] as const;
 
+// A contract queued for AI split parsing. Splits are often spread across
+// several contracts (producer deal, feature deal, …) that only together
+// account for 100% — the queue lets the user parse them all and merge.
+interface QueuedContract {
+  id: string;
+  kind: "upload" | "project";
+  file?: File;
+  contractFileId?: string;
+  displayName: string;
+  status: "pending" | "parsing" | "done" | "error";
+  error?: string;
+  parties?: ParsedParty[]; // raw parse result, kept for provenance + re-merge
+  mainArtistFound?: boolean;
+}
+
+interface MergeConflict {
+  name: string;
+  values: Array<{ file: string; master: number; publishing: number }>;
+}
+
+const normName = (name: string) => name.trim().toLowerCase().replace(/\s+/g, " ");
+
+/**
+ * Merge the parsed parties of several contracts into one split table.
+ * Correctness rules: values are NEVER silently summed — the same person in two
+ * contracts keeps the first value and raises a conflict; the main artist's
+ * share is stated relative to each individual deal, so summing it would
+ * double-count. Conflicts are surfaced for the user to reconcile in the
+ * editable table.
+ */
+function mergeParsedContracts(
+  contracts: Array<{ displayName: string; parties?: ParsedParty[]; mainArtistFound?: boolean }>,
+  artistName: string
+): { rows: SplitRow[]; mainArtistFoundAny: boolean; conflicts: MergeConflict[] } {
+  const byKey = new Map<string, SplitRow>();
+  const conflictByKey = new Map<string, MergeConflict>();
+  const firstSeen = new Map<string, { file: string; master: number; publishing: number }>();
+  let youRow: SplitRow | null = null;
+  const mainArtistFoundAny = contracts.some((c) => c.mainArtistFound);
+
+  const noteConflict = (key: string, name: string, file: string, master: number, publishing: number) => {
+    let conflict = conflictByKey.get(key);
+    if (!conflict) {
+      conflict = { name, values: [firstSeen.get(key)!] };
+      conflictByKey.set(key, conflict);
+    }
+    conflict.values.push({ file, master, publishing });
+  };
+
+  for (const c of contracts) {
+    for (const p of c.parties || []) {
+      const master = Math.round(p.master_pct);
+      const publishing = Math.round(p.publishing_pct);
+      if (p.is_main_artist) {
+        if (!youRow) {
+          youRow = { key: "you", name: p.name, role: p.role || "Primary Artist", isYou: true, master, publishing };
+          firstSeen.set("you", { file: c.displayName, master, publishing });
+        } else if (master !== youRow.master || publishing !== youRow.publishing) {
+          noteConflict("you", youRow.name, c.displayName, master, publishing);
+        }
+        continue;
+      }
+      const key = normName(p.name);
+      const existing = byKey.get(key);
+      if (existing) {
+        if (master !== existing.master || publishing !== existing.publishing) {
+          noteConflict(key, existing.name, c.displayName, master, publishing);
+        }
+        // equal values = duplicate mention of the same deal — dedupe silently
+      } else {
+        byKey.set(key, { key, name: p.name, role: p.role, isYou: false, master, publishing });
+        firstSeen.set(key, { file: c.displayName, master, publishing });
+      }
+    }
+  }
+
+  if (!youRow) {
+    youRow = { key: "you", name: artistName, role: "Primary Artist", isYou: true, master: 0, publishing: 0 };
+  }
+  return {
+    rows: [youRow, ...byKey.values()],
+    mainArtistFoundAny,
+    conflicts: Array.from(conflictByKey.values()),
+  };
+}
+
 export function AddWorkWizard({
   open,
   onClose,
@@ -223,7 +309,7 @@ export function AddWorkWizard({
 
   // Splits
   const [royMode, setRoyMode] = useState<null | "ai" | "manual">(null);
-  const [contractFile, setContractFile] = useState<File | null>(null);
+  const [queuedContracts, setQueuedContracts] = useState<QueuedContract[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const parseSplits = useParseContractSplits();
   const [splitRows, setSplitRows] = useState<SplitRow[]>([]);
@@ -231,6 +317,10 @@ export function AddWorkWizard({
     null | { type: "ai" | "manual"; file?: string; date: string }
   >(null);
   const [mainArtistInContract, setMainArtistInContract] = useState(true);
+  const [mergeConflicts, setMergeConflicts] = useState<MergeConflict[]>([]);
+  // True once the user hand-edits the split table — guards against a re-parse
+  // silently overwriting their edits.
+  const [rowsDirty, setRowsDirty] = useState(false);
 
   // Mutations
   const createWork = useCreateWork();
@@ -251,10 +341,12 @@ export function AddWorkWizard({
     setChosen(null);
     setManualArtists([]);
     setRoyMode(null);
-    setContractFile(null);
+    setQueuedContracts([]);
     setSplitRows([]);
     setSplitsSource(null);
     setMainArtistInContract(true);
+    setMergeConflicts([]);
+    setRowsDirty(false);
     setSubmitting(false);
   };
 
@@ -338,61 +430,120 @@ export function AddWorkWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onRoyalty]);
 
-  const handleParse = async (
-    source:
+  // ---- multi-contract queue ----
+  const patchQueued = (id: string, patch: Partial<QueuedContract>) =>
+    setQueuedContracts((prev) => prev.map((q) => (q.id === id ? { ...q, ...patch } : q)));
+
+  const addContracts = (
+    items: Array<
       | { kind: "upload"; file: File; displayName: string }
       | { kind: "project"; contractFileId: string; displayName: string }
-  ) => {
-    try {
-      const result = await parseSplits.mutateAsync(
-        source.kind === "upload"
-          ? { file: source.file, mainArtistName: artistName }
-          : { contractFileId: source.contractFileId, mainArtistName: artistName }
-      );
-      const today = new Date().toISOString().slice(0, 10);
-      if (result.parties.length === 0) {
-        toast.error("We couldn't read royalty splits from this contract");
-        setRoyMode("manual");
-        setSplitRows([
-          {
-            key: "you",
-            name: artistName,
-            role: "Primary Artist",
-            isYou: true,
-            master: 0,
-            publishing: 0,
-          },
-        ]);
-        setSplitsSource(null);
-        return;
-      }
-      setMainArtistInContract(result.main_artist_found);
-      const rows: SplitRow[] = [];
-      if (!result.main_artist_found) {
-        rows.push({
-          key: "you",
-          name: artistName,
-          role: "Primary Artist",
-          isYou: true,
-          master: 0,
-          publishing: 0,
-        });
-      }
-      for (const p of result.parties) {
-        rows.push({
-          key: p.name,
-          name: p.name,
-          role: p.role,
-          isYou: p.is_main_artist,
-          master: Math.round(p.master_pct),
-          publishing: Math.round(p.publishing_pct),
-        });
-      }
-      setSplitRows(rows);
-      setSplitsSource({ type: "ai", file: source.displayName, date: today });
-    } catch (e) {
-      toast.error((e as Error).message || "Parse failed");
+    >
+  ) =>
+    setQueuedContracts((prev) => [
+      ...prev,
+      ...items.map((item) => ({ ...item, id: crypto.randomUUID(), status: "pending" as const })),
+    ]);
+
+  const clearContracts = () => setQueuedContracts([]);
+
+  // Rebuild the split table from every successfully parsed contract.
+  const applyMerge = (done: QueuedContract[]) => {
+    const withParties = done.filter((q) => (q.parties?.length ?? 0) > 0);
+    if (withParties.length === 0) {
+      toast.error("We couldn't read royalty splits from these contracts");
+      setRoyMode("manual");
+      setSplitRows([
+        { key: "you", name: artistName, role: "Primary Artist", isYou: true, master: 0, publishing: 0 },
+      ]);
+      setSplitsSource(null);
+      setMergeConflicts([]);
+      return;
     }
+    const merged = mergeParsedContracts(withParties, artistName);
+    setMainArtistInContract(merged.mainArtistFoundAny);
+    setSplitRows(merged.rows);
+    setMergeConflicts(merged.conflicts);
+    setSplitsSource({
+      type: "ai",
+      file:
+        withParties.length === 1
+          ? withParties[0].displayName
+          : `${withParties.length} contracts`,
+      date: new Date().toISOString().slice(0, 10),
+    });
+    setRowsDirty(false);
+  };
+
+  const removeContract = (id: string) => {
+    const removed = queuedContracts.find((q) => q.id === id);
+    const remaining = queuedContracts.filter((q) => q.id !== id);
+    setQueuedContracts(remaining);
+    // Removing an already-merged contract re-merges the rest so its parties
+    // drop out of the table (unless the user has hand-edited the rows).
+    if (removed?.status === "done" && !rowsDirty && splitRows.some((r) => !r.isYou)) {
+      const done = remaining.filter((q) => q.status === "done");
+      if (done.length > 0) {
+        applyMerge(done);
+      } else {
+        setSplitRows([]);
+        setSplitsSource(null);
+        setMergeConflicts([]);
+        setMainArtistInContract(true);
+      }
+    }
+  };
+
+  const handleParseAll = async () => {
+    if (
+      rowsDirty &&
+      splitRows.some((r) => !r.isYou) &&
+      !window.confirm("Parsing will rebuild the split table and replace your edits. Continue?")
+    ) {
+      return;
+    }
+    const done: QueuedContract[] = [];
+    for (const qc of queuedContracts) {
+      if (qc.status === "done" && qc.parties) {
+        // already parsed — reuse the result, don't re-run the AI
+        done.push(qc);
+        continue;
+      }
+      patchQueued(qc.id, { status: "parsing", error: undefined });
+      try {
+        const result = await parseSplits.mutateAsync(
+          qc.kind === "upload"
+            ? { file: qc.file!, mainArtistName: artistName }
+            : { contractFileId: qc.contractFileId!, mainArtistName: artistName }
+        );
+        const parsed: QueuedContract = {
+          ...qc,
+          status: "done",
+          parties: result.parties,
+          mainArtistFound: result.main_artist_found,
+        };
+        patchQueued(qc.id, {
+          status: "done",
+          parties: result.parties,
+          mainArtistFound: result.main_artist_found,
+        });
+        done.push(parsed);
+      } catch (e) {
+        patchQueued(qc.id, { status: "error", error: (e as Error).message || "Parse failed" });
+      }
+    }
+    if (done.length === 0) {
+      // every contract failed to parse — stay in AI mode so the per-file
+      // errors remain visible and the user can retry or remove files
+      toast.error("We couldn't read these contracts — see the errors below");
+      return;
+    }
+    applyMerge(done);
+  };
+
+  const handleRowsEdit = (rows: SplitRow[]) => {
+    setSplitRows(rows);
+    setRowsDirty(true);
   };
 
   const finish = async (overrideRows?: SplitRow[]) => {
@@ -660,14 +811,17 @@ export function AddWorkWizard({
             <RoyaltyStep
               royMode={royMode}
               setRoyMode={setRoyMode}
-              contractFile={contractFile}
-              setContractFile={setContractFile}
+              queuedContracts={queuedContracts}
+              onAddContracts={addContracts}
+              onRemoveContract={removeContract}
+              onClearContracts={clearContracts}
               fileInputRef={fileInputRef}
-              parsing={parseSplits.isPending}
+              parsing={queuedContracts.some((q) => q.status === "parsing")}
               splitRows={splitRows}
-              setSplitRows={setSplitRows}
+              setSplitRows={handleRowsEdit}
               splitsSource={splitsSource}
-              onParse={handleParse}
+              onParseAll={handleParseAll}
+              mergeConflicts={mergeConflicts}
               artistName={artistName}
               mainArtistInContract={mainArtistInContract}
               projectId={projectIdInUse}
@@ -1254,38 +1408,46 @@ type AiSource = "upload" | "project";
 function RoyaltyStep({
   royMode,
   setRoyMode,
-  contractFile,
-  setContractFile,
+  queuedContracts,
+  onAddContracts,
+  onRemoveContract,
+  onClearContracts,
   fileInputRef,
   parsing,
   splitRows,
   setSplitRows,
   splitsSource,
-  onParse,
+  onParseAll,
+  mergeConflicts,
   artistName,
   mainArtistInContract,
   projectId,
 }: {
   royMode: null | "ai" | "manual";
   setRoyMode: (v: null | "ai" | "manual") => void;
-  contractFile: File | null;
-  setContractFile: (f: File | null) => void;
+  queuedContracts: QueuedContract[];
+  onAddContracts: (
+    items: Array<
+      | { kind: "upload"; file: File; displayName: string }
+      | { kind: "project"; contractFileId: string; displayName: string }
+    >
+  ) => void;
+  onRemoveContract: (id: string) => void;
+  onClearContracts: () => void;
   fileInputRef: React.RefObject<HTMLInputElement>;
   parsing: boolean;
   splitRows: SplitRow[];
   setSplitRows: (r: SplitRow[]) => void;
   splitsSource: null | { type: "ai" | "manual"; file?: string; date: string };
-  onParse: (
-    source:
-      | { kind: "upload"; file: File; displayName: string }
-      | { kind: "project"; contractFileId: string; displayName: string }
-  ) => void;
+  onParseAll: () => void;
+  mergeConflicts: MergeConflict[];
   artistName: string;
   mainArtistInContract: boolean;
   projectId: string;
 }) {
   const [aiSource, setAiSource] = useState<AiSource>("project");
-  const [pickedContract, setPickedContract] = useState<ProjectContract | null>(null);
+  // Re-opens the contract picker after a merge (the "Add another contract" button).
+  const [showPicker, setShowPicker] = useState(false);
 
   const projectContractsQuery = useQuery<ProjectContract[]>({
     queryKey: ["wizard-project-contracts", projectId],
@@ -1303,22 +1465,21 @@ function RoyaltyStep({
     enabled: !!projectId && royMode === "ai",
   });
 
-  const triggerParse = () => {
-    if (aiSource === "upload" && contractFile) {
-      onParse({ kind: "upload", file: contractFile, displayName: contractFile.name });
-    } else if (aiSource === "project" && pickedContract) {
-      onParse({
-        kind: "project",
-        contractFileId: pickedContract.id,
-        displayName: pickedContract.file_name,
-      });
-    }
+  const queuedProjectIds = new Set(
+    queuedContracts.filter((q) => q.kind === "project").map((q) => q.contractFileId)
+  );
+
+  const toggleProjectContract = (c: ProjectContract) => {
+    const existing = queuedContracts.find(
+      (q) => q.kind === "project" && q.contractFileId === c.id
+    );
+    if (existing) onRemoveContract(existing.id);
+    else onAddContracts([{ kind: "project", contractFileId: c.id, displayName: c.file_name }]);
   };
 
   const canParse =
-    !parsing &&
-    ((aiSource === "upload" && !!contractFile) ||
-      (aiSource === "project" && !!pickedContract));
+    !parsing && queuedContracts.some((q) => q.status === "pending" || q.status === "error");
+  const doneContracts = queuedContracts.filter((q) => q.status === "done");
 
   return (
     <div className="space-y-4">
@@ -1360,7 +1521,7 @@ function RoyaltyStep({
         </div>
       )}
 
-      {royMode === "ai" && splitRows.filter((r) => !r.isYou).length === 0 && (
+      {royMode === "ai" && (splitRows.filter((r) => !r.isYou).length === 0 || showPicker) && (
         <>
           <div className="inline-flex items-center gap-1 rounded-lg border bg-muted/40 p-1">
             <button
@@ -1407,14 +1568,16 @@ function RoyaltyStep({
                   </p>
                 </div>
               ) : (
+                <>
                 <div className="max-h-60 overflow-y-auto rounded-lg border divide-y">
                   {(projectContractsQuery.data || []).map((c) => {
-                    const picked = pickedContract?.id === c.id;
+                    const picked = queuedProjectIds.has(c.id);
                     return (
                       <button
                         key={c.id}
                         type="button"
-                        onClick={() => setPickedContract(c)}
+                        onClick={() => toggleProjectContract(c)}
+                        disabled={parsing}
                         className={cn(
                           "w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-muted/40 transition-colors",
                           picked && "bg-muted/40"
@@ -1437,6 +1600,10 @@ function RoyaltyStep({
                     );
                   })}
                 </div>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  Select every contract that covers this work's splits — you can pick more than one.
+                </p>
+                </>
               )}
             </div>
           )}
@@ -1447,48 +1614,103 @@ function RoyaltyStep({
                 ref={fileInputRef}
                 type="file"
                 accept="application/pdf,.pdf"
+                multiple
                 className="hidden"
-                onChange={(e) => setContractFile(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || []);
+                  if (files.length > 0) {
+                    onAddContracts(
+                      files.map((f) => ({ kind: "upload" as const, file: f, displayName: f.name }))
+                    );
+                  }
+                  // allow re-picking the same file after removing it
+                  e.target.value = "";
+                }}
               />
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className={cn(
-                  "w-full rounded-xl border-2 border-dashed p-6 flex flex-col items-center gap-2 hover:border-primary/40 hover:bg-muted/40",
-                  contractFile && "border-primary/40 bg-muted/40"
-                )}
+                className="w-full rounded-xl border-2 border-dashed p-6 flex flex-col items-center gap-2 hover:border-primary/40 hover:bg-muted/40"
               >
-                {contractFile ? (
-                  <Sparkles className="w-6 h-6 text-primary" />
-                ) : (
-                  <Upload className="w-6 h-6 text-muted-foreground" />
-                )}
+                <Upload className="w-6 h-6 text-muted-foreground" />
                 <div className="text-sm font-semibold">
-                  {contractFile?.name || "Click to choose the related contract"}
+                  Click to add the related contract{queuedContracts.length > 0 ? "s" : ""}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {contractFile ? "Ready to analyze" : "PDF up to ~25 MB · text is read by AI"}
+                  PDFs up to ~25 MB · you can add several · text is read by AI
                 </div>
               </button>
             </>
           )}
 
+          {queuedContracts.length > 0 && (
+            <div className="rounded-lg border divide-y">
+              {queuedContracts.map((q) => (
+                <div key={q.id} className="flex items-center gap-3 px-3 py-2">
+                  {q.status === "parsing" ? (
+                    <Loader2 className="w-4 h-4 shrink-0 animate-spin text-primary" />
+                  ) : q.status === "done" ? (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+                  ) : q.status === "error" ? (
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-destructive" />
+                  ) : (
+                    <Clock className="w-4 h-4 shrink-0 text-muted-foreground" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{q.displayName}</div>
+                    <div
+                      className={cn(
+                        "text-[11px]",
+                        q.status === "error" ? "text-destructive" : "text-muted-foreground"
+                      )}
+                    >
+                      {q.status === "pending" && "Ready to parse"}
+                      {q.status === "parsing" && "Reading with AI…"}
+                      {q.status === "done" &&
+                        `Parsed · ${q.parties?.length ?? 0} ${(q.parties?.length ?? 0) === 1 ? "party" : "parties"} found`}
+                      {q.status === "error" && (q.error || "Parse failed")}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveContract(q.id)}
+                    disabled={q.status === "parsing"}
+                    aria-label={`Remove ${q.displayName}`}
+                    className="shrink-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-center gap-3">
-            <Button onClick={triggerParse} disabled={!canParse}>
+            <Button
+              onClick={() => {
+                setShowPicker(false);
+                onParseAll();
+              }}
+              disabled={!canParse}
+            >
               {parsing ? (
                 <Loader2 className="w-4 h-4 mr-1 animate-spin" />
               ) : (
                 <Sparkles className="w-4 h-4 mr-1" />
               )}
-              {parsing ? "Reading contract…" : "Parse with AI"}
+              {parsing
+                ? `Reading contract${queuedContracts.length > 1 ? "s" : ""}…`
+                : queuedContracts.length === 0
+                  ? "Parse with AI"
+                  : `Parse ${queuedContracts.length} contract${queuedContracts.length === 1 ? "" : "s"} with AI`}
             </Button>
             <button
               type="button"
               className="text-xs text-primary hover:underline"
               onClick={() => {
                 setRoyMode(null);
-                setContractFile(null);
-                setPickedContract(null);
+                setShowPicker(false);
+                onClearContracts();
               }}
             >
               Back to options
@@ -1503,9 +1725,29 @@ function RoyaltyStep({
             <div className="flex items-start gap-2 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg px-3 py-2">
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
-                We didn't see <b>{artistName}</b> in the contract. Enter your own master /
-                publishing % manually in the "You" row below.
+                We didn't see <b>{artistName}</b> in the contract
+                {doneContracts.length > 1 ? "s" : ""}. Enter your own master / publishing %
+                manually in the "You" row below.
               </span>
+            </div>
+          )}
+          {mergeConflicts.length > 0 && (
+            <div className="flex items-start gap-2 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg px-3 py-2">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <p className="font-medium">
+                  The contracts disagree on some splits — we kept the first value. Edit the rows
+                  below to the correct totals.
+                </p>
+                {mergeConflicts.map((conflict) => (
+                  <p key={conflict.name}>
+                    <b>{conflict.name}</b>:{" "}
+                    {conflict.values
+                      .map((v) => `Master ${v.master}% / Publishing ${v.publishing}% (${v.file})`)
+                      .join(" vs ")}
+                  </p>
+                ))}
+              </div>
             </div>
           )}
           <RoyaltySplitsTable
@@ -1516,6 +1758,21 @@ function RoyaltyStep({
             source={splitsSource}
             warnOnImbalance={false}
           />
+          {doneContracts.length > 1 && (
+            <div className="text-[11px] text-muted-foreground space-y-0.5">
+              <p className="font-medium text-muted-foreground">Sources</p>
+              {doneContracts.map((q) => (
+                <p key={q.id} className="truncate">
+                  {q.displayName}: {(q.parties || []).map((p) => p.name).join(", ") || "no parties"}
+                </p>
+              ))}
+            </div>
+          )}
+          {!showPicker && (
+            <Button type="button" variant="outline" size="sm" onClick={() => setShowPicker(true)}>
+              <Plus className="w-4 h-4 mr-1" /> Add another contract
+            </Button>
+          )}
         </>
       )}
 

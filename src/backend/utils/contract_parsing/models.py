@@ -21,6 +21,9 @@ class RoyaltyShare:
     royalty_type: str
     percentage: float
     terms: str | None = None
+    # Income basis this party is paid on: "net" (after track expenses), "gross"
+    # (full earnings), or None when the contract is silent for this party.
+    basis: str | None = None
 
 
 @dataclass
@@ -29,3 +32,13 @@ class ContractData:
     works: list[Work]
     royalty_shares: list[RoyaltyShare]
     contract_summary: str | None = None
+    # Contract-wide income basis applied when a share doesn't state its own.
+    default_basis: str | None = None
+
+
+def effective_basis(share: RoyaltyShare, contract: ContractData) -> str:
+    """Resolve the income basis for a share: its own basis, else the contract
+    default, else "gross". Always returns "net" or "gross". Uses getattr so it
+    tolerates lightweight share/contract stand-ins without the basis fields."""
+    basis = getattr(share, "basis", None) or getattr(contract, "default_basis", None)
+    return basis if basis in ("net", "gross") else "gross"

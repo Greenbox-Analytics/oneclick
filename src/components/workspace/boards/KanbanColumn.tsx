@@ -25,6 +25,7 @@ interface KanbanColumnProps {
   variant?: "desktop" | "mobile";
   moveOptions?: { id: string; title: string }[];
   onMoveTask?: (taskId: string, targetColumnId: string) => void;
+  showCreator?: boolean;
 }
 
 export function KanbanColumn({
@@ -40,6 +41,7 @@ export function KanbanColumn({
   variant = "desktop",
   moveOptions,
   onMoveTask,
+  showCreator,
 }: KanbanColumnProps) {
   const isMobileVariant = variant === "mobile";
   const [isRenaming, setIsRenaming] = useState(false);
@@ -151,6 +153,7 @@ export function KanbanColumn({
             disableDrag={isMobileVariant}
             moveOptions={isMobileVariant ? moveOptions : undefined}
             onMove={isMobileVariant ? onMoveTask : undefined}
+            showCreator={showCreator}
           />
         ))}
       </div>

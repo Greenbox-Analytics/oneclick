@@ -23,6 +23,8 @@ interface ArtistFile {
   project_id: string;
 }
 
+const STATEMENT_CURRENCIES = ["USD", "GBP", "EUR", "CAD", "AUD"] as const;
+
 interface RoyaltyStatementSelectorProps {
   royaltyStatementTabValue: string;
   setRoyaltyStatementTabValue: (value: string) => void;
@@ -41,6 +43,8 @@ interface RoyaltyStatementSelectorProps {
   selectedExistingRoyaltyStatement: string | null;
   setSelectedExistingRoyaltyStatement: React.Dispatch<React.SetStateAction<string | null>>;
   fetchProjectFilesForValidation: (projectId: string) => Promise<ArtistFile[]>;
+  currency: string;
+  onCurrencyChange: (value: string) => void;
 }
 
 const normalizeFileName = (name: string) => name.trim().toLowerCase();
@@ -75,6 +79,8 @@ const RoyaltyStatementSelector = ({
   selectedExistingRoyaltyStatement,
   setSelectedExistingRoyaltyStatement,
   fetchProjectFilesForValidation,
+  currency,
+  onCurrencyChange,
 }: RoyaltyStatementSelectorProps) => {
   const { captureOneClickStatementSelected } = useAnalytics();
   // Fire `oneclick_statement_selected` once per page-instance.
@@ -210,6 +216,21 @@ const RoyaltyStatementSelector = ({
                 </div>
               </div>
             )}
+
+            <div className="space-y-1.5 pt-2 border-t border-border">
+              <label className="text-sm font-medium text-foreground">Statement Currency</label>
+              <Select value={currency} onValueChange={onCurrencyChange}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select currency..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATEMENT_CURRENCIES.map((code) => (
+                    <SelectItem key={code} value={code}>{code}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">The currency used in this royalty statement.</p>
+            </div>
           </TabsContent>
 
           <TabsContent value="existing" className="space-y-4 mt-4">

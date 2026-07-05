@@ -25,6 +25,7 @@ export interface OwnershipStake {
   holder_name: string; holder_role: string; percentage: number;
   holder_email: string | null; holder_ipi: string | null;
   publisher_or_label: string | null; notes: string | null;
+  collaborator_id: string | null; is_owner_stake?: boolean;
   created_at: string; updated_at: string;
 }
 

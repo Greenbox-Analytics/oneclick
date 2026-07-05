@@ -257,3 +257,83 @@ def test_parse_contract_normalizes_null_terms_to_none(monkeypatch):
     result = parser.parse_contract(full_text="markdown")
 
     assert result.royalty_shares[0].terms is None
+
+
+# ─── income basis extraction (net vs gross) ─────────────────────────────────
+
+
+def test_parse_contract_extracts_per_share_net_basis(monkeypatch):
+    """A share marked net in the contract is captured as basis='net'."""
+    payload = {
+        "parties": [{"name": "Alice", "role": "Producer"}],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [{"party_name": "Alice", "royalty_type": "Producer", "percentage": 20.0, "basis": "net"}],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.royalty_shares[0].basis == "net"
+
+
+def test_parse_contract_basis_silent_is_none(monkeypatch):
+    """When the contract is silent, share.basis and default_basis are None."""
+    payload = {
+        "parties": [{"name": "Alice", "role": "Artist"}],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [{"party_name": "Alice", "royalty_type": "Streaming", "percentage": 50.0}],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.royalty_shares[0].basis is None
+    assert result.default_basis is None
+
+
+def test_parse_contract_captures_contract_default_basis(monkeypatch):
+    """A contract-wide net term lands in default_basis."""
+    payload = {
+        "parties": [{"name": "Alice", "role": "Artist"}],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [{"party_name": "Alice", "royalty_type": "Streaming", "percentage": 50.0}],
+        "default_basis": "net",
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.default_basis == "net"
+
+
+def test_parse_contract_rejects_garbage_basis(monkeypatch):
+    """An out-of-vocabulary basis value is normalized to None."""
+    payload = {
+        "parties": [{"name": "Alice", "role": "Artist"}],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [
+            {"party_name": "Alice", "royalty_type": "Streaming", "percentage": 50.0, "basis": "wholesale"}
+        ],
+        "default_basis": "maybe",
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.royalty_shares[0].basis is None
+    assert result.default_basis is None
+
+
+def test_effective_basis_resolution_chain(monkeypatch):
+    """effective_basis: share basis wins, then contract default, then gross."""
+    from utils.contract_parsing.models import ContractData, RoyaltyShare, effective_basis
+
+    net_share = RoyaltyShare("A", "streaming", 50.0, basis="net")
+    bare_share = RoyaltyShare("B", "streaming", 50.0)
+
+    contract_default_net = ContractData([], [], [], default_basis="net")
+    contract_silent = ContractData([], [], [])
+
+    assert effective_basis(net_share, contract_silent) == "net"
+    assert effective_basis(bare_share, contract_default_net) == "net"
+    assert effective_basis(bare_share, contract_silent) == "gross"

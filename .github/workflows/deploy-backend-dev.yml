@@ -35,6 +35,9 @@ jobs:
           filters: |
             oneclick:
               - 'src/backend/oneclick/**'
+              # royalties/** is the persistence/tracking layer — it does NOT change
+              # calc results, so changes there must not trigger the calc-cache wipe.
+              - '!src/backend/oneclick/royalties/**'
 
       - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v2

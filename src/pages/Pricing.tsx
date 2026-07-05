@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Check, X, Music } from "lucide-react";
+import { Check, X, Music, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -81,14 +81,25 @@ const Pricing = () => {
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
-            <div
-              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => navigate("/")}
-            >
-              <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
-                <Music className="w-5 h-5 text-primary-foreground" />
+            <div className="flex items-center gap-2 sm:gap-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 -ml-2 text-muted-foreground"
+                onClick={() => navigate("/")}
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back
+              </Button>
+              <div
+                className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+                onClick={() => navigate("/")}
+              >
+                <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
+                  <Music className="w-5 h-5 text-primary-foreground" />
+                </div>
+                <span className="text-lg font-semibold tracking-tight">Msanii</span>
               </div>
-              <span className="text-lg font-semibold tracking-tight">Msanii</span>
             </div>
             <Button
               variant="ghost"
