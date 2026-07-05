@@ -16,6 +16,8 @@ interface MultiSelectComboboxProps {
   selected: string[];
   onChange: (ids: string[]) => void;
   placeholder: string;
+  /** Accessible name for the trigger — screen readers otherwise only hear "N selected". */
+  "aria-label"?: string;
 }
 
 export function MultiSelectCombobox({
@@ -23,6 +25,7 @@ export function MultiSelectCombobox({
   selected,
   onChange,
   placeholder,
+  "aria-label": ariaLabel,
 }: MultiSelectComboboxProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -52,6 +55,7 @@ export function MultiSelectCombobox({
           <Button
             variant="outline"
             size="sm"
+            aria-label={ariaLabel}
             className="w-full justify-between font-normal"
           >
             <span className="truncate text-muted-foreground">

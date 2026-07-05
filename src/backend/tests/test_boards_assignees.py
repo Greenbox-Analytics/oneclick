@@ -86,7 +86,7 @@ def test_enrich_tasks_attaches_assignees_batched():
         }
     )
 
-    out = service._enrich_tasks(db, [{"id": t1}, {"id": t2}])
+    out = service._enrich_tasks(db, [{"id": t1}, {"id": t2}], USER)
 
     by_id = {t["id"]: t for t in out}
     assert by_id[t1]["assignees"] == [{"user_id": TARGET, "full_name": "Jane", "avatar_url": None}]

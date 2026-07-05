@@ -57,7 +57,10 @@ export interface BoardTask {
   artist_ids?: string[];
   project_ids?: string[];
   contract_ids?: string[];
-  artists?: { id: string; name: string }[];
+  artists?: { id: string; name: string; can_open: boolean }[];
+  projects?: { id: string; name: string; can_open: boolean }[];
+  documents?: { id: string; name: string; can_open: boolean }[];
+  creator?: { user_id: string; full_name: string | null; avatar_url: string | null };
   assignee_name?: string;
   assignees?: { user_id: string; full_name?: string | null; avatar_url?: string | null }[];
   labels?: string[];
@@ -72,9 +75,9 @@ export interface BoardTask {
 }
 
 export interface BoardTaskDetail extends BoardTask {
-  artists: { id: string; name: string; avatar?: string }[];
-  projects: { id: string; name: string }[];
-  contracts: { id: string; file_name: string }[];
+  artists: { id: string; name: string; can_open: boolean }[];
+  projects: { id: string; name: string; can_open: boolean }[];
+  documents: { id: string; name: string; can_open: boolean }[];
   comments: TaskComment[];
   children?: BoardTask[];
   parent?: { id: string; title: string } | null;

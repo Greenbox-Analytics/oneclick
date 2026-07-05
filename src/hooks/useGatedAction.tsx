@@ -5,13 +5,17 @@ import { ApiError } from "@/lib/apiFetch";
 import { PaywallModal } from "@/components/paywall/PaywallModal";
 import type { GatedFeature, CountableResource } from "@/hooks/useEntitlements";
 
-interface UseGatedActionOptions<TData, TVars> {
+interface UseGatedActionOptions<TData, TVars, TContext> {
   /** The actual work: API call, supabase mutation, etc. */
   mutationFn: (vars: TVars) => Promise<TData>;
+  /** Optimistic pre-flight (react-query onMutate). Whatever it returns is passed back as `context` to onSuccess/onError/onSettled — use it to snapshot cache for rollback. */
+  onMutate?: (vars: TVars) => TContext | Promise<TContext>;
   /** Consumer's onSuccess (cache invalidation, navigation, toasts). Runs after the near-limit toast. */
-  onSuccess?: (data: TData, vars: TVars) => void;
+  onSuccess?: (data: TData, vars: TVars, context?: TContext) => void;
   /** Consumer's onError. Only invoked for non-402, non-storage-cap errors. 402 + storage-cap errors are swallowed and surface as the paywall modal instead. */
-  onError?: (err: Error, vars: TVars) => void;
+  onError?: (err: Error, vars: TVars, context?: TContext) => void;
+  /** Runs after success OR error (mirrors react-query onSettled) — reconcile/rollback optimistic state here, since it fires even on the swallowed-402 path. */
+  onSettled?: (data: TData | undefined, err: Error | null, vars: TVars, context?: TContext) => void;
 
   resource?: CountableResource;
   feature?: GatedFeature;
@@ -31,15 +35,16 @@ interface UseGatedActionResult<TData, TVars> {
   paywallElement: ReactNode;
 }
 
-export function useGatedAction<TData, TVars>(
-  opts: UseGatedActionOptions<TData, TVars>,
+export function useGatedAction<TData, TVars, TContext = unknown>(
+  opts: UseGatedActionOptions<TData, TVars, TContext>,
 ): UseGatedActionResult<TData, TVars> {
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [paywallReason, setPaywallReason] = useState<string | undefined>(undefined);
 
-  const mutation = useMutation<TData, Error, TVars>({
+  const mutation = useMutation<TData, Error, TVars, TContext>({
     mutationFn: opts.mutationFn,
-    onSuccess: (data, vars) => {
+    onMutate: opts.onMutate,
+    onSuccess: (data, vars, context) => {
       // Near-limit toast: did currentCount + 1 cross 80%?
       if (opts.resource && opts.cap !== undefined && opts.cap !== -1 && opts.currentCount !== undefined) {
         const before = opts.currentCount;
@@ -52,9 +57,9 @@ export function useGatedAction<TData, TVars>(
           toast(`You're at ${after}/${cap} ${opts.resource}s — upgrade to Pro for unlimited.`);
         }
       }
-      opts.onSuccess?.(data, vars);
+      opts.onSuccess?.(data, vars, context);
     },
-    onError: (err: Error, vars: TVars) => {
+    onError: (err: Error, vars: TVars, context) => {
       // Best-effort: detect storage trigger errors that leak through as 400/409
       const looksLikeStorageCap =
         /storage cap exceeded/i.test(err.message) ||
@@ -71,7 +76,10 @@ export function useGatedAction<TData, TVars>(
         setPaywallOpen(true);
         return;
       }
-      opts.onError?.(err, vars);
+      opts.onError?.(err, vars, context);
+    },
+    onSettled: (data, err, vars, context) => {
+      opts.onSettled?.(data ?? undefined, err, vars, context);
     },
   });
 

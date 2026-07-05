@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -51,6 +52,9 @@ interface TaskFieldsProps {
   selectedContractIds: string[];
   setSelectedContractIds: (ids: string[]) => void;
   saveField: (field: string, value: unknown) => void;
+  // Batches multiple fields into a single updateTask mutation so the backend
+  // merge sees <kind>_ids and <kind>_labels together. No-op in create mode.
+  saveFields: (fields: Record<string, unknown>) => void;
   onNavigateToTask?: (taskId: string) => void;
 }
 
@@ -81,6 +85,7 @@ export function TaskFields({
   selectedContractIds,
   setSelectedContractIds,
   saveField,
+  saveFields,
   onNavigateToTask,
 }: TaskFieldsProps) {
   const { user } = useAuth();
@@ -103,6 +108,51 @@ export function TaskFields({
       .filter((id) => !ids.includes(id))
       .forEach((userId) => removeAssignee.mutate({ taskId: task.id, userId }));
   };
+
+  // For each linked kind, split the server's linked set into:
+  //   - options: the viewer's own list + synthetic options for can_open linked
+  //     ids not already in the own list (e.g. a project the viewer is a member
+  //     of). Non-can_open ids are intentionally excluded so they can't be
+  //     toggled in the dropdown.
+  //   - readonly: non-can_open linked entities, shown as plain (unremovable)
+  //     chips. The backend merge preserves these server-side.
+  // `nameFor` resolves a selected id's label from the option set (own +
+  // synthetic) so the write can snapshot <kind>_labels.
+  const buildLinkedField = (
+    ownOptions: { id: string; label: string }[],
+    linked: { id: string; name: string; can_open: boolean }[]
+  ) => {
+    const ownIds = new Set(ownOptions.map((o) => o.id));
+    const synthetic = linked
+      .filter((l) => l.can_open && !ownIds.has(l.id))
+      .map((l) => ({ id: l.id, label: l.name }));
+    const options = [...ownOptions, ...synthetic];
+    const nameByIdEntries = new Map(options.map((o) => [o.id, o.label]));
+    return {
+      options,
+      readonly: linked.filter((l) => !l.can_open),
+      nameFor: (id: string) =>
+        nameByIdEntries.get(id) ??
+        linked.find((l) => l.id === id)?.name ??
+        id,
+    };
+  };
+
+  const artistField = buildLinkedField(
+    artists.map((a) => ({ id: a.id, label: a.name })),
+    task.artists ?? []
+  );
+  const projectField = buildLinkedField(
+    projects.map((p) => ({ id: p.id, label: p.name })),
+    task.projects ?? []
+  );
+  const documentField = buildLinkedField(
+    contracts.map((c) => ({ id: c.id, label: c.file_name })),
+    task.documents ?? []
+  );
+
+  const labelsFor = (ids: string[], nameFor: (id: string) => string) =>
+    Object.fromEntries(ids.map((id) => [id, nameFor(id)]));
 
   return (
     <>
@@ -414,14 +464,18 @@ export function TaskFields({
           Involved Artists
         </Label>
         <MultiSelectCombobox
-          options={artists.map((a) => ({ id: a.id, label: a.name }))}
+          options={artistField.options}
           selected={selectedArtistIds}
           onChange={(ids) => {
             setSelectedArtistIds(ids);
-            saveField("artist_ids", ids);
+            saveFields({
+              artist_ids: ids,
+              artist_labels: labelsFor(ids, artistField.nameFor),
+            });
           }}
           placeholder="Select artists..."
         />
+        <ReadonlyLinkChips items={artistField.readonly} />
       </div>
 
       {/* Projects */}
@@ -430,14 +484,18 @@ export function TaskFields({
           Linked Projects
         </Label>
         <MultiSelectCombobox
-          options={projects.map((p) => ({ id: p.id, label: p.name }))}
+          options={projectField.options}
           selected={selectedProjectIds}
           onChange={(ids) => {
             setSelectedProjectIds(ids);
-            saveField("project_ids", ids);
+            saveFields({
+              project_ids: ids,
+              project_labels: labelsFor(ids, projectField.nameFor),
+            });
           }}
           placeholder="Select projects..."
         />
+        <ReadonlyLinkChips items={projectField.readonly} />
       </div>
 
       {/* Contracts */}
@@ -446,18 +504,43 @@ export function TaskFields({
           Linked Contracts
         </Label>
         <MultiSelectCombobox
-          options={contracts.map((c) => ({
-            id: c.id,
-            label: c.file_name,
-          }))}
+          options={documentField.options}
           selected={selectedContractIds}
           onChange={(ids) => {
             setSelectedContractIds(ids);
-            saveField("contract_ids", ids);
+            saveFields({
+              contract_ids: ids,
+              contract_labels: labelsFor(ids, documentField.nameFor),
+            });
           }}
           placeholder="Select contracts..."
         />
+        <ReadonlyLinkChips items={documentField.readonly} />
       </div>
     </>
+  );
+}
+
+// Display-only chips for linked entities the viewer can't access. No remove
+// affordance and no click-through — the backend preserves these links on write.
+function ReadonlyLinkChips({
+  items,
+}: {
+  items: { id: string; name: string }[];
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.map((item) => (
+        <Badge
+          key={item.id}
+          variant="secondary"
+          className="text-xs font-normal opacity-70"
+          title="Shared by a teammate — you don't have access"
+        >
+          {item.name}
+        </Badge>
+      ))}
+    </div>
   );
 }

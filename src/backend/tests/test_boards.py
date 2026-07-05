@@ -567,19 +567,24 @@ class TestCreateTask:
         assert response.status_code == 200
 
     def test_create_task_with_artist_ids_calls_junction_table(self, client, mock_supabase):
-        """POST /boards/tasks with artist_ids sets junction rows."""
+        """POST /boards/tasks with artist_ids sets junction rows (merge-on-write)."""
         # Sequence: 1) board_tasks count (gate), 2) artists (owned-artist filter for board
         # resolution), 3) board_columns (_column_board_id), 4) board_tasks insert,
-        # 5) artists (_owned_artist_ids ownership filter for junctions), 6-7) board_task_artists junction
+        # then _merge_junction(artists): 5) board_task_artists select (existing links → none),
+        # 6) artists (_owned_artist_ids ownership filter for the submitted set),
+        # 7) board_task_artists insert; then _merge_junction(projects): 8) board_task_projects
+        # select (existing → none); _merge_junction(contracts): 9) board_task_contracts select.
         mock_supabase.table.side_effect = _sequence_side_effect(
             [
                 [],
                 [{"id": ARTIST_ID}],
                 [SAMPLE_COLUMN],
                 [SAMPLE_TASK],
+                [],
                 [{"id": ARTIST_ID}],
-                [{"artist_id": ARTIST_ID}],
-                [{"artist_id": ARTIST_ID}],
+                [],
+                [],
+                [],
             ]
         )
 
@@ -804,7 +809,13 @@ class TestListParents:
 class TestCreateParent:
     def test_create_parent_task_returns_task(self, client, mock_supabase):
         """POST /boards/parents creates a parent task and returns it."""
-        mock_supabase.table.side_effect = lambda name: _authz_board_builder(name) or _builder([SAMPLE_PARENT])
+        # _merge_junction selects existing junction rows first — return empty for those tables
+        # (the generic SAMPLE_PARENT row lacks the fk columns the merge reads).
+        mock_supabase.table.side_effect = lambda name: (
+            _builder([])
+            if name in ("board_task_artists", "board_task_projects", "board_task_contracts")
+            else _authz_board_builder(name) or _builder([SAMPLE_PARENT])
+        )
 
         response = client.post(
             "/boards/parents",
@@ -827,7 +838,12 @@ class TestCreateParent:
     def test_create_parent_task_with_due_date(self, client, mock_supabase):
         """POST /boards/parents with due_date converts date to string."""
         parent_with_date = {**SAMPLE_PARENT, "due_date": "2026-05-01"}
-        mock_supabase.table.side_effect = lambda name: _authz_board_builder(name) or _builder([parent_with_date])
+        # _merge_junction selects existing junction rows first — return empty for those tables.
+        mock_supabase.table.side_effect = lambda name: (
+            _builder([])
+            if name in ("board_task_artists", "board_task_projects", "board_task_contracts")
+            else _authz_board_builder(name) or _builder([parent_with_date])
+        )
 
         response = client.post(
             "/boards/parents",

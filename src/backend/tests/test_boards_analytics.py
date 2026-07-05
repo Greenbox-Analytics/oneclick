@@ -46,7 +46,13 @@ def _capture():
 
 def test_create_parent_board_fires_board_created(client, mock_supabase):
     """POST /boards/parents fires board_created with tool=boards on success."""
-    mock_supabase.table.side_effect = lambda name: _authz_board_builder(name) or _builder([SAMPLE_PARENT])
+    # _merge_junction selects existing junction rows first — return empty for those tables
+    # (the generic SAMPLE_PARENT row lacks the fk columns the merge reads).
+    mock_supabase.table.side_effect = lambda name: (
+        _builder([])
+        if name in ("board_task_artists", "board_task_projects", "board_task_contracts")
+        else _authz_board_builder(name) or _builder([SAMPLE_PARENT])
+    )
 
     sink, fake = _capture()
     with patch("boards.router.analytics_capture", side_effect=fake):

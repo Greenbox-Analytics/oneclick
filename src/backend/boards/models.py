@@ -33,6 +33,9 @@ class TaskCreate(BaseModel):
     artist_ids: list[str] | None = []
     project_ids: list[str] | None = []
     contract_ids: list[str] | None = []
+    artist_labels: dict[str, str] | None = None
+    project_labels: dict[str, str] | None = None
+    contract_labels: dict[str, str] | None = None
     assignee_name: str | None = None
     labels: list[str] | None = []
 
@@ -50,6 +53,9 @@ class TaskUpdate(BaseModel):
     artist_ids: list[str] | None = None
     project_ids: list[str] | None = None
     contract_ids: list[str] | None = None
+    artist_labels: dict[str, str] | None = None
+    project_labels: dict[str, str] | None = None
+    contract_labels: dict[str, str] | None = None
     assignee_name: str | None = None
     labels: list[str] | None = None
     position: int | None = None
@@ -65,6 +71,8 @@ class ParentTaskCreate(BaseModel):
     color: str | None = None
     artist_ids: list[str] | None = []
     project_ids: list[str] | None = []
+    artist_labels: dict[str, str] | None = None
+    project_labels: dict[str, str] | None = None
     labels: list[str] | None = []
 
 

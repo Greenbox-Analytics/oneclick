@@ -356,7 +356,7 @@ class TestCreateTaskJunctionFiltering:
     def test_foreign_artist_id_is_silently_dropped(self, client, mock_supabase):
         """POST /boards/tasks with a victim artist_id: the junction must not link it."""
 
-        # Tracks which artist IDs were actually passed to _set_junction for board_task_artists
+        # Tracks which artist IDs were actually passed to _merge_junction for board_task_artists
         linked_artists = []
 
         # Counted per-table-name (not globally) so it's robust to the board-resolution
@@ -397,7 +397,7 @@ class TestCreateTaskJunctionFiltering:
 
                 b.insert = capturing_insert
                 b.execute.return_value = MagicMock(data=[])
-                # delete side (called first by _set_junction)
+                # delete side (called first by _merge_junction)
                 b.delete.return_value = MagicMock()
                 b.delete.return_value.eq = MagicMock(return_value=MagicMock(execute=MagicMock(return_value=None)))
             else:

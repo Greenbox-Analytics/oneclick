@@ -303,7 +303,7 @@ async def create_task(body: TaskCreate, user_id: str = Depends(get_current_user_
 
 @router.get("/tasks/{task_id}/detail")
 async def get_task_detail(task_id: str, user_id: str = Depends(get_current_user_id)):
-    """Get a single task with full detail (artists, projects, contracts, comments)."""
+    """Get a single task with full detail (artists, projects, documents, comments)."""
     task = await service.get_task_detail(_get_supabase(), user_id, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")

@@ -1,5 +1,6 @@
 """Business logic for the Kanban board feature."""
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 from supabase import Client
@@ -12,12 +13,33 @@ from teams import authz
 # --- Junction table helpers ---
 
 
-def _set_junction(supabase: Client, table: str, task_id: str, fk_column: str, ids: list[str]):
-    """Replace all junction rows for a task. Delete existing, insert new."""
-    supabase.table(table).delete().eq("task_id", task_id).execute()
-    if ids:
-        rows = [{"task_id": task_id, fk_column: fk_id} for fk_id in ids]
+def _merge_junction(
+    supabase: Client,
+    task_id: str,
+    table: str,
+    fk_column: str,
+    submitted_ids: list[str],
+    labels: dict[str, str] | None,
+    access_fn,
+    user_id: str,
+) -> list[str]:
+    """Non-destructive link write (spec §3.1). Replaces ONLY the rows the editor can access,
+    preserving co-owners' rows (and their labels) untouched. Caller must skip this entirely
+    when the link field was absent from the payload (absent = no-op).
+    RETURNS the editor's accessible inserted ids — the caller sets these on the returned task
+    dict before emitting the event (Slack routing reads task['project_ids']; see below)."""
+    existing = supabase.table(table).select(fk_column).eq("task_id", task_id).execute().data or []
+    existing_ids = [r[fk_column] for r in existing]
+    # of the EXISTING rows, which may the editor replace?  (their accessible partition)
+    editor_existing = access_fn(supabase, user_id, existing_ids)
+    # the editor's new accessible set from the submitted selection
+    new_accessible = access_fn(supabase, user_id, submitted_ids)
+    if editor_existing:
+        supabase.table(table).delete().eq("task_id", task_id).in_(fk_column, editor_existing).execute()
+    rows = [{"task_id": task_id, fk_column: fid, "label": (labels or {}).get(fid)} for fid in new_accessible]
+    if rows:
         supabase.table(table).insert(rows).execute()
+    return new_accessible
 
 
 def _owned_artist_ids(db: Client, user_id: str, ids: list[str]) -> list[str]:
@@ -71,15 +93,66 @@ def _get_junction_ids(supabase: Client, table: str, fk_column: str, task_ids: li
     return mapping
 
 
-def _enrich_tasks(supabase: Client, tasks: list) -> list:
-    """Add artist_ids, project_ids, contract_ids, artist names, assignees, and parent_title to tasks."""
+def _get_junction_with_labels(
+    supabase: Client, table: str, fk_column: str, task_ids: list[str]
+) -> dict[str, list[dict]]:
+    """Batch-fetch junction rows WITH their snapshot label. Returns
+    {task_id: [{"id": fk_id, "label": label_or_None}]}."""
+    if not task_ids:
+        return {}
+    rows = supabase.table(table).select(f"task_id, {fk_column}, label").in_("task_id", task_ids).execute().data or []
+    mapping: dict[str, list[dict]] = {}
+    for row in rows:
+        mapping.setdefault(row["task_id"], []).append({"id": row[fk_column], "label": row.get("label")})
+    return mapping
+
+
+def _shape_links(
+    supabase: Client,
+    user_id: str,
+    links_by_task: dict[str, list[dict]],
+    name_table: str,
+    name_col: str,
+    access_fn: Callable[[Client, str, list[str]], list[str]],
+) -> Callable[[list[dict]], list[dict]]:
+    """Build a per-task shaper that turns junction links [{id, label}] → [{id, name, can_open}]
+    (spec §4). Precomputes ONCE over the union of every task's links for this kind: a single
+    access_fn call (→ the can_open set) and a single name-lookup over ONLY the NULL-label ids
+    (the label is the snapshot; the entity-table lookup is the fallback). Returns a closure applied
+    per task, so the board-load hot path issues ~1 access + ~1 name query per kind — not per task.
+    Shared by _enrich_tasks and get_task_detail so both paths emit an identical shape."""
+    all_ids = list({link["id"] for links in links_by_task.values() for link in links})
+    accessible = set(access_fn(supabase, user_id, all_ids)) if all_ids else set()
+    need_ids = list({link["id"] for links in links_by_task.values() for link in links if link["label"] is None})
+    names: dict = {}
+    if need_ids:  # fallback lookup only fills the NULL-label ids
+        result = supabase.table(name_table).select(f"id, {name_col}").in_("id", need_ids).execute()
+        names = {row["id"]: row[name_col] for row in (result.data or [])}
+
+    def shaper(links: list[dict]) -> list[dict]:
+        return [
+            {
+                "id": link["id"],
+                "name": link["label"] or names.get(link["id"], "Unknown"),
+                "can_open": link["id"] in accessible,
+            }
+            for link in links
+        ]
+
+    return shaper
+
+
+def _enrich_tasks(supabase: Client, tasks: list, user_id: str) -> list:
+    """Enrich tasks with linked entities ([{id, name, can_open}] per kind), their raw ids,
+    creator, assignees, and parent_title. `name` comes from the junction label snapshot
+    (fallback to the entity-table lookup on NULL); `can_open` is stamped via the access helpers."""
     if not tasks:
         return tasks
     task_ids = [t["id"] for t in tasks]
 
-    artist_map = _get_junction_ids(supabase, "board_task_artists", "artist_id", task_ids)
-    project_map = _get_junction_ids(supabase, "board_task_projects", "project_id", task_ids)
-    contract_map = _get_junction_ids(supabase, "board_task_contracts", "project_file_id", task_ids)
+    artist_links = _get_junction_with_labels(supabase, "board_task_artists", "artist_id", task_ids)
+    project_links = _get_junction_with_labels(supabase, "board_task_projects", "project_id", task_ids)
+    contract_links = _get_junction_with_labels(supabase, "board_task_contracts", "project_file_id", task_ids)
 
     # Batched assignees (spec §5.6): one query for all task rows, one for their profiles.
     assignee_map = _get_junction_ids(supabase, "board_task_assignees", "user_id", task_ids)
@@ -89,12 +162,13 @@ def _enrich_tasks(supabase: Client, tasks: list) -> list:
         presult = supabase.table("profiles").select("id, full_name, avatar_url").in_("id", assignee_user_ids).execute()
         assignee_profiles = {p["id"]: p for p in (presult.data or [])}
 
-    # Fetch artist names for display
-    all_artist_ids = list({aid for ids in artist_map.values() for aid in ids})
-    artist_names = {}
-    if all_artist_ids:
-        result = supabase.table("artists").select("id, name").in_("id", all_artist_ids).execute()
-        artist_names = {a["id"]: a["name"] for a in (result.data or [])}
+    # Batched creators (spec §4): one profiles query for all tasks' user_ids. Resolves even for a
+    # creator who has left the team (the profile row survives the membership removal).
+    creator_ids = list({t.get("user_id") for t in tasks if t.get("user_id")})
+    creators = {}
+    if creator_ids:
+        cresult = supabase.table("profiles").select("id, full_name, avatar_url").in_("id", creator_ids).execute()
+        creators = {p["id"]: p for p in (cresult.data or [])}
 
     # Fetch parent titles for child tasks
     parent_ids = list({t["parent_task_id"] for t in tasks if t.get("parent_task_id")})
@@ -103,12 +177,29 @@ def _enrich_tasks(supabase: Client, tasks: list) -> list:
         result = supabase.table("board_tasks").select("id, title").in_("id", parent_ids).execute()
         parent_titles = {p["id"]: p["title"] for p in (result.data or [])}
 
+    # Build each kind's shaper ONCE (one access_fn call + one name-lookup per kind over the union of
+    # all tasks' links) — NOT per task — then apply the closure inside the loop (avoids N+1).
+    shape_artists = _shape_links(supabase, user_id, artist_links, "artists", "name", _owned_artist_ids)
+    shape_projects = _shape_links(supabase, user_id, project_links, "projects", "name", _accessible_project_ids)
+    shape_documents = _shape_links(
+        supabase, user_id, contract_links, "project_files", "file_name", _accessible_contract_ids
+    )
+
     for task in tasks:
         tid = task["id"]
-        task["artist_ids"] = artist_map.get(tid, [])
-        task["project_ids"] = project_map.get(tid, [])
-        task["contract_ids"] = contract_map.get(tid, [])
-        task["artists"] = [{"id": aid, "name": artist_names.get(aid, "Unknown")} for aid in task["artist_ids"]]
+        task["artists"] = shape_artists(artist_links.get(tid, []))
+        task["projects"] = shape_projects(project_links.get(tid, []))
+        task["documents"] = shape_documents(contract_links.get(tid, []))
+        # Keep the raw ids alongside the shaped lists — the board filter reads them directly.
+        task["artist_ids"] = [a["id"] for a in task["artists"]]
+        task["project_ids"] = [p["id"] for p in task["projects"]]
+        task["contract_ids"] = [d["id"] for d in task["documents"]]
+        creator = creators.get(task.get("user_id")) or {}
+        task["creator"] = {
+            "user_id": task.get("user_id"),
+            "full_name": creator.get("full_name"),
+            "avatar_url": creator.get("avatar_url"),
+        }
         task["assignees"] = [
             {
                 "user_id": uid,
@@ -246,11 +337,11 @@ async def get_tasks(
 
     result = paginate_query(query, page, page_size)
 
-    # Enrich with artist/project/contract names
+    # Enrich with linked entities (name + can_open), creator, assignees
     if isinstance(result, list):
-        return _enrich_tasks(supabase, result)
+        return _enrich_tasks(supabase, result, user_id)
     else:
-        result.data = _enrich_tasks(supabase, result.data)
+        result.data = _enrich_tasks(supabase, result.data, user_id)
         return result
 
 
@@ -259,6 +350,9 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
     artist_ids = data.pop("artist_ids", [])
     project_ids = data.pop("project_ids", [])
     contract_ids = data.pop("contract_ids", [])
+    artist_labels = data.pop("artist_labels", None) or {}
+    project_labels = data.pop("project_labels", None) or {}
+    contract_labels = data.pop("contract_labels", None) or {}
 
     if not data.get("start_date"):
         data["start_date"] = str(date.today())
@@ -295,21 +389,38 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
     if task:
         task_id = task["id"]
 
-        # Filter junction ids to only those the caller is authorised to reference
-        artist_ids = _owned_artist_ids(supabase, user_id, artist_ids)
-        project_ids = _accessible_project_ids(supabase, user_id, project_ids)
-        contract_ids = _accessible_contract_ids(supabase, user_id, contract_ids)
-
-        if artist_ids:
-            _set_junction(supabase, "board_task_artists", task_id, "artist_id", artist_ids)
-        if project_ids:
-            _set_junction(supabase, "board_task_projects", task_id, "project_id", project_ids)
-        if contract_ids:
-            _set_junction(supabase, "board_task_contracts", task_id, "project_file_id", contract_ids)
-
-        task["artist_ids"] = artist_ids
-        task["project_ids"] = project_ids
-        task["contract_ids"] = contract_ids
+        # Merge-on-write: preserve co-owners' rows, snapshot labels. Re-set the accessible ids
+        # on the task dict BEFORE emit — the Slack bridge routes via task["project_ids"][0].
+        task["artist_ids"] = _merge_junction(
+            supabase,
+            task_id,
+            table="board_task_artists",
+            fk_column="artist_id",
+            submitted_ids=artist_ids,
+            labels=artist_labels,
+            access_fn=_owned_artist_ids,
+            user_id=user_id,
+        )
+        task["project_ids"] = _merge_junction(
+            supabase,
+            task_id,
+            table="board_task_projects",
+            fk_column="project_id",
+            submitted_ids=project_ids,
+            labels=project_labels,
+            access_fn=_accessible_project_ids,
+            user_id=user_id,
+        )
+        task["contract_ids"] = _merge_junction(
+            supabase,
+            task_id,
+            table="board_task_contracts",
+            fk_column="project_file_id",
+            submitted_ids=contract_ids,
+            labels=contract_labels,
+            access_fn=_accessible_contract_ids,
+            user_id=user_id,
+        )
         await events.emit(events.TASK_CREATED, {"user_id": user_id, "task": task})
 
     return task
@@ -357,6 +468,9 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
     artist_ids = data.pop("artist_ids", None)
     project_ids = data.pop("project_ids", None)
     contract_ids = data.pop("contract_ids", None)
+    artist_labels = data.pop("artist_labels", None) or {}
+    project_labels = data.pop("project_labels", None) or {}
+    contract_labels = data.pop("contract_labels", None) or {}
 
     # Empty string column_id means "clear it" (backlog)
     if "column_id" in data and data["column_id"] == "":
@@ -387,16 +501,43 @@ async def update_task(supabase: Client, user_id: str, task_id: str, data: dict) 
         task = result.data or {}
 
     if task:
-        # Filter junction ids to only those the caller is authorised to reference
+        # Merge-on-write: replace only the editor's accessible partition (preserve co-owners'
+        # rows) and snapshot labels. Absent link field (None) stays a no-op — do NOT touch it.
+        # Re-set the accessible ids on the task dict BEFORE emit (only for present fields) so a
+        # project-link change routes to the project channel, symmetric with create_task.
         if artist_ids is not None:
-            artist_ids = _owned_artist_ids(supabase, user_id, artist_ids)
-            _set_junction(supabase, "board_task_artists", task_id, "artist_id", artist_ids)
+            task["artist_ids"] = _merge_junction(
+                supabase,
+                task_id,
+                table="board_task_artists",
+                fk_column="artist_id",
+                submitted_ids=artist_ids,
+                labels=artist_labels,
+                access_fn=_owned_artist_ids,
+                user_id=user_id,
+            )
         if project_ids is not None:
-            project_ids = _accessible_project_ids(supabase, user_id, project_ids)
-            _set_junction(supabase, "board_task_projects", task_id, "project_id", project_ids)
+            task["project_ids"] = _merge_junction(
+                supabase,
+                task_id,
+                table="board_task_projects",
+                fk_column="project_id",
+                submitted_ids=project_ids,
+                labels=project_labels,
+                access_fn=_accessible_project_ids,
+                user_id=user_id,
+            )
         if contract_ids is not None:
-            contract_ids = _accessible_contract_ids(supabase, user_id, contract_ids)
-            _set_junction(supabase, "board_task_contracts", task_id, "project_file_id", contract_ids)
+            task["contract_ids"] = _merge_junction(
+                supabase,
+                task_id,
+                table="board_task_contracts",
+                fk_column="project_file_id",
+                submitted_ids=contract_ids,
+                labels=contract_labels,
+                access_fn=_accessible_contract_ids,
+                user_id=user_id,
+            )
 
         await events.emit(events.TASK_UPDATED, {"user_id": user_id, "task": task})
 
@@ -421,30 +562,39 @@ async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
         return {}
     authz.require_board_access(supabase, user_id, task["board_id"])
 
-    # Junction data
-    artists_result = supabase.table("board_task_artists").select("artist_id").eq("task_id", task_id).execute()
-    artist_ids = [r["artist_id"] for r in (artists_result.data or [])]
+    # Linked entities — normalized to the SAME [{id, name, can_open}] shape as _enrich_tasks
+    # (label-first, fallback lookup on NULL, can_open via the access helpers), via the shared
+    # _shape_links closure (single task's links wrapped as {task_id: links} → same code path).
+    artist_links = _get_junction_with_labels(supabase, "board_task_artists", "artist_id", [task_id])
+    project_links = _get_junction_with_labels(supabase, "board_task_projects", "project_id", [task_id])
+    contract_links = _get_junction_with_labels(supabase, "board_task_contracts", "project_file_id", [task_id])
 
-    projects_result = supabase.table("board_task_projects").select("project_id").eq("task_id", task_id).execute()
-    project_ids = [r["project_id"] for r in (projects_result.data or [])]
+    shape_artists = _shape_links(supabase, user_id, artist_links, "artists", "name", _owned_artist_ids)
+    shape_projects = _shape_links(supabase, user_id, project_links, "projects", "name", _accessible_project_ids)
+    shape_documents = _shape_links(
+        supabase, user_id, contract_links, "project_files", "file_name", _accessible_contract_ids
+    )
+    task["artists"] = shape_artists(artist_links.get(task_id, []))
+    task["projects"] = shape_projects(project_links.get(task_id, []))
+    task["documents"] = shape_documents(contract_links.get(task_id, []))
+    # Keep the raw ids alongside the shaped lists for the frontend.
+    task["artist_ids"] = [a["id"] for a in task["artists"]]
+    task["project_ids"] = [p["id"] for p in task["projects"]]
+    task["contract_ids"] = [d["id"] for d in task["documents"]]
 
-    contracts_result = supabase.table("board_task_contracts").select("project_file_id").eq("task_id", task_id).execute()
-    contract_ids = [r["project_file_id"] for r in (contracts_result.data or [])]
-
-    artists = []
-    if artist_ids:
-        r = supabase.table("artists").select("id, name, avatar_url").in_("id", artist_ids).execute()
-        artists = r.data or []
-
-    projects = []
-    if project_ids:
-        r = supabase.table("projects").select("id, name").in_("id", project_ids).execute()
-        projects = r.data or []
-
-    contracts = []
-    if contract_ids:
-        r = supabase.table("project_files").select("id, file_name").in_("id", contract_ids).execute()
-        contracts = r.data or []
+    # Creator — same {user_id, full_name, avatar_url} shape as _enrich_tasks (single-row lookup;
+    # resolves even for a creator who has left the team). Null-safe when the task has no user_id.
+    creator = {}
+    if task.get("user_id"):
+        cres = (
+            supabase.table("profiles").select("id, full_name, avatar_url").eq("id", task["user_id"]).limit(1).execute()
+        )
+        creator = (cres.data or [{}])[0]
+    task["creator"] = {
+        "user_id": task.get("user_id"),
+        "full_name": creator.get("full_name"),
+        "avatar_url": creator.get("avatar_url"),
+    }
 
     comments_result = (
         supabase.table("board_task_comments").select("*").eq("task_id", task_id).order("created_at").execute()
@@ -456,7 +606,7 @@ async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
         children_result = (
             supabase.table("board_tasks").select("*").eq("parent_task_id", task_id).order("position").execute()
         )
-        children = _enrich_tasks(supabase, children_result.data or [])
+        children = _enrich_tasks(supabase, children_result.data or [], user_id)
 
     # Fetch parent info if this is a child task
     parent = None
@@ -466,12 +616,6 @@ async def get_task_detail(supabase: Client, user_id: str, task_id: str) -> dict:
         )
         parent = parent_result.data
 
-    task["artist_ids"] = artist_ids
-    task["project_ids"] = project_ids
-    task["contract_ids"] = contract_ids
-    task["artists"] = artists
-    task["projects"] = projects
-    task["contracts"] = contracts
     task["comments"] = comments_result.data or []
     task["children"] = children
     task["parent"] = parent
@@ -519,7 +663,7 @@ async def get_tasks_by_date_range(
             seen.add(task["id"])
             tasks.append(task)
 
-    return _enrich_tasks(supabase, tasks)
+    return _enrich_tasks(supabase, tasks, user_id)
 
 
 # --- Period-based Tasks ---
@@ -582,7 +726,7 @@ async def get_tasks_by_period(
         # Fallback: if completed_at column missing or other error, return all tasks
         return await get_tasks(supabase, user_id, board_id=board_id, artist_id=artist_id)
 
-    return _enrich_tasks(supabase, tasks)
+    return _enrich_tasks(supabase, tasks, user_id)
 
 
 # --- Parent Tasks ---
@@ -592,6 +736,8 @@ async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict
     """Create a parent task (no column_id, is_parent=True)."""
     artist_ids = data.pop("artist_ids", [])
     project_ids = data.pop("project_ids", [])
+    artist_labels = data.pop("artist_labels", None) or {}
+    project_labels = data.pop("project_labels", None) or {}
 
     if not data.get("start_date"):
         data["start_date"] = str(date.today())
@@ -607,12 +753,26 @@ async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict
 
     if task:
         task_id = task["id"]
-        if artist_ids:
-            _set_junction(supabase, "board_task_artists", task_id, "artist_id", artist_ids)
-        if project_ids:
-            _set_junction(supabase, "board_task_projects", task_id, "project_id", project_ids)
-        task["artist_ids"] = artist_ids
-        task["project_ids"] = project_ids
+        task["artist_ids"] = _merge_junction(
+            supabase,
+            task_id,
+            table="board_task_artists",
+            fk_column="artist_id",
+            submitted_ids=artist_ids,
+            labels=artist_labels,
+            access_fn=_owned_artist_ids,
+            user_id=user_id,
+        )
+        task["project_ids"] = _merge_junction(
+            supabase,
+            task_id,
+            table="board_task_projects",
+            fk_column="project_id",
+            submitted_ids=project_ids,
+            labels=project_labels,
+            access_fn=_accessible_project_ids,
+            user_id=user_id,
+        )
 
     return task
 
@@ -653,7 +813,7 @@ async def get_all_parents_with_children(
 
     # Enrich both sets
     all_tasks = parents + all_children
-    enriched = _enrich_tasks(supabase, all_tasks)
+    enriched = _enrich_tasks(supabase, all_tasks, user_id)
 
     # Split back into parents and children
     parent_map = {}
