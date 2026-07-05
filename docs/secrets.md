@@ -40,6 +40,19 @@ Without these, `/billing/*` endpoints raise `KeyError` on first call and the Pri
 
 ---
 
+## 🟠 Required for PayPal royalty payouts (OneClick)
+
+Without these, the "Pay with PayPal" button is hidden and payout capture fails. Sandbox and live are **separate PayPal apps** with their own credentials; in GSM they're stored env-scoped as `PAYPAL_CLIENT_ID_DEV` / `_PROD` and `PAYPAL_CLIENT_SECRET_DEV` / `_PROD` (`task setup:secrets:dev` pulls the sandbox pair, `:prod` the live pair).
+
+| Var | Source | Notes |
+|-----|--------|-------|
+| `PAYPAL_ENV` | — | `sandbox` (default) or `live`. Picks the PayPal API host |
+| `PAYPAL_CLIENT_ID` | [developer.paypal.com](https://developer.paypal.com) → Apps & Credentials → your app → Client ID | Toggle Sandbox/Live in the dashboard to see each app |
+| `PAYPAL_CLIENT_SECRET` | Same page → Secret key | Backend only — **never** expose to the frontend |
+| `VITE_PAYPAL_CLIENT_ID` | Same Client ID as above | Public, used by the PayPal JS SDK in the browser. Button is hidden when unset |
+
+---
+
 ## 🟠 Required for OpenAI features (Zoe + OneClick contract parsing)
 
 | Var | Source | Required? |

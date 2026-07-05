@@ -51,6 +51,7 @@ tasks:
           ENV_SUFFIX: DEV
           BYPASS_PAYWALLS: "false"
           POSTHOG_ENABLED: "false"
+          PAYPAL_ENV: "sandbox"
           FRONTEND_URL: "http://localhost:8080"
           VITE_BACKEND_API_URL: "http://localhost:8000"
 
@@ -67,6 +68,7 @@ tasks:
           ENV_SUFFIX: PROD
           BYPASS_PAYWALLS: "false"
           POSTHOG_ENABLED: "false"
+          PAYPAL_ENV: "live"
           FRONTEND_URL: "https://app.msanii.com"
           VITE_BACKEND_API_URL: "https://msanii-backend-529844341368.northamerica-northeast2.run.app"
 
@@ -93,6 +95,7 @@ tasks:
           ENV_SUFFIX: PROD
           BYPASS_PAYWALLS: "false"
           POSTHOG_ENABLED: "false"
+          PAYPAL_ENV: "live"
           FRONTEND_URL: "https://app.msanii.com"
           VITE_BACKEND_API_URL: "https://msanii-backend-529844341368.northamerica-northeast2.run.app"
 
@@ -187,14 +190,17 @@ tasks:
           fi
         }
 
-        # Try an env-scoped GSM secret (GSM stores NAME_DEV / NAME_PROD; written as NAME)
+        # Try an env-scoped GSM secret (GSM stores NAME_DEV / NAME_PROD; written as NAME).
+        # Optional 2nd arg: GSM base name, when the env-var name differs from the
+        # GSM secret name (e.g. VITE_PAYPAL_CLIENT_ID reuses PAYPAL_CLIENT_ID_*).
         try_gsm_scoped() {
           local base="$1"
+          local gsm_base="${2:-$base}"
           if has_live_entry "$base"; then
             echo "  ◌ $base"
             return
           fi
-          local gsm_name="${base}_{{.ENV_SUFFIX}}"
+          local gsm_name="${gsm_base}_{{.ENV_SUFFIX}}"
           local value
           if value=$(gcloud secrets versions access latest --secret="$gsm_name" --project="{{.GCP_PROJECT}}" 2>/dev/null); then
             PENDING_LINES+=("${base}=${value}")
@@ -270,6 +276,13 @@ tasks:
         try_gsm_scoped "STRIPE_WEBHOOK_SECRET"
         try_gsm "STRIPE_PRICE_MONTHLY"
         try_gsm "STRIPE_PRICE_ANNUAL"
+        end_section
+
+        start_section "PAYPAL (royalty payouts)"
+        try_literal "PAYPAL_ENV" "{{.PAYPAL_ENV}}"
+        try_gsm_scoped "PAYPAL_CLIENT_ID"
+        try_gsm_scoped "PAYPAL_CLIENT_SECRET"
+        try_gsm_scoped "VITE_PAYPAL_CLIENT_ID" "PAYPAL_CLIENT_ID"
         end_section
 
         start_section "RESEND SMTP"
