@@ -12,5 +12,9 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
     restoreMocks: true,
     unstubGlobals: true,
+    // In CI, also emit JUnit XML so dorny/test-reporter can render a per-test
+    // check run on the PR (see .github/workflows/ci.yml). Local runs stay clean.
+    reporters: process.env.CI ? ["default", "junit"] : ["default"],
+    outputFile: { junit: "./junit.xml" },
   },
 });
