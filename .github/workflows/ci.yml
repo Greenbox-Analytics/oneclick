@@ -75,3 +75,5 @@ jobs:
           VITE_SUPABASE_URL: "https://fake.supabase.co"
           VITE_SUPABASE_ANON_KEY: "fake-key-for-ci"
           VITE_BACKEND_API_URL: "https://fake-backend.example.com"
+      - name: Unit tests
+        run: npm run test

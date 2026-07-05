@@ -256,17 +256,17 @@ export const KanbanCard = React.memo(function KanbanCard({ task, onDelete, onCli
             </span>
           )}
           {task.assignees && task.assignees.length > 0 && (
-            <div className="flex items-center -space-x-1.5">
+            <div className="flex items-center gap-1">
               {task.assignees.slice(0, 3).map((a) => (
-                <Avatar key={a.user_id} className="h-5 w-5 border border-background">
+                <Avatar key={a.user_id} className="h-5 w-5" title={a.full_name ?? undefined}>
                   <AvatarImage src={a.avatar_url ?? undefined} />
-                  <AvatarFallback className="text-[9px]">
+                  <AvatarFallback className="bg-green-100 text-green-700 text-[9px] font-medium dark:bg-green-900/40 dark:text-green-300">
                     {initials(a.full_name)}
                   </AvatarFallback>
                 </Avatar>
               ))}
               {task.assignees.length > 3 && (
-                <span className="text-[10px] text-muted-foreground pl-2">
+                <span className="text-[10px] text-muted-foreground pl-0.5">
                   +{task.assignees.length - 3}
                 </span>
               )}

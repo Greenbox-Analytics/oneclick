@@ -101,9 +101,21 @@ export function TaskFields({
   const assigneeIds = task.assignees?.map((a) => a.user_id) ?? [];
 
   const handleAssigneesChange = (ids: string[]) => {
+    const memberById = new Map((members ?? []).map((m) => [m.user_id, m]));
     ids
       .filter((id) => !assigneeIds.includes(id))
-      .forEach((userId) => addAssignee.mutate({ taskId: task.id, userId }));
+      .forEach((userId) => {
+        const m = memberById.get(userId);
+        // Pass the display object so the optimistic assignee shows the right
+        // name/avatar immediately (falls back to id-only if not a known member).
+        addAssignee.mutate({
+          taskId: task.id,
+          userId,
+          assignee: m
+            ? { user_id: userId, full_name: m.full_name, avatar_url: m.avatar_url }
+            : undefined,
+        });
+      });
     assigneeIds
       .filter((id) => !ids.includes(id))
       .forEach((userId) => removeAssignee.mutate({ taskId: task.id, userId }));
