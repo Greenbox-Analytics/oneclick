@@ -93,7 +93,6 @@ const QuotaCard = ({ label, current, cap, formatter }: QuotaCardProps) => {
 const INTEGRATION_LABELS: Record<IntegrationName, string> = {
   google_drive: "Google Drive",
   slack: "Slack",
-  notion: "Notion",
 };
 
 const Subscription = () => {

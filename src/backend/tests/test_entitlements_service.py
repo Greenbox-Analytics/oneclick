@@ -38,7 +38,7 @@ PRO_TIER_ROW = {
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
-    "integrations_allowed": ["google_drive", "slack", "notion"],
+    "integrations_allowed": ["google_drive", "slack"],
     "updated_at": "2026-05-09T00:00:00+00:00",
 }
 FREE_SUB_ROW = {
@@ -992,7 +992,7 @@ class TestBypassPaywalls:
         assert ent.features.zoe_enabled is True
         assert ent.features.oneclick_enabled is True
         assert ent.features.registry_enabled is True
-        assert set(ent.features.integrations_allowed) == {"google_drive", "slack", "notion"}
+        assert set(ent.features.integrations_allowed) == {"google_drive", "slack"}
         # Usage, tier string, status, user_id must be preserved
         assert ent.tier == "free"
         assert ent.user_id == TEST_USER_ID

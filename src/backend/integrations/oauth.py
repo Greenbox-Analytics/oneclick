@@ -39,13 +39,6 @@ PROVIDER_CONFIGS = {
         "token_url": "https://slack.com/api/oauth.v2.access",
         "scopes": ["channels:read", "chat:write", "commands", "incoming-webhook"],
     },
-    "notion": {
-        "client_id": lambda: os.getenv("NOTION_CLIENT_ID"),
-        "client_secret": lambda: os.getenv("NOTION_CLIENT_SECRET"),
-        "auth_url": "https://api.notion.com/v1/oauth/authorize",
-        "token_url": "https://api.notion.com/v1/oauth/token",
-        "scopes": [],  # Notion scopes are set in the integration config
-    },
 }
 
 
@@ -110,9 +103,7 @@ def build_auth_url(provider: str, user_id: str) -> str:
         "response_type": "code",
     }
 
-    if provider == "notion":
-        params["owner"] = "user"
-    elif provider == "slack":
+    if provider == "slack":
         params["scope"] = ",".join(config["scopes"])
     else:
         params["scope"] = " ".join(config["scopes"])
@@ -138,22 +129,8 @@ async def exchange_code_for_tokens(provider: str, code: str) -> dict:
         "grant_type": "authorization_code",
     }
 
-    headers = {}
-    if provider == "notion":
-        # Notion uses Basic auth for token exchange
-        import base64
-
-        credentials = base64.b64encode(f"{config['client_id']()}:{config['client_secret']()}".encode()).decode()
-        headers["Authorization"] = f"Basic {credentials}"
-        payload = {"code": code, "grant_type": "authorization_code", "redirect_uri": get_oauth_redirect_url(provider)}
-
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            config["token_url"],
-            data=payload if provider != "notion" else None,
-            json=payload if provider == "notion" else None,
-            headers=headers,
-        )
+        response = await client.post(config["token_url"], data=payload)
         response.raise_for_status()
         return response.json()
 
@@ -164,8 +141,8 @@ async def refresh_access_token(provider: str, refresh_token: str) -> dict:
     if not config:
         raise ValueError(f"Unknown provider: {provider}")
 
-    # Slack and Notion don't use refresh tokens the same way
-    if provider in ("slack", "notion"):
+    # Slack doesn't use refresh tokens the same way
+    if provider == "slack":
         return {}
 
     payload = {
@@ -275,9 +252,6 @@ async def store_connection(
     if provider == "slack":
         data["provider_workspace_id"] = tokens.get("team", {}).get("id")
         data["provider_user_id"] = tokens.get("authed_user", {}).get("id")
-    elif provider == "notion":
-        data["provider_workspace_id"] = tokens.get("workspace_id")
-        data["provider_user_id"] = tokens.get("owner", {}).get("user", {}).get("id")
 
     if tokens.get("scope"):
         data["scopes"] = tokens["scope"].split(",") if isinstance(tokens["scope"], str) else tokens["scope"]

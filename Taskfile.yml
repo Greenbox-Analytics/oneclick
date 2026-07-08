@@ -253,11 +253,6 @@ tasks:
         try_gsm "SLACK_CLIENT_SECRET"
         end_section
 
-        start_section "NOTION INTEGRATION"
-        try_gsm "NOTION_CLIENT_ID"
-        try_gsm "NOTION_CLIENT_SECRET"
-        end_section
-
         start_section "SPOTIFY INTEGRATION"
         try_gsm "SPOTIFY_CLIENT_ID"
         try_gsm "SPOTIFY_CLIENT_SECRET"

@@ -25,7 +25,7 @@ export function RegistryNotifications() {
       <div className="text-center py-12 text-muted-foreground">
         <Bell className="w-12 h-12 mx-auto mb-4 opacity-50" />
         <h3 className="text-lg font-semibold mb-2">No notifications yet</h3>
-        <p>Collaboration updates from the Rights Registry will appear here</p>
+        <p>Collaboration updates from the Metadata Registry will appear here</p>
       </div>
     );
   }
@@ -37,7 +37,7 @@ export function RegistryNotifications() {
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <Shield className="w-5 h-5 text-primary" />
-          Rights Registry Notifications
+          Metadata Registry Notifications
           {unreadCount > 0 && (
             <Badge variant="destructive" className="ml-1">{unreadCount}</Badge>
           )}

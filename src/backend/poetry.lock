@@ -1659,21 +1659,6 @@ test = ["pytest (>=7.2)", "pytest-cov (>=4.0)", "pytest-xdist (>=3.0)"]
 test-extras = ["pytest-mpl", "pytest-randomly"]
 
 [[package]]
-name = "notion-client"
-version = "3.1.0"
-description = "Python client for the official Notion API"
-optional = false
-python-versions = "<4,>=3.8"
-groups = ["main"]
-files = [
-    {file = "notion_client-3.1.0-py2.py3-none-any.whl", hash = "sha256:7e3935f4dbc11231d8ad1fe404112e278501520342eaa35f86456f0df44a8aca"},
-    {file = "notion_client-3.1.0.tar.gz", hash = "sha256:516e31326f855ec34559289b57be4e27ad656062f51f594c8f4ee3a608ee333d"},
-]
-
-[package.dependencies]
-httpx = ">=0.23.0"
-
-[[package]]
 name = "numpy"
 version = "2.4.6"
 description = "Fundamental package for array computing in Python"
@@ -4300,4 +4285,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "47c7ba0142754460381b61d61ddfea094679eff16326f0a7210c9d301fa71f2a"
+content-hash = "dd2b66f7c7f1975471cdcf518c74809cc95da920d75e0b8b66c1de0ce37c44c8"

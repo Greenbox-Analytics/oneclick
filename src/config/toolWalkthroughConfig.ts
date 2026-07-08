@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-// Flip to false to restore the Rights Registry walkthrough and works mentions.
+// Flip to false to restore the Metadata Registry walkthrough and works mentions.
 const HIDE_REGISTRY_AND_WORKS = false;
 
 export interface ToolWalkthroughStep {
@@ -208,7 +208,7 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="workspace-integrations"]',
         title: "Integrations",
         description:
-          "Connect Google Drive to import contracts, royalty statements, and split sheets directly into your projects — each category only accepts the right file types (e.g., PDFs for contracts, Excel/CSV for royalty statements). Slack and Notion notifications are coming soon.",
+          "Connect Google Drive to import contracts, royalty statements, and split sheets directly into your projects — each category only accepts the right file types (e.g., PDFs for contracts, Excel/CSV for royalty statements). Slack notifications are coming soon.",
         placement: "bottom",
       },
     ],
@@ -262,7 +262,7 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
     key: "registry",
     intro: {
       icon: Shield,
-      title: "Rights Registry",
+      title: "Metadata Registry",
       description:
         "Track and protect ownership of your works. Register master and publishing stakes, invite collaborators with defined roles and splits, and keep full traceability of contracts and ownership — all in one place.",
     },
@@ -332,7 +332,7 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
               targetSelector: '[data-walkthrough="project-add-work"]',
               title: "Add Works",
               description:
-                "Create a new work (track or composition) inside this project. Works can then be registered in the Rights Registry with ownership stakes and collaborators.",
+                "Create a new work (track or composition) inside this project. Works can then be registered in the Metadata Registry with ownership stakes and collaborators.",
               placement: "bottom" as const,
               skipIfMissing: true,
             },
@@ -342,7 +342,7 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         title: "Team Members",
         description: HIDE_REGISTRY_AND_WORKS
           ? "Invite people by email and assign them a role — Admin, Editor, or Viewer. Members see everything in this project."
-          : "Invite people by email and assign them a role — Admin, Editor, or Viewer. Members see all works in this project. For work-level access only, invite collaborators from the Rights Registry instead.",
+          : "Invite people by email and assign them a role — Admin, Editor, or Viewer. Members see all works in this project. For work-level access only, invite collaborators from the Metadata Registry instead.",
         placement: "bottom",
       },
     ],

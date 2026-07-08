@@ -27,7 +27,7 @@ _PRO_TIER_ROW = {
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
-    "integrations_allowed": ["google_drive", "slack", "notion"],
+    "integrations_allowed": ["google_drive", "slack"],
     "updated_at": "2026-05-09T00:00:00+00:00",
 }
 _PRO_SUB_ROW = {

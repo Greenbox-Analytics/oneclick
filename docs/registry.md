@@ -1,6 +1,6 @@
-# Rights Registry
+# Metadata Registry
 
-The Rights Registry is the largest domain in Msanii. It provides a complete ownership and licensing ledger for musical works. Each work tracks ownership stakes (master and publishing percentages), licensing rights, immutable agreement records, and collaborator invitations. Works can be linked to project files and audio files, and the full ownership chain can be exported as a signed PDF. A TeamCard system lets collaborators control what contact information they share. An in-app notification layer surfaces invitation and status-change events in real time.
+The Metadata Registry is the largest domain in Msanii. It provides a complete ownership and licensing ledger for musical works. Each work tracks ownership stakes (master and publishing percentages), licensing rights, immutable agreement records, and collaborator invitations. Works can be linked to project files and audio files, and the full ownership chain can be exported as a signed PDF. A TeamCard system lets collaborators control what contact information they share. An in-app notification layer surfaces invitation and status-change events in real time.
 
 ---
 
@@ -244,7 +244,7 @@ Notification `type` values observed in the UI: `invitation`, `confirmation`, `di
 
 ## Collaboration Flow
 
-The Rights Registry uses a multi-step invite-and-confirm flow to ensure all parties explicitly agree to ownership splits before a work is registered.
+The Metadata Registry uses a multi-step invite-and-confirm flow to ensure all parties explicitly agree to ownership splits before a work is registered.
 
 ```
 Owner creates work (status: draft)

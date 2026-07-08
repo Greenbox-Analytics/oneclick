@@ -18,7 +18,7 @@ interface PaywallCardProps {
 const FEATURE_LABELS: Record<GatedFeature, string> = {
   zoe: "Zoe AI",
   oneclick: "OneClick",
-  registry: "Rights Registry",
+  registry: "Metadata Registry",
 };
 
 const RESOURCE_LABELS: Record<CountableResource, string> = {

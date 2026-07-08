@@ -13,12 +13,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Rights registry is still under development. The dashboard-side collaborator
+# Metadata registry is still under development. The dashboard-side collaborator
 # flow has diverged from these test mocks (auth check changed to return 403),
 # so these specific tests are skipped until the module stabilizes. Revisit
 # once the registry collaborator routes settle.
 _REGISTRY_WIP = pytest.mark.skip(
-    reason="Rights registry collaborator flow under active development — revisit when stabilized"
+    reason="Metadata registry collaborator flow under active development — revisit when stabilized"
 )
 
 from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect, grant_owner_access

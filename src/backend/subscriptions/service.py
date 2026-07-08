@@ -50,7 +50,7 @@ def _patch_for_max_pro(ent: Entitlements) -> Entitlements:
         zoe_enabled=True,
         oneclick_enabled=True,
         registry_enabled=True,
-        integrations_allowed=["google_drive", "slack", "notion"],
+        integrations_allowed=["google_drive", "slack"],
     )
     return replace(ent, caps=max_caps, features=max_features)
 
@@ -112,7 +112,7 @@ class EntitlementsService:
                 zoe_enabled=True,
                 oneclick_enabled=True,
                 registry_enabled=True,
-                integrations_allowed=["google_drive", "slack", "notion"],
+                integrations_allowed=["google_drive", "slack"],
             )
 
         usage = Usage(
@@ -378,7 +378,7 @@ class EntitlementsService:
                 host_ent = self.get_for_user(host_user_id)
                 if host_ent.features.registry_enabled:
                     return allow()
-            return deny("The Rights Registry is a Pro feature.")
+            return deny("The Metadata Registry is a Pro feature.")
 
         if action == Action.USE_INTEGRATION:
             name = ctx.get("name", "")

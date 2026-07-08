@@ -22,7 +22,7 @@ Three environment variables were written to `.env`:
 | `tool_used` (tool=zoe) | User submitted a Zoe AI query | `src/backend/main.py` |
 | `tool_used` (tool=oneclick) | User ran an OneClick royalty calculation | `src/backend/main.py` |
 | `contract_uploaded` | User uploaded a contract PDF to a project (file_size captured) | `src/backend/main.py` |
-| `work_created` | User created a new work in the Rights Registry (work_type captured) | `src/backend/registry/router.py` |
+| `work_created` | User created a new work in the Metadata Registry (work_type captured) | `src/backend/registry/router.py` |
 | `work_submitted_for_registration` | User submitted a work for approval/registration | `src/backend/registry/router.py` |
 
 **Pre-existing events (not duplicated):**

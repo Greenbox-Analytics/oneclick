@@ -76,7 +76,7 @@ Without these, the "Pay with PayPal" button is hidden and payout capture fails. 
 
 ---
 
-## 🟡 Required for OAuth integrations (Google Drive, Slack, Notion)
+## 🟡 Required for OAuth integrations (Google Drive, Slack)
 
 Each integration is independently optional — the feature is hidden in the UI if its credentials are missing.
 
@@ -84,12 +84,10 @@ Each integration is independently optional — the feature is hidden in the UI i
 |-----|--------|
 | `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET` | [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials) → OAuth 2.0 Client ID |
 | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | [api.slack.com/apps](https://api.slack.com/apps) → your app → Basic Information |
-| `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET` | [notion.so/profile/integrations](https://www.notion.so/profile/integrations) → New integration (public, OAuth) |
 
 OAuth callback URLs to register in each console (replace host as appropriate):
 - Google Drive: `{BACKEND_URL}/integrations/google-drive/callback`
 - Slack: `{BACKEND_URL}/integrations/slack/callback`
-- Notion: `{BACKEND_URL}/integrations/notion/callback`
 
 OAuth tokens are encrypted at rest with the next two keys.
 

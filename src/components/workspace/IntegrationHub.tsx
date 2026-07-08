@@ -9,14 +9,13 @@ import { PaywallModal } from "@/components/paywall/PaywallModal";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
 // Map backend provider key to the analytics tool id used in the registry.
-const PROVIDER_TO_TOOL: Record<IntegrationProvider, "drive" | "slack" | "notion"> = {
+const PROVIDER_TO_TOOL: Record<IntegrationProvider, "drive" | "slack"> = {
   google_drive: "drive",
   slack: "slack",
-  notion: "notion",
 };
 
 type IntegrationItem = {
-  provider: IntegrationProvider | "atlassian";
+  provider: IntegrationProvider;
   name: string;
   description: string;
   icon: React.ReactNode;
@@ -40,22 +39,6 @@ const INTEGRATIONS: IntegrationItem[] = [
     color: "#4A154B",
     comingSoon: true,
   },
-  {
-    provider: "notion",
-    name: "Notion",
-    description: "Sync project boards and tasks with Notion databases",
-    icon: <img src="/Notion_app_logo.png" alt="Notion" className="w-6 h-6 object-contain" />,
-    color: "#000000",
-    comingSoon: true,
-  },
-  {
-    provider: "atlassian",
-    name: "Jira & Confluence",
-    description: "Sync tasks with Jira and link Confluence pages to your projects",
-    icon: <img src="/atlassian.png" alt="Atlassian" className="w-6 h-6 object-contain rounded" />,
-    color: "#0052CC",
-    comingSoon: true,
-  },
 ];
 
 export function IntegrationHub() {
@@ -66,27 +49,22 @@ export function IntegrationHub() {
   const [paywallReason, setPaywallReason] = useState<string | undefined>(undefined);
 
   const { allowed: slackAllowed } = useIntegrationAllowed("slack");
-  const { allowed: notionAllowed } = useIntegrationAllowed("notion");
 
   const integrationAllowed: Record<string, boolean> = {
     google_drive: true, // Drive is always allowed; no paywall
     slack: slackAllowed,
-    notion: notionAllowed,
   };
 
   const integrationLabel: Record<string, string> = {
     slack: "Slack",
-    notion: "Notion",
   };
 
-  const getStatus = (provider: IntegrationItem["provider"]): ConnectionStatus => {
-    if (provider === "atlassian") return "disconnected";
+  const getStatus = (provider: IntegrationProvider): ConnectionStatus => {
     const conn = connections.find((c) => c.provider === provider);
     return conn?.status || "disconnected";
   };
 
-  const isConnected = (provider: IntegrationItem["provider"]) =>
-    getStatus(provider) === "active";
+  const isConnected = (provider: IntegrationProvider) => getStatus(provider) === "active";
 
   const handleConnect = (integration: IntegrationItem) => {
     if (integration.comingSoon) {
@@ -96,7 +74,6 @@ export function IntegrationHub() {
       return;
     }
     const provider = integration.provider;
-    if (provider === "atlassian") return;
     if (!integrationAllowed[provider]) {
       const label = integrationLabel[provider] ?? provider;
       setPaywallReason(`${label} integration is a Pro feature. Upgrade to Pro to connect it.`);
@@ -119,7 +96,7 @@ export function IntegrationHub() {
         {INTEGRATIONS.map((integration) => (
           <IntegrationCard
             key={integration.provider}
-            provider={integration.provider as IntegrationProvider}
+            provider={integration.provider}
             name={integration.name}
             description={integration.description}
             icon={integration.icon}
@@ -127,7 +104,6 @@ export function IntegrationHub() {
             status={getStatus(integration.provider)}
             onConnect={() => handleConnect(integration)}
             onDisconnect={() => {
-              if (integration.provider === "atlassian") return;
               disconnect(integration.provider);
               if (integration.provider === "slack") setSlackPanelOpen(false);
             }}
@@ -141,9 +117,7 @@ export function IntegrationHub() {
         ))}
       </div>
 
-      {slackPanelOpen && (
-        <SlackPanel onClose={() => setSlackPanelOpen(false)} />
-      )}
+      {slackPanelOpen && <SlackPanel onClose={() => setSlackPanelOpen(false)} />}
 
       <PaywallModal
         open={paywallOpen}

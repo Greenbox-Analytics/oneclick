@@ -1,4 +1,4 @@
-export type IntegrationProvider = "google_drive" | "slack" | "notion";
+export type IntegrationProvider = "google_drive" | "slack";
 
 export type ConnectionStatus = "active" | "expired" | "revoked" | "disconnected";
 
@@ -113,13 +113,6 @@ export interface SlackChannel {
   id: string;
   name: string;
   is_private: boolean;
-}
-
-// Notion types
-export interface NotionDatabase {
-  id: string;
-  title: string;
-  url: string;
 }
 
 export interface WorkspaceSettings {

@@ -1,6 +1,6 @@
 """Spotify Web API client using Client Credentials flow (app-only, no user OAuth).
 
-Used by the Rights Registry Add Work wizard to look up released-track metadata
+Used by the Metadata Registry Add Work wizard to look up released-track metadata
 (ISRC, label, release date, duration, popularity, cover art).
 """
 

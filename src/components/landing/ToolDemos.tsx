@@ -982,8 +982,6 @@ const WORKSPACE_COL_BASE = [
 const WORKSPACE_INTEGRATIONS = [
   { l: "Google Drive", d: "#1a73e8" },
   { l: "Slack", d: "#611f69" },
-  { l: "Notion", d: "#000" },
-  { l: "Atlassian", d: "#0052cc" },
 ];
 
 const TRAVELING_CARD = "Cold Mornings · Master";
@@ -1187,7 +1185,7 @@ const SPLIT_TOTAL_BOX: CSSProperties = {
 };
 
 // ======================================================================
-// 6. Rights Registry — works & ownership splits
+// 6. Metadata Registry — works & ownership splits
 // ======================================================================
 const REGISTRY_COLORS = ["var(--primary)", "var(--accent)", "hsl(168 55% 52%)", "hsl(150 22% 72%)"];
 
@@ -1279,7 +1277,7 @@ function DemoRegistryInner({ playing, height }: DemoBodyProps) {
   const work = REGISTRY_WORKS[focused];
   const registered = REGISTRY_WORKS.filter((w) => w.status === "Registered").length;
   return (
-    <DemoFrame tab="/tools/registry" title="Rights Registry" height={height}>
+    <DemoFrame tab="/tools/registry" title="Metadata Registry" height={height}>
       <div style={{ padding: 18, height: "100%", display: "grid", gridTemplateRows: "auto 1fr", gap: 14 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
@@ -1403,11 +1401,12 @@ export const TOOLS: Tool[] = [
     name: "OneClick",
     tagline: "Royalty calculator",
     blurb:
-      "Cross-reference any contract against a royalty statement and get a per-song, per-payee breakdown in seconds. Share the PDF straight to Drive or Slack — every receipt, every collaborator, every quarter.",
+      "OneClick is our most advanced tool and your one-stop shop for artists and artist teams to get instant visibility for your streaming revenue, identify what collaborators are owed, send payouts in-app, and organize your finances. Cross-reference any contract against a royalty statement and get a per-song, per-payee breakdown in seconds.",
     bullets: [
-      "Streams progress as it works",
-      "CSV, Excel & PDF export",
-      "Save to Drive · Share to Slack",
+      "Consistently precise results",
+      "Simplified payout breakdown",
+      "In-app payout options",
+      "CSV, Excel & PDF Export",
     ],
     cta: "Open the calculator",
     href: "/tools/oneclick",
@@ -1418,11 +1417,13 @@ export const TOOLS: Tool[] = [
     name: "Zoe",
     tagline: "AI contract analyst",
     blurb:
-      "Drop a contract in and ask anything. Cited answers grounded in your actual document — no hallucinated clauses, no generic LLM mush. Royalty rates, escalations, term lengths, exits — all at a chat prompt's distance.",
+      "Turn contracts into conversations. Upload your agreement, ask any question and get clarity in the simplest of terms. No legal jargon. No endless scrolling. From royalty rates to recoupment models, get instant answers sourced directly from your contract.",
     bullets: [
-      "Streaming responses",
+      "AI powered parsing",
       "Inline citations to page & clause",
-      "Indexes royalty statements too",
+      "Intuitive responses within seconds",
+      "Accurate insights addressing any relevant concerns",
+      "Conversational style format",
     ],
     cta: "Ask Zoe",
     href: "/tools/zoe",
@@ -1430,14 +1431,15 @@ export const TOOLS: Tool[] = [
   },
   {
     id: "splitsheet",
-    name: "Split Sheet",
-    tagline: "Splits generator",
+    name: "Split Sheet Generator",
+    tagline: "",
     blurb:
-      "Auto-balancing split sheets that won't ship until publishing and master both sum to 100. Export PDF or DOCX with signature blocks ready to go, and the receipts stay attached to the project.",
+      "Capture splits while everyone is still in the room. Input simple metadata and have a split sheet generated instantly with a professional document, clear percentages and an agreement ready to be shared and executed between all parties in seconds. Keep for your records, use at a later time or upload into OneClick to generate collaborator earnings from a royalty statement.",
     bullets: [
-      "Live totals for pub + master",
-      "PDF & DOCX in one click",
-      "Signature blocks built-in",
+      "All relevant metadata available for input",
+      "Export ready PDF & DOCX",
+      "Signature blocks integration",
+      "Instant split sheet creation",
     ],
     cta: "Generate a split sheet",
     href: "/tools/split-sheet",
@@ -1445,7 +1447,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: "registry",
-    name: "Rights Registry",
+    name: "Metadata Registry",
     tagline: "Works & ownership",
     blurb:
       "Register every work and lock in who owns what — master and publishing splits, per collaborator. Track each work from draft to registered, with an auditable record of the stakes, roles and agreements behind every percentage.",
@@ -1461,13 +1463,14 @@ export const TOOLS: Tool[] = [
   {
     id: "portfolio",
     name: "Portfolio",
-    tagline: "Artists & projects",
+    tagline: "Artists & Administration",
     blurb:
-      "One place for every artist on your roster — projects, files, audio, notes, members. Granular roles (owner / admin / editor / viewer) and RLS-gated so collaborators see only what they should.",
+      "Your control center for every project. Everything your team needs in one place. Organize contracts, statements, audio assets, collaborators, and team members in one place, with flexible permissions that keep the right content in the right hands.",
     bullets: [
-      "Artist profiles & DSP links",
-      "Project files & audio",
-      "Owner / admin / editor / viewer roles",
+      "Artist profiles, DSP links, Bio, Press Kits",
+      "Project files & audio assets",
+      "Centralized access management for all artist logins",
+      "Owner / admin / editor / viewer roles with encryption included",
     ],
     cta: "Open Portfolio",
     href: "/portfolio",
@@ -1476,13 +1479,14 @@ export const TOOLS: Tool[] = [
   {
     id: "workspace",
     name: "Workspace",
-    tagline: "Boards & integrations",
+    tagline: "Project management built for music",
     blurb:
-      "Kanban and calendar that talk to Drive, Slack, Notion and the rest. Move a card, sync a folder — the back-office stays out of your way and your team stays in their existing tools.",
+      "Track releases, registrations, royalty tasks, deliverables, and to-dos in one streamlined environment. Tasks automatically sync to the project calendar once due dates are added to maintain clear visibility and alignment. Assign work, set deadlines, and stay on top of what needs to happen next in the fast paced landscape of entertainment.",
     bullets: [
-      "Drive · Slack · Notion sync",
-      "Kanban + calendar views",
-      "Notifications & audit log",
+      "Task management",
+      "Track various initiatives in one area",
+      "Connect files and contents from Google Drive, Slack and more",
+      "Calendar synced to the project board",
     ],
     cta: "Open Workspace",
     href: "/workspace",

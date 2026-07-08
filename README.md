@@ -70,7 +70,7 @@ Edit `.env` and fill in at minimum:
   - `DATABASE_PW` — Database password (Settings → Database)
 - **Backend:** `VITE_BACKEND_API_URL` (default: `http://localhost:8000`)
 - **OpenAI:** `OPENAI_API_KEY` (for Zoe contract analysis)
-- **Integrations (optional):** Google Drive, Slack, Notion OAuth credentials — see `.env.example` sections
+- **Integrations (optional):** Google Drive, Slack OAuth credentials — see `.env.example` sections
 
 For the full variable catalog (required vs optional, where to source each), see [docs/secrets.md](docs/secrets.md).
 
@@ -227,9 +227,9 @@ oneclick/
 │   ├── backend/               # FastAPI server (Python, Poetry, Docker)
 │   │   ├── main.py            # App entry, all routers mounted here
 │   │   ├── boards/            # Kanban board management
-│   │   ├── integrations/      # Google Drive, Slack, Notion
+│   │   ├── integrations/      # Google Drive, Slack
 │   │   ├── oneclick/          # Royalty calculator + PDF share
-│   │   ├── registry/          # Rights registry
+│   │   ├── registry/          # Metadata registry
 │   │   ├── splitsheet/        # Split sheet generator
 │   │   ├── settings/          # Workspace settings
 │   │   ├── projects/          # Project management
@@ -240,7 +240,7 @@ oneclick/
 │   │   ├── project/           # Project detail tabs + integration UIs
 │   │   ├── workspace/         # Workspace tabs, integration hub, boards
 │   │   ├── oneclick/          # OneClick calculation UI
-│   │   ├── registry/          # Rights registry panels
+│   │   ├── registry/          # Metadata registry panels
 │   │   ├── notes/             # BlockNote rich text editor
 │   │   └── zoe/               # Zoe AI chat
 │   ├── pages/                 # Route pages (lazy-loaded)

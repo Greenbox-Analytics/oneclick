@@ -23,7 +23,6 @@ google-api-python-client
 google-auth
 google-auth-oauthlib
 slack-sdk
-notion-client
 cryptography
 PyJWT
 httpx
