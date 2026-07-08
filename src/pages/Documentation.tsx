@@ -23,7 +23,7 @@ import {
 // Section model — grouped sidebar nav (module scope: rendering-hoist-jsx)
 // ---------------------------------------------------------------------------
 
-// Flip to true to hide Rights Registry / Work Detail docs and works references.
+// Flip to true to hide Metadata Registry / Work Detail docs and works references.
 const HIDE_REGISTRY_AND_WORKS = false;
 
 interface SectionMeta { id: string; label: string; icon: React.ElementType; group: string; }
@@ -41,7 +41,7 @@ const SECTION_LABELS: Record<string, { label: string; icon: React.ElementType }>
   portfolio: { label: "Portfolio", icon: Folder },
   "project-detail": { label: "Project Detail", icon: FolderOpen },
   "work-detail": { label: "Work Detail", icon: FileText },
-  "rights-registry": { label: "Rights Registry", icon: Shield },
+  "rights-registry": { label: "Metadata Registry", icon: Shield },
   oneclick: { label: "OneClick", icon: Calculator },
   "royalty-tracking": { label: "Royalty Tracking", icon: Wallet },
   zoe: { label: "Zoe AI", icon: Bot },
@@ -76,7 +76,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   "split-sheet": "Create split sheet agreements and generate clean PDF or Word documents ready for signing.",
   "artist-management": "Manage your roster with profiles, streaming links, and organized projects.",
   workspace: "Your project-management hub with Kanban boards, a calendar, and integrations.",
-  integrations: "Connect Msanii to Google Drive, Slack, and Notion — and see what's coming next.",
+  integrations: "Connect Msanii to Google Drive and Slack — and see what's coming next.",
   "best-practices": "Tips for getting the most out of Msanii.",
 };
 
@@ -259,11 +259,11 @@ function QuickCards({ cards }: { cards: QuickCard[] }) {
 }
 
 const TOOLKIT = [
-  { target: "rights-registry", name: "Rights Registry", icon: Shield, desc: "Track ownership and confirm rights across every work." },
+  { target: "rights-registry", name: "Metadata Registry", icon: Shield, desc: "Track ownership and confirm rights across every work." },
   { target: "oneclick", name: "OneClick", icon: Calculator, desc: "Cross-reference contracts against a statement to calculate who's owed what." },
   { target: "zoe", name: "Zoe", icon: Bot, desc: "Ask plain-language questions of any contract and get cited answers." },
   { target: "split-sheet", name: "Split Sheet", icon: Scale, desc: "Generate balanced publishing & master splits as a PDF or DOCX." },
-  { target: "workspace", name: "Workspace", icon: LayoutGrid, desc: "Boards and a calendar wired into Drive, Slack, and Notion." },
+  { target: "workspace", name: "Workspace", icon: LayoutGrid, desc: "Boards and a calendar wired into Drive and Slack." },
 ];
 
 function ToolGrid() {
@@ -521,7 +521,7 @@ const WorkDetailContent = () => (
     <div>
       <SectionHeading>Overview</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">
-        The Work Detail page is where you manage a single work — a track, composition, or recording. Get here by clicking a work in the <strong>Project Detail → Works tab</strong> or from the <strong>Rights Registry</strong>. Everything about the work lives on one page: identity codes, ownership splits, licensing, agreements, and collaboration status.
+        The Work Detail page is where you manage a single work — a track, composition, or recording. Get here by clicking a work in the <strong>Project Detail → Works tab</strong> or from the <strong>Metadata Registry</strong>. Everything about the work lives on one page: identity codes, ownership splits, licensing, agreements, and collaboration status.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FeatureCard icon={Shield} title="Work header" description="Title (inline-editable by the owner), status badge, work type, and industry codes (ISRC, ISWC, UPC)." color="blue" />
@@ -568,7 +568,7 @@ const WorkDetailContent = () => (
           The invite includes the work title, your name, their role, and stake percentages so they can review before accepting.
         </Step>
         <Step num={4} title="Accept or decline" isLast>
-          The collaborator sees the invite in their <strong>Rights Registry</strong>. Accepting confirms their stake; declining removes them. Files linked to the work become accessible only after they accept.
+          The collaborator sees the invite in their <strong>Metadata Registry</strong>. Accepting confirms their stake; declining removes them. Files linked to the work become accessible only after they accept.
         </Step>
       </div>
     </div>
@@ -603,7 +603,7 @@ const WorkDetailContent = () => (
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FeatureCard icon={Users} title="Project members" description="Added at the project level (Owner/Admin/Editor/Viewer). They see ALL works in that project and manage files, audio, and notes." color="purple" />
-        <FeatureCard icon={UserPlus} title="Work collaborators" description="Invited to a specific work via the Rights Registry. They only see the work they were invited to — not the full project or other works." color="blue" />
+        <FeatureCard icon={UserPlus} title="Work collaborators" description="Invited to a specific work via the Metadata Registry. They only see the work they were invited to — not the full project or other works." color="blue" />
       </div>
       <Callout type="info" title="When to use which">
         Use <strong>project members</strong> for your internal team (managers, assistants) who need access to everything in a project. Use <strong>work collaborators</strong> for external parties (producers, featured artists) who should only see their specific work and its ownership details.
@@ -620,7 +620,7 @@ const RightsRegistryContent = () => (
     <div>
       <SectionHeading>Overview</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">
-        The Rights Registry is your ownership-tracking dashboard. It shows everything you own and everything you're involved in across all projects. (You create works in Project Detail, not here.)
+        The Metadata Registry is your ownership-tracking dashboard. It shows everything you own and everything you're involved in across all projects. (You create works in Project Detail, not here.)
       </p>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
@@ -798,7 +798,7 @@ const ArtistManagementContent = () => (
       {HIDE_REGISTRY_AND_WORKS ? (
         <>Artist profiles are <strong>private to you</strong>. Only you can see an artist's notes and profile details.</>
       ) : (
-        <>Artist profiles are <strong>private to you</strong>. Only you can see an artist's notes and profile details. Works and their linked contracts can be shared with collaborators through the Rights Registry.</>
+        <>Artist profiles are <strong>private to you</strong>. Only you can see an artist's notes and profile details. Works and their linked contracts can be shared with collaborators through the Metadata Registry.</>
       )}
     </Callout>
   </div>
@@ -811,7 +811,7 @@ const WorkspaceContent = () => (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FeatureCard icon={LayoutGrid} title="Kanban boards" description="Drag-and-drop task boards with columns you define. Create tasks with titles, descriptions, priority, due dates, labels, and color coding." color="sky" />
         <FeatureCard icon={Zap} title="Calendar view" description="See tasks on a timeline (day, week, month, or year). Track deadlines, release dates, and contract expirations at a glance." color="amber" />
-        <FeatureCard icon={Plug} title="Integrations" description="Connect Google Drive, Slack, and Notion to move files, send notifications, and sync tasks." color="blue" />
+        <FeatureCard icon={Plug} title="Integrations" description="Connect Google Drive and Slack to move files, send notifications, and sync tasks." color="blue" />
         <FeatureCard icon={Settings} title="Settings" description="Configure timezone and time format (12h/24h). Preferences apply across the Dashboard and Workspace." color="emerald" />
       </div>
     </div>
@@ -832,8 +832,6 @@ const IntegrationsContent = () => (
         rows={[
           ["Google Drive", "Connected", "Import files into a project, export files back to Drive, and set up folder sync."],
           ["Slack", "Coming soon", "Send task and royalty notifications to a channel, share OneClick breakdowns, and capture @mentions."],
-          ["Notion", "Coming soon", "Two-way sync between your Workspace board tasks and a Notion database."],
-          ["Jira & Confluence", "Coming soon", "Sync tasks with Jira and link Confluence pages."],
         ]}
       />
     </div>
@@ -842,15 +840,13 @@ const IntegrationsContent = () => (
       <CodeBlock label="Workspace → Settings → Integrations">{`Connect a service in two clicks:
 
   ✓ Google Drive          connected
-  + Slack                 coming soon
-  + Notion                coming soon
-  + Jira & Confluence     coming soon`}</CodeBlock>
+  + Slack                 coming soon`}</CodeBlock>
     </div>
     <Callout type="tip" title="Spotify metadata — no setup needed">
-      When you mark a work as <strong>Released</strong>, Msanii can pull its ISRC, UPC, release date, and cover art from Spotify automatically. There's nothing to connect — it's built into the Rights Registry.
+      When you mark a work as <strong>Released</strong>, Msanii can pull its ISRC, UPC, release date, and cover art from Spotify automatically. There's nothing to connect — it's built into the Metadata Registry.
     </Callout>
     <Callout type="info" title="What's live today">
-      Google Drive is connected today — import files into a project and export them back to Drive. Slack, Notion, and Jira are on the way. There's no public API; everything happens inside Msanii.
+      Google Drive is connected today — import files into a project and export them back to Drive. Slack is on the way. There's no public API; everything happens inside Msanii.
     </Callout>
   </div>
 );
@@ -865,7 +861,7 @@ const BestPracticesContent = () => (
     </Callout>
     {!HIDE_REGISTRY_AND_WORKS && (
       <Callout type="info" title="Rights & ownership">
-        Use the Rights Registry to track ownership of every work before distributing or licensing. When inviting collaborators, include detailed stake information so everyone has a clear record. Keep files linked to works — collaborators see linked files once they accept.
+        Use the Metadata Registry to track ownership of every work before distributing or licensing. When inviting collaborators, include detailed stake information so everyone has a clear record. Keep files linked to works — collaborators see linked files once they accept.
       </Callout>
     )}
     <Callout type="tip" title="Workflow recommendations">

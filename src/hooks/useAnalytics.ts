@@ -68,7 +68,7 @@ export function useAnalytics() {
     captureOnboardingFinished: () => capture("onboarding_finished", {}),
 
     // Integrations (client-side "Connect" click)
-    captureIntegrationConnectStarted: (tool: "drive" | "slack" | "notion") =>
+    captureIntegrationConnectStarted: (tool: "drive" | "slack") =>
       capture("integration_connect_started", { tool }),
   };
 }

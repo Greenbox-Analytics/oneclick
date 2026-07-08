@@ -375,8 +375,6 @@ const LOGOS: readonly LogoEntry[] = [
   { name: "SoundCloud", src: "/soundcloud.png" },
   { name: "Google Drive", src: "/drive.webp" },
   { name: "Slack", src: "/slack.png" },
-  { name: "Notion", src: "/Notion_app_logo.png" },
-  { name: "Atlassian", src: "/atlassian.png" },
 ];
 
 // Doubled so the keyframes can translate -50% and loop seamlessly.
@@ -504,22 +502,24 @@ export function ToolShowcase() {
                   className="lp-tool-row"
                 >
                   <div style={{ order: flipped ? 2 : 1 }}>
-                    <div
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 8,
-                        fontSize: 11,
-                        fontWeight: 700,
-                        color: "var(--accent)",
-                        letterSpacing: "0.14em",
-                        textTransform: "uppercase",
-                        marginBottom: 14,
-                      }}
-                    >
-                      <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} />
-                      {tool.tagline}
-                    </div>
+                    {tool.tagline && (
+                      <div
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: "var(--accent)",
+                          letterSpacing: "0.14em",
+                          textTransform: "uppercase",
+                          marginBottom: 14,
+                        }}
+                      >
+                        <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} />
+                        {tool.tagline}
+                      </div>
+                    )}
                     <h4
                       className="tighter"
                       style={{
@@ -656,18 +656,20 @@ export function ToolsOverview() {
                 </span>
                 <IconArrow style={{ width: 15, height: 15, color: "var(--accent)" }} />
               </div>
-              <span
-                style={{
-                  marginTop: 8,
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: "var(--accent)",
-                  letterSpacing: "0.12em",
-                  textTransform: "uppercase",
-                }}
-              >
-                {tool.tagline}
-              </span>
+              {tool.tagline && (
+                <span
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "var(--accent)",
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {tool.tagline}
+                </span>
+              )}
             </Link>
           ))}
         </div>
@@ -694,7 +696,7 @@ const FOOTER_COLS: Array<[string, Array<[string, string]>]> = [
       ["OneClick", "/docs?section=oneclick"],
       ["Zoe", "/docs?section=zoe"],
       ["Split Sheet", "/docs?section=split-sheet"],
-      ["Rights Registry", "/docs?section=rights-registry"],
+      ["Metadata Registry", "/docs?section=rights-registry"],
       ["Portfolio", "/docs?section=portfolio"],
       ["Workspace", "/docs?section=workspace"],
     ],

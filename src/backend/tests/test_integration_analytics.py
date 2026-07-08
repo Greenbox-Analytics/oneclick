@@ -138,64 +138,6 @@ class TestSlackCallbackAnalytics:
 
 
 # ---------------------------------------------------------------------------
-# Notion
-# ---------------------------------------------------------------------------
-
-
-class TestNotionCallbackAnalytics:
-    def test_callback_fires_connected_on_success(self, monkeypatch):
-        captured = []
-        monkeypatch.setattr(
-            "integrations.notion.router.analytics_capture",
-            lambda uid, event, props=None: captured.append((event, dict(props or {}))),
-        )
-        monkeypatch.setattr(
-            "integrations.notion.router.verify_oauth_state",
-            lambda state: {"user_id": "u-1"},
-        )
-        monkeypatch.setattr(
-            "integrations.notion.router.exchange_code_for_tokens",
-            AsyncMock(return_value={"access_token": "n-token", "workspace_id": "w1"}),
-        )
-        monkeypatch.setattr(
-            "integrations.notion.router.store_connection",
-            AsyncMock(return_value=None),
-        )
-
-        client = TestClient(main.app)
-        client.get("/integrations/notion/callback?code=xyz&state=abc", follow_redirects=False)
-
-        connected = [c for c in captured if c[0] == "integration_connected"]
-        assert len(connected) == 1, f"expected integration_connected, got {captured}"
-        assert connected[0][1]["tool"] == "notion"
-
-    def test_callback_fires_failed_on_exception(self, monkeypatch):
-        captured = []
-        monkeypatch.setattr(
-            "integrations.notion.router.analytics_capture",
-            lambda uid, event, props=None: captured.append((event, dict(props or {}))),
-        )
-        monkeypatch.setattr(
-            "integrations.notion.router.verify_oauth_state",
-            lambda state: {"user_id": "u-1"},
-        )
-        monkeypatch.setattr(
-            "integrations.notion.router.exchange_code_for_tokens",
-            AsyncMock(side_effect=RuntimeError("notion oauth failed")),
-        )
-
-        client = TestClient(main.app)
-        resp = client.get("/integrations/notion/callback?code=xyz&state=abc", follow_redirects=False)
-
-        assert resp.status_code == 400
-
-        failed = [c for c in captured if c[0] == "integration_connect_failed"]
-        assert len(failed) == 1, f"expected integration_connect_failed, got {captured}"
-        assert failed[0][1]["tool"] == "notion"
-        assert failed[0][1]["error_code"] == "RuntimeError"
-
-
-# ---------------------------------------------------------------------------
 # Use-site events
 # ---------------------------------------------------------------------------
 
@@ -233,35 +175,6 @@ class TestGoogleDriveImportAnalytics:
         assert len(used) == 1, f"expected integration_used, got {captured}"
         assert used[0][1]["tool"] == "drive"
         assert used[0][1]["action"] == "file_imported"
-
-
-class TestNotionSyncAnalytics:
-    def test_sync_tasks_fires_integration_used(self, client, monkeypatch):
-        captured = []
-        monkeypatch.setattr(
-            "integrations.notion.router.analytics_capture",
-            lambda uid, event, props=None: captured.append((event, dict(props or {}))),
-        )
-        monkeypatch.setattr(
-            "integrations.notion.router.get_valid_token",
-            AsyncMock(return_value="n-token"),
-        )
-        monkeypatch.setattr(
-            "integrations.notion.service.sync_tasks_with_notion",
-            AsyncMock(return_value={"synced": 0}),
-        )
-
-        resp = client.post(
-            "/integrations/notion/sync/tasks",
-            json={"database_id": "db-1", "sync_enabled": True},
-        )
-
-        assert resp.status_code == 200, resp.text
-
-        used = [c for c in captured if c[0] == "integration_used"]
-        assert len(used) == 1, f"expected integration_used, got {captured}"
-        assert used[0][1]["tool"] == "notion"
-        assert used[0][1]["action"] == "task_synced"
 
 
 class TestSlackNotifyAnalytics:

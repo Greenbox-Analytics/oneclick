@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 
-// Flip to false to restore Rights Registry / works mentions in the dashboard walkthrough.
+// Flip to false to restore Metadata Registry / works mentions in the dashboard walkthrough.
 const HIDE_REGISTRY_AND_WORKS = false;
 
 export interface WalkthroughStep {
@@ -18,7 +18,7 @@ export const WALKTHROUGH_STEPS: WalkthroughStep[] = [
     title: "Tools",
     description: HIDE_REGISTRY_AND_WORKS
       ? "OneClick for royalty calculations, Zoe AI for contract analysis, and Split Sheets for ownership docs."
-      : "OneClick for royalty calculations, Zoe AI for contract analysis, Split Sheets for ownership docs, and the Rights Registry to track and protect your catalog.",
+      : "OneClick for royalty calculations, Zoe AI for contract analysis, Split Sheets for ownership docs, and the Metadata Registry to track and protect your catalog.",
     placement: "bottom",
   },
   {
@@ -32,7 +32,7 @@ export const WALKTHROUGH_STEPS: WalkthroughStep[] = [
     targetSelector: '[data-walkthrough="workspace"]',
     title: "Workspace",
     description:
-      "Organize tasks on Kanban boards with monthly iterations. Connect Google Drive, Slack, and Notion to keep everything in sync.",
+      "Organize tasks on Kanban boards with monthly iterations. Connect Google Drive and Slack to keep everything in sync.",
     placement: "bottom",
   },
   {

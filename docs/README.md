@@ -8,7 +8,7 @@ Domain-specific guides organized by tool/product area. Each doc covers backend e
 |-----|------|-------|--------|
 | [Workspace](workspace.md) | Workspace | `/workspace` | Integrations (Drive, Slack), Kanban boards, Calendar, Notifications, Settings |
 | [Portfolio](portfolio.md) | Portfolio & Projects | `/portfolio`, `/projects/:id` | Artists, projects, files, audio, members, notes |
-| [Registry](registry.md) | Rights Registry | `/tools/registry` | Works, ownership stakes, collaborators, licensing, agreements |
+| [Registry](registry.md) | Metadata Registry | `/tools/registry` | Works, ownership stakes, collaborators, licensing, agreements |
 | [OneClick](oneclick.md) | OneClick | `/tools/oneclick` | Royalty calculator, PDF generation, sharing to Drive/Slack |
 | [Zoe](zoe.md) | Zoe AI | `/tools/zoe` | AI contract analysis chatbot, streaming, document processing |
 | [Split Sheet](split-sheet.md) | Split Sheet | `/tools/split-sheet` | Split sheet PDF/DOCX generator |

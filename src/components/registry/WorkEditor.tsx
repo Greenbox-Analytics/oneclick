@@ -309,7 +309,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
             className="pl-0 text-muted-foreground"
             onClick={() => navigate("/tools/registry")}
           >
-            <ArrowLeft className="w-4 h-4 mr-1" /> Rights Registry
+            <ArrowLeft className="w-4 h-4 mr-1" /> Metadata Registry
           </Button>
           {artist && project && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">

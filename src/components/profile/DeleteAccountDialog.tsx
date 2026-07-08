@@ -66,7 +66,7 @@ export function DeleteAccountDialog({ open, onOpenChange, userEmail }: DeleteAcc
                 <li>Sign you out of Msanii.</li>
               </ul>
               <p className="text-muted-foreground">
-                You may still see Msanii listed in your connected Google / Slack / Notion app permissions —
+                You may still see Msanii listed in your connected Google / Slack app permissions —
                 revoke those from each service's settings if you want a complete removal.
               </p>
               <p>

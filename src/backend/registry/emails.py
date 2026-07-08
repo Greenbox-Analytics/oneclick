@@ -1,4 +1,4 @@
-"""Invitation and verification emails for the Rights Registry."""
+"""Invitation and verification emails for the Metadata Registry."""
 
 import html
 import os
@@ -37,7 +37,7 @@ def send_invitation_email(
     html_body = f"""
     <div style="font-family: -apple-system, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
       <div style="text-align: center; margin-bottom: 24px;">
-        <h1 style="color: #1a3a2a; font-size: 24px; margin: 0;">Msanii Rights Registry</h1>
+        <h1 style="color: #1a3a2a; font-size: 24px; margin: 0;">Msanii Metadata Registry</h1>
       </div>
 
       <p style="font-size: 16px; color: #333;">Hi {safe_name},</p>
@@ -130,7 +130,7 @@ def send_rich_invitation_email(
     html_body = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
       <div style="text-align: center; margin-bottom: 24px;">
-        <h1 style="color: #1a3a2a; font-size: 24px; margin: 0;">Msanii Rights Registry</h1>
+        <h1 style="color: #1a3a2a; font-size: 24px; margin: 0;">Msanii Metadata Registry</h1>
       </div>
       <p style="font-size: 16px; color: #333;">Hi {safe_name},</p>
       <p style="font-size: 15px; color: #555;">

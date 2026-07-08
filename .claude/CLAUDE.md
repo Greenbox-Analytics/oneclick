@@ -104,10 +104,9 @@ src/
 │   │   ├── events.py       # Internal event bus (emit/subscribe for notifications)
 │   │   ├── connections_router.py  # GET /integrations/connections (list user's connections)
 │   │   ├── google_drive/   # OAuth, file browse, import/export, PDF upload
-│   │   ├── slack/          # OAuth, channels, Block Kit notifications, webhook (@mentions)
-│   │   └── notion/         # OAuth, database listing, bidirectional task sync
+│   │   └── slack/          # OAuth, channels, Block Kit notifications, webhook (@mentions)
 │   ├── oneclick/           # Royalty calculation tool + PDF share to Drive/Slack
-│   ├── registry/           # Rights registry (works, stakes, collaborators, licensing, PDF)
+│   ├── registry/           # Metadata registry (works, stakes, collaborators, licensing, PDF)
 │   ├── splitsheet/         # Split sheet PDF/DOCX generator
 │   ├── settings/           # User/workspace settings
 │   ├── projects/           # Project management endpoints
@@ -119,7 +118,7 @@ src/
 │   ├── project/            # Project detail tabs (works, files, audio, members, settings)
 │   │   └── integrations/   # Drive import dialog, project Slack settings
 │   ├── profile/            # User profile components
-│   ├── registry/           # Rights registry panels
+│   ├── registry/           # Metadata registry panels
 │   ├── workspace/          # Workspace tabs, integration hub, boards
 │   │   ├── boards/         # Kanban board, calendar view, task detail panel
 │   │   └── integrations/   # DrivePanel, SlackPanel (workspace-level config)
@@ -160,7 +159,6 @@ All routers are mounted in `src/backend/main.py`:
 | `/integrations` | Connections | List user's integration connections |
 | `/integrations/google-drive` | Google Drive | OAuth, file browse, import/export, PDF upload |
 | `/integrations/slack` | Slack | OAuth, channels, notification settings, webhook |
-| `/integrations/notion` | Notion | OAuth, database listing, task sync |
 | `/boards` | Boards | Kanban board CRUD |
 | `/settings` | Settings | Workspace settings |
 | `/splitsheet` | Split Sheet | PDF/DOCX generation |
@@ -195,7 +193,7 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 - Each artist has **projects** (albums, EPs, singles, etc.)
 - Projects contain **works** (individual tracks/compositions)
 
-### Rights Registry
+### Metadata Registry
 - Works are registered with ownership stakes (master % and publishing %)
 - **Collaborators** are invited per-work with splits, roles, and terms
 - Collaboration flow: Invited -> Accepted / Declined

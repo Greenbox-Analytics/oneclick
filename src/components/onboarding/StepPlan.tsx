@@ -24,7 +24,7 @@ const PRO_BULLETS = [
   "Unlimited artists, projects, tasks",
   "Unlimited split sheets",
   "Zoe AI contract analysis",
-  "Rights Registry + all integrations",
+  "Metadata Registry + all integrations",
 ];
 
 /**

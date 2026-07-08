@@ -245,7 +245,7 @@ export function RegistryDashboard() {
       {/* Title block */}
       <div className="mb-6">
         <div className="text-[11px] tracking-widest uppercase font-semibold text-primary mb-2">
-          Rights Registry
+          Metadata Registry
         </div>
         <h2 className="text-3xl font-bold tracking-tight">Your rights, in one place</h2>
         <p className="text-muted-foreground mt-1">

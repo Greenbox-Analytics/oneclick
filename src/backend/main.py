@@ -43,7 +43,6 @@ from boards.router import router as boards_router
 from credentials.router import router as credentials_router
 from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
-from integrations.notion.router import router as notion_router
 from integrations.slack.router import router as slack_router
 from integrations.spotify.router import router as spotify_router
 from oneclick.breakdown import router as oneclick_breakdown_router
@@ -65,13 +64,12 @@ from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
 app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
-app.include_router(notion_router, prefix="/integrations/notion", tags=["Notion"])
 app.include_router(spotify_router, prefix="/integrations/spotify", tags=["Spotify"])
 app.include_router(connections_router, prefix="/integrations", tags=["Integrations"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
 app.include_router(settings_router, prefix="/settings", tags=["Workspace Settings"])
 app.include_router(splitsheet_router, prefix="/splitsheet", tags=["Split Sheet"])
-app.include_router(registry_router, prefix="/registry", tags=["Rights Registry"])
+app.include_router(registry_router, prefix="/registry", tags=["Metadata Registry"])
 app.include_router(projects_router, prefix="/projects", tags=["Projects"])
 app.include_router(projects_share_email_router, prefix="/projects", tags=["Projects"])
 app.include_router(oneclick_share_router, prefix="/oneclick", tags=["OneClick"])
@@ -738,7 +736,7 @@ async def bootstrap_tester(
         "zoe_enabled": True,
         "oneclick_enabled": True,
         "registry_enabled": True,
-        "integrations_allowed": ["google_drive", "slack", "notion"],
+        "integrations_allowed": ["google_drive", "slack"],
         "reason": "tester_env",
         "expires_at": None,
         "granted_at": granted_at,

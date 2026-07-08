@@ -441,7 +441,7 @@ class TestOneClickShare:
 
 
 class TestIntegrationGated:
-    """SP3: Free users cannot start OAuth for Slack/Notion; Drive is ungated."""
+    """SP3: Free users cannot start OAuth for Slack; Drive is ungated."""
 
     def _denied_service(self, name: str):
         from subscriptions.models import CheckResult
@@ -464,17 +464,6 @@ class TestIntegrationGated:
         assert resp.status_code == 402
         detail = resp.json()["detail"].lower()
         assert "slack" in detail or "integration" in detail or "pro" in detail
-
-    def test_notion_oauth_start_free_returns_402(self, client, monkeypatch):
-        """Free user -> GET /integrations/notion/auth returns 402."""
-        from subscriptions import enforcement
-
-        monkeypatch.setattr(enforcement, "_service", lambda: self._denied_service("notion"))
-
-        resp = client.get("/integrations/notion/auth")
-        assert resp.status_code == 402
-        detail = resp.json()["detail"].lower()
-        assert "notion" in detail or "integration" in detail or "pro" in detail
 
     @patch("integrations.google_drive.router.build_auth_url")
     def test_drive_oauth_start_free_succeeds(self, mock_build, client, monkeypatch):
