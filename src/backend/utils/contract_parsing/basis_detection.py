@@ -42,6 +42,7 @@ class BasisFinding:
     kb_context: str = field(default="", repr=False)
 
 
+# NOTE: split_verification.py imports _normalize for its verbatim-quote guardrail — behavior changes affect both modules' false-green defenses.
 def _normalize(text: str) -> str:
     # Fold PDF artifacts, then reconcile spacing around hyphens ("a — b" / "a-b" -> "a-b")
     # so an em-dash with/without surrounding spaces doesn't defeat the verbatim check.

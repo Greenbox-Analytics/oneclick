@@ -125,7 +125,7 @@ class TestOneclickCalculateRoyaltiesStream:
 
         with patch(
             "main.calculate_royalty_payments",
-            return_value=payments if payments is not None else SAMPLE_PAYMENTS,
+            return_value=(payments if payments is not None else SAMPLE_PAYMENTS, None),
         ):
             response = client.get("/oneclick/calculate-royalties-stream", params=params)
 
@@ -162,7 +162,7 @@ class TestOneclickCalculateRoyaltiesStream:
         """GET /oneclick/calculate-royalties-stream streams error when no contracts given."""
         mock_supabase.table.side_effect = lambda name: _sub_table(name, [])
 
-        with patch("main.calculate_royalty_payments", return_value=[]):
+        with patch("main.calculate_royalty_payments", return_value=([], None)):
             response = client.get(
                 "/oneclick/calculate-royalties-stream",
                 params={
@@ -180,7 +180,7 @@ class TestOneclickCalculateRoyaltiesStream:
         """GET /oneclick/calculate-royalties-stream streams error when statement file absent."""
         mock_supabase.table.side_effect = lambda name: _sub_table(name, [])
 
-        with patch("main.calculate_royalty_payments", return_value=[]):
+        with patch("main.calculate_royalty_payments", return_value=([], None)):
             response = client.get(
                 "/oneclick/calculate-royalties-stream",
                 params={
@@ -285,7 +285,7 @@ class TestOneclickCalculateRoyaltiesStream:
         )
         mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
-        with patch("main.calculate_royalty_payments", return_value=SAMPLE_PAYMENTS) as mock_calc:
+        with patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, None)) as mock_calc:
             response = client.get(
                 "/oneclick/calculate-royalties-stream",
                 params={
@@ -299,6 +299,26 @@ class TestOneclickCalculateRoyaltiesStream:
             mock_calc.assert_called_once()
 
         assert response.status_code == 200
+
+    def test_stream_complete_event_carries_review_when_present(self, client, mock_supabase):
+        """A review computed by the calc pipeline rides inside the 'complete' SSE event."""
+        review = {"overall": "needs_review", "checked": 2, "flagged": 1, "findings": []}
+        params = {
+            "project_id": PROJECT_ID,
+            "royalty_statement_file_id": STATEMENT_FILE_ID,
+            "contract_ids": [CONTRACT_ID],
+        }
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        )
+        mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
+
+        with patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, review)):
+            response = client.get("/oneclick/calculate-royalties-stream", params=params)
+
+        events = _sse_events(response.content)
+        complete = next(e for e in events if e.get("type") == "complete")
+        assert complete["review"] == review
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +343,7 @@ class TestOneclickCalculateRoyalties:
 
         with patch(
             "main.calculate_royalty_payments",
-            return_value=payments if payments is not None else SAMPLE_PAYMENTS,
+            return_value=(payments if payments is not None else SAMPLE_PAYMENTS, None),
         ):
             return client.post("/oneclick/calculate-royalties", json=payload)
 
@@ -392,7 +412,7 @@ class TestOneclickCalculateRoyalties:
         }
         mock_supabase.table.side_effect = lambda name: _sub_table(name, [])
 
-        with patch("main.calculate_royalty_payments", return_value=[]):
+        with patch("main.calculate_royalty_payments", return_value=([], None)):
             response = client.post("/oneclick/calculate-royalties", json=payload)
 
         assert response.status_code == 400
@@ -406,7 +426,7 @@ class TestOneclickCalculateRoyalties:
         }
         mock_supabase.table.side_effect = lambda name: _sub_table(name, [])
 
-        with patch("main.calculate_royalty_payments", return_value=[]):
+        with patch("main.calculate_royalty_payments", return_value=([], None)):
             response = client.post("/oneclick/calculate-royalties", json=payload)
 
         assert response.status_code == 404
@@ -423,7 +443,7 @@ class TestOneclickCalculateRoyalties:
         )
         mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
 
-        with patch("main.calculate_royalty_payments", return_value=SAMPLE_PAYMENTS):
+        with patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, None)):
             response = client.post("/oneclick/calculate-royalties", json=payload)
 
         assert response.status_code == 200

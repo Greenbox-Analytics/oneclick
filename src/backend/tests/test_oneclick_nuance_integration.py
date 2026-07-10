@@ -22,6 +22,7 @@ import pytest
 import oneclick.royalty_calculator as rc
 from oneclick.royalty_calculator import RoyaltyCalculator
 from utils.contract_parsing.basis_detection import BasisFinding, audit_contract_basis
+from utils.contract_parsing.split_verification import ReviewResult
 
 # A contract whose clause is verbatim-present (the audit rejects non-verbatim quotes).
 CONTRACT = (
@@ -74,6 +75,10 @@ def test_calc_logs_nuance_without_changing_payout(caplog):
 
     with (
         patch("oneclick.royalty_calculator.audit_contract_basis", return_value=finding) as mock_audit,
+        patch(
+            "oneclick.royalty_calculator.verify_royalty_shares",
+            return_value=ReviewResult(overall="unavailable"),
+        ) as mock_verify,
         caplog.at_level(logging.INFO, logger="oneclick.audit"),
     ):
         result = calc.calculate_payments(
@@ -84,9 +89,12 @@ def test_calc_logs_nuance_without_changing_payout(caplog):
             full_text=CONTRACT,
         )
 
-    # Payout is returned UNCHANGED (log-only): same object, same amounts.
-    assert result is payout
-    assert [p.amount_to_pay for p in result] == [50.0]
+    # Payout is returned UNCHANGED (advisory-only): same object, same amounts.
+    assert result.payments is payout
+    assert [p.amount_to_pay for p in result.payments] == [50.0]
+    # The verification pass ran and its outcome rides on the output — never on the payout.
+    assert mock_verify.called
+    assert result.review is mock_verify.return_value
     # The audit was wired to the REAL reference-namespace search (not a no-op).
     assert mock_audit.call_args.kwargs["search_fn"] is rc.search_reference
     # The finding was recorded for human review.
@@ -97,7 +105,13 @@ def test_calc_skips_audit_when_no_full_text():
     payout = [SimpleNamespace(royalty_type="Streaming", amount_to_pay=50.0, song_title="Midnight Drive")]
     calc = _calc_with_mocked_seams(payout)
 
-    with patch("oneclick.royalty_calculator.audit_contract_basis") as mock_audit:
+    with (
+        patch("oneclick.royalty_calculator.audit_contract_basis") as mock_audit,
+        patch(
+            "oneclick.royalty_calculator.verify_royalty_shares",
+            return_value=ReviewResult(overall="unavailable"),
+        ) as mock_verify,
+    ):
         result = calc.calculate_payments(
             contract_path="c.pdf",
             statement_path="s.xlsx",
@@ -107,7 +121,9 @@ def test_calc_skips_audit_when_no_full_text():
         )
 
     mock_audit.assert_not_called()
-    assert result is payout
+    assert result.payments is payout
+    mock_verify.assert_not_called()
+    assert result.review is None
 
 
 # ── B2: audit consults the reference namespace ───────────────────────────────────────

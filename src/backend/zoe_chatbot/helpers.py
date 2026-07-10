@@ -7,6 +7,7 @@ What remains is purpose-built glue around `oneclick.royalty_calculator` —
 """
 
 import os
+from dataclasses import asdict
 
 from dotenv import load_dotenv
 
@@ -23,7 +24,7 @@ def calculate_royalty_payments(
     contract_ids: list[str] = None,
     contract_markdowns: dict[str, str] = None,
     expenses: list[dict] = None,
-) -> list[dict]:
+) -> tuple[list[dict], dict | None]:
     """
     Calculate royalty payments from a contract and royalty statement.
 
@@ -39,15 +40,19 @@ def calculate_royalty_payments(
         contract_ids: Optional list of contract IDs for multi-contract calculation
 
     Returns:
-        List of payment dictionaries with keys:
-            - song_title: str
-            - party_name: str
-            - role: str
-            - royalty_type: str
-            - percentage: float
-            - total_royalty: float
-            - amount_to_pay: float
-            - terms: Optional[str]
+        Tuple of (payment_dicts, review_dict):
+            - payment_dicts: list of payment dictionaries with keys:
+                - song_title: str
+                - party_name: str
+                - role: str
+                - royalty_type: str
+                - percentage: float
+                - total_royalty: float
+                - amount_to_pay: float
+                - terms: Optional[str]
+            - review_dict: the advisory split-verification outcome as a dict
+              (overall/checked/flagged/findings), or None when the pass
+              didn't run. Advisory only — never changes any payout.
     """
     from oneclick.royalty_calculator import RoyaltyCalculator
 
@@ -57,7 +62,7 @@ def calculate_royalty_payments(
     # Calculate payments
     if contract_ids and len(contract_ids) > 0:
         # Multi-contract mode
-        payments = calculator.calculate_payments_from_contract_ids(
+        output = calculator.calculate_payments_from_contract_ids(
             contract_ids=contract_ids,
             user_id=user_id,
             statement_path=statement_path,
@@ -67,7 +72,7 @@ def calculate_royalty_payments(
     else:
         # Single contract mode
         full_text = contract_markdowns.get(contract_id) if contract_markdowns and contract_id else None
-        payments = calculator.calculate_payments(
+        output = calculator.calculate_payments(
             contract_path=contract_path,
             statement_path=statement_path,
             full_text=full_text,
@@ -78,7 +83,7 @@ def calculate_royalty_payments(
 
     # Convert to dictionaries for easier JSON serialization
     payment_dicts = []
-    for payment in payments:
+    for payment in output.payments:
         payment_dicts.append(
             {
                 "song_title": payment.song_title,
@@ -96,7 +101,8 @@ def calculate_royalty_payments(
             }
         )
 
-    return payment_dicts
+    review_dict = asdict(output.review) if output.review is not None else None
+    return payment_dicts, review_dict
 
 
 def save_royalty_payments_to_excel(payments: list[dict], output_path: str, api_key: str = None) -> None:

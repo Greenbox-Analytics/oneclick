@@ -107,7 +107,7 @@ class TestOneclickStreamAnalytics:
         sink, fake = _capture_events()
         with (
             patch("main.analytics_capture", side_effect=fake),
-            patch("main.calculate_royalty_payments", return_value=SAMPLE_PAYMENTS),
+            patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, None)),
         ):
             response = client.get(
                 "/oneclick/calculate-royalties-stream",
@@ -138,6 +138,64 @@ class TestOneclickStreamAnalytics:
         # Existing `tool_used` capture must still fire for backward compat.
         tool_used = [e for e, _ in sink if e == "tool_used"]
         assert len(tool_used) == 1
+
+    def test_streaming_review_fires_split_verification_event(self, client, mock_supabase):
+        """A review from the calc pipeline emits `oneclick_split_verification_run` with its counts."""
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        )
+        mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
+
+        review = {"overall": "needs_review", "checked": 2, "flagged": 1, "findings": []}
+        sink, fake = _capture_events()
+        with (
+            patch("main.analytics_capture", side_effect=fake),
+            patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, review)),
+        ):
+            response = client.get(
+                "/oneclick/calculate-royalties-stream",
+                params={
+                    "project_id": PROJECT_ID,
+                    "royalty_statement_file_id": STATEMENT_FILE_ID,
+                    "contract_ids": [CONTRACT_ID],
+                    "force_recalculate": "true",
+                },
+            )
+
+        assert response.status_code == 200
+
+        fired = [(e, p) for e, p in sink if e == "oneclick_split_verification_run"]
+        assert len(fired) == 1, f"expected one split-verification event, got events={sink}"
+        props = fired[0][1]
+        assert props["tool"] == "oneclick"
+        assert props["checked"] == 2
+        assert props["flagged"] == 1
+        assert props["overall"] == "needs_review"
+
+    def test_streaming_no_review_skips_split_verification_event(self, client, mock_supabase):
+        """When the verification pass didn't run (review=None), no event is emitted."""
+        mock_supabase.table.side_effect = lambda name: _sub_table(
+            name, [SAMPLE_STATEMENT_FILE] if name == "project_files" else []
+        )
+        mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
+
+        sink, fake = _capture_events()
+        with (
+            patch("main.analytics_capture", side_effect=fake),
+            patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, None)),
+        ):
+            response = client.get(
+                "/oneclick/calculate-royalties-stream",
+                params={
+                    "project_id": PROJECT_ID,
+                    "royalty_statement_file_id": STATEMENT_FILE_ID,
+                    "contract_ids": [CONTRACT_ID],
+                    "force_recalculate": "true",
+                },
+            )
+
+        assert response.status_code == 200
+        assert not any(e == "oneclick_split_verification_run" for e, _ in sink), f"unexpected event in {sink}"
 
     def test_streaming_cache_hit_fires_started_and_completed_paired(self, client, mock_supabase):
         """Cache hit fires BOTH `_started` and `_completed` (paired) with cached=True."""
@@ -269,7 +327,7 @@ class TestOneclickPostAnalytics:
         sink, fake = _capture_events()
         with (
             patch("main.analytics_capture", side_effect=fake),
-            patch("main.calculate_royalty_payments", return_value=SAMPLE_PAYMENTS),
+            patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, None)),
         ):
             response = client.post(
                 "/oneclick/calculate-royalties",

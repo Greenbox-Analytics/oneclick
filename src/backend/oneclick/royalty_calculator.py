@@ -9,7 +9,8 @@ Usage:
     from royalty_calculator import RoyaltyCalculator
 
     calculator = RoyaltyCalculator()
-    payments = calculator.calculate_payments("contract.pdf", "statement.xlsx")
+    output = calculator.calculate_payments("contract.pdf", "statement.xlsx")
+    payments, review = output.payments, output.review
 """
 
 import csv
@@ -34,6 +35,7 @@ from utils.contract_parsing.parser import (
     STREAMING_EQUIVALENT_TERMS,
     MusicContractParser,
 )
+from utils.contract_parsing.split_verification import ReviewResult, SplitFinding, verify_royalty_shares
 from utils.llm.client import get_openai_client
 from utils.text.normalize import find_matching_song, normalize_name, normalize_title, simplify_role
 
@@ -189,6 +191,15 @@ class RoyaltyPayment:
     gross_amount: float = 0.0
     expenses_applied: float = 0.0
     net_amount: float = 0.0
+
+
+@dataclass
+class CalcOutput:
+    """Bundle returned by the calc entry points: the payments plus the advisory
+    split-verification outcome (None when the pass didn't run)."""
+
+    payments: list[RoyaltyPayment]
+    review: ReviewResult | None = None
 
 
 @dataclass
@@ -915,7 +926,7 @@ class RoyaltyCalculator:
         payable_column: str | None = None,
         full_text: str = None,
         expenses: list[dict] | None = None,
-    ) -> list[RoyaltyPayment]:
+    ) -> CalcOutput:
         """
         Calculate payments for single contract and statement.
 
@@ -928,7 +939,9 @@ class RoyaltyCalculator:
             payable_column: Optional - Name of payable column in statement
 
         Returns:
-            List of RoyaltyPayment objects with calculated amounts
+            CalcOutput bundling the calculated RoyaltyPayment list and the
+            advisory split-verification ReviewResult (None when the pass
+            didn't run, e.g. no full_text).
         """
         logger.info("\n" + "=" * 80)
         logger.info("ROYALTY PAYMENT CALCULATION")
@@ -963,6 +976,7 @@ class RoyaltyCalculator:
 
         # Step 4 (log-only): detect an explicit basis/deduction clause and record it for review.
         # Does NOT change any payout. Never breaks the calc.
+        review = None
         if full_text:
             try:
                 types_present = [s.royalty_type for s in contract_data.royalty_shares]
@@ -976,9 +990,21 @@ class RoyaltyCalculator:
             except Exception as e:  # noqa: BLE001 — nuance logging must never break the payout calc
                 logger.warning(f"[NuanceAudit] skipped (detection/logging error): {e}")
 
+            # Step 5 (advisory): blind-verify the extracted splits against the contract.
+            # Surfaced to the UI; never changes any payout. Never breaks the calc.
+            try:
+                review = verify_royalty_shares(
+                    full_text,
+                    contract_data,
+                    openai_client=self.contract_parser.openai_client,
+                    search_fn=search_reference,
+                )
+            except Exception as e:  # noqa: BLE001 — advisory verification must never break the calc
+                logger.warning(f"[SplitVerify] skipped (error): {e}")
+
         logger.info(f"\n✅ Total calculation process took: {time.time() - total_start:.2f}s")
 
-        return payments
+        return CalcOutput(payments=payments, review=review)
 
     def calculate_payments_from_contract_ids(
         self,
@@ -989,7 +1015,7 @@ class RoyaltyCalculator:
         payable_column: str | None = None,
         contract_markdowns: dict[str, str] = None,
         expenses: list[dict] | None = None,
-    ) -> list[RoyaltyPayment]:
+    ) -> CalcOutput:
         """
         Parse multiple contracts from Pinecone in PARALLEL, merge their data, and calculate payments.
 
@@ -1001,7 +1027,9 @@ class RoyaltyCalculator:
             payable_column: Optional column name for payable amounts
 
         Returns:
-            List of RoyaltyPayment objects with combined results
+            CalcOutput bundling the combined RoyaltyPayment list and the
+            advisory split-verification ReviewResult (None when no
+            contract's verification pass could run).
         """
         logger.info("\n" + "=" * 80)
         logger.info(f"MULTI-CONTRACT ROYALTY CALCULATION ({len(contract_ids)} contracts)")
@@ -1010,6 +1038,8 @@ class RoyaltyCalculator:
         # Step 1: Parse all contracts in PARALLEL
         logger.info(f"\n📄 Step 1: Parsing {len(contract_ids)} contracts (Parallel)...")
         all_contracts_data = []
+        parsed_pairs = []
+        failed_cids = []
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1029,10 +1059,12 @@ class RoyaltyCalculator:
                     # logger.info(f"   ...Finished processing a contract...")
                     data = future.result()
                     all_contracts_data.append(data)
+                    parsed_pairs.append((cid, data))
                     logger.info(
                         f"   ✓ Contract parsed successfully ({len(data.parties)} parties, {len(data.works)} works)"
                     )
                 except Exception as e:
+                    failed_cids.append(cid)
                     logger.error(f"   ⚠️  Failed to parse contract {cid}: {e}")
 
         if not all_contracts_data:
@@ -1049,7 +1081,77 @@ class RoyaltyCalculator:
         payments = self._calculate_payments_from_data(merged_data, song_totals, expenses)
         logger.info("[NuanceAudit] multi-contract: basis-nuance detection deferred (v1 single-contract only)")
 
-        return payments
+        # Step 5 (advisory): blind-verify each contract's splits against its OWN markdown
+        # (provenance is lost after merge_contracts), concurrently. Never breaks the calc.
+        # Honest coverage rule: if some contracts verify and another's pass couldn't run,
+        # its shares are counted as UNVERIFIED findings — partial coverage must never
+        # render as a green "all verified". If NO contract's pass ran, review stays None.
+        review = None
+        try:
+            findings, checked, flagged, any_ran = [], 0, 0, False
+            unavailable_findings: list[SplitFinding] = []
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                future_map = {
+                    executor.submit(
+                        verify_royalty_shares,
+                        contract_markdowns.get(cid) if contract_markdowns else None,
+                        data,
+                        openai_client=self.contract_parser.openai_client,
+                        search_fn=search_reference,
+                    ): (cid, data)
+                    for cid, data in parsed_pairs
+                }
+                for future in as_completed(future_map):
+                    cid, data = future_map[future]
+                    r = future.result()
+                    if r.overall == "unavailable":
+                        for s in data.royalty_shares or []:
+                            unavailable_findings.append(
+                                SplitFinding(
+                                    party_name=s.party_name,
+                                    royalty_type=s.royalty_type,
+                                    extracted_percentage=s.percentage,
+                                    extracted_basis=effective_basis(s, data),
+                                    verdict="unverified",
+                                    note="Verification couldn't run for this contract.",
+                                )
+                            )
+                        continue
+                    any_ran = True
+                    checked += r.checked
+                    flagged += r.flagged
+                    findings.extend(r.findings)
+            if any_ran:
+                findings.extend(unavailable_findings)
+                checked += len(unavailable_findings)
+                flagged += len(unavailable_findings)
+                # A contract that failed to parse has NO extracted shares at all — its
+                # absence must not read as verified. One synthetic flagged finding per
+                # failed contract keeps the banner honest.
+                for _cid in failed_cids:
+                    findings.append(
+                        SplitFinding(
+                            party_name="(unreadable contract)",
+                            royalty_type="all",
+                            extracted_percentage=0.0,
+                            extracted_basis=None,
+                            verdict="unverified",
+                            note="One selected contract could not be read; its splits are missing "
+                            "from this calculation and could not be verified.",
+                        )
+                    )
+                    checked += 1
+                    flagged += 1
+                review = ReviewResult(
+                    overall="verified" if flagged == 0 else "needs_review",
+                    checked=checked,
+                    flagged=flagged,
+                    findings=findings,
+                )
+        except Exception as e:  # noqa: BLE001 — advisory verification must never break the calc
+            logger.warning(f"[SplitVerify] multi-contract verification skipped: {e}")
+
+        return CalcOutput(payments=payments, review=review)
 
     def calculate_payments_from_contracts(
         self,

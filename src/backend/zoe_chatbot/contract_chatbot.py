@@ -3909,10 +3909,10 @@ You have the COMPLETE contract document(s) provided as context. Use them to answ
 
 CRITICAL RULES:
 1. Answer the question from the CONTRACT first - that is the authoritative source
-2. Do NOT automatically add comparisons, summaries, or extra information unless explicitly requested. EXCEPTION: if a "BACKGROUND REFERENCE" message is provided AND it adds applicable general industry context the contract does not cover, you MAY append the brief supplemental section described in that message. If the contract fully answers the question, add nothing extra.
+2. Do NOT automatically add comparisons, summaries, or extra information the user did not ask for. EXCEPTION: if the contract does not fully answer the question, add the **General guidance** section described in rule 5.
 3. Answer about the contract(s) the user currently has selected (named in the selection note when more than one contract is shown). Do not compare to or pull in contracts carried over from earlier in the conversation, or earlier conversation topics, unless the user explicitly asks.
 4. Be precise and only include contract information that is explicitly stated in the document
-5. If the answer is not in the document, say so clearly
+5. If the contract does not fully answer the question, first state plainly what the contract does or does not say, then add a section headed **General guidance:** answering the general/technical part of the question from your music-business knowledge (and the BACKGROUND REFERENCE message when provided) - in your own words, clearly separate from the contract answer, and never presented as a contract term. Only if neither the contract nor general music-business knowledge applies, say the contract doesn't address it and there is no standard general answer.
 6. Do NOT suggest follow-up questions - the system handles this separately
 
 MULTI-CONTRACT COMPARISON RULES:
@@ -3935,8 +3935,9 @@ CONVERSATION AWARENESS:
 
 Your answers should be:
 - Accurate and grounded in the provided text
-- Clear, concise, and to the point
-- Formatted with generous spacing between sections for readability
+- Led by a direct 1-2 sentence answer, followed by only the essential supporting points (multi-contract comparisons follow the comparison format above instead)
+- Short for simple questions; expand only for genuinely complex or multi-contract questions
+- Written in plain, everyday language - briefly define any industry term you use
 - Use **bold** for key terms, percentages, and section headers; bullet points for lists
 - Format URLs as markdown links: [Display Text](url)"""
 
@@ -3965,15 +3966,11 @@ Your answers should be:
                         "contract does not contain. Do NOT cite page numbers or name a source.\n\n"
                         "HOW TO USE IT:\n"
                         "1. First answer the question directly from the CONTRACT.\n"
-                        "2. If the contract fully answers the question, STOP — add nothing from this background.\n"
-                        "3. ONLY if this background adds genuinely applicable general industry context the contract "
-                        "doesn't cover, append a short, clearly-separated supplemental section, in your own words, "
-                        "as 1-3 concise bullet points. Use this exact structure:\n\n"
-                        "[your contract-based answer]\n\n"
-                        "**Supplemental (general industry context):**\n"
-                        "- bullet 1\n"
-                        "- bullet 2\n\n"
-                        "Keep it to 1-3 short bullets. Never present background as if it were in the contract.\n\n"
+                        "2. If the contract does not fully answer the question, use this background (plus your own "
+                        "general music-business knowledge) to write the **General guidance:** section described in "
+                        "the system rules: a short, clearly-separated section in your own words - a direct answer "
+                        "plus at most a few concise bullet points.\n"
+                        "3. Never present background as if it were written in the contract.\n\n"
                         "BACKGROUND:\n\n" + reference_context
                     ),
                 }
@@ -3992,7 +3989,7 @@ Your answers should be:
         messages.append(
             {
                 "role": "user",
-                "content": f"{query}\n\nRemember: Answer ONLY what was asked. Do not suggest follow-up questions.",
+                "content": f"{query}\n\nRemember: Answer ONLY what was asked (when the contract does not fully answer it, the General guidance rule still applies). Do not suggest follow-up questions.",
             }
         )
 

@@ -1913,6 +1913,7 @@ class OneClickRoyaltyResponse(BaseModel):
     excel_file_url: str | None = None
     message: str
     is_cached: bool | None = False
+    review: dict[str, Any] | None = None
 
 
 class ConfirmCalculationRequest(BaseModel):
@@ -2541,12 +2542,12 @@ async def oneclick_calculate_royalties_stream(
             await asyncio.sleep(0.3)
 
             # Calculate payments
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Processing statement and verifying splits against the contract(s)...', 'progress': 80, 'stage': 'processing'})}\n\n"
 
             # Load project expenses so net-basis shares can be calculated.
             calc_expenses, review_expenses = _load_oneclick_expenses(get_supabase_client(), project_id)
 
-            payments = calculate_royalty_payments(
+            payments, review = calculate_royalty_payments(
                 contract_path=contract_path,
                 statement_path=statement_path,
                 user_id=user_id,
@@ -2601,9 +2602,24 @@ async def oneclick_calculate_royalties_stream(
                 "stage": "complete",
                 "expense_review_required": expense_review_required,
                 "expenses": review_expenses if expense_review_required else [],
+                "review": review,
             }
 
             yield f"data: {json.dumps(result)}\n\n"
+
+            # Fires for overall="unavailable" too — the event's `overall` property lets
+            # dashboards separate completed verifications from failed passes.
+            if review:
+                analytics_capture(
+                    user_id,
+                    "oneclick_split_verification_run",
+                    {
+                        "tool": "oneclick",
+                        "checked": review.get("checked", 0),
+                        "flagged": review.get("flagged", 0),
+                        "overall": review.get("overall"),
+                    },
+                )
 
             _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
             analytics_capture(
@@ -2785,7 +2801,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
             print("\n--- Step 3: Calculating Royalty Payments ---")
 
             # Use helper function from helpers.py
-            payments = calculate_royalty_payments(
+            payments, review = calculate_royalty_payments(
                 contract_path=contract_path,
                 statement_path=statement_path,
                 user_id=user_id,
@@ -2837,6 +2853,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
                 payments=payment_responses,
                 excel_file_url=None,
                 message=f"Successfully calculated {len(payments)} royalty payments",
+                review=review,
             )
 
         finally:
