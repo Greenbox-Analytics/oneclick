@@ -17,7 +17,7 @@ import { useIntegrations } from "@/hooks/useIntegrations";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import EarningsBreakdown from "@/components/oneclick/EarningsBreakdown";
 
-interface RoyaltyPayment {
+export interface RoyaltyPayment {
   song_title: string;
   party_name: string;
   role: string;
@@ -32,7 +32,7 @@ interface RoyaltyPayment {
   net_amount?: number;
 }
 
-interface SplitFinding {
+export interface SplitFinding {
   party_name: string;
   royalty_type: string;
   extracted_percentage: number;
@@ -43,7 +43,7 @@ interface SplitFinding {
   contract_quote?: string;
   note?: string;
 }
-interface SplitReview { overall: "verified" | "needs_review" | "unavailable"; checked: number; flagged: number; findings: SplitFinding[]; }
+export interface SplitReview { overall: "verified" | "needs_review" | "unavailable"; checked: number; flagged: number; findings: SplitFinding[]; }
 
 interface CalculationResult {
   status: string;
@@ -91,7 +91,7 @@ const BasisBadge = ({ payment }: { payment: RoyaltyPayment }) => (
 );
 
 const normKey = (s: string) => (s || "").trim().toLowerCase();
-const findingForRow = (review: SplitReview | null | undefined, row: RoyaltyPayment): SplitFinding | undefined =>
+export const findingForRow = (review: SplitReview | null | undefined, row: RoyaltyPayment): SplitFinding | undefined =>
   review?.findings?.find(
     (f) =>
       normKey(f.party_name) === normKey(row.party_name) &&
@@ -106,7 +106,10 @@ const VERDICT_STYLES = {
 } as const;
 const VERDICT_LABELS = { verified: "Verified", mismatch: "Needs review", unverified: "Not verified" } as const;
 
-const VerdictPill = ({ finding }: { finding: SplitFinding }) => (
+// Currently not rendered — the per-row Verification column was removed by user
+// request (2026-07-10). Kept (exported) so the quote-popover UI can be re-added
+// without rebuilding it; findingForRow is its row-join helper.
+export const VerdictPill = ({ finding }: { finding: SplitFinding }) => (
   <Popover>
     <PopoverTrigger asChild>
       <Badge variant="outline" className={`${VERDICT_STYLES[finding.verdict]} cursor-pointer whitespace-nowrap`}>
@@ -130,7 +133,7 @@ const VerdictPill = ({ finding }: { finding: SplitFinding }) => (
   </Popover>
 );
 
-const ReviewBanner = ({ review }: { review?: SplitReview | null }) => {
+export const ReviewBanner = ({ review }: { review?: SplitReview | null }) => {
   if (!review || review.overall === "unavailable") {
     return <p className="text-sm text-muted-foreground">Split verification wasn't available for this result.</p>;
   }
@@ -148,7 +151,7 @@ const ReviewBanner = ({ review }: { review?: SplitReview | null }) => {
     <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600">
       <AlertTriangle className="h-4 w-4 shrink-0" />
       {review.flagged} of {review.checked} split{review.checked === 1 ? "" : "s"} couldn't be confirmed against the
-      contract — check the flagged rows in the breakdown below.
+      contract — double-check the percentages below against your contract before paying.
     </div>
   );
 };
@@ -598,7 +601,7 @@ const CalculationResults = ({
                     <Table className="w-full">
                         <TableHeader>
                             <TableRow>
-                                <TableHead className="min-w-[140px]">Song</TableHead><TableHead className="min-w-[200px]">Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Basis</TableHead><TableHead>Verification</TableHead><TableHead className="whitespace-nowrap text-right">Gross Revenue</TableHead><TableHead className="whitespace-nowrap text-right">Expenses</TableHead><TableHead className="whitespace-nowrap text-right">Net Revenue</TableHead><TableHead className="whitespace-nowrap text-right">Share %</TableHead><TableHead className="whitespace-nowrap text-right">Amount Owed</TableHead>
+                                <TableHead className="min-w-[140px]">Song</TableHead><TableHead className="min-w-[200px]">Payee</TableHead><TableHead>Role</TableHead><TableHead>Royalty Type</TableHead><TableHead>Basis</TableHead><TableHead className="whitespace-nowrap text-right">Gross Revenue</TableHead><TableHead className="whitespace-nowrap text-right">Expenses</TableHead><TableHead className="whitespace-nowrap text-right">Net Revenue</TableHead><TableHead className="whitespace-nowrap text-right">Share %</TableHead><TableHead className="whitespace-nowrap text-right">Amount Owed</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -609,9 +612,6 @@ const CalculationResults = ({
                                     <TableCell className="capitalize">{row.role}</TableCell>
                                     <TableCell className="capitalize">{row.royalty_type}</TableCell>
                                     <TableCell><BasisBadge payment={row} /></TableCell>
-                                    <TableCell>
-                                      {(() => { const f = findingForRow(calculationResult.review, row); return f ? <VerdictPill finding={f} /> : null; })()}
-                                    </TableCell>
                                     <TableCell className="whitespace-nowrap text-right">{formatCurrency(grossOf(row))}</TableCell>
                                     <TableCell className="whitespace-nowrap text-right">{isNet(row) ? `-${formatCurrency(row.expenses_applied ?? 0)}` : "—"}</TableCell>
                                     <TableCell className="whitespace-nowrap text-right">{formatCurrency(netOf(row))}</TableCell>
@@ -631,10 +631,7 @@ const CalculationResults = ({
                             <p className="text-sm font-semibold text-foreground">{row.song_title}</p>
                             <p className="text-xs text-muted-foreground">{row.party_name} • <span className="capitalize">{row.role}</span></p>
                           </div>
-                          <div className="flex items-center gap-1.5">
-                            {(() => { const f = findingForRow(calculationResult.review, row); return f ? <VerdictPill finding={f} /> : null; })()}
-                            <BasisBadge payment={row} />
-                          </div>
+                          <BasisBadge payment={row} />
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <div>
