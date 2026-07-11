@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import {
+  filterRows,
   findingForRow,
   ReviewBanner,
+  sortRows,
   type RoyaltyPayment,
   type SplitFinding,
   type SplitReview,
@@ -89,5 +91,38 @@ describe("ReviewBanner", () => {
     expect(
       screen.getByText("2 of 3 splits couldn't be confirmed against the contract — double-check the percentages below against your contract before paying."),
     ).toBeTruthy();
+  });
+});
+
+describe("filterRows / sortRows", () => {
+  const rows: RoyaltyPayment[] = [
+    makePayment({ song_title: "Song A", party_name: "Alice", basis: "net", expenses_applied: 100, amount_to_pay: 500 }),
+    makePayment({ song_title: "Song B", party_name: "Bob", basis: "gross", amount_to_pay: 900 }),
+    makePayment({ song_title: "Song B", party_name: "Cara", amount_to_pay: 100 }),
+  ];
+  const noFilters = { search: "", song: "all", basis: "all", status: "any", segment: null } as const;
+
+  it("filters by basis without touching any row amounts", () => {
+    const out = filterRows(rows, { ...noFilters, basis: "net" }, null);
+    expect(out).toEqual([rows[0]]);
+    expect(out[0].amount_to_pay).toBe(500);
+    expect(out[0].expenses_applied).toBe(100);
+  });
+
+  it("filters by search text and by chart segment selection", () => {
+    expect(filterRows(rows, { ...noFilters, search: "bob" }, null)).toEqual([rows[1]]);
+    expect(
+      filterRows(rows, { ...noFilters, segment: { kind: "song", name: "Song B" } }, null),
+    ).toEqual([rows[1], rows[2]]);
+    expect(
+      filterRows(rows, { ...noFilters, segment: { kind: "payee", name: "Alice" } }, null),
+    ).toEqual([rows[0]]);
+  });
+
+  it("sorts by amount desc and payee asc without mutating the input", () => {
+    expect(sortRows(rows, "amount", "desc").map((r) => r.amount_to_pay)).toEqual([900, 500, 100]);
+    expect(sortRows(rows, "payee", "asc").map((r) => r.party_name)).toEqual(["Alice", "Bob", "Cara"]);
+    // Original order untouched.
+    expect(rows.map((r) => r.amount_to_pay)).toEqual([500, 900, 100]);
   });
 });
