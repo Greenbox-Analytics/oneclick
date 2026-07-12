@@ -131,3 +131,28 @@ def test_bucket_key_unknown_for_null_and_blank():
 def test_bucket_key_country_passes_through_value():
     assert _bucket_key("country", "UNITED STATES") == "UNITED STATES"
     assert _bucket_key("vendor", "Spotify") == "Spotify"
+
+
+# ── PDF generator ────────────────────────────────────────────────────────────────
+
+
+def test_generate_breakdown_pdf_builds_valid_pdf():
+    from oneclick.breakdown import _generate_breakdown_pdf
+
+    sections = [
+        (
+            "month",
+            {
+                "total": 100.0,
+                "row_count": 2,
+                "rows": [
+                    {"key": "2026-01", "net_payable": 60.0, "percent_of_total": 60.0},
+                    {"key": "2026-02", "net_payable": 40.0, "percent_of_total": 40.0},
+                ],
+            },
+        ),
+        ("vendor", {"total": 0.0, "row_count": 0, "rows": []}),
+    ]
+    buf = _generate_breakdown_pdf(sections, track_label="Song & Title <b>")
+    data = buf.read()
+    assert data.startswith(b"%PDF")
