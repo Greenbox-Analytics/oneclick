@@ -67,6 +67,7 @@ import { ReleaseTag } from "./ReleaseTag";
 import { RegistryStatusBadge } from "./RegistryStatusBadge";
 import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
+import { EditRoyaltySplitsDialog } from "./EditRoyaltySplitsDialog";
 import { DeleteWorkConfirmModal } from "./DeleteWorkConfirmModal";
 import FetchSpotifyMetadataDialog from "./FetchSpotifyMetadataDialog";
 
@@ -245,12 +246,14 @@ export function WorkEditor({ work }: WorkEditorProps) {
 
   // Splits — built from stakes
   const stakeRows: SplitRow[] = useMemo(() => {
-    // Group stakes by holder_name, pivot master + publishing into the same row
+    // Group stakes by holder_name, pivot master + publishing + SoundExchange
+    // into the same row
     const byHolder: Record<
       string,
       {
         masterStake?: OwnershipStake;
         publishingStake?: OwnershipStake;
+        soundexchangeStake?: OwnershipStake;
         role: string;
       }
     > = {};
@@ -259,6 +262,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
         byHolder[s.holder_name] = { role: s.holder_role };
       if (s.stake_type === "master") byHolder[s.holder_name].masterStake = s;
       if (s.stake_type === "publishing") byHolder[s.holder_name].publishingStake = s;
+      if (s.stake_type === "soundexchange") byHolder[s.holder_name].soundexchangeStake = s;
     }
     return Object.entries(byHolder).map(([name, info]) => {
       const isYou = !!(
@@ -272,6 +276,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
         isYou,
         master: info.masterStake?.percentage || 0,
         publishing: info.publishingStake?.percentage || 0,
+        soundexchange: info.soundexchangeStake?.percentage || 0,
       };
     });
   }, [work.stakes, artist]);
@@ -285,8 +290,20 @@ export function WorkEditor({ work }: WorkEditorProps) {
     const pubSum = (work.stakes || [])
       .filter((s) => s.stake_type === "publishing")
       .reduce((n, s) => n + (s.percentage || 0), 0);
-    if ((work.stakes || []).length > 0 && (masterSum !== 100 || pubSum !== 100)) {
-      out.push(`Splits don't total 100% (master ${masterSum}%, publishing ${pubSum}%)`);
+    // Name only the split type(s) that are actually off so the user knows
+    // exactly what to fix.
+    const masterOff = masterSum !== 100;
+    const pubOff = pubSum !== 100;
+    if ((work.stakes || []).length > 0 && (masterOff || pubOff)) {
+      if (masterOff && pubOff) {
+        out.push(
+          `Master and publishing splits don't total 100% (master ${masterSum}%, publishing ${pubSum}%)`
+        );
+      } else if (masterOff) {
+        out.push(`Master splits don't total 100% (currently ${masterSum}%)`);
+      } else {
+        out.push(`Publishing splits don't total 100% (currently ${pubSum}%)`);
+      }
     }
     return out;
   }, [work]);
@@ -298,7 +315,8 @@ export function WorkEditor({ work }: WorkEditorProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_312px] gap-6 items-start">
+    // 380px sidebar so party names in the Royalty splits table fit on one line.
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-6 items-start">
       {/* main column */}
       <div className="flex flex-col gap-4">
         {/* breadcrumb */}
@@ -730,7 +748,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
             ) : (
               <Download className="w-4 h-4 mr-2" />
             )}
-            Export Proof of Ownership
+            Export Metadata
           </Button>
         </Card>
       </div>
@@ -859,7 +877,8 @@ function TraceRow({ icon, label, value, ok }: TraceRowProps) {
   );
 }
 
-/** Sidebar splits card — local editable copy, persists on "Done" via stake CRUD. */
+/** Sidebar splits card — display-only table; "Edit" opens the modal editor,
+ *  which persists via stake CRUD on save. */
 function SplitsSidebar({
   work,
   canEdit,
@@ -871,25 +890,25 @@ function SplitsSidebar({
   canSeeFullOwnership: boolean;
   initialRows: SplitRow[];
 }) {
-  const [isEditing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<SplitRow[]>(initialRows);
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const createStake = useCreateStake();
   const updateStake = useUpdateStake();
   const deleteStake = useDeleteStake();
 
-  useEffect(() => {
-    if (!isEditing) setDraft(initialRows);
-  }, [initialRows, isEditing]);
-
-  const save = async () => {
+  const save = async (draft: SplitRow[]) => {
     // Diff against work.stakes, emit minimal create/update/delete calls.
     const existing = work.stakes || [];
-    const byHolder = new Map<string, { master?: OwnershipStake; publishing?: OwnershipStake }>();
+    const byHolder = new Map<
+      string,
+      { master?: OwnershipStake; publishing?: OwnershipStake; soundexchange?: OwnershipStake }
+    >();
     for (const s of existing) {
       if (!byHolder.has(s.holder_name)) byHolder.set(s.holder_name, {});
       const entry = byHolder.get(s.holder_name)!;
       if (s.stake_type === "master") entry.master = s;
       if (s.stake_type === "publishing") entry.publishing = s;
+      if (s.stake_type === "soundexchange") entry.soundexchange = s;
     }
 
     const promises: Promise<unknown>[] = [];
@@ -946,6 +965,31 @@ function SplitsSidebar({
       } else if (entry.publishing) {
         promises.push(deleteStake.mutateAsync(entry.publishing.id));
       }
+      // soundexchange
+      if ((row.soundexchange ?? 0) > 0) {
+        if (entry.soundexchange) {
+          if (entry.soundexchange.percentage !== row.soundexchange)
+            promises.push(
+              updateStake.mutateAsync({
+                stakeId: entry.soundexchange.id,
+                percentage: row.soundexchange,
+              })
+            );
+        } else {
+          promises.push(
+            createStake.mutateAsync({
+              work_id: work.id,
+              stake_type: "soundexchange",
+              holder_name: name,
+              holder_role: row.role || "Collaborator",
+              percentage: row.soundexchange,
+              ...(row.isYou === true ? { is_owner_stake: true } : {}),
+            })
+          );
+        }
+      } else if (entry.soundexchange) {
+        promises.push(deleteStake.mutateAsync(entry.soundexchange.id));
+      }
     }
 
     // Delete stakes whose holders were removed from the table
@@ -953,6 +997,7 @@ function SplitsSidebar({
       if (seenNames.has(name)) continue;
       if (entry.master) promises.push(deleteStake.mutateAsync(entry.master.id));
       if (entry.publishing) promises.push(deleteStake.mutateAsync(entry.publishing.id));
+      if (entry.soundexchange) promises.push(deleteStake.mutateAsync(entry.soundexchange.id));
     }
 
     try {
@@ -964,22 +1009,33 @@ function SplitsSidebar({
   };
 
   return (
-    <RoyaltySplitsTable
-      rows={isEditing ? draft : initialRows}
-      onChange={isEditing ? setDraft : undefined}
-      editable={isEditing}
-      showEditToggle={canEdit}
-      isEditing={isEditing}
-      onToggleEdit={async () => {
-        if (isEditing) {
-          await save();
-        }
-        setEditing((v) => !v);
-      }}
-      allowAddRow={isEditing}
-      warnOnImbalance={canEdit}
-      showTotals={canSeeFullOwnership}
-    />
+    <>
+      <RoyaltySplitsTable
+        rows={initialRows}
+        showEditToggle={canEdit}
+        isEditing={false}
+        onToggleEdit={() => setEditOpen(true)}
+        // The "needs attention" card under the track name already flags
+        // imbalanced splits — don't repeat the warning inside this card.
+        warnOnImbalance={false}
+        showTotals={canSeeFullOwnership}
+      />
+      <EditRoyaltySplitsDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        rows={initialRows}
+        saving={saving}
+        onSave={async (rows) => {
+          setSaving(true);
+          try {
+            await save(rows);
+            setEditOpen(false);
+          } finally {
+            setSaving(false);
+          }
+        }}
+      />
+    </>
   );
 }
 

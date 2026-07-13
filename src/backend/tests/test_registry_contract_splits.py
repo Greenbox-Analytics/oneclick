@@ -85,6 +85,159 @@ def test_streaming_share_pivots_into_master_bucket(patched_parser):
     assert nova["publishing_pct"] == 0.0
 
 
+# ─── soundexchange bucketing ──────────────────────────────────────────────────
+
+
+def test_soundexchange_share_pivots_into_own_bucket(patched_parser):
+    """SoundExchange shares stay out of the master total."""
+    patched_parser(
+        {
+            "parties": [{"name": "Nova Sky", "role": "Artist"}],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [
+                {"party_name": "Nova Sky", "royalty_type": "Master", "percentage": 60.0},
+                {"party_name": "Nova Sky", "royalty_type": "SoundExchange", "percentage": 45.0},
+            ],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="Nova Sky")
+    nova = next(p for p in result["parties"] if p["name"] == "Nova Sky")
+    assert nova["master_pct"] == 60.0
+    assert nova["soundexchange_pct"] == 45.0
+    assert nova["publishing_pct"] == 0.0
+
+
+def test_soundexchange_only_party_survives_zero_split_filter(patched_parser):
+    patched_parser(
+        {
+            "parties": [
+                {"name": "Nova Sky", "role": "Artist"},
+                {"name": "Marcus Adebayo", "role": "Producer"},
+            ],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [
+                {"party_name": "Nova Sky", "royalty_type": "Master", "percentage": 100.0},
+                {
+                    "party_name": "Marcus Adebayo",
+                    "royalty_type": "SoundExchange",
+                    "percentage": 10.0,
+                },
+            ],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="Nova Sky")
+    by_name = {p["name"]: p for p in result["parties"]}
+    assert "Marcus Adebayo" in by_name
+    assert by_name["Marcus Adebayo"]["soundexchange_pct"] == 10.0
+    assert by_name["Marcus Adebayo"]["master_pct"] == 0.0
+
+
+def test_non_interactive_digital_performance_buckets_to_soundexchange(patched_parser):
+    """Regression: the soundexchange substring check must run before the
+    streaming-terms fallback, which also contains this phrase."""
+    patched_parser(
+        {
+            "parties": [{"name": "Nova Sky", "role": "Artist"}],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [
+                {
+                    "party_name": "Nova Sky",
+                    "royalty_type": "non-interactive digital performance royalties",
+                    "percentage": 25.0,
+                },
+            ],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="Nova Sky")
+    nova = next(p for p in result["parties"] if p["name"] == "Nova Sky")
+    assert nova["soundexchange_pct"] == 25.0
+    assert nova["master_pct"] == 0.0
+
+
+def test_bare_digital_performance_royalties_stay_in_master(patched_parser):
+    """Guards the conservative mapping: only explicit SoundExchange /
+    non-interactive terms leave the master bucket."""
+    patched_parser(
+        {
+            "parties": [{"name": "Nova Sky", "role": "Artist"}],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [
+                {
+                    "party_name": "Nova Sky",
+                    "royalty_type": "digital performance royalties",
+                    "percentage": 30.0,
+                },
+            ],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="Nova Sky")
+    nova = next(p for p in result["parties"] if p["name"] == "Nova Sky")
+    assert nova["master_pct"] == 30.0
+    assert nova["soundexchange_pct"] == 0.0
+
+
+# ─── zero-split party filtering ───────────────────────────────────────────────
+
+
+def test_party_without_royalty_share_is_dropped(patched_parser):
+    """Parties merely mentioned in the contract (no split) are filtered out."""
+    patched_parser(
+        {
+            "parties": [
+                {"name": "Nova Sky", "role": "Artist"},
+                {"name": "Big Label LLC", "role": "Label"},
+                {"name": "Rita Moses", "role": "Manager"},
+            ],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [
+                {"party_name": "Nova Sky", "royalty_type": "Master", "percentage": 60.0},
+                # Unbucketable royalty type — counts as no split.
+                {"party_name": "Rita Moses", "royalty_type": "flat fee", "percentage": 10.0},
+            ],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="Nova Sky")
+
+    names = {p["name"] for p in result["parties"]}
+    assert names == {"Nova Sky"}
+
+
+def test_main_artist_kept_even_with_zero_split(patched_parser):
+    """The main artist prefills the "You" row, so they survive the filter."""
+    patched_parser(
+        {
+            "parties": [
+                {"name": "Nova Sky", "role": "Artist"},
+                {"name": "Marcus Adebayo", "role": "Producer"},
+            ],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [
+                {"party_name": "Marcus Adebayo", "royalty_type": "Producer", "percentage": 40.0},
+            ],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="Nova Sky")
+
+    assert result["main_artist_found"] is True
+    by_name = {p["name"]: p for p in result["parties"]}
+    assert set(by_name) == {"Nova Sky", "Marcus Adebayo"}
+    assert by_name["Nova Sky"]["is_main_artist"] is True
+    assert by_name["Nova Sky"]["master_pct"] == 0.0
+    assert by_name["Nova Sky"]["publishing_pct"] == 0.0
+
+
 # ─── main-artist detection ────────────────────────────────────────────────────
 
 
@@ -121,7 +274,8 @@ def test_main_artist_not_found_drops_collaborator_only(patched_parser):
 
 
 def test_main_artist_matched_via_substring(patched_parser):
-    """Fuzzy compare: 'Nova Sky (p/k/a Nova)' should still match 'Nova Sky'."""
+    """Fuzzy compare: 'Nova Sky p/k/a Nova' still matches 'Nova Sky' — the
+    marker splitter canonicalizes the name and the alias carries 'Nova'."""
     patched_parser(
         {
             "parties": [{"name": "Nova Sky p/k/a Nova", "role": "Artist"}],
@@ -133,6 +287,68 @@ def test_main_artist_matched_via_substring(patched_parser):
 
     result = parse_royalty_splits(text="md", main_artist_name="Nova Sky")
     assert result["main_artist_found"] is True
+    main = next(p for p in result["parties"] if p["is_main_artist"])
+    assert main["name"] == "Nova Sky"
+    assert main["aliases"] == ["Nova"]
+    assert main["master_pct"] == 60.0
+
+
+def test_main_artist_matched_via_exact_alias(patched_parser):
+    """Legal name in `name`, stage name in `aliases` — artist matched by alias."""
+    patched_parser(
+        {
+            "parties": [{"name": "Jane Q. Doe", "role": "Artist", "aliases": ["Jasmine Kiara"]}],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [{"party_name": "Jane Q. Doe", "royalty_type": "Master", "percentage": 55.0}],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="Jasmine Kiara")
+    assert result["main_artist_found"] is True
+    main = next(p for p in result["parties"] if p["is_main_artist"])
+    assert main["name"] == "Jane Q. Doe"
+    assert main["aliases"] == ["Jasmine Kiara"]
+    assert main["master_pct"] == 55.0
+
+
+def test_royalty_share_attached_via_alias_key(patched_parser):
+    """A share emitted under the stage name attaches to the legal-name party."""
+    patched_parser(
+        {
+            "parties": [{"name": "Jane Q. Doe", "role": "Artist", "aliases": ["Jasmine Kiara"]}],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [{"party_name": "Jasmine Kiara", "royalty_type": "Publishing", "percentage": 40.0}],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="")
+    assert len(result["parties"]) == 1
+    party = result["parties"][0]
+    assert party["name"] == "Jane Q. Doe"
+    assert party["publishing_pct"] == 40.0
+
+
+def test_output_parties_always_carry_aliases_list(patched_parser):
+    """`aliases` is present (possibly empty) on every party, even when the LLM
+    omits the field or a party is registered on the fly from a share."""
+    patched_parser(
+        {
+            "parties": [{"name": "Marcus Adebayo", "role": "Producer"}],
+            "works": [{"title": "X", "work_type": "song"}],
+            "royalty_shares": [
+                {"party_name": "Marcus Adebayo", "royalty_type": "Producer", "percentage": 40.0},
+                {"party_name": "Unlisted Publisher", "royalty_type": "Publishing", "percentage": 10.0},
+            ],
+        }
+    )
+    from registry.contract_splits import parse_royalty_splits
+
+    result = parse_royalty_splits(text="md", main_artist_name="")
+    assert len(result["parties"]) == 2
+    for party in result["parties"]:
+        assert party["aliases"] == []
 
 
 # ─── empty contract result ─────────────────────────────────────────────────────

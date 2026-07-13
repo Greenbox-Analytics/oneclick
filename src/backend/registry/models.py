@@ -186,7 +186,7 @@ class ProjectAboutUpdate(BaseModel):
 
 
 class StakeInput(BaseModel):
-    stake_type: str  # master, publishing
+    stake_type: str  # master, publishing, soundexchange
     percentage: float
     # When set, link/update this pre-existing unlinked stake on the work
     # instead of inserting a new row (invite of someone already in Royalty Splits).

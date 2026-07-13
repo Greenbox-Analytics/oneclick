@@ -11,10 +11,6 @@ from supabase import Client
 from registry import contract_splits
 
 
-def _norm(s) -> str:
-    return (s or "").strip().lower()
-
-
 def _parse_pdf_bytes(content: bytes) -> dict:
     """Run the existing parser on PDF bytes. main_artist_name="" so the cached result is
     collaborator-independent (name matching happens in derive_for_collaborator)."""
@@ -79,11 +75,11 @@ async def derive_for_collaborator(db: Client, work_id: str, name: str, email=Non
         for p in parsed.get("parties", []):
             parties.append({**p, "_file_id": fid})
 
-    # Match the collaborator by name (exact, else substring either direction).
+    # Match the collaborator by name or alias (exact, else substring either
+    # direction). Cached payloads that predate aliases simply have none.
     target = None
     for p in parties:
-        pn = _norm(p.get("name"))
-        if pn and (pn == _norm(name) or _norm(name) in pn or pn in _norm(name)):
+        if contract_splits.matches_party_name(p.get("name") or "", p.get("aliases"), name):
             target = p
             break
 
@@ -93,12 +89,15 @@ async def derive_for_collaborator(db: Client, work_id: str, name: str, email=Non
             "confidence": "low",
             "master_pct": None,
             "publishing_pct": None,
+            "soundexchange_pct": None,
             "terms": [],
             "matched_file_ids": [],
         }
 
     master = target.get("master_pct")
     publishing = target.get("publishing_pct")
+    # .get() tolerates cached payloads that predate the soundexchange bucket.
+    soundexchange = target.get("soundexchange_pct")
     # Scoped confidence: low if no percentage extracted for them (NOT based on cap-table totals).
     has_pct = bool(master) or bool(publishing)
     return {
@@ -106,6 +105,7 @@ async def derive_for_collaborator(db: Client, work_id: str, name: str, email=Non
         "confidence": "high" if has_pct else "low",
         "master_pct": master,
         "publishing_pct": publishing,
+        "soundexchange_pct": soundexchange,
         "terms": [],  # not auto-extracted; manual entry in the review UI
         "matched_file_ids": [target["_file_id"]],
     }

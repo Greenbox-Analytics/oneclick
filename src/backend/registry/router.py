@@ -206,7 +206,7 @@ async def export_proof_of_ownership(work_id: str, user_id: str = Depends(get_cur
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="Proof_of_Ownership_{safe_title}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="Work_Metadata_{safe_title}.pdf"'},
     )
 
 
@@ -1090,7 +1090,8 @@ async def parse_contract_splits(
         Supabase storage bucket.
 
     Powers the Add Work wizard's "Pull from the contract" step. Returns:
-        {parties: [{name, role, master_pct, publishing_pct, is_main_artist}],
+        {parties: [{name, role, aliases, master_pct, publishing_pct,
+                    soundexchange_pct, is_main_artist}],
          main_artist_found: bool}
 
     If `main_artist_found` is false, the main artist is omitted from `parties`

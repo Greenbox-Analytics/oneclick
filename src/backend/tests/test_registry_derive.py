@@ -104,7 +104,13 @@ def test_name_matched_with_pct_high_confidence():
     )
     parsed = {
         "parties": [
-            {"name": "Marcus", "role": "producer", "master_pct": 30, "publishing_pct": 0},
+            {
+                "name": "Marcus",
+                "role": "producer",
+                "master_pct": 30,
+                "publishing_pct": 0,
+                "soundexchange_pct": 15,
+            },
             {"name": "Someone Else", "role": "writer", "master_pct": 10, "publishing_pct": 50},
         ],
         "main_artist_found": False,
@@ -117,6 +123,7 @@ def test_name_matched_with_pct_high_confidence():
     assert result["confidence"] == "high"
     assert result["master_pct"] == 30
     assert result["publishing_pct"] == 0
+    assert result["soundexchange_pct"] == 15
     assert result["matched_file_ids"] == ["f1"]
     assert result["terms"] == []
     # Result was cached for the content_hash.
@@ -146,6 +153,7 @@ def test_name_not_matched_returns_not_found():
     assert result["confidence"] == "low"
     assert result["master_pct"] is None
     assert result["publishing_pct"] is None
+    assert result["soundexchange_pct"] is None
     assert result["matched_file_ids"] == []
     assert result["terms"] == []
 
@@ -200,3 +208,53 @@ def test_matched_no_pct_low_confidence():
     assert result["master_pct"] == 0
     assert result["publishing_pct"] is None
     assert result["matched_file_ids"] == ["f1"]
+
+
+# ---------------------------------------------------------------------------
+# Alias matching
+# ---------------------------------------------------------------------------
+
+
+def test_collaborator_matched_via_alias():
+    """A party listed by legal name with the collaborator's stage name in
+    `aliases` still matches."""
+    db = _make_db(
+        downloads={"contracts/a.pdf": b"%PDF-bytes"},
+        work_files=[{"work_id": "w1", "file_id": "f1"}],
+        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
+        contract_parse_cache=[],
+    )
+    parsed = {
+        "parties": [
+            {"name": "Marcus Adebayo", "role": "producer", "aliases": ["M-Bay"], "master_pct": 30, "publishing_pct": 0}
+        ],
+        "main_artist_found": False,
+    }
+    with patch.object(derive_service, "_parse_pdf_bytes", return_value=parsed):
+        result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "M-Bay"))
+
+    assert result["found"] is True
+    assert result["confidence"] == "high"
+    assert result["master_pct"] == 30
+    assert result["matched_file_ids"] == ["f1"]
+
+
+def test_stale_cache_payload_without_aliases_still_matches_by_name():
+    """Cached parses from before the aliases field behave exactly as before."""
+    cached_parsed = {
+        "parties": [{"name": "Marcus", "role": "producer", "master_pct": 25, "publishing_pct": 0}],
+        "main_artist_found": False,
+    }
+    db = _make_db(
+        work_files=[{"work_id": "w1", "file_id": "f1"}],
+        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
+        contract_parse_cache=[{"content_hash": "h1", "parsed": cached_parsed}],
+    )
+    with patch.object(derive_service, "_parse_pdf_bytes") as mock_parse:
+        result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
+
+    assert mock_parse.call_count == 0
+    assert result["found"] is True
+    assert result["master_pct"] == 25
+    # Cached payload predates the soundexchange bucket — tolerated as None.
+    assert result["soundexchange_pct"] is None

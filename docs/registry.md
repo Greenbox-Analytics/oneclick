@@ -22,7 +22,7 @@ Authentication is resolved via the `Authorization: Bearer <jwt>` header; user id
 | `PUT` | `/registry/works/{work_id}` | Update a work. Body: `WorkUpdate`. Returns updated work; 404 if not found. |
 | `DELETE` | `/registry/works/{work_id}` | Delete a work. Returns `{ ok: true }`. |
 | `POST` | `/registry/works/{work_id}/submit-for-approval` | Transition work status from `draft` → `pending`. Re-sends invitation emails to any pending collaborators. Returns the updated work; 400 on validation error. |
-| `GET` | `/registry/works/{work_id}/export` | Stream a PDF "Proof of Ownership" for the work. Response header: `Content-Disposition: attachment; filename="Proof_of_Ownership_<title>.pdf"`. 404 if not found. |
+| `GET` | `/registry/works/{work_id}/export` | Stream the work metadata PDF ("Export Metadata"). Response header: `Content-Disposition: attachment; filename="Work_Metadata_<title>.pdf"`. 404 if not found. |
 
 **WorkCreate fields:**
 
@@ -326,7 +326,7 @@ All hooks live in `src/hooks/`. They wrap TanStack React Query and call the back
 | `useMyInvites()` | `DashboardInvite[]` | List the current user's pending invitations (dashboard view). Query key: `["registry-my-invites", userId]`. |
 | `useAcceptFromDashboard()` | `UseMutationResult` | Accept an invitation from the dashboard. |
 | `useDeclineInvitation()` | `UseMutationResult` | Decline an invitation. |
-| `useExportProof()` | `UseMutationResult` | Download the Proof of Ownership PDF for a work (triggers a browser file download). |
+| `useExportProof()` | `UseMutationResult` | Download the work metadata PDF for a work (triggers a browser file download). |
 
 ### useWorkFiles.ts
 
@@ -372,7 +372,6 @@ All hooks live in `src/hooks/`. They wrap TanStack React Query and call the back
 | `AgreementsPanel` | `src/components/registry/AgreementsPanel.tsx` | Display and creation of immutable agreement records. |
 | `CollaborationStatus` | `src/components/registry/CollaborationStatus.tsx` | Collaboration workflow panel: shows collaborator list with `invited`/`accepted`/`confirmed` status, provides submit-for-approval, resend, revoke, and decline actions. |
 | `InviteCollaboratorModal` | `src/components/registry/InviteCollaboratorModal.tsx` | Modal form for inviting a new collaborator (email, name, role, optional stake). |
-| `ProofOfOwnership` | `src/components/registry/ProofOfOwnership.tsx` | Button/trigger that calls `useExportProof` to download the PDF ownership certificate. |
 | `RegistryNotifications` | `src/components/workspace/RegistryNotifications.tsx` | Notification feed shown in the Workspace panel. Renders registry notifications with type-colored badges (`invitation`, `confirmation`, `dispute`, `status_change`) and a "mark all read" action. Clicking a notification navigates to `/tools/registry/{work_id}`. Also renders `SlackMentions` above the registry list. |
 
 ---
@@ -479,10 +478,10 @@ curl -s -X POST "$BASE/registry/works/<work-uuid>/submit-for-approval" \
   -H "Authorization: Bearer $JWT" | jq .
 ```
 
-### Download Proof of Ownership PDF
+### Download work metadata PDF
 
 ```bash
-curl -s -o "proof.pdf" \
+curl -s -o "metadata.pdf" \
   -H "Authorization: Bearer $JWT" \
   "$BASE/registry/works/<work-uuid>/export"
 ```
