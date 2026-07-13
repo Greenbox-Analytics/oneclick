@@ -521,18 +521,18 @@ export function useExportProof() {
       const res = await fetch(`${API_URL}/registry/works/${workId}/export`, {
         headers: authHeaders,
       });
-      if (!res.ok) throw new Error("Failed to generate proof of ownership");
+      if (!res.ok) throw new Error("Failed to generate metadata export");
       const blob = await res.blob();
       const disposition = res.headers.get("Content-Disposition") || "";
       const match = disposition.match(/filename="?(.+?)"?$/);
-      const filename = match ? match[1] : "Proof_of_Ownership.pdf";
+      const filename = match ? match[1] : "Work_Metadata.pdf";
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = filename;
       document.body.appendChild(a); a.click();
       document.body.removeChild(a); URL.revokeObjectURL(url);
     },
-    onSuccess: () => toast.success("Proof of ownership downloaded"),
+    onSuccess: () => toast.success("Metadata PDF downloaded"),
     onError: (e: Error) => toast.error(e.message),
   });
 }

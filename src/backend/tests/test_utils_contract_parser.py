@@ -102,6 +102,22 @@ def test_parse_contract_returns_structured_data(monkeypatch):
     assert result.royalty_shares[0].percentage == 50.0
 
 
+def test_parse_contract_passes_soundexchange_type_through_lowercased(monkeypatch):
+    """A 'SoundExchange' share survives extraction as royalty_type
+    'soundexchange' so the registry pivot can bucket it separately."""
+    payload = {
+        "parties": [{"name": "Alice Cooper", "role": "Artist"}],
+        "works": [{"title": "Blue Sky", "work_type": "song"}],
+        "royalty_shares": [{"party_name": "Alice Cooper", "royalty_type": "SoundExchange", "percentage": 45.0}],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.royalty_shares[0].royalty_type == "soundexchange"
+    assert result.royalty_shares[0].percentage == 45.0
+
+
 # ─── post-processing behavior ───────────────────────────────────────────────
 
 
@@ -167,6 +183,117 @@ def test_parse_contract_deduplicates_works_by_normalized_title(monkeypatch):
     result = parser.parse_contract(full_text="markdown")
 
     assert len(result.works) == 1
+
+
+# ─── alias extraction ────────────────────────────────────────────────────────
+
+
+def test_parse_contract_captures_party_aliases(monkeypatch):
+    payload = {
+        "parties": [{"name": "Jane Q. Doe", "role": "Artist", "aliases": ["Nova Sky"]}],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.parties[0].name == "Jane Q. Doe"
+    assert result.parties[0].aliases == ["Nova Sky"]
+
+
+def test_parse_contract_aliases_default_to_empty_list(monkeypatch):
+    """LLM output without an aliases field still yields Party.aliases == []."""
+    payload = {
+        "parties": [{"name": "Alice", "role": "Artist"}],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.parties[0].aliases == []
+
+
+def test_parse_contract_filters_garbage_aliases(monkeypatch):
+    """Non-strings, blanks, duplicates-of-name, and repeat aliases are dropped."""
+    payload = {
+        "parties": [
+            {
+                "name": "Jane Doe",
+                "role": "Artist",
+                "aliases": ["Nova Sky", "", None, 42, "jane doe", "NOVA SKY"],
+            }
+        ],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.parties[0].aliases == ["Nova Sky"]
+
+
+def test_parse_contract_splits_alias_markers_left_in_name(monkeypatch):
+    """Fallback for LLM non-compliance: 'Legal p/k/a Stage' in the name field
+    is split into name + alias deterministically."""
+    payload = {
+        "parties": [{"name": "Jane Doe p/k/a Nova Sky", "role": "Artist"}],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.parties[0].name == "Jane Doe"
+    assert result.parties[0].aliases == ["Nova Sky"]
+
+
+def test_parse_contract_duplicate_parties_union_aliases(monkeypatch):
+    """The same party listed twice keeps one entry with the union of aliases."""
+    payload = {
+        "parties": [
+            {"name": "Jane Doe", "role": "Artist", "aliases": ["Nova Sky"]},
+            {"name": "JANE DOE", "role": "Artist", "aliases": ["Nova"]},
+        ],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert len(result.parties) == 1
+    assert result.parties[0].aliases == ["Nova Sky", "Nova"]
+
+
+def test_parse_contract_reconciles_share_party_name_via_alias(monkeypatch):
+    """A share emitted under a stage name is reconciled to the legal-name party."""
+    payload = {
+        "parties": [{"name": "Jane Doe", "role": "Artist", "aliases": ["Nova Sky"]}],
+        "works": [{"title": "X", "work_type": "song"}],
+        "royalty_shares": [{"party_name": "Nova Sky", "royalty_type": "Streaming", "percentage": 50.0}],
+    }
+    parser = _parser_with_client(monkeypatch, _client_returning(payload))
+
+    result = parser.parse_contract(full_text="markdown")
+
+    assert result.royalty_shares[0].party_name == "Jane Doe"
+
+
+def test_split_alias_markers_variants():
+    """The marker splitter handles the common alias notations."""
+    from utils.text.normalize import split_alias_markers
+
+    assert split_alias_markers("Jane Doe p/k/a Nova Sky") == ("Jane Doe", ["Nova Sky"])
+    assert split_alias_markers("Jane Doe a.k.a. Nova Sky") == ("Jane Doe", ["Nova Sky"])
+    assert split_alias_markers("Jane Doe, professionally known as Nova Sky") == ("Jane Doe", ["Nova Sky"])
+    assert split_alias_markers("Acme Ltd d/b/a Neon Records") == ("Acme Ltd", ["Neon Records"])
+    assert split_alias_markers("Jane Doe") == ("Jane Doe", [])
+    assert split_alias_markers("") == ("", [])
 
 
 # ─── parse_contract — defensive handling of malformed LLM output ────────────

@@ -4,8 +4,12 @@ import { API_URL, getAuthHeaders, ApiError } from "@/lib/apiFetch";
 export interface ParsedParty {
   name: string;
   role: string;
+  /** Alternate names from the contract (p/k/a, a/k/a, d/b/a, stage names). */
+  aliases?: string[];
   master_pct: number;
   publishing_pct: number;
+  /** SoundExchange (US digital performance) % — tracked separately, never counted in master. */
+  soundexchange_pct?: number;
   is_main_artist: boolean;
 }
 

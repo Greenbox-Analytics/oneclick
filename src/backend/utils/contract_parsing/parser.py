@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
 from utils.llm.client import get_openai_client
-from utils.text.normalize import normalize_name, normalize_title, simplify_role
+from utils.text.normalize import normalize_name, normalize_title, simplify_role, split_alias_markers
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -250,22 +250,26 @@ class MusicContractParser:
         for party in parties:
             party.role = simplify_role(party.role)
 
-        # Reconcile royalty share names with extracted parties
+        # Reconcile royalty share names with extracted parties. Each party is
+        # matched by its normalized name AND every normalized alias, so shares
+        # emitted under a stage name attach to the legal-name party.
+        party_norms = [
+            (party, [normalize_name(party.name)] + [normalize_name(a) for a in party.aliases]) for party in parties
+        ]
         for share in royalty_shares:
             share_name_norm = normalize_name(share.party_name)
             best_match = None
 
-            # 1. Exact normalized match
-            for party in parties:
-                if normalize_name(party.name) == share_name_norm:
+            # 1. Exact normalized match (name or alias)
+            for party, norms in party_norms:
+                if share_name_norm in norms:
                     best_match = party
                     break
 
             # 2. Partial match (if no exact match)
             if not best_match:
-                for party in parties:
-                    party_norm = normalize_name(party.name)
-                    if share_name_norm in party_norm or party_norm in share_name_norm:
+                for party, norms in party_norms:
+                    if any(share_name_norm in n or n in share_name_norm for n in norms if n):
                         best_match = party
                         break
 
@@ -318,7 +322,7 @@ EXTRACTION INSTRUCTIONS:
    - Map roles to the STANDARD ROLE TAXONOMY above. For example: "Songwriter" -> Writer, "Recording Artist" -> Artist, "Company" -> Label.
      If no standard term fits, use a short descriptive term (max 2 words).
    - If a party has multiple roles, separate them with semicolons (e.g., "Writer; Producer").
-   - Include aliases (p/k/a, d/b/a, professionally known as) in the name field.
+   - Put each party's primary/legal name in the "name" field. List every alias — stage names, p/k/a, a/k/a, f/k/a, d/b/a, "professionally known as", "also known as", "performing as" — as separate strings in the "aliases" array. Do NOT include alias markers in the "name" field. Use an empty array when a party has no aliases.
    - Ignore generic references like "third parties" unless a specific name is attached.
 
 2. WORKS: Identify all musical works, compositions, masters, recordings, tracks, or releases covered by this agreement.
@@ -332,7 +336,8 @@ EXTRACTION INSTRUCTIONS:
    - Also scan body clauses for wording such as 'shall receive', 'entitled to', 'payable', 'points', 'gross receipts', 'net receipts'.
    - Note that 'master' or 'producer royalties' typically encompass streaming revenue.
    - CRITICAL: If a royalty split refers to a generic role (e.g., 'Songwriter', 'Producer', 'Artist'), substitute it with the actual party name from step 1.
-   - Simplify royalty type to one of: Streaming, Master, Publishing, Producer, Mixer, Remixer. If it doesn't fit, use a short descriptive term (max 3 words).
+   - Simplify royalty type to one of: Streaming, Master, Publishing, Producer, Mixer, Remixer, SoundExchange. If it doesn't fit, use a short descriptive term (max 3 words).
+   - Use 'SoundExchange' ONLY when the share is explicitly about SoundExchange (or Sound Exchange) income, or about non-interactive digital performance royalties on the master. Do NOT use it for general streaming or master royalties.
    - Only include parties with a specific numeric percentage.
    - INCOME BASIS (per share): set "basis" to "net" if the contract states that party's split is paid on NET income/receipts/profits (i.e. after deducting costs/expenses), or "gross" if paid on GROSS income/receipts/the full amount. If the contract does not state a basis for that specific party, set "basis" to null.
 
@@ -341,13 +346,13 @@ EXTRACTION INSTRUCTIONS:
 Return your answer as a JSON object with this exact structure:
 {{
   "parties": [
-    {{"name": "Full Name (including aliases)", "role": "standard_role"}}
+    {{"name": "Primary/Legal Name", "role": "standard_role", "aliases": ["Stage Name"]}}
   ],
   "works": [
     {{"title": "Canonical Title", "work_type": "composition|master recording|song|album"}}
   ],
   "royalty_shares": [
-    {{"party_name": "Full Name", "royalty_type": "Streaming|Master|Publishing|Producer|Mixer", "percentage": 50.0, "terms": "optional terms or null", "basis": "net|gross|null"}}
+    {{"party_name": "Full Name", "royalty_type": "Streaming|Master|Publishing|Producer|Mixer|SoundExchange", "percentage": 50.0, "terms": "optional terms or null", "basis": "net|gross|null"}}
   ],
   "default_basis": "net|gross|null"
 }}
@@ -379,15 +384,39 @@ Return ONLY valid JSON."""
 
         # Parse parties
         parties = []
-        seen_party_names = set()
+        party_by_key: dict[str, Party] = {}
         for item in data.get("parties", []):
             name = item.get("name", "").strip()
             role = item.get("role", "").strip()
-            if name and role:
-                key = normalize_name(name)
-                if key not in seen_party_names:
-                    seen_party_names.add(key)
-                    parties.append(Party(name, role.lower()))
+            if not (name and role):
+                continue
+            raw_aliases = item.get("aliases") or []
+            aliases = [a.strip() for a in raw_aliases if isinstance(a, str) and a.strip()]
+            # Fallback for LLM non-compliance: split alias markers still embedded
+            # in the name ("Jane Doe p/k/a Nova Sky") into name + aliases.
+            name, marker_aliases = split_alias_markers(name)
+            aliases.extend(marker_aliases)
+            key = normalize_name(name)
+            # Drop aliases that duplicate the party's own name; dedupe the rest.
+            seen_alias_keys = {key}
+            clean_aliases = []
+            for alias in aliases:
+                alias_key = normalize_name(alias)
+                if alias_key and alias_key not in seen_alias_keys:
+                    seen_alias_keys.add(alias_key)
+                    clean_aliases.append(alias)
+            existing = party_by_key.get(key)
+            if existing is None:
+                party = Party(name, role.lower(), clean_aliases)
+                party_by_key[key] = party
+                parties.append(party)
+            else:
+                # Duplicate mention of the same party — union its aliases.
+                known = {normalize_name(existing.name)} | {normalize_name(a) for a in existing.aliases}
+                for alias in clean_aliases:
+                    if normalize_name(alias) not in known:
+                        known.add(normalize_name(alias))
+                        existing.aliases.append(alias)
 
         logger.info(f"👥 Extracted {len(parties)} parties")
         for i, party in enumerate(parties):

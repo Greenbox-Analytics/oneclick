@@ -53,11 +53,8 @@ import {
 import { Artwork } from "./Artwork";
 import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
-import {
-  type QueuedContract,
-  partitionContractsForLinking,
-  persistContractToProject,
-} from "./contractLinking";
+import { mergeParsedContracts, type MergeConflict } from "./mergeParsedContracts";
+import { AddWorkConfirmDialog } from "./AddWorkConfirmDialog";
 import { NewArtistDialog } from "@/components/NewArtistDialog";
 import { ProjectFormDialog } from "@/components/ProjectFormDialog";
 
@@ -88,75 +85,19 @@ const TYPES = [
   ["other", "Other"],
 ] as const;
 
-interface MergeConflict {
-  name: string;
-  values: Array<{ file: string; master: number; publishing: number }>;
-}
-
-const normName = (name: string) => name.trim().toLowerCase().replace(/\s+/g, " ");
-
-/**
- * Merge the parsed parties of several contracts into one split table.
- * Correctness rules: values are NEVER silently summed — the same person in two
- * contracts keeps the first value and raises a conflict; the main artist's
- * share is stated relative to each individual deal, so summing it would
- * double-count. Conflicts are surfaced for the user to reconcile in the
- * editable table.
- */
-function mergeParsedContracts(
-  contracts: Array<{ displayName: string; parties?: ParsedParty[]; mainArtistFound?: boolean }>,
-  artistName: string
-): { rows: SplitRow[]; mainArtistFoundAny: boolean; conflicts: MergeConflict[] } {
-  const byKey = new Map<string, SplitRow>();
-  const conflictByKey = new Map<string, MergeConflict>();
-  const firstSeen = new Map<string, { file: string; master: number; publishing: number }>();
-  let youRow: SplitRow | null = null;
-  const mainArtistFoundAny = contracts.some((c) => c.mainArtistFound);
-
-  const noteConflict = (key: string, name: string, file: string, master: number, publishing: number) => {
-    let conflict = conflictByKey.get(key);
-    if (!conflict) {
-      conflict = { name, values: [firstSeen.get(key)!] };
-      conflictByKey.set(key, conflict);
-    }
-    conflict.values.push({ file, master, publishing });
-  };
-
-  for (const c of contracts) {
-    for (const p of c.parties || []) {
-      const master = Math.round(p.master_pct);
-      const publishing = Math.round(p.publishing_pct);
-      if (p.is_main_artist) {
-        if (!youRow) {
-          youRow = { key: "you", name: p.name, role: p.role || "Primary Artist", isYou: true, master, publishing };
-          firstSeen.set("you", { file: c.displayName, master, publishing });
-        } else if (master !== youRow.master || publishing !== youRow.publishing) {
-          noteConflict("you", youRow.name, c.displayName, master, publishing);
-        }
-        continue;
-      }
-      const key = normName(p.name);
-      const existing = byKey.get(key);
-      if (existing) {
-        if (master !== existing.master || publishing !== existing.publishing) {
-          noteConflict(key, existing.name, c.displayName, master, publishing);
-        }
-        // equal values = duplicate mention of the same deal — dedupe silently
-      } else {
-        byKey.set(key, { key, name: p.name, role: p.role, isYou: false, master, publishing });
-        firstSeen.set(key, { file: c.displayName, master, publishing });
-      }
-    }
-  }
-
-  if (!youRow) {
-    youRow = { key: "you", name: artistName, role: "Primary Artist", isYou: true, master: 0, publishing: 0 };
-  }
-  return {
-    rows: [youRow, ...byKey.values()],
-    mainArtistFoundAny,
-    conflicts: Array.from(conflictByKey.values()),
-  };
+// A contract queued for AI split parsing. Splits are often spread across
+// several contracts (producer deal, feature deal, …) that only together
+// account for 100% — the queue lets the user parse them all and merge.
+interface QueuedContract {
+  id: string;
+  kind: "upload" | "project";
+  file?: File;
+  contractFileId?: string;
+  displayName: string;
+  status: "pending" | "parsing" | "done" | "error";
+  error?: string;
+  parties?: ParsedParty[]; // raw parse result, kept for provenance + re-merge
+  mainArtistFound?: boolean;
 }
 
 export function AddWorkWizard({
@@ -319,6 +260,8 @@ export function AddWorkWizard({
   const createStake = useCreateStake();
   const inviteCollaborator = useInviteCollaborator();
   const [submitting, setSubmitting] = useState(false);
+  // Final review dialog shown between "Add work" and the actual submit.
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const reset = () => {
     setSelectedArtistId(initialArtistId || "");
@@ -340,6 +283,7 @@ export function AddWorkWizard({
     setMergeConflicts([]);
     setRowsDirty(false);
     setSubmitting(false);
+    setConfirmOpen(false);
   };
 
   useEffect(() => {
@@ -403,25 +347,6 @@ export function AddWorkWizard({
     }
   };
 
-  // Build initial split rows when entering the royalty step
-  useEffect(() => {
-    if (!onRoyalty) return;
-    if (splitRows.length === 0 && royMode === null) {
-      // Seed with just the user's row so manual mode has something to render later.
-      setSplitRows([
-        {
-          key: "you",
-          name: artistName,
-          role: "Primary Artist",
-          isYou: true,
-          master: 0,
-          publishing: 0,
-        },
-      ]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onRoyalty]);
-
   // ---- multi-contract queue ----
   const patchQueued = (id: string, patch: Partial<QueuedContract>) =>
     setQueuedContracts((prev) => prev.map((q) => (q.id === id ? { ...q, ...patch } : q)));
@@ -444,15 +369,14 @@ export function AddWorkWizard({
     const withParties = done.filter((q) => (q.parties?.length ?? 0) > 0);
     if (withParties.length === 0) {
       toast.error("We couldn't read royalty splits from these contracts");
+      // Manual mode renders its own default "You" row when splitRows is empty.
       setRoyMode("manual");
-      setSplitRows([
-        { key: "you", name: artistName, role: "Primary Artist", isYou: true, master: 0, publishing: 0 },
-      ]);
+      setSplitRows([]);
       setSplitsSource(null);
       setMergeConflicts([]);
       return;
     }
-    const merged = mergeParsedContracts(withParties, artistName);
+    const merged = mergeParsedContracts(withParties);
     setMainArtistInContract(merged.mainArtistFoundAny);
     setSplitRows(merged.rows);
     setMergeConflicts(merged.conflicts);
@@ -538,52 +462,105 @@ export function AddWorkWizard({
     setRowsDirty(true);
   };
 
-  // Everything the user attached in the "Parse with AI" step is — by their own
-  // selection — related to this work, so link it into Related documents once the
-  // work exists. Best-effort: a failure here must never fail work creation
-  // (mirrors the derive-from-contracts endpoint's auto-link behavior).
-  const linkParsedContractsToWork = async (workId: string) => {
-    const { existingFileIds, uploads } = partitionContractsForLinking(queuedContracts);
-    const fileIds = [...existingFileIds];
-
-    // Uploaded-in-wizard PDFs live only in memory — persist them to the project's
-    // Files (as contracts) so they survive and can be linked.
-    if (uploads.length > 0 && projectIdInUse) {
-      const totalSize = uploads.reduce((n, u) => n + u.file.size, 0);
-      const overCap =
-        storageStatus.cap !== -1 && storageStatus.used + totalSize > storageStatus.cap;
-      if (overCap) {
-        toast.error(
-          "Uploaded contracts couldn't be saved to Related documents — storage limit reached."
-        );
-      } else {
-        for (const u of uploads) {
-          try {
-            fileIds.push(await persistContractToProject(u.file, projectIdInUse));
-          } catch {
-            // one upload failing shouldn't block the rest — or the work itself
+  // Attach the contracts whose splits were read to the new work's Related
+  // Documents. Best-effort: a failure here never fails work creation.
+  // Project-picked contracts already have a project_files id; fresh uploads
+  // are persisted first (same pipeline as the work page's "Add documents").
+  const linkUsedContracts = async (workId: string) => {
+    const used = queuedContracts.filter((q) => q.status === "done");
+    if (used.length === 0) return;
+    const linkedFileIds = new Set<string>();
+    let anyFailed = false;
+    for (const q of used) {
+      try {
+        let fileId = q.kind === "project" ? q.contractFileId ?? null : null;
+        if (!fileId && q.kind === "upload" && q.file) {
+          const file = q.file;
+          // Soft storage-cap check. Skipped while entitlements are loading or
+          // errored (cap reads 0 then) — a real overage still fails server-side
+          // and is caught below.
+          if (
+            !storageStatus.loading &&
+            !storageStatus.error &&
+            storageStatus.cap !== -1 &&
+            storageStatus.used + file.size > storageStatus.cap
+          ) {
+            anyFailed = true;
+            continue;
+          }
+          const hashBuffer = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+          const contentHash = Array.from(new Uint8Array(hashBuffer))
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
+          // Dedup: if this exact file already exists in the project, link the
+          // existing row instead of re-uploading.
+          const { data: existing } = await supabase
+            .from("project_files")
+            .select("id")
+            .eq("project_id", projectIdInUse)
+            .eq("content_hash", contentHash)
+            .limit(1);
+          if (existing && existing.length > 0) {
+            fileId = existing[0].id;
+          } else {
+            const filePath = `${projectIdInUse}/contract/${Date.now()}_${file.name}`;
+            const { error: uploadError } = await supabase.storage
+              .from("project-files")
+              .upload(filePath, file);
+            if (uploadError) throw uploadError;
+            const { data: urlData } = supabase.storage
+              .from("project-files")
+              .getPublicUrl(filePath);
+            const { data: inserted, error: dbError } = await supabase
+              .from("project_files")
+              .insert({
+                project_id: projectIdInUse,
+                file_name: file.name,
+                file_url: urlData.publicUrl,
+                file_path: filePath,
+                folder_category: "contract",
+                file_size: file.size,
+                file_type: file.type,
+                content_hash: contentHash,
+              })
+              .select("id")
+              .single();
+            if (dbError) {
+              await supabase.storage.from("project-files").remove([filePath]);
+              throw dbError;
+            }
+            fileId = inserted.id;
           }
         }
+        if (!fileId || linkedFileIds.has(fileId)) continue;
+        await apiFetch(`${API_URL}/registry/works/${workId}/files?file_id=${fileId}`, {
+          method: "POST",
+        });
+        linkedFileIds.add(fileId);
+      } catch {
+        anyFailed = true;
       }
     }
-
-    // Dedup across picked + uploaded ids (an upload may hash to an already-picked
-    // file) so we never hit the work_files UNIQUE(work_id, file_id) constraint.
-    const unique = Array.from(new Set(fileIds));
-    if (unique.length === 0) return;
-
-    const results = await Promise.allSettled(
-      unique.map((fileId) =>
-        apiFetch(`${API_URL}/registry/works/${workId}/files?file_id=${fileId}`, {
-          method: "POST",
-        })
-      )
-    );
-    queryClient.invalidateQueries({ queryKey: ["work-files", workId] });
-    if (results.every((r) => r.status === "rejected")) {
-      toast.error("Couldn't link the contracts to this work's documents.");
+    if (linkedFileIds.size > 0) {
+      queryClient.invalidateQueries({ queryKey: ["work-files", workId] });
+      queryClient.invalidateQueries({ queryKey: ["project-files-tab", projectIdInUse] });
+    }
+    if (anyFailed) {
+      toast.warning(
+        "Work created, but a contract couldn't be attached — you can link it from the work page."
+      );
     }
   };
+
+  // The rows the user actually sees on the splits step: the manual branch
+  // renders a default "You" row when splitRows is empty, so mirror it here —
+  // what's shown in the confirm dialog is exactly what gets submitted.
+  const effectiveRows: SplitRow[] =
+    splitRows.length > 0
+      ? splitRows
+      : royMode === "manual"
+        ? [{ key: "you", name: artistName, role: "Primary Artist", isYou: true, master: 0, publishing: 0 }]
+        : [];
 
   const finish = async (overrideRows?: SplitRow[]) => {
     const rows = overrideRows ?? splitRows;
@@ -618,6 +595,7 @@ export function AddWorkWizard({
       const workId = (created as { id?: string })?.id;
 
       // Persist splits as ownership_stakes rows
+      let stakesSaved = 0;
       if (workId) {
         for (const row of rows) {
           const name = row.name?.trim();
@@ -631,6 +609,7 @@ export function AddWorkWizard({
               percentage: row.master,
               is_owner_stake: row.isYou === true,
             });
+            stakesSaved += 1;
           }
           if (row.publishing > 0) {
             await createStake.mutateAsync({
@@ -641,6 +620,18 @@ export function AddWorkWizard({
               percentage: row.publishing,
               is_owner_stake: row.isYou === true,
             });
+            stakesSaved += 1;
+          }
+          if ((row.soundexchange ?? 0) > 0) {
+            await createStake.mutateAsync({
+              work_id: workId,
+              stake_type: "soundexchange",
+              holder_name: name,
+              holder_role: row.role || (row.isYou ? "Primary Artist" : "Collaborator"),
+              percentage: row.soundexchange,
+              is_owner_stake: row.isYou === true,
+            });
+            stakesSaved += 1;
           }
         }
         // Link everything attached in "Parse with AI" into Related documents.
@@ -651,7 +642,18 @@ export function AddWorkWizard({
           // swallow: the work exists; linking is a non-blocking nicety
         }
       }
+      // useCreateStake intentionally doesn't toast per stake — show one
+      // consolidated toast here (useCreateWork already toasts "Work created").
+      if (stakesSaved > 0) {
+        toast.success(`${stakesSaved} royalty stake${stakesSaved === 1 ? "" : "s"} saved`);
+      }
 
+      // Attach the contracts the splits came from as Related Documents.
+      if (workId) {
+        await linkUsedContracts(workId);
+      }
+
+      setConfirmOpen(false);
       onClose();
     } catch (e) {
       toast.error((e as Error).message || "Failed to add work");
@@ -687,15 +689,33 @@ export function AddWorkWizard({
     if (onRoyalty) {
       return (
         <>
-          <Button variant="outline" onClick={() => setStep(released ? 2 : 1)}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (royMode !== null) {
+                // Return to the "pull from contract vs by hand" choice, not the
+                // metadata step. Queued contracts are cleared (a fresh choice
+                // starts clean) but parsed/edited rows survive.
+                setRoyMode(null);
+                clearContracts();
+              } else {
+                setStep(released ? 2 : 1);
+              }
+            }}
+          >
             <ArrowLeft className="w-4 h-4 mr-1" /> Back
           </Button>
-          <Button onClick={() => finish()} disabled={submitting}>
-            {submitting ? (
-              <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-            ) : (
-              <CheckCircle2 className="w-4 h-4 mr-1" />
-            )}
+          <Button
+            onClick={() => {
+              if (!projectIdInUse || !artistIdInUse) {
+                toast.error("Pick a project first");
+                return;
+              }
+              setConfirmOpen(true);
+            }}
+            disabled={submitting}
+          >
+            <CheckCircle2 className="w-4 h-4 mr-1" />
             Add work
           </Button>
         </>
@@ -860,7 +880,6 @@ export function AddWorkWizard({
               queuedContracts={queuedContracts}
               onAddContracts={addContracts}
               onRemoveContract={removeContract}
-              onClearContracts={clearContracts}
               fileInputRef={fileInputRef}
               parsing={queuedContracts.some((q) => q.status === "parsing")}
               splitRows={splitRows}
@@ -891,6 +910,16 @@ export function AddWorkWizard({
       artists={artistsQuery.data || []}
       defaultArtistId={selectedArtistId}
       onSave={handleProjectSave}
+    />
+    <AddWorkConfirmDialog
+      open={confirmOpen}
+      onOpenChange={setConfirmOpen}
+      workTitle={(chosen?.title || title).trim() || "Untitled work"}
+      artistName={artistName}
+      projectName={projectName}
+      rows={effectiveRows}
+      submitting={submitting}
+      onConfirm={() => finish(effectiveRows)}
     />
     </>
   );
@@ -1457,7 +1486,6 @@ function RoyaltyStep({
   queuedContracts,
   onAddContracts,
   onRemoveContract,
-  onClearContracts,
   fileInputRef,
   parsing,
   splitRows,
@@ -1479,7 +1507,6 @@ function RoyaltyStep({
     >
   ) => void;
   onRemoveContract: (id: string) => void;
-  onClearContracts: () => void;
   fileInputRef: React.RefObject<HTMLInputElement>;
   parsing: boolean;
   splitRows: SplitRow[];
@@ -1494,6 +1521,12 @@ function RoyaltyStep({
   const [aiSource, setAiSource] = useState<AiSource>("project");
   // Re-opens the contract picker after a merge (the "Add another contract" button).
   const [showPicker, setShowPicker] = useState(false);
+
+  // The footer Back button resets royMode to return to the splits-source
+  // choice; the picker state lives here, so reset it alongside.
+  useEffect(() => {
+    if (royMode === null) setShowPicker(false);
+  }, [royMode]);
 
   const projectContractsQuery = useQuery<ProjectContract[]>({
     queryKey: ["wizard-project-contracts", projectId],
@@ -1532,7 +1565,7 @@ function RoyaltyStep({
       <div>
         <p className="text-base font-semibold">Royalty splits</p>
         <p className="text-sm text-muted-foreground">
-          Pull splits from the related contract with AI, or set them by hand.
+          Let AI read the splits from the related contract, or set them by hand.
         </p>
       </div>
 
@@ -1546,9 +1579,9 @@ function RoyaltyStep({
             <div className="w-10 h-10 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center">
               <Sparkles className="w-5 h-5" />
             </div>
-            <div className="text-sm font-semibold">Pull from the contract</div>
+            <div className="text-sm font-semibold">Get splits from the contract</div>
             <div className="text-xs text-muted-foreground">
-              Attach the related contract — AI extracts the royalty split for every party.
+              Pick the related contract — AI reads it and fills in each party's split.
             </div>
           </button>
           <button
@@ -1569,6 +1602,9 @@ function RoyaltyStep({
 
       {royMode === "ai" && (splitRows.filter((r) => !r.isYou).length === 0 || showPicker) && (
         <>
+          <div className="text-xs font-semibold text-muted-foreground -mb-2">
+            Step 1 · Pick the contract(s) that cover this work
+          </div>
           <div className="inline-flex items-center gap-1 rounded-lg border bg-muted/40 p-1">
             <button
               type="button"
@@ -1731,36 +1767,35 @@ function RoyaltyStep({
             </div>
           )}
 
-          <div className="flex items-center gap-3">
-            <Button
-              onClick={() => {
-                setShowPicker(false);
-                onParseAll();
-              }}
-              disabled={!canParse}
-            >
-              {parsing ? (
-                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-              ) : (
-                <Sparkles className="w-4 h-4 mr-1" />
-              )}
-              {parsing
-                ? `Reading contract${queuedContracts.length > 1 ? "s" : ""}…`
-                : queuedContracts.length === 0
-                  ? "Parse with AI"
-                  : `Parse ${queuedContracts.length} contract${queuedContracts.length === 1 ? "" : "s"} with AI`}
-            </Button>
-            <button
-              type="button"
-              className="text-xs text-primary hover:underline"
-              onClick={() => {
-                setRoyMode(null);
-                setShowPicker(false);
-                onClearContracts();
-              }}
-            >
-              Back to options
-            </button>
+          <div>
+            <div className="text-xs font-semibold text-muted-foreground mb-2">
+              Step 2 · Read the contract{queuedContracts.length > 1 ? "s" : ""}
+            </div>
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={() => {
+                  setShowPicker(false);
+                  onParseAll();
+                }}
+                disabled={!canParse}
+              >
+                {parsing ? (
+                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4 mr-1" />
+                )}
+                {parsing
+                  ? `Reading contract${queuedContracts.length > 1 ? "s" : ""}…`
+                  : queuedContracts.length <= 1
+                    ? "Read contract"
+                    : `Read ${queuedContracts.length} contracts`}
+              </Button>
+            </div>
+            {queuedContracts.length === 0 && (
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Select or upload at least one contract first.
+              </p>
+            )}
           </div>
         </>
       )}
@@ -1772,8 +1807,35 @@ function RoyaltyStep({
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
                 We didn't see <b>{artistName}</b> in the contract
-                {doneContracts.length > 1 ? "s" : ""}. Enter your own master / publishing %
-                manually in the "You" row below.
+                {doneContracts.length > 1 ? "s" : ""}.
+                {splitRows.some((r) => r.isYou) ? (
+                  <> If you hold a share, enter it in your row below.</>
+                ) : (
+                  <>
+                    {" "}
+                    If you hold a share of this work,{" "}
+                    <button
+                      type="button"
+                      className="font-semibold underline underline-offset-2 hover:text-amber-300"
+                      onClick={() =>
+                        setSplitRows([
+                          {
+                            key: "you",
+                            name: artistName,
+                            role: "Primary Artist",
+                            isYou: true,
+                            master: 0,
+                            publishing: 0,
+                          },
+                          ...splitRows,
+                        ])
+                      }
+                    >
+                      add your own row
+                    </button>{" "}
+                    and set your split.
+                  </>
+                )}
               </span>
             </div>
           )}
@@ -1789,13 +1851,21 @@ function RoyaltyStep({
                   <p key={conflict.name}>
                     <b>{conflict.name}</b>:{" "}
                     {conflict.values
-                      .map((v) => `Master ${v.master}% / Publishing ${v.publishing}% (${v.file})`)
+                      .map(
+                        (v) =>
+                          `Master ${v.master}% / Publishing ${v.publishing}%` +
+                          (v.soundexchange > 0 ? ` / SoundExchange ${v.soundexchange}%` : "") +
+                          ` (${v.file})`
+                      )
                       .join(" vs ")}
                   </p>
                 ))}
               </div>
             </div>
           )}
+          <div className="text-xs font-semibold text-muted-foreground -mb-2">
+            Step 3 · Review and edit the splits
+          </div>
           <RoyaltySplitsTable
             rows={splitRows}
             onChange={setSplitRows}

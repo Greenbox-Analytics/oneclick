@@ -525,7 +525,7 @@ const WorkDetailContent = () => (
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FeatureCard icon={Shield} title="Work header" description="Title (inline-editable by the owner), status badge, work type, and industry codes (ISRC, ISWC, UPC)." color="blue" />
-        <FeatureCard icon={Pencil} title="Owner actions" description="Register the work, export proof of ownership, invite collaborators, edit metadata, or delete it." color="purple" />
+        <FeatureCard icon={Pencil} title="Owner actions" description="Register the work, export its metadata as a PDF, invite collaborators, edit metadata, or delete it." color="purple" />
       </div>
     </div>
     <div>
@@ -620,14 +620,15 @@ const RightsRegistryContent = () => (
     <div>
       <SectionHeading>Overview</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">
-        The Metadata Registry is your ownership-tracking dashboard. It shows everything you own and everything you're involved in across all projects. (You create works in Project Detail, not here.)
+        The Metadata Registry is your ownership-tracking dashboard. It shows everything you own and everything you're involved in across all projects, and it's where you add new works — the <strong>Add work</strong> button walks you through registering a track step by step.
       </p>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
-          { label: "My Works", desc: "Works you own" },
-          { label: "Registered", desc: "Fully confirmed" },
-          { label: "Pending", desc: "Awaiting response" },
-          { label: "Shared with Me", desc: "Works you're on" },
+          { label: "Total works", desc: "Everything you're on" },
+          { label: "Released", desc: "Live tracks" },
+          { label: "Unreleased", desc: "Still in the works" },
+          { label: "Need attention", desc: "Splits or codes missing" },
+          { label: "Shared with you", desc: "Works you're invited to" },
         ].map((card) => (
           <div key={card.label} className="rounded-xl border border-border p-3 bg-card">
             <p className="text-xs font-semibold text-primary uppercase tracking-wide">{card.label}</p>
@@ -639,13 +640,48 @@ const RightsRegistryContent = () => (
     <div>
       <SectionHeading>Dashboard</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-3">
-        The registry opens on a dashboard of every work you're involved in. Toggle between <strong>My Works</strong> and <strong>Shared with Me</strong>, and use the stat cards across the top to filter the list.
+        The registry opens on a dashboard of every work you're involved in. Toggle between <strong>My Works</strong> and <strong>Shared with Me</strong>, use the stat cards across the top to filter the list, and click <strong>Add work</strong> to register a new track.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FeatureCard icon={Folder} title="My Works / Shared with Me" description="Switch between works you own and works other people have shared with you." color="purple" />
         <FeatureCard icon={Zap} title="Stat filters" description="Total, Released, Unreleased, Need attention, and Shared with you — click a card to filter the list." color="amber" />
-        <FeatureCard icon={Info} title="Search & sort" description="Find a work by title and sort by recently added, title A–Z, or release date." color="teal" />
+        <FeatureCard icon={Search} title="Search & sort" description="Find a work by title and sort by recently added, title A–Z, or release date." color="teal" />
         <FeatureCard icon={Shield} title="Status at a glance" description="Every row shows its registry status — Draft, Pending, or Registered." color="blue" />
+      </div>
+    </div>
+    <div>
+      <SectionHeading><Music className="w-4 h-4" /> Adding a work</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+        The Add Work wizard registers a track in a few guided steps:
+      </p>
+      <div className="space-y-0">
+        <Step num={1} title="Pick the artist and project">
+          Choose where the work belongs. You can create a new artist or project without leaving the wizard. (This step is skipped when you start from a project page.)
+        </Step>
+        <Step num={2} title="Released or unreleased?">
+          For released tracks we search Spotify and auto-fill the metadata — ISRC, UPC, label, release date, and credited artists — for you to review. For unreleased tracks, enter the details you know now and fill in the rest later.
+        </Step>
+        <Step num={3} title="Set the royalty splits">
+          Either <strong>get splits from the contract</strong> — pick contracts already in the project or upload PDFs, and AI reads each party's split (several contracts can be combined; disagreements between them are flagged for you to fix) — or <strong>add them by hand</strong>.
+        </Step>
+        <Step num={4} title="Review and confirm" isLast>
+          A final summary shows every party and split before the work and its stakes are saved.
+        </Step>
+      </div>
+      <Callout type="tip" title="Contracts are attached automatically">
+        Any contract used to read splits is added to the work's <strong>Related documents</strong>, so the paper trail stays with the work.
+      </Callout>
+    </div>
+    <div>
+      <SectionHeading>The work page</SectionHeading>
+      <p className="text-sm text-muted-foreground leading-relaxed mb-3">
+        Click any work to open its page — everything about the work lives there:
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <FeatureCard icon={Scale} title="Royalty splits" description="Master and publishing splits per party, with running totals. SoundExchange royalties, when present, are shown separately — they're paid directly by SoundExchange and never counted in the master total." color="blue" />
+        <FeatureCard icon={FileText} title="Related documents" description="Contracts and split sheets linked to the work — pick from the project's files or upload new ones." color="amber" />
+        <FeatureCard icon={UserPlus} title="Collaborators & access" description="Invite collaborators with their stakes, derive a collaborator's split straight from the linked contracts, and control exactly what each person can see." color="purple" />
+        <FeatureCard icon={FileCheck} title="Traceability & Export Metadata" description="A quick audit of what's on file — linked documents, ISRC, recorded stakes — plus a one-click Export Metadata PDF." color="emerald" />
       </div>
     </div>
     <div>
@@ -656,7 +692,7 @@ const RightsRegistryContent = () => (
       </p>
     </div>
     <div>
-      <SectionHeading><Lock className="w-4 h-4" /> Enhanced invite form</SectionHeading>
+      <SectionHeading><UserPlus className="w-4 h-4" /> Inviting collaborators</SectionHeading>
       <p className="text-sm text-muted-foreground leading-relaxed mb-3">
         When inviting a collaborator, the form captures everything needed:
       </p>
@@ -666,6 +702,9 @@ const RightsRegistryContent = () => (
         <FeatureCard icon={FileText} title="Notes & terms" description="Add context about the arrangement. The collaborator sees this in the invite email." color="amber" />
         <FeatureCard icon={Lock} title="Access control" description="Files become accessible only after acceptance. The invite email contains all decision-making info." color="red" />
       </div>
+      <Callout type="tip" title="Let the contract fill in the numbers">
+        When the work has linked contracts, the invite form can <strong>derive the collaborator's split from the contracts</strong> — AI finds their share so you don't have to type it.
+      </Callout>
     </div>
   </div>
 );
