@@ -3,11 +3,19 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ArrowLeft, BookOpen, Plus, Receipt, ChevronRight, Loader2 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
 import {
   useExpenseSummary,
+  EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_LABELS,
   type ExpenseSummaryRow,
 } from "@/hooks/useProjectExpenses";
@@ -15,6 +23,13 @@ import ExpenseFormDialog from "@/components/project/ExpenseFormDialog";
 
 const formatCurrency = (n: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
+
+const trendChartConfig: ChartConfig = {
+  total: {
+    label: "Spent",
+    color: "hsl(var(--primary))",
+  },
+};
 
 type Granularity = "week" | "month" | "year";
 
@@ -50,30 +65,72 @@ function bucketKeyAndLabel(dateStr: string, g: Granularity): { key: string; labe
   return { key, label: `W${week} ${year}` };
 }
 
+// "all" is the sentinel for an inactive filter. Uncategorized expenses count as
+// "other", matching how byCategory buckets them.
+export function filterExpenseRows(
+  rows: ExpenseSummaryRow[],
+  projectFilter: string,
+  categoryFilter: string,
+): ExpenseSummaryRow[] {
+  return rows.filter(
+    (r) =>
+      (projectFilter === "all" || r.project_id === projectFilter) &&
+      (categoryFilter === "all" || (r.category ?? "other") === categoryFilter),
+  );
+}
+
 const ExpenseTracker = () => {
   const navigate = useNavigate();
   const { data: expenses, isLoading, isError } = useExpenseSummary();
   const [granularity, setGranularity] = useState<Granularity>("month");
   const [addOpen, setAddOpen] = useState(false);
+  const [projectFilter, setProjectFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const filtersActive = projectFilter !== "all" || categoryFilter !== "all";
 
   const rows: ExpenseSummaryRow[] = useMemo(() => expenses ?? [], [expenses]);
 
-  const grandTotal = useMemo(() => rows.reduce((s, r) => s + (r.amount || 0), 0), [rows]);
+  // Options come from unfiltered rows so they don't vanish while a filter is active,
+  // and only projects that actually have expenses are listed.
+  const projectOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of rows) {
+      if (!map.has(r.project_id)) map.set(r.project_id, r.project_name ?? "Untitled project");
+    }
+    return [...map.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows]);
+
+  const filteredRows = useMemo(
+    () => filterExpenseRows(rows, projectFilter, categoryFilter),
+    [rows, projectFilter, categoryFilter],
+  );
+
+  const clearFilters = () => {
+    setProjectFilter("all");
+    setCategoryFilter("all");
+  };
+
+  const grandTotal = useMemo(
+    () => filteredRows.reduce((s, r) => s + (r.amount || 0), 0),
+    [filteredRows],
+  );
 
   const byCategory = useMemo(() => {
     const acc: Record<string, number> = {};
-    for (const r of rows) {
+    for (const r of filteredRows) {
       const key = r.category ?? "other";
       acc[key] = (acc[key] || 0) + (r.amount || 0);
     }
     return Object.entries(acc)
       .map(([key, value]) => ({ key, label: EXPENSE_CATEGORY_LABELS[key] ?? key, value }))
       .sort((a, b) => b.value - a.value);
-  }, [rows]);
+  }, [filteredRows]);
 
   const trend = useMemo(() => {
     const acc: Record<string, { label: string; total: number }> = {};
-    for (const r of rows) {
+    for (const r of filteredRows) {
       if (!r.incurred_on) continue; // undated expenses are excluded from the trend
       const { key, label } = bucketKeyAndLabel(r.incurred_on, granularity);
       if (!acc[key]) acc[key] = { label, total: 0 };
@@ -82,9 +139,9 @@ const ExpenseTracker = () => {
     return Object.entries(acc)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([, v]) => v);
-  }, [rows, granularity]);
+  }, [filteredRows, granularity]);
 
-  const undatedCount = useMemo(() => rows.filter((r) => !r.incurred_on).length, [rows]);
+  const undatedCount = useMemo(() => filteredRows.filter((r) => !r.incurred_on).length, [filteredRows]);
 
   // Group by artist → project for the rollup list.
   const grouped = useMemo(() => {
@@ -92,7 +149,7 @@ const ExpenseTracker = () => {
       string,
       { artistName: string; total: number; projects: Record<string, { name: string; total: number }> }
     > = {};
-    for (const r of rows) {
+    for (const r of filteredRows) {
       const aid = r.artist_id ?? "unknown";
       if (!byArtist[aid]) {
         byArtist[aid] = { artistName: r.artist_name ?? "Unknown artist", total: 0, projects: {} };
@@ -105,7 +162,7 @@ const ExpenseTracker = () => {
       byArtist[aid].projects[pid].total += r.amount || 0;
     }
     return Object.values(byArtist).sort((a, b) => b.total - a.total);
-  }, [rows]);
+  }, [filteredRows]);
 
   const maxCategory = byCategory[0]?.value ?? 0;
 
@@ -169,6 +226,51 @@ const ExpenseTracker = () => {
           </div>
         ) : (
           <div className="space-y-6">
+            {/* Filters — scope every section below */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={projectFilter} onValueChange={setProjectFilter}>
+                <SelectTrigger className="w-full sm:w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All projects</SelectItem>
+                  {projectOptions.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-full sm:w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All categories</SelectItem>
+                  {EXPENSE_CATEGORIES.map((c) => (
+                    <SelectItem key={c.value} value={c.value}>
+                      {c.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {filtersActive && (
+                <Button variant="ghost" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              )}
+            </div>
+
+            {filteredRows.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <Receipt className="w-10 h-10 text-muted-foreground/40 mb-3" />
+                <p className="text-sm text-muted-foreground">No expenses match your filters</p>
+                <Button variant="outline" size="sm" className="mt-3" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              </div>
+            ) : (
+              <>
             {/* Grand total */}
             <Card>
               <CardHeader className="pb-2">
@@ -179,8 +281,8 @@ const ExpenseTracker = () => {
               <CardContent>
                 <p className="text-3xl font-bold text-foreground">{formatCurrency(grandTotal)}</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {rows.length} expense{rows.length === 1 ? "" : "s"} across {grouped.length} artist
-                  {grouped.length === 1 ? "" : "s"}
+                  {filteredRows.length} expense{filteredRows.length === 1 ? "" : "s"} across{" "}
+                  {grouped.length} artist{grouped.length === 1 ? "" : "s"}
                 </p>
               </CardContent>
             </Card>
@@ -207,20 +309,24 @@ const ExpenseTracker = () => {
                       No dated expenses to chart yet.
                     </p>
                   ) : (
-                    <div className="h-64">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={trend} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" vertical={false} />
-                          <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                          <YAxis
-                            tick={{ fontSize: 11 }}
-                            tickFormatter={(v) => `$${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : v}`}
-                          />
-                          <Tooltip formatter={(v) => formatCurrency(Number(v))} />
-                          <Bar dataKey="total" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
+                    <ChartContainer config={trendChartConfig} className="h-64 w-full">
+                      <BarChart data={trend} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                        <YAxis
+                          tick={{ fontSize: 11 }}
+                          tickFormatter={(v) => `$${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : v}`}
+                        />
+                        <ChartTooltip
+                          content={
+                            <ChartTooltipContent
+                              formatter={(value) => [formatCurrency(Number(value)), "Spent"]}
+                            />
+                          }
+                        />
+                        <Bar dataKey="total" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ChartContainer>
                   )}
                   {undatedCount > 0 && (
                     <p className="text-xs text-muted-foreground/70 mt-2">
@@ -287,6 +393,8 @@ const ExpenseTracker = () => {
                 ))}
               </CardContent>
             </Card>
+              </>
+            )}
           </div>
         )}
       </main>

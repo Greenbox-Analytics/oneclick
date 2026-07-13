@@ -214,3 +214,29 @@ def normalize_name(name: str) -> str:
     # Remove extra whitespace
     clean = re.sub(r"\s+", " ", clean)
     return clean
+
+
+# Alias markers contracts use to attach a stage/trade name to a legal name,
+# e.g. "Jane Doe p/k/a Nova Sky" or "Jane Doe, professionally known as Nova".
+_ALIAS_MARKER_RE = re.compile(
+    r"[,;]?\s*(?:\b[apf]\s*[./]?\s*k\s*[./]?\s*a\b\.?|\bd\s*[./]?\s*b\s*[./]?\s*a\b\.?"
+    r"|(?:professionally|also|formerly)\s+known\s+as|performing\s+as)\s*",
+    re.IGNORECASE,
+)
+
+
+def split_alias_markers(name: str) -> tuple[str, list[str]]:
+    """
+    Split a party name on alias markers (p/k/a, a/k/a, f/k/a, d/b/a,
+    "professionally/also/formerly known as", "performing as").
+
+    Returns (primary_name, aliases). When no marker is present the name is
+    returned unchanged with an empty alias list.
+    """
+    if not name:
+        return name, []
+    segments = [s.strip(" ,;\"'") for s in _ALIAS_MARKER_RE.split(name)]
+    segments = [s for s in segments if s]
+    if len(segments) <= 1:
+        return name.strip(), []
+    return segments[0], segments[1:]

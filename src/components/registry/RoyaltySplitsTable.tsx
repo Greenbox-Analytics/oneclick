@@ -13,10 +13,15 @@ export interface SplitRow {
   role: string;
   /** UI-only flag for the user's own row. */
   isYou?: boolean;
+  /** UI-only "p/k/a Stage Name" note shown under the (legal) name. Not persisted. */
+  aliasNote?: string;
   /** Master royalties percentage 0–100. */
   master: number;
   /** Publishing royalties percentage 0–100. */
   publishing: number;
+  /** SoundExchange (US digital performance) % — paid directly by SoundExchange,
+   *  tracked separately and never counted toward the master total. */
+  soundexchange?: number;
   status?: string;
 }
 
@@ -44,7 +49,26 @@ interface RoyaltySplitsTableProps {
   /** Show the summed "Master X% · Publishing Y%" line. Hidden for viewers who
    *  only receive their own slice of the splits, where a "total" is meaningless. */
   showTotals?: boolean;
+  /** Force the SoundExchange section on/off. Defaults to auto: shown when any
+   *  row carries a SoundExchange share. Pass an explicit value while editing
+   *  so the section doesn't vanish when a value is zeroed mid-edit. */
+  showSoundExchange?: boolean;
 }
+
+export const clampPct = (v: string | number): number => {
+  const n = parseInt(String(v).replace(/[^0-9]/g, ""), 10);
+  if (Number.isNaN(n)) return 0;
+  return Math.max(0, Math.min(100, n));
+};
+
+export const COLLAB_PALETTE = [
+  "#7c5cff",
+  "#1f8a5b",
+  "#d9762b",
+  "#d24b6e",
+  "#2a6fdb",
+  "#0f6b43",
+];
 
 const fmtDate = (iso: string): string => {
   if (!iso) return "";
@@ -70,9 +94,14 @@ export function RoyaltySplitsTable({
   allowAddRow = false,
   warnOnImbalance = true,
   showTotals = true,
+  showSoundExchange,
 }: RoyaltySplitsTableProps) {
   const totals = useMemo(() => splitTotals(rows), [rows]);
   const balanced = totals.master === 100 && totals.publishing === 100;
+  // SoundExchange shares render in their own section below the table — never
+  // as a column, never in `balanced` (SoundExchange pays parties directly, so
+  // there's no 100% expectation against the master split).
+  const showSX = showSoundExchange ?? rows.some((r) => (r.soundexchange ?? 0) > 0);
 
   const setRow = (idx: number, patch: Partial<SplitRow>) => {
     if (!onChange) return;
@@ -141,92 +170,129 @@ export function RoyaltySplitsTable({
         </div>
       )}
 
-      {/* column headings */}
-      <div className="grid grid-cols-[1fr_72px_72px_auto] gap-2 px-1 text-[10px] uppercase tracking-wider text-muted-foreground/70 font-semibold mb-1">
-        <span>Party</span>
-        <span className="text-center">Master</span>
-        <span className="text-center">Publishing</span>
-        {editable && allowAddRow && <span />}
-      </div>
+      {/* column headings — edit mode labels the % inputs inline instead */}
+      {!editable && (
+        <div className="grid grid-cols-[1fr_72px_72px] gap-2 px-1 text-[10px] uppercase tracking-wider text-muted-foreground/70 font-semibold mb-1">
+          <span>Party</span>
+          <span className="text-center">Master</span>
+          <span className="text-center">Publishing</span>
+        </div>
+      )}
 
       {/* rows */}
       <div className="divide-y divide-border/60">
         {rows.map((r, idx) => {
-          const palette = SPLIT_PALETTE[idx % SPLIT_PALETTE.length];
+          const palette = COLLAB_PALETTE[idx % COLLAB_PALETTE.length];
+
+          if (editable) {
+            // Edit mode stacks each party: full-width name/role inputs so
+            // nothing gets clipped while typing, % fields labeled below.
+            return (
+              <div key={r.key} className="py-2.5 space-y-1.5">
+                <div className="flex items-start gap-2">
+                  <RegistryAvatar name={r.name || "?"} color={palette} size={26} />
+                  <div className="flex-1 min-w-0 space-y-1">
+                    {r.isYou ? (
+                      <div className="text-xs font-semibold break-words leading-snug pt-1">
+                        {r.name || "Unnamed"}
+                      </div>
+                    ) : (
+                      <Input
+                        value={r.name}
+                        placeholder="Name"
+                        onChange={(e) => setRow(idx, { name: e.target.value })}
+                        className="h-7 text-xs px-2"
+                      />
+                    )}
+                    {r.aliasNote && (
+                      <div className="text-[11px] text-muted-foreground/80 italic break-words leading-snug">
+                        {r.aliasNote}
+                      </div>
+                    )}
+                    {r.isYou ? (
+                      <div className="text-[11px] text-muted-foreground break-words leading-snug">
+                        {r.role}
+                      </div>
+                    ) : (
+                      <Input
+                        value={r.role}
+                        placeholder="Role"
+                        onChange={(e) => setRow(idx, { role: e.target.value })}
+                        className="h-7 text-[11px] px-2"
+                      />
+                    )}
+                  </div>
+                  {allowAddRow && (
+                    <div className="w-6 flex justify-center pt-1">
+                      {!r.isYou && (
+                        <button
+                          type="button"
+                          onClick={() => removeRow(idx)}
+                          className="text-muted-foreground hover:text-destructive p-1"
+                          title="Remove party"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 pl-[34px]">
+                  {(["master", "publishing"] as const).map((k) => (
+                    <label key={k} className="flex items-center gap-1.5">
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-semibold">
+                        {k === "master" ? "Master" : "Publishing"}
+                      </span>
+                      <div className="relative">
+                        <input
+                          inputMode="numeric"
+                          value={r[k] ?? 0}
+                          onChange={(e) => setRow(idx, { [k]: clampPct(e.target.value) })}
+                          className="w-[58px] h-7 rounded-md border bg-background text-right pr-4 pl-2 text-xs tabular-nums font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                        <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
+                          %
+                        </span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          }
+
           return (
             <div
               key={r.key}
-              className="grid grid-cols-[1fr_72px_72px_auto] gap-2 items-center py-2"
+              className="grid grid-cols-[1fr_72px_72px] gap-2 items-center py-2"
             >
               <div className="flex items-center gap-2 min-w-0">
                 <RegistryAvatar name={r.name || "?"} color={palette} size={26} />
                 <div className="min-w-0">
-                  {editable && !r.isYou ? (
-                    <Input
-                      value={r.name}
-                      placeholder="Name"
-                      onChange={(e) => setRow(idx, { name: e.target.value })}
-                      className="h-7 text-xs px-2"
-                    />
-                  ) : (
-                    <div className="text-xs font-semibold truncate">
-                      {r.name || "Unnamed"}
+                  <div className="text-xs font-semibold break-words leading-snug">
+                    {r.name || "Unnamed"}
+                  </div>
+                  {r.aliasNote && (
+                    <div className="text-[11px] text-muted-foreground/80 italic break-words leading-snug">
+                      {r.aliasNote}
                     </div>
                   )}
-                  {editable && !r.isYou ? (
-                    <Input
-                      value={r.role}
-                      placeholder="Role"
-                      onChange={(e) => setRow(idx, { role: e.target.value })}
-                      className="h-6 text-[11px] px-2 mt-1"
-                    />
-                  ) : (
-                    <div className="text-[11px] text-muted-foreground truncate">{r.role}</div>
-                  )}
+                  <div className="text-[11px] text-muted-foreground break-words leading-snug">{r.role}</div>
                 </div>
               </div>
 
               {(["master", "publishing"] as const).map((k) => (
                 <div key={k} className="flex items-center justify-center">
-                  {editable ? (
-                    <div className="relative">
-                      <input
-                        inputMode="numeric"
-                        value={r[k] ?? 0}
-                        onChange={(e) => setRow(idx, { [k]: clampPct(e.target.value) })}
-                        className="w-[58px] h-7 rounded-md border bg-background text-right pr-4 pl-2 text-xs tabular-nums font-mono focus:outline-none focus:ring-1 focus:ring-primary"
-                      />
-                      <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
-                        %
-                      </span>
-                    </div>
-                  ) : (
-                    <span
-                      className={cn(
-                        "font-mono text-xs font-bold tabular-nums",
-                        (r[k] || 0) === 0 && "text-muted-foreground"
-                      )}
-                    >
-                      {r[k] ?? 0}%
-                    </span>
-                  )}
+                  <span
+                    className={cn(
+                      "font-mono text-xs font-bold tabular-nums",
+                      (r[k] || 0) === 0 && "text-muted-foreground"
+                    )}
+                  >
+                    {r[k] ?? 0}%
+                  </span>
                 </div>
               ))}
-
-              {editable && allowAddRow && (
-                <div className="flex justify-center">
-                  {!r.isYou && (
-                    <button
-                      type="button"
-                      onClick={() => removeRow(idx)}
-                      className="text-muted-foreground hover:text-destructive p-1"
-                      title="Remove party"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
           );
         })}
@@ -269,6 +335,58 @@ export function RoyaltySplitsTable({
               <Plus className="w-3 h-3 mr-1" /> Add party
             </Button>
           )}
+        </div>
+      )}
+      {/* SoundExchange — its own section, never a column and never part of the
+          master total. In edit mode every row gets an input so a share can be
+          adjusted or zeroed (zeroing deletes the stake on save). */}
+      {showSX && (
+        <div className="mt-4 pt-3 border-t border-border/60">
+          <div className="text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-1">
+            SoundExchange
+          </div>
+          <div className="divide-y divide-border/60">
+            {rows.map((r, idx) => {
+              if (!editable && (r.soundexchange ?? 0) <= 0) return null;
+              const palette = COLLAB_PALETTE[idx % COLLAB_PALETTE.length];
+              return (
+                <div key={r.key} className="flex items-center gap-2 py-2">
+                  <RegistryAvatar name={r.name || "?"} color={palette} size={26} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold break-words leading-snug">
+                      {r.name || "Unnamed"}
+                    </div>
+                    {r.role && (
+                      <div className="text-[11px] text-muted-foreground break-words leading-snug">
+                        {r.role}
+                      </div>
+                    )}
+                  </div>
+                  {editable ? (
+                    <div className="relative shrink-0">
+                      <input
+                        inputMode="numeric"
+                        value={r.soundexchange ?? 0}
+                        onChange={(e) => setRow(idx, { soundexchange: clampPct(e.target.value) })}
+                        className="w-[58px] h-7 rounded-md border bg-background text-right pr-4 pl-2 text-xs tabular-nums font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                      <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
+                        %
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="font-mono text-xs font-bold tabular-nums shrink-0">
+                      {r.soundexchange ?? 0}%
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-1.5">
+            SoundExchange royalties are paid directly by SoundExchange and aren't
+            counted in the master total.
+          </p>
         </div>
       )}
     </div>
