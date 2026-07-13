@@ -279,6 +279,26 @@
     </table></div></div>
   </section>
 
+  <!-- CUSTOMER CALC -->
+  <section>
+    <div class="sec-head"><h2>Per-customer P&amp;L</h2>
+      <div class="toggle" id="planToggle" role="group" aria-label="plan">
+        <button type="button" data-p="free">Free</button>
+        <button type="button" data-p="pro" class="active">Pro</button>
+      </div>
+    </div>
+    <p class="sec-note" style="margin:-4px 0 14px;max-width:80ch">One customer's monthly usage → your direct cost, what you bill, and margin. Non-AI features (split sheets, projects, artists…) are $0 marginal, so only AI + storage move the number. Assumes the credit model, using the rates / allowances / storage prices set above.</p>
+    <div class="assume">
+      <div class="field"><label>OneClick runs / mo</label><input type="number" id="cRuns" min="0" step="1" value="20"></div>
+      <div class="field"><label>Zoe messages / mo</label><input type="number" id="cZoe" min="0" step="1" value="60"></div>
+      <div class="field"><label>Registry parses / mo</label><input type="number" id="cReg" min="0" step="1" value="10"></div>
+      <div class="field"><label>Storage used <span class="sub">GB</span></label><input type="number" id="cGB" min="0" step="1" value="120"></div>
+      <div class="field"><label>Pro base <span class="sub">$ / mo</span></label><div class="prefix"><span>$</span><input type="number" id="cProPrice" min="0" step="1" value="25"></div></div>
+    </div>
+    <div class="stats" id="calcStats"></div>
+    <p class="sec-note" id="calcBreak" style="margin-top:12px;max-width:80ch;line-height:1.6"></p>
+  </section>
+
   <!-- LEVERS -->
   <section>
     <div class="sec-head"><h2>Notes &amp; levers</h2></div>
@@ -326,6 +346,8 @@
   var gb=el('gb'),incl=el('incl'),ovRate=el('ovRate'),sbRate=el('sbRate');
   var freeCredits=el('freeCredits'),proCredits=el('proCredits');
   var model='live';
+  var cRuns=el('cRuns'),cZoe=el('cZoe'),cReg=el('cReg'),cGB=el('cGB'),cProPrice=el('cProPrice');
+  var plan='pro';
 
   function cost(calls){var c=0;for(var i=0;i<calls.length;i++){var k=calls[i],m=MODELS[k.m];c+=(k.tin*m.in+k.tout*m.out)/1e6;}return c;}
   function tokens(calls){var ti=0,to=0;calls.forEach(function(k){ti+=k.tin;to+=k.tout;});return{ti:ti,to:to};}
@@ -466,19 +488,40 @@
         '<td class="num '+(m>=0?'credits':'creditsFree')+'" style="'+(m<0?'color:var(--crit)':'')+'">'+fmtMoney(m)+'</td>'+
         '<td class="num">'+mp+'%</td></tr>';
     }).join('');
+
+    // per-customer P&L
+    var pl=(plan==='pro');
+    var base=pl?(+cProPrice.value||0):0, allowance=pl?(+proCredits.value):(+freeCredits.value), storeIncl=pl?inc:1;
+    var ocCr=toCredits(blend,mk,cp), zC=cost(zoe1(_ct)), rC=cost(registry(_ct));
+    var R=+cRuns.value||0,Z=+cZoe.value||0,G=+cReg.value||0,GBu=+cGB.value||0;
+    var aiCogs=R*blend+Z*zC+G*rC, creditsUsed=R*ocCr+Z*zoeCr+G*regCr;
+    var oGB=Math.max(0,GBu-storeIncl), storeCogs=oGB*sb, totalCogs=aiCogs+storeCogs;
+    var topup=Math.max(0,creditsUsed-allowance), topupRev=topup*cp, storeRev=oGB*ov;
+    var bill=base+topupRev+storeRev, margin=bill-totalCogs;
+    var mo='<span style="font-size:12px;color:var(--muted)">/mo</span>';
+    el('calcStats').innerHTML=
+      stat('Direct cost (COGS)',fmtMoney(totalCogs)+mo,'AI '+fmtMoney(aiCogs)+' · storage '+fmtMoney(storeCogs),null)+
+      stat('You bill',fmtMoney(bill)+mo,(pl?'$'+base.toFixed(0)+' base':'free plan')+' + top-ups + overage',null)+
+      stat('Margin',fmtMoney(margin)+mo,(bill>0?Math.round(margin/bill*100)+'% of revenue':'no plan revenue'),margin>=0?'pos':'neg')+
+      stat('Credits used',Math.round(creditsUsed)+' / '+allowance,topup>0?'over by '+Math.round(topup)+' → top-up':'within allowance',topup>0?'neg':'pos');
+    el('calcBreak').innerHTML='This <b style="color:var(--ink-soft)">'+(pl?'Pro':'Free')+'</b> customer draws <b style="color:var(--ink-soft)">'+Math.round(creditsUsed)+' credits</b>'+(topup>0?' ('+Math.round(topup)+' over allowance → '+fmtMoney(topupRev)+' top-up)':' (within allowance)')+' and <b style="color:var(--ink-soft)">'+GBu+' GB</b>'+(oGB>0?' ('+oGB+' GB overage → '+fmtMoney(storeRev)+')':'')+'. You bill <b style="color:var(--ink-soft)">'+fmtMoney(bill)+'</b>, it costs you <b style="color:var(--ink-soft)">'+fmtMoney(totalCogs)+'</b> → <b style="color:'+(margin>=0?'var(--accent)':'var(--crit)')+'">'+fmtMoney(margin)+' margin'+(bill>0?' ('+Math.round(margin/bill*100)+'%)':'')+'</b>.';
   }
   function stat(label,val,note,cls){
     return '<div class="stat"><div class="sl">'+label+'</div><div class="sv'+(cls?' '+cls:'')+'">'+val+'</div><div class="snote">'+note+'</div></div>';
   }
 
-  [pages,contracts,creditPrice,markup,hit,gb,incl,ovRate,sbRate,freeCredits,proCredits].forEach(function(i){i.addEventListener('input',render);});
-  Array.prototype.forEach.call(document.querySelectorAll('#modelToggle button'),function(b){
-    b.addEventListener('click',function(){
-      model=b.getAttribute('data-m');
-      Array.prototype.forEach.call(document.querySelectorAll('#modelToggle button'),function(x){x.classList.toggle('active',x===b);});
-      render();
+  [pages,contracts,creditPrice,markup,hit,gb,incl,ovRate,sbRate,freeCredits,proCredits,cRuns,cZoe,cReg,cGB,cProPrice].forEach(function(i){i.addEventListener('input',render);});
+  function wireToggle(sel,set){
+    Array.prototype.forEach.call(document.querySelectorAll(sel+' button'),function(b){
+      b.addEventListener('click',function(){
+        set(b.getAttribute('data-m')||b.getAttribute('data-p'));
+        Array.prototype.forEach.call(document.querySelectorAll(sel+' button'),function(x){x.classList.toggle('active',x===b);});
+        render();
+      });
     });
-  });
+  }
+  wireToggle('#modelToggle',function(v){model=v;});
+  wireToggle('#planToggle',function(v){plan=v;});
   render();
 })();
 </script>
