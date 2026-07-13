@@ -41,7 +41,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
-import { useStorageStatus } from "@/hooks/useEntitlements";
 import {
   useSpotifySearch,
   type CreditedArtist,
