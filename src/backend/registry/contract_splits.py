@@ -15,6 +15,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from utils.contract_parsing.models import ContractData
 from utils.contract_parsing.parser import STREAMING_EQUIVALENT_TERMS, MusicContractParser
 from utils.ingestion.pdf_markdown import pdf_to_markdown
 from utils.text.normalize import normalize_name
@@ -59,10 +60,13 @@ def parse_royalty_splits(
     text: str | None = None,
     pdf_path: str | None = None,
     main_artist_name: str = "",
+    contract_data: ContractData | None = None,
 ) -> dict:
     """Parse a contract (markdown text OR a PDF path) and return per-party splits.
 
-    Exactly one of `text` / `pdf_path` must be provided.
+    Exactly one of `text` / `pdf_path` / `contract_data` must be provided. When
+    `contract_data` is supplied (already parsed, e.g. from the shared cache), the LLM
+    extraction is skipped and only the pivot runs.
 
     Returns:
         {
@@ -74,14 +78,15 @@ def parse_royalty_splits(
           "main_artist_found": bool
         }
     """
-    if not text and not pdf_path:
-        raise ValueError("Either text or pdf_path must be provided.")
+    if contract_data is None:
+        if not text and not pdf_path:
+            raise ValueError("Either text or pdf_path must be provided.")
 
-    if pdf_path:
-        text = pdf_to_markdown(pdf_path)
+        if pdf_path:
+            text = pdf_to_markdown(pdf_path)
 
-    parser = MusicContractParser()
-    contract_data = parser.parse_contract(text)
+        parser = MusicContractParser()
+        contract_data = parser.parse_contract(text)
 
     # Index parties by normalized name so royalty shares can attach to them
     # even when the LLM emits a slightly different spelling on the share row.

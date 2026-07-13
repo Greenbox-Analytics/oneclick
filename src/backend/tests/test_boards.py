@@ -863,9 +863,8 @@ class TestCalendar:
         """GET /boards/calendar returns tasks within the given date range."""
         # get_tasks_by_date_range sequence:
         # 1. board_tasks (due_date query)
-        # 2. board_tasks (start_date query)
-        # 3-5. _enrich_tasks: board_task_artists, board_task_projects, board_task_contracts
-        mock_supabase.table.side_effect = _sequence_side_effect([[SAMPLE_TASK], [], [], [], []])
+        # 2-4. _enrich_tasks: board_task_artists, board_task_projects, board_task_contracts
+        mock_supabase.table.side_effect = _sequence_side_effect([[SAMPLE_TASK], [], [], []])
 
         response = client.get("/boards/calendar?start=2026-04-01&end=2026-04-30")
 
@@ -885,17 +884,22 @@ class TestCalendar:
 
         assert response.status_code == 422
 
-    def test_calendar_tasks_deduplicates_overlapping_results(self, client, mock_supabase):
-        """GET /boards/calendar deduplicates tasks appearing in both due_date and start_date queries."""
-        # Both board_tasks queries return the same task.
-        # The service deduplicates by ID, so it should appear once in results.
-        mock_supabase.table.side_effect = _sequence_side_effect([[SAMPLE_TASK], [SAMPLE_TASK], [], [], []])
+    def test_calendar_tasks_query_uses_due_date_only(self, client, mock_supabase):
+        """GET /boards/calendar keys off due_date only — start_date does not place a task
+        on the calendar, so the range is fetched with a single board_tasks query (no
+        separate start_date query, no dedup)."""
+        mock_supabase.table.side_effect = _sequence_side_effect([[SAMPLE_TASK], [], [], []])
 
         response = client.get("/boards/calendar?start=2026-04-01&end=2026-04-30")
 
         assert response.status_code == 200
-        tasks = response.json()["tasks"]
-        assert len(tasks) == 1
+        assert len(response.json()["tasks"]) == 1
+        # Only one board_tasks range query should run (due_date). _resolve_read_board_ids
+        # reads `boards`/`team_members`, and _enrich_tasks reads the junction tables — none
+        # of those is `board_tasks`, and this task has no parent, so board_tasks is queried
+        # exactly once. Before this change it was queried twice (due_date + start_date).
+        board_task_queries = [c for c in mock_supabase.table.call_args_list if c.args and c.args[0] == "board_tasks"]
+        assert len(board_task_queries) == 1
 
 
 # ===========================================================================

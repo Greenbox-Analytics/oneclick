@@ -11,6 +11,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 from registry import derive_service
+from utils.contract_parsing.models import ContractData, Party, RoyaltyShare
 
 
 class _Result:
@@ -90,56 +91,45 @@ def _make_db(downloads=None, **tables):
     return _FakeDB({name: list(rows) for name, rows in tables.items()}, downloads=downloads)
 
 
-# ---------------------------------------------------------------------------
-# Name matched, has percentage -> high confidence
-# ---------------------------------------------------------------------------
+def _cd(rows):
+    """rows: list of (name, role, master_pct, publishing_pct). Builds a ContractData whose
+    pivot reproduces those percentages (Master -> master bucket, Publishing -> publishing)."""
+    parties, shares = [], []
+    for name, role, master, publishing in rows:
+        parties.append(Party(name=name, role=role))
+        if master:
+            shares.append(RoyaltyShare(party_name=name, royalty_type="Master", percentage=float(master)))
+        if publishing:
+            shares.append(RoyaltyShare(party_name=name, royalty_type="Publishing", percentage=float(publishing)))
+    return ContractData(parties=parties, works=[], royalty_shares=shares, contract_summary="", default_basis=None)
+
+
+def _db():
+    return _make_db(
+        work_files=[{"work_id": "w1", "file_id": "f1"}],
+        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
+    )
 
 
 def test_name_matched_with_pct_high_confidence():
-    db = _make_db(
-        downloads={"contracts/a.pdf": b"%PDF-bytes"},
-        work_files=[{"work_id": "w1", "file_id": "f1"}],
-        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
-        contract_parse_cache=[],
-    )
-    parsed = {
-        "parties": [
-            {"name": "Marcus", "role": "producer", "master_pct": 30, "publishing_pct": 0},
-            {"name": "Someone Else", "role": "writer", "master_pct": 10, "publishing_pct": 50},
-        ],
-        "main_artist_found": False,
-    }
-    with patch.object(derive_service, "_parse_pdf_bytes", return_value=parsed) as mock_parse:
+    db = _db()
+    cd = _cd([("Marcus", "producer", 30, 0), ("Someone Else", "writer", 10, 50)])
+    with patch.object(derive_service, "get_or_parse", return_value=cd) as mock_gop:
         result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
 
-    assert mock_parse.call_count == 1  # cache miss -> parsed once
+    assert mock_gop.call_count == 1
     assert result["found"] is True
     assert result["confidence"] == "high"
     assert result["master_pct"] == 30
     assert result["publishing_pct"] == 0
     assert result["matched_file_ids"] == ["f1"]
     assert result["terms"] == []
-    # Result was cached for the content_hash.
-    assert any(r["content_hash"] == "h1" for r in db._store["contract_parse_cache"])
-
-
-# ---------------------------------------------------------------------------
-# Name not matched -> found False, low confidence, no matches
-# ---------------------------------------------------------------------------
 
 
 def test_name_not_matched_returns_not_found():
-    db = _make_db(
-        downloads={"contracts/a.pdf": b"%PDF-bytes"},
-        work_files=[{"work_id": "w1", "file_id": "f1"}],
-        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
-        contract_parse_cache=[],
-    )
-    parsed = {
-        "parties": [{"name": "Jane Doe", "role": "writer", "master_pct": 50, "publishing_pct": 50}],
-        "main_artist_found": False,
-    }
-    with patch.object(derive_service, "_parse_pdf_bytes", return_value=parsed):
+    db = _db()
+    cd = _cd([("Jane Doe", "writer", 50, 50)])
+    with patch.object(derive_service, "get_or_parse", return_value=cd):
         result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
 
     assert result["found"] is False
@@ -150,53 +140,36 @@ def test_name_not_matched_returns_not_found():
     assert result["terms"] == []
 
 
-# ---------------------------------------------------------------------------
-# Cache hit -> parser NOT called, still derives from cached parties
-# ---------------------------------------------------------------------------
-
-
-def test_cache_hit_skips_parser():
-    cached_parsed = {
-        "parties": [{"name": "Marcus", "role": "producer", "master_pct": 25, "publishing_pct": 0}],
-        "main_artist_found": False,
-    }
-    db = _make_db(
-        # No download configured: if the code tried to download/parse, it would fail/return None.
-        work_files=[{"work_id": "w1", "file_id": "f1"}],
-        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
-        contract_parse_cache=[{"content_hash": "h1", "parsed": cached_parsed}],
-    )
-    with patch.object(derive_service, "_parse_pdf_bytes") as mock_parse:
+def test_derivation_uses_get_or_parse_result():
+    db = _db()  # no downloads configured; get_or_parse is patched so none happen
+    cd = _cd([("Marcus", "producer", 25, 0)])
+    with patch.object(derive_service, "get_or_parse", return_value=cd) as mock_gop:
         result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
 
-    assert mock_parse.call_count == 0  # cache hit -> never parsed
+    assert mock_gop.call_count == 1
     assert result["found"] is True
     assert result["confidence"] == "high"
     assert result["master_pct"] == 25
     assert result["matched_file_ids"] == ["f1"]
 
 
-# ---------------------------------------------------------------------------
-# Matched party but no percentage -> confidence "low"
-# ---------------------------------------------------------------------------
-
-
 def test_matched_no_pct_low_confidence():
-    db = _make_db(
-        downloads={"contracts/a.pdf": b"%PDF-bytes"},
-        work_files=[{"work_id": "w1", "file_id": "f1"}],
-        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
-        contract_parse_cache=[],
-    )
-    parsed = {
-        "parties": [{"name": "Marcus", "role": "producer", "master_pct": 0, "publishing_pct": None}],
-        "main_artist_found": False,
-    }
-    with patch.object(derive_service, "_parse_pdf_bytes", return_value=parsed):
+    db = _db()
+    cd = _cd([("Marcus", "producer", 0, 0)])
+    with patch.object(derive_service, "get_or_parse", return_value=cd):
         result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
 
     assert result["found"] is True
     assert result["confidence"] == "low"
     assert result["master_pct"] == 0
-    assert result["publishing_pct"] is None
+    assert result["publishing_pct"] == 0  # pivot yields 0.0, not None
     assert result["matched_file_ids"] == ["f1"]
+
+
+def test_parse_failure_returns_not_found():
+    db = _db()
+    with patch.object(derive_service, "get_or_parse", side_effect=RuntimeError("boom")):
+        result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
+
+    assert result["found"] is False
+    assert result["matched_file_ids"] == []

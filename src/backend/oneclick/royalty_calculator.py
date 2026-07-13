@@ -739,7 +739,7 @@ class RoyaltyCalculator:
                 )
 
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",  # Use a fast/cheap model
+                    model="gpt-5.4-mini",  # Use a fast/cheap model
                     messages=[
                         {
                             "role": "system",
@@ -926,6 +926,7 @@ class RoyaltyCalculator:
         payable_column: str | None = None,
         full_text: str = None,
         expenses: list[dict] | None = None,
+        contract_data: ContractData | None = None,
     ) -> CalcOutput:
         """
         Calculate payments for single contract and statement.
@@ -949,10 +950,10 @@ class RoyaltyCalculator:
 
         total_start = time.time()
 
-        # Step 1: Parse contract using full document text
+        # Step 1: Use pre-parsed contract data (shared cache) when provided, else parse.
         logger.info("\n📄 Step 1: Extracting contract data from full document...")
         t0 = time.time()
-        contract_data = self.contract_parser.parse_contract(full_text=full_text)
+        contract_data = contract_data or self.contract_parser.parse_contract(full_text=full_text)
         logger.info(f"⏱️  Step 1 took: {time.time() - t0:.2f}s")
 
         # Step 2: Read royalty statement
@@ -1015,6 +1016,7 @@ class RoyaltyCalculator:
         payable_column: str | None = None,
         contract_markdowns: dict[str, str] = None,
         expenses: list[dict] | None = None,
+        contract_data_by_id: dict[str, ContractData] | None = None,
     ) -> CalcOutput:
         """
         Parse multiple contracts from Pinecone in PARALLEL, merge their data, and calculate payments.
@@ -1041,31 +1043,40 @@ class RoyaltyCalculator:
         parsed_pairs = []
         failed_cids = []
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        provided = contract_data_by_id or {}
+        # Use pre-parsed (cached) data where available; parse only the missing cids — and
+        # do that in parallel so a partial/cold cache never serializes N LLM extractions
+        # and never re-parses a contract we already have.
+        for cid in contract_ids:
+            if cid in provided:
+                data = provided[cid]
+                all_contracts_data.append(data)
+                parsed_pairs.append((cid, data))
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_cid = {
-                executor.submit(
-                    self.contract_parser.parse_contract,
-                    full_text=contract_markdowns.get(cid) if contract_markdowns else None,
-                ): cid
-                for cid in contract_ids
-            }
+        missing = [cid for cid in contract_ids if cid not in provided]
+        if missing:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            # Process results as they complete
-            for _i, future in enumerate(as_completed(future_to_cid), 1):
-                cid = future_to_cid[future]
-                try:
-                    # logger.info(f"   ...Finished processing a contract...")
-                    data = future.result()
-                    all_contracts_data.append(data)
-                    parsed_pairs.append((cid, data))
-                    logger.info(
-                        f"   ✓ Contract parsed successfully ({len(data.parties)} parties, {len(data.works)} works)"
-                    )
-                except Exception as e:
-                    failed_cids.append(cid)
-                    logger.error(f"   ⚠️  Failed to parse contract {cid}: {e}")
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                future_to_cid = {
+                    executor.submit(
+                        self.contract_parser.parse_contract,
+                        full_text=contract_markdowns.get(cid) if contract_markdowns else None,
+                    ): cid
+                    for cid in missing
+                }
+                for future in as_completed(future_to_cid):
+                    cid = future_to_cid[future]
+                    try:
+                        data = future.result()
+                        all_contracts_data.append(data)
+                        parsed_pairs.append((cid, data))
+                        logger.info(
+                            f"   ✓ Contract parsed successfully ({len(data.parties)} parties, {len(data.works)} works)"
+                        )
+                    except Exception as e:
+                        failed_cids.append(cid)
+                        logger.error(f"   ⚠️  Failed to parse contract {cid}: {e}")
 
         if not all_contracts_data:
             raise ValueError("❌ No valid contracts could be parsed. Please check your files.")

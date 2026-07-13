@@ -1109,7 +1109,8 @@ async def parse_contract_splits(
             detail="Provide exactly one of: `file` (upload) or `contract_file_id` (existing).",
         )
 
-    contents: bytes
+    contents: bytes | None = None
+    stored_md: str | None = None
     if has_upload:
         contents = await file.read()
         if not contents:
@@ -1121,39 +1122,57 @@ async def parse_contract_splits(
             raise HTTPException(status_code=403, detail="Access denied")
         db = _get_supabase()
         row = (
-            db.table("project_files").select("file_path, file_name").eq("id", contract_file_id).maybe_single().execute()
+            db.table("project_files")
+            .select("file_path, file_name, contract_markdown")
+            .eq("id", contract_file_id)
+            .maybe_single()
+            .execute()
         )
         if not row.data:
             raise HTTPException(status_code=404, detail="Contract file not found")
-        file_path = row.data.get("file_path")
-        if not file_path:
-            raise HTTPException(status_code=400, detail="Contract file has no storage path")
-        try:
-            contents = db.storage.from_("project-files").download(file_path)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Failed to download contract: {exc}") from exc
-
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(contents)
-            tmp_path = tmp.name
-
-        try:
-            result = contract_splits.parse_royalty_splits(
-                pdf_path=tmp_path,
-                main_artist_name=main_artist_name or "",
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Contract parsing failed: {e}")
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
+        stored_md = row.data.get("contract_markdown")
+        if not stored_md:
+            file_path = row.data.get("file_path")
+            if not file_path:
+                raise HTTPException(status_code=400, detail="Contract file has no storage path")
             try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+                contents = db.storage.from_("project-files").download(file_path)
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"Failed to download contract: {exc}") from exc
+
+    from utils.contract_parsing.cache import get_or_parse
+    from utils.ingestion.pdf_markdown import pdf_to_markdown
+
+    def _load_text() -> str:
+        # Prefer the stored canonical markdown (shares cache entries with OneClick and the
+        # Add-Work collaborator derivation); otherwise convert the uploaded/downloaded PDF.
+        if stored_md:
+            return stored_md
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(contents)
+                tmp_path = tmp.name
+            return pdf_to_markdown(tmp_path)
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    try:
+        # Route through the shared parse cache so this Add-Work parse is cached and
+        # canonicalized (marker-stripped) like every other contract parse.
+        contract_data = get_or_parse(_get_supabase(), _load_text)
+        result = contract_splits.parse_royalty_splits(
+            contract_data=contract_data,
+            main_artist_name=main_artist_name or "",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Contract parsing failed: {e}")
 
     analytics_capture(
         user_id,

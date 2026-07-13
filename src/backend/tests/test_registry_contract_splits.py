@@ -6,9 +6,12 @@ detection behavior the Add Work wizard depends on.
 """
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+
+from registry.contract_splits import parse_royalty_splits
+from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
 
 
 def _client_returning(payload: dict):
@@ -162,3 +165,67 @@ def test_requires_text_or_pdf_path():
 
     with pytest.raises(ValueError, match="Either text or pdf_path"):
         parse_royalty_splits(main_artist_name="Nova Sky")
+
+
+# ─── pre-parsed ContractData (shared cache) ───────────────────────────────────
+
+
+def test_parse_royalty_splits_pivots_preparsed_without_llm():
+    cd = ContractData(
+        parties=[Party(name="Jane Doe", role="artist")],
+        works=[Work(title="Midnight")],
+        royalty_shares=[RoyaltyShare(party_name="Jane Doe", royalty_type="Streaming", percentage=60.0)],
+        contract_summary="",
+        default_basis=None,
+    )
+    with patch("registry.contract_splits.MusicContractParser") as MockParser:
+        out = parse_royalty_splits(contract_data=cd, main_artist_name="")
+    MockParser.assert_not_called()
+    assert out["parties"][0]["name"] == "Jane Doe"
+    assert out["parties"][0]["master_pct"] == 60.0
+    assert out["parties"][0]["publishing_pct"] == 0.0
+
+
+def test_parse_contract_splits_endpoint_routes_through_cache(monkeypatch):
+    """The Add-Work 'suggest splits' endpoint must go through the shared parse cache
+    (get_or_parse), not an uncached parse_royalty_splits(pdf_path=...)."""
+    import asyncio
+
+    import main
+    from registry import router as registry_router
+    from utils.contract_parsing import cache as cache_mod
+    from utils.contract_parsing.models import ContractData, Party, RoyaltyShare
+
+    cd = ContractData(
+        parties=[Party(name="Marcus", role="producer")],
+        works=[],
+        royalty_shares=[RoyaltyShare(party_name="Marcus", royalty_type="Master", percentage=40.0)],
+        contract_summary="",
+        default_basis=None,
+    )
+
+    fake_db = MagicMock()
+    (
+        fake_db.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value
+    ) = MagicMock(data={"file_path": "c/a.pdf", "file_name": "a.pdf", "contract_markdown": "stored canonical text"})
+
+    monkeypatch.setattr(registry_router, "gated_feature", lambda *a, **k: None)
+    monkeypatch.setattr(registry_router, "_get_supabase", lambda: fake_db)
+    monkeypatch.setattr(registry_router, "analytics_capture", lambda *a, **k: None)
+    monkeypatch.setattr(main, "verify_user_owns_contract", lambda *a, **k: True)
+
+    gop = MagicMock(return_value=cd)
+    monkeypatch.setattr(cache_mod, "get_or_parse", gop)
+
+    result = asyncio.run(
+        registry_router.parse_contract_splits(main_artist_name="", contract_file_id="f1", file=None, user_id="u1")
+    )
+
+    # The endpoint parsed via the shared cache...
+    gop.assert_called_once()
+    # ...feeding it a loader that prefers the stored canonical markdown (no PDF download).
+    loader = gop.call_args.args[1]
+    assert loader() == "stored canonical text"
+    # ...and pivoted the cached ContractData into per-party splits.
+    assert result["parties"][0]["name"] == "Marcus"
+    assert result["parties"][0]["master_pct"] == 40.0

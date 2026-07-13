@@ -633,7 +633,12 @@ async def get_tasks_by_date_range(
     board_id: str | None = None,
     artist_id: str | None = None,
 ) -> list:
-    """Get non-parent tasks that have due_date or start_date within a date range."""
+    """Get non-parent tasks whose due_date falls within a date range.
+
+    The calendar keys off end dates only: a task appears on its due_date, not its
+    start_date. start_date remains a task field (shown on cards / task detail) but
+    does not place the task on the calendar.
+    """
     board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
     if not board_ids:
         return []
@@ -646,24 +651,8 @@ async def get_tasks_by_date_range(
         .lte("due_date", end)
         .execute()
     )
-    start_result = (
-        supabase.table("board_tasks")
-        .select("*")
-        .in_("board_id", board_ids)
-        .or_("is_parent.eq.false,is_parent.is.null")
-        .gte("start_date", start)
-        .lte("start_date", end)
-        .execute()
-    )
 
-    seen = set()
-    tasks = []
-    for task in (due_result.data or []) + (start_result.data or []):
-        if task["id"] not in seen:
-            seen.add(task["id"])
-            tasks.append(task)
-
-    return _enrich_tasks(supabase, tasks, user_id)
+    return _enrich_tasks(supabase, due_result.data or [], user_id)
 
 
 # --- Period-based Tasks ---

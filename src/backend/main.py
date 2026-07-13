@@ -2547,6 +2547,37 @@ async def oneclick_calculate_royalties_stream(
             # Load project expenses so net-basis shares can be calculated.
             calc_expenses, review_expenses = _load_oneclick_expenses(get_supabase_client(), project_id)
 
+            # Pre-parse each contract through the shared cache, in parallel so a cold
+            # multi-contract run doesn't serialize N extractions. NOTE: force_recalculate
+            # recomputes the PAYOUT (statement/expenses changed) — the contract bytes are
+            # unchanged, so we still READ the parse cache here (do NOT bypass it).
+            #
+            # Concurrency note: get_supabase_client() is a process-wide singleton, so all
+            # workers share one httpx-backed client — thread-safe for concurrent requests,
+            # and the default pool covers max_workers=4. If a cold multi-contract run ever
+            # surfaces PostgREST/connection-pool errors, switch to a fresh create_client(...)
+            # per worker (NOT get_supabase_client(), which returns the same singleton).
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            from utils.contract_parsing.cache import get_or_parse
+
+            db_client = get_supabase_client()
+            contract_data_by_id = {}
+            parse_targets = [
+                (cid, contract_markdowns[cid]) for cid in target_contract_ids if contract_markdowns.get(cid)
+            ]
+            if parse_targets:
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    fut_to_cid = {
+                        executor.submit(get_or_parse, db_client, (lambda m=md: m)): cid for cid, md in parse_targets
+                    }
+                    for future in as_completed(fut_to_cid):
+                        cid = fut_to_cid[future]
+                        try:
+                            contract_data_by_id[cid] = future.result()
+                        except Exception as e:
+                            print(f"Warning: pre-parse failed for contract {cid}: {e}")
+
             payments, review = calculate_royalty_payments(
                 contract_path=contract_path,
                 statement_path=statement_path,
@@ -2555,6 +2586,7 @@ async def oneclick_calculate_royalties_stream(
                 contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
                 contract_markdowns=contract_markdowns if contract_markdowns else None,
                 expenses=calc_expenses,
+                contract_data_by_id=contract_data_by_id if contract_data_by_id else None,
             )
 
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"

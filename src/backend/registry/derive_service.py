@@ -9,21 +9,24 @@ import tempfile
 from supabase import Client
 
 from registry import contract_splits
+from utils.contract_parsing.cache import get_or_parse
 
 
 def _norm(s) -> str:
     return (s or "").strip().lower()
 
 
-def _parse_pdf_bytes(content: bytes) -> dict:
-    """Run the existing parser on PDF bytes. main_artist_name="" so the cached result is
-    collaborator-independent (name matching happens in derive_for_collaborator)."""
+def _pdf_bytes_to_markdown(content: bytes) -> str:
+    """Convert PDF bytes to markdown via a temp file (pymupdf4llm, local, no LLM).
+    Page markers are stripped downstream by get_or_parse (canonical parse input)."""
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(content)
             tmp_path = tmp.name
-        return contract_splits.parse_royalty_splits(pdf_path=tmp_path, main_artist_name="")
+        from utils.ingestion.pdf_markdown import pdf_to_markdown
+
+        return pdf_to_markdown(tmp_path)
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -33,24 +36,29 @@ def _parse_pdf_bytes(content: bytes) -> dict:
 
 
 def _parse_file_cached(db: Client, file_row: dict) -> dict | None:
-    """Return the parsed result for a project_files row, using contract_parse_cache by
-    content_hash. Parses + caches on a miss. Returns None if the file can't be downloaded."""
-    chash = file_row.get("content_hash")
-    if chash:
-        cached = db.table("contract_parse_cache").select("parsed").eq("content_hash", chash).maybe_single().execute()
-        if cached and cached.data:
-            return cached.data["parsed"]
+    """Return the pivoted splits for a project_files row, using the shared parse cache.
+    Prefers the stored `contract_markdown` as the canonical text (the same source OneClick
+    uses) so both tools share cache entries and no PDF is downloaded when the markdown is
+    already present; falls back to downloading + converting the PDF only when it isn't.
+    Returns None if the file can't be parsed."""
     file_path = file_row.get("file_path")
-    if not file_path:
+    stored_md = file_row.get("contract_markdown")
+    if not stored_md and not file_path:
         return None
-    try:
+
+    def _load_text() -> str:
+        if stored_md:
+            return stored_md
         content = db.storage.from_("project-files").download(file_path)
+        return _pdf_bytes_to_markdown(content)
+
+    try:
+        contract_data = get_or_parse(db, _load_text)
     except Exception:
+        # Download/convert/parse failed on a miss — behave like the old "can't download".
         return None
-    parsed = _parse_pdf_bytes(content)
-    if chash:
-        db.table("contract_parse_cache").insert({"content_hash": chash, "parsed": parsed}).execute()
-    return parsed
+
+    return contract_splits.parse_royalty_splits(contract_data=contract_data, main_artist_name="")
 
 
 async def derive_for_collaborator(db: Client, work_id: str, name: str, email=None, contract_file_ids=None) -> dict:
@@ -66,7 +74,7 @@ async def derive_for_collaborator(db: Client, work_id: str, name: str, email=Non
     for fid in file_ids:
         row = (
             db.table("project_files")
-            .select("file_path, content_hash, file_name")
+            .select("file_path, content_hash, file_name, contract_markdown")
             .eq("id", fid)
             .maybe_single()
             .execute()

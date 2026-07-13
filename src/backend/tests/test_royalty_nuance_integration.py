@@ -40,7 +40,7 @@ def test_single_contract_no_finding_is_unchanged(mock_verify, _mock_audit):
 
 def test_helper_forwards_contract_id():
     # The helper must pass contract_id into calculate_payments so audit logs aren't "unknown".
-    with patch("oneclick.royalty_calculator.RoyaltyCalculator") as MockCalc:
+    with patch("zoe_chatbot.helpers.RoyaltyCalculator") as MockCalc:
         instance = MockCalc.return_value
         instance.calculate_payments.return_value = CalcOutput(payments=[], review=None)
         from zoe_chatbot.helpers import calculate_royalty_payments
@@ -164,7 +164,7 @@ def test_helper_serializes_review_to_dict():
 
     from utils.contract_parsing.split_verification import ReviewResult, SplitFinding
 
-    with patch("oneclick.royalty_calculator.RoyaltyCalculator") as MockCalc:
+    with patch("zoe_chatbot.helpers.RoyaltyCalculator") as MockCalc:
         instance = MockCalc.return_value
         instance.calculate_payments.return_value = CalcOutput(
             payments=[],
