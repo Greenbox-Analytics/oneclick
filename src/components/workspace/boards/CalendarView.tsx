@@ -134,14 +134,11 @@ export function CalendarView() {
     const filtered = searchQuery
       ? tasks.filter((t) => t.title.toLowerCase().includes(searchQuery.toLowerCase()))
       : tasks;
+    // Calendar keys off end dates only: place each task on its due_date, not its start_date.
     for (const task of filtered) {
       if (task.due_date) {
         if (!map.has(task.due_date)) map.set(task.due_date, []);
         map.get(task.due_date)!.push(task);
-      }
-      if (task.start_date && task.start_date !== task.due_date) {
-        if (!map.has(task.start_date)) map.set(task.start_date, []);
-        map.get(task.start_date)!.push(task);
       }
     }
     return map;

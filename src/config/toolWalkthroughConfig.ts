@@ -121,14 +121,14 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="splitsheet-royalty-type"]',
         title: "Royalty Type",
         description:
-          "Choose Publishing (songwriting), Master (recording), or Both. Each type tracks splits independently.",
+          "Choose Publishing (composition), Master (recording), or Both. Each type tracks splits independently.",
         placement: "bottom",
       },
       {
         targetSelector: '[data-walkthrough="splitsheet-info"]',
         title: "Quick Tip",
         description:
-          "Publishing royalties come from songwriting. Master royalties come from the recording. This box explains the difference.",
+          "Publishing royalties come from the composition. Master royalties come from the recording. This box explains the difference.",
         placement: "bottom",
       },
     ],

@@ -225,68 +225,118 @@ async def export_breakdown_pdf(
 def _generate_breakdown_pdf(sections: list[tuple[str, dict]], track_label: str | None = None):
     """Build a multi-section earnings-breakdown PDF and return a BytesIO buffer.
 
-    Each section is a (dimension, aggregation) pair. Reuses the table styling
-    established by the OneClick share PDF for visual consistency. When
+    Each section is a (dimension, aggregation) pair rendered like the dashboard's
+    Earnings Breakdown tab: a brand-green bar chart of the top rows, then the
+    full table. Styling mirrors the OneClick results PDF (share.py). When
     `track_label` is given, the document title reads "<Track> — Earnings Breakdown".
     """
     import io
     from datetime import datetime
     from xml.sax.saxutils import escape
 
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.shapes import Drawing
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import inch
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+    # Same brand styling as the results PDF — one visual system across exports.
+    from oneclick.share import _BRAND_DARK, _CHART_COLORS, _MUTED, _ROW_ALT
+
+    bar_green = colors.HexColor(_CHART_COLORS[0])
+
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.75 * inch, bottomMargin=0.75 * inch)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        topMargin=0.6 * inch,
+        bottomMargin=0.6 * inch,
+        leftMargin=0.55 * inch,
+        rightMargin=0.55 * inch,
+    )
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("BreakdownTitle", parent=styles["Title"], fontSize=18, spaceAfter=12)
+    title_style = ParagraphStyle("BreakdownTitle", parent=styles["Title"], fontSize=19, spaceAfter=4, alignment=0)
+    sub_style = ParagraphStyle("BreakdownSub", parent=styles["Normal"], fontSize=9.5, textColor=_MUTED)
+    section_style = ParagraphStyle(
+        "BreakdownSection", parent=styles["Heading2"], fontSize=13, spaceBefore=14, spaceAfter=8
+    )
+    cell_style = ParagraphStyle("BreakdownCell", parent=styles["Normal"], fontSize=7.5, leading=9.5)
 
     # Escape the dynamic track name — it can contain &, <, > that would otherwise
     # break the reportlab Paragraph markup.
     prefix = escape(track_label) if track_label else "OneClick"
     elements = [
         Paragraph(f"{prefix} &mdash; Earnings Breakdown", title_style),
-        Paragraph(f"Generated: {datetime.now().strftime('%B %d, %Y')}", styles["Normal"]),
-        Spacer(1, 0.3 * inch),
+        Paragraph(f"Generated {datetime.now().strftime('%B %d, %Y')}", sub_style),
+        Spacer(1, 0.18 * inch),
     ]
 
     for dimension, agg in sections:
         section_title = _PDF_SECTION_TITLES.get(dimension, dimension.title())
-        elements.append(Paragraph(f"{section_title} &mdash; ${agg['total']:,.2f}", styles["Heading2"]))
-        elements.append(Spacer(1, 0.1 * inch))
+        elements.append(Paragraph(f"{section_title} &mdash; ${agg['total']:,.2f}", section_style))
 
         if not agg["rows"]:
-            elements.append(Paragraph("No data for this dimension.", styles["Normal"]))
-            elements.append(Spacer(1, 0.25 * inch))
+            elements.append(Paragraph("No data for this dimension.", sub_style))
+            elements.append(Spacer(1, 0.2 * inch))
             continue
+
+        # Bar chart of the top rows, mirroring the dashboard's per-tab chart.
+        top_rows = agg["rows"][:12]
+        if top_rows:
+            drawing = Drawing(7.2 * inch, 1.7 * inch)
+            chart = VerticalBarChart()
+            chart.x = 55
+            chart.y = 30
+            chart.width = 6.3 * inch
+            chart.height = 1.25 * inch
+            chart.data = [[float(r["net_payable"]) for r in top_rows]]
+            chart.categoryAxis.categoryNames = [
+                (str(r["key"])[:17] + "…") if len(str(r["key"])) > 18 else str(r["key"]) for r in top_rows
+            ]
+            chart.categoryAxis.labels.fontSize = 6.5
+            chart.categoryAxis.labels.angle = 30
+            chart.categoryAxis.labels.boxAnchor = "ne"
+            chart.categoryAxis.labels.dy = -2
+            chart.valueAxis.labels.fontSize = 6.5
+            chart.valueAxis.valueMin = 0
+            chart.valueAxis.labelTextFormat = "$%0.2f"
+            chart.bars[0].fillColor = bar_green
+            chart.bars[0].strokeColor = None
+            chart.barSpacing = 2
+            drawing.add(chart)
+            elements.append(drawing)
+            elements.append(Spacer(1, 0.08 * inch))
 
         table_data = [["Category", "Net Payable", "% of total"]]
         for r in agg["rows"]:
             table_data.append(
                 [
-                    str(r["key"]),
+                    Paragraph(escape(str(r["key"])), cell_style),
                     f"${r['net_payable']:,.2f}",
                     f"{r['percent_of_total']:.2f}%",
                 ]
             )
 
-        table = Table(table_data, repeatRows=1)
+        table = Table(table_data, repeatRows=1, colWidths=[4.4 * inch, 1.5 * inch, 1.3 * inch])
         table.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4A154B")),
+                    ("BACKGROUND", (0, 0), (-1, 0), _BRAND_DARK),
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F9FAFB")]),
+                    ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                    ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, _ROW_ALT]),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
                 ]
             )
         )
         elements.append(table)
-        elements.append(Spacer(1, 0.3 * inch))
+        elements.append(Spacer(1, 0.2 * inch))
 
     doc.build(elements)
     buffer.seek(0)

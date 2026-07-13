@@ -312,6 +312,8 @@ export function TaskFields({
               <Calendar
                 mode="single"
                 selected={startDate}
+                defaultMonth={startDate ?? dueDate}
+                disabled={dueDate ? { after: dueDate } : undefined}
                 onSelect={(date) => {
                   setStartDate(date);
                   saveField(
@@ -359,6 +361,8 @@ export function TaskFields({
               <Calendar
                 mode="single"
                 selected={dueDate}
+                defaultMonth={dueDate ?? startDate}
+                disabled={startDate ? { before: startDate } : undefined}
                 onSelect={(date) => {
                   setDueDate(date);
                   saveField(

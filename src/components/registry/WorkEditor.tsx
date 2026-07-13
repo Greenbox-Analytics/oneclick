@@ -913,7 +913,7 @@ function SplitsSidebar({
 
     const promises: Promise<unknown>[] = [];
     const seenNames = new Set<string>();
-    for (const row of draft) {
+    for (const row of rowsToSave) {
       const name = (row.name || "").trim();
       if (!name) continue;
       seenNames.add(name);

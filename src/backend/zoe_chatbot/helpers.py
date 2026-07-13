@@ -11,6 +11,8 @@ from dataclasses import asdict
 
 from dotenv import load_dotenv
 
+from oneclick.royalty_calculator import RoyaltyCalculator
+
 # Load environment variables
 load_dotenv()
 
@@ -24,6 +26,7 @@ def calculate_royalty_payments(
     contract_ids: list[str] = None,
     contract_markdowns: dict[str, str] = None,
     expenses: list[dict] = None,
+    contract_data_by_id: dict = None,
 ) -> tuple[list[dict], dict | None]:
     """
     Calculate royalty payments from a contract and royalty statement.
@@ -54,8 +57,6 @@ def calculate_royalty_payments(
               (overall/checked/flagged/findings), or None when the pass
               didn't run. Advisory only — never changes any payout.
     """
-    from oneclick.royalty_calculator import RoyaltyCalculator
-
     # Initialize calculator
     calculator = RoyaltyCalculator(api_key=api_key or os.getenv("OPENAI_API_KEY"))
 
@@ -68,10 +69,12 @@ def calculate_royalty_payments(
             statement_path=statement_path,
             contract_markdowns=contract_markdowns,
             expenses=expenses,
+            contract_data_by_id=contract_data_by_id,
         )
     else:
         # Single contract mode
         full_text = contract_markdowns.get(contract_id) if contract_markdowns and contract_id else None
+        contract_data = contract_data_by_id.get(contract_id) if contract_data_by_id and contract_id else None
         output = calculator.calculate_payments(
             contract_path=contract_path,
             statement_path=statement_path,
@@ -79,6 +82,7 @@ def calculate_royalty_payments(
             contract_id=contract_id,
             user_id=user_id,
             expenses=expenses,
+            contract_data=contract_data,
         )
 
     # Convert to dictionaries for easier JSON serialization

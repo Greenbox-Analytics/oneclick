@@ -452,3 +452,8 @@ tasks:
     desc: Start Vite frontend dev server
     cmds:
       - npm run dev
+
+  pricing:
+    desc: Open the LLM cost & credit model dashboard in your browser
+    cmds:
+      - python3 src/backend/subscriptions/pricing_model/open.py

@@ -53,10 +53,12 @@ Defined directly in `src/backend/main.py`.
 
 | File | Purpose |
 |------|---------|
-| `zoe_chatbot/contract_chatbot.py` | RAG chatbot, streaming, conversation memory |
-| `zoe_chatbot/contract_ingestion.py` | PDF ingestion pipeline |
-| `zoe_chatbot/contract_search.py` | Semantic search with metadata filtering |
-| `zoe_chatbot/helpers.py` | PDF → markdown, section splitting, table extraction |
+| `zoe_chatbot/contract_chatbot.py` | Core RAG chatbot — query routing (knowledge base vs contract), SSE streaming, conversation memory (fact/assumption ledgers, session history), confidence scoring, and answer generation |
+| `zoe_chatbot/helpers.py` | Royalty payment calculation + Excel export helpers |
+| `zoe_chatbot/CHATBOT.md` | Deep-dive reference: routing rules, contract page-jump, and reference-book RAG mechanics |
+| `utils/ingestion/` | Contract PDF ingestion — `pdf_to_markdown` (`pdf_markdown.py`), section splitting (`sections.py`), table extraction (`tables.py`), embeddings (`embeddings.py`) |
+| `knowledge/reference_search.py` | Semantic search over the music-business reference book (Pinecone RAG), injected as silent background context |
+| `knowledge/ingest.py`, `knowledge/chunking.py` | Reference-book ingestion + section-aware chunking pipeline |
 
 ## Local Testing
 

@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
 import { useStorageStatus } from "@/hooks/useEntitlements";
 import {
@@ -111,6 +112,7 @@ export function AddWorkWizard({
   // -------- destination state --------
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const storageStatus = useStorageStatus();
   const [selectedArtistId, setSelectedArtistId] = useState<string>(initialArtistId || "");
   const [selectedProjectId, setSelectedProjectId] = useState<string>(initialProjectId || "");
 
@@ -633,6 +635,13 @@ export function AddWorkWizard({
             });
             stakesSaved += 1;
           }
+        }
+        // Link everything attached in "Parse with AI" into Related documents.
+        // Best-effort — a linking hiccup must never fail the already-created work.
+        try {
+          await linkParsedContractsToWork(workId);
+        } catch {
+          // swallow: the work exists; linking is a non-blocking nicety
         }
       }
       // useCreateStake intentionally doesn't toast per stake — show one

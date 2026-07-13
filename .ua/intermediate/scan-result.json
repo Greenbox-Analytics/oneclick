@@ -1,0 +1,4136 @@
+{
+  "name": "Msanii",
+  "description": "Msanii is a music industry management platform for artists, managers, and collaborators, handling artist profiles, project and work management, rights registration, contract analysis, royalty calculations, and collaboration workflows. Note: this project has over 100 source files; consider scoping analysis to a subdirectory for faster results.",
+  "languages": [
+    "css",
+    "dockerfile",
+    "html",
+    "javascript",
+    "json",
+    "markdown",
+    "python",
+    "shell",
+    "toml",
+    "typescript",
+    "yaml"
+  ],
+  "frameworks": [
+    "React",
+    "Vite",
+    "Vitest",
+    "Tailwind CSS",
+    "FastAPI",
+    "Uvicorn",
+    "pytest",
+    "Docker",
+    "GitHub Actions"
+  ],
+  "files": [
+    {
+      "path": ".claude/CLAUDE.md",
+      "language": "markdown",
+      "sizeLines": 342,
+      "fileCategory": "docs"
+    },
+    {
+      "path": ".claude/skills/chunk-pdf-pinecone/README.md",
+      "language": "markdown",
+      "sizeLines": 65,
+      "fileCategory": "docs"
+    },
+    {
+      "path": ".claude/skills/chunk-pdf-pinecone/SKILL.md",
+      "language": "markdown",
+      "sizeLines": 132,
+      "fileCategory": "docs"
+    },
+    {
+      "path": ".env.example",
+      "language": "config",
+      "sizeLines": 214,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "language": "yaml",
+      "sizeLines": 39,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "language": "yaml",
+      "sizeLines": 86,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".github/workflows/deploy-backend-dev.yml",
+      "language": "yaml",
+      "sizeLines": 138,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".github/workflows/deploy-backend.yml",
+      "language": "yaml",
+      "sizeLines": 151,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".github/workflows/deploy-frontend-prod.yml",
+      "language": "yaml",
+      "sizeLines": 51,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".github/workflows/sync-vercel-env-from-gsm.yml",
+      "language": "yaml",
+      "sizeLines": 79,
+      "fileCategory": "infra"
+    },
+    {
+      "path": ".npmrc",
+      "language": "unknown",
+      "sizeLines": 4,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".ua/.understandignore",
+      "language": "unknown",
+      "sizeLines": 51,
+      "fileCategory": "code"
+    },
+    {
+      "path": "components.json",
+      "language": "json",
+      "sizeLines": 20,
+      "fileCategory": "config"
+    },
+    {
+      "path": "docs/admin-roles.md",
+      "language": "markdown",
+      "sizeLines": 156,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/oneclick.md",
+      "language": "markdown",
+      "sizeLines": 249,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/portfolio.md",
+      "language": "markdown",
+      "sizeLines": 127,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/README.md",
+      "language": "markdown",
+      "sizeLines": 28,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/registry.md",
+      "language": "markdown",
+      "sizeLines": 504,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/secrets.md",
+      "language": "markdown",
+      "sizeLines": 213,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/split-sheet.md",
+      "language": "markdown",
+      "sizeLines": 74,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/stripe-integration.md",
+      "language": "markdown",
+      "sizeLines": 241,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/workspace.md",
+      "language": "markdown",
+      "sizeLines": 294,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/zoe.md",
+      "language": "markdown",
+      "sizeLines": 83,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "eslint.config.js",
+      "language": "javascript",
+      "sizeLines": 26,
+      "fileCategory": "code"
+    },
+    {
+      "path": "index.html",
+      "language": "html",
+      "sizeLines": 42,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "package.json",
+      "language": "json",
+      "sizeLines": 106,
+      "fileCategory": "config"
+    },
+    {
+      "path": "postcss.config.js",
+      "language": "javascript",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "posthog-setup-report.md",
+      "language": "markdown",
+      "sizeLines": 48,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "README.md",
+      "language": "markdown",
+      "sizeLines": 311,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "scripts/populate-gsm-from-env.sh",
+      "language": "shell",
+      "sizeLines": 141,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/seed-gsm-secrets.sh",
+      "language": "shell",
+      "sizeLines": 101,
+      "fileCategory": "script"
+    },
+    {
+      "path": "src/App.css",
+      "language": "css",
+      "sizeLines": 43,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "src/App.tsx",
+      "language": "typescript",
+      "sizeLines": 261,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/.dockerignore",
+      "language": "unknown",
+      "sizeLines": 60,
+      "fileCategory": "infra"
+    },
+    {
+      "path": "src/backend/admin/__init__.py",
+      "language": "python",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/admin/analytics_models.py",
+      "language": "python",
+      "sizeLines": 87,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/admin/analytics_router.py",
+      "language": "python",
+      "sizeLines": 542,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/admin/behavior_queries.py",
+      "language": "python",
+      "sizeLines": 133,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/admin/posthog_client.py",
+      "language": "python",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/analytics.py",
+      "language": "python",
+      "sizeLines": 57,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/auth.py",
+      "language": "python",
+      "sizeLines": 101,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/boards/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/boards/models.py",
+      "language": "python",
+      "sizeLines": 110,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/boards/router.py",
+      "language": "python",
+      "sizeLines": 417,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/boards/service.py",
+      "language": "python",
+      "sizeLines": 1124,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/confirm.py",
+      "language": "python",
+      "sizeLines": 12,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/credentials/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/credentials/models.py",
+      "language": "python",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/credentials/router.py",
+      "language": "python",
+      "sizeLines": 96,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/credentials/service.py",
+      "language": "python",
+      "sizeLines": 204,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/Dockerfile",
+      "language": "dockerfile",
+      "sizeLines": 22,
+      "fileCategory": "infra"
+    },
+    {
+      "path": "src/backend/integrations/__init__.py",
+      "language": "python",
+      "sizeLines": 3,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/connections_router.py",
+      "language": "python",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/events.py",
+      "language": "python",
+      "sizeLines": 73,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/google_drive/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/google_drive/models.py",
+      "language": "python",
+      "sizeLines": 20,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/google_drive/router.py",
+      "language": "python",
+      "sizeLines": 177,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/google_drive/service.py",
+      "language": "python",
+      "sizeLines": 192,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/oauth.py",
+      "language": "python",
+      "sizeLines": 275,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/slack/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/slack/blocks.py",
+      "language": "python",
+      "sizeLines": 157,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/slack/router.py",
+      "language": "python",
+      "sizeLines": 221,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/slack/service.py",
+      "language": "python",
+      "sizeLines": 152,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/spotify/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/spotify/router.py",
+      "language": "python",
+      "sizeLines": 50,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/integrations/spotify/service.py",
+      "language": "python",
+      "sizeLines": 145,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/knowledge/__init__.py",
+      "language": "python",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/knowledge/chunking.py",
+      "language": "python",
+      "sizeLines": 181,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/knowledge/ingest.py",
+      "language": "python",
+      "sizeLines": 131,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/knowledge/reference_search.py",
+      "language": "python",
+      "sizeLines": 91,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/library_summary.txt",
+      "language": "txt",
+      "sizeLines": 32,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "src/backend/main.py",
+      "language": "python",
+      "sizeLines": 3095,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/middleware/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/middleware/analytics_middleware.py",
+      "language": "python",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/breakdown.py",
+      "language": "python",
+      "sizeLines": 293,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/ONECLICK.md",
+      "language": "markdown",
+      "sizeLines": 62,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/analytics_router.py",
+      "language": "python",
+      "sizeLines": 77,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/analytics_service.py",
+      "language": "python",
+      "sizeLines": 501,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/emails.py",
+      "language": "python",
+      "sizeLines": 93,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/fx.py",
+      "language": "python",
+      "sizeLines": 178,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/ingest.py",
+      "language": "python",
+      "sizeLines": 174,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/models.py",
+      "language": "python",
+      "sizeLines": 189,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/paypal_client.py",
+      "language": "python",
+      "sizeLines": 189,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/pdf.py",
+      "language": "python",
+      "sizeLines": 296,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/router.py",
+      "language": "python",
+      "sizeLines": 447,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalties/service.py",
+      "language": "python",
+      "sizeLines": 1172,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/royalty_calculator.py",
+      "language": "python",
+      "sizeLines": 1549,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/oneclick/share.py",
+      "language": "python",
+      "sizeLines": 312,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/pagination.py",
+      "language": "python",
+      "sizeLines": 43,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/projects/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/projects/emails.py",
+      "language": "python",
+      "sizeLines": 61,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/projects/models.py",
+      "language": "python",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/projects/router.py",
+      "language": "python",
+      "sizeLines": 217,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/projects/service.py",
+      "language": "python",
+      "sizeLines": 341,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/projects/share_email.py",
+      "language": "python",
+      "sizeLines": 156,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/pyproject.toml",
+      "language": "toml",
+      "sizeLines": 75,
+      "fileCategory": "config"
+    },
+    {
+      "path": "src/backend/rag-tools/pinecone_upload_pdf.py",
+      "language": "python",
+      "sizeLines": 141,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/access.py",
+      "language": "python",
+      "sizeLines": 122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/contract_splits.py",
+      "language": "python",
+      "sizeLines": 138,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/derive_service.py",
+      "language": "python",
+      "sizeLines": 111,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/emails.py",
+      "language": "python",
+      "sizeLines": 175,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/grants_service.py",
+      "language": "python",
+      "sizeLines": 90,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/models.py",
+      "language": "python",
+      "sizeLines": 237,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/pdf_generator.py",
+      "language": "python",
+      "sizeLines": 262,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/router.py",
+      "language": "python",
+      "sizeLines": 1167,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/service.py",
+      "language": "python",
+      "sizeLines": 1356,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/registry/work_links_service.py",
+      "language": "python",
+      "sizeLines": 51,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/settings/__init__.py",
+      "language": "python",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/settings/models.py",
+      "language": "python",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/settings/router.py",
+      "language": "python",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/settings/service.py",
+      "language": "python",
+      "sizeLines": 34,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/splitsheet/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/splitsheet/docx_generator.py",
+      "language": "python",
+      "sizeLines": 252,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/splitsheet/pdf_generator.py",
+      "language": "python",
+      "sizeLines": 287,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/splitsheet/router.py",
+      "language": "python",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/admin_auth.py",
+      "language": "python",
+      "sizeLines": 140,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/admin_router.py",
+      "language": "python",
+      "sizeLines": 235,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/admin_service.py",
+      "language": "python",
+      "sizeLines": 396,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/billing_router.py",
+      "language": "python",
+      "sizeLines": 152,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/deps.py",
+      "language": "python",
+      "sizeLines": 27,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/enforcement.py",
+      "language": "python",
+      "sizeLines": 111,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/models.py",
+      "language": "python",
+      "sizeLines": 165,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/pro_requests_router.py",
+      "language": "python",
+      "sizeLines": 107,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/router.py",
+      "language": "python",
+      "sizeLines": 41,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/service.py",
+      "language": "python",
+      "sizeLines": 568,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/stripe_client.py",
+      "language": "python",
+      "sizeLines": 38,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/subscriptions/stripe_events.py",
+      "language": "python",
+      "sizeLines": 148,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/teams/__init__.py",
+      "language": "python",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/teams/authz.py",
+      "language": "python",
+      "sizeLines": 96,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/teams/emails.py",
+      "language": "python",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/teams/models.py",
+      "language": "python",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/teams/router.py",
+      "language": "python",
+      "sizeLines": 264,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/teams/service.py",
+      "language": "python",
+      "sizeLines": 398,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/users/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/users/account_deletion_service.py",
+      "language": "python",
+      "sizeLines": 159,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/users/emails.py",
+      "language": "python",
+      "sizeLines": 57,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/users/router.py",
+      "language": "python",
+      "sizeLines": 185,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/contract_parsing/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/contract_parsing/basis_detection.py",
+      "language": "python",
+      "sizeLines": 181,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/contract_parsing/models.py",
+      "language": "python",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/contract_parsing/oneclick_context.md",
+      "language": "markdown",
+      "sizeLines": 53,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "src/backend/utils/contract_parsing/parser.py",
+      "language": "python",
+      "sizeLines": 444,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/contract_parsing/split_verification.py",
+      "language": "python",
+      "sizeLines": 260,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/ingestion/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/ingestion/embeddings.py",
+      "language": "python",
+      "sizeLines": 75,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/ingestion/pdf_markdown.py",
+      "language": "python",
+      "sizeLines": 51,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/ingestion/sections.py",
+      "language": "python",
+      "sizeLines": 154,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/ingestion/tables.py",
+      "language": "python",
+      "sizeLines": 226,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/llm/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/llm/client.py",
+      "language": "python",
+      "sizeLines": 28,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/text/__init__.py",
+      "language": "python",
+      "sizeLines": 0,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/utils/text/normalize.py",
+      "language": "python",
+      "sizeLines": 216,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/zoe_chatbot/CHATBOT.md",
+      "language": "markdown",
+      "sizeLines": 205,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "src/backend/zoe_chatbot/contract_chatbot.py",
+      "language": "python",
+      "sizeLines": 4095,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/zoe_chatbot/helpers.py",
+      "language": "python",
+      "sizeLines": 139,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/backend/zoe_chatbot/music_context.md",
+      "language": "markdown",
+      "sizeLines": 30,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "src/components/AccessGate.tsx",
+      "language": "typescript",
+      "sizeLines": 73,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/admin/AdminBadge.tsx",
+      "language": "typescript",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/admin/AnalyticsSummaryCard.tsx",
+      "language": "typescript",
+      "sizeLines": 242,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/admin/BehaviorAnalyticsCard.tsx",
+      "language": "typescript",
+      "sizeLines": 197,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/AdminProtectedRoute.tsx",
+      "language": "typescript",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/AudioSection.tsx",
+      "language": "typescript",
+      "sizeLines": 574,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/billing/UpgradeBanner.tsx",
+      "language": "typescript",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/CalculationProgressModal.tsx",
+      "language": "typescript",
+      "sizeLines": 130,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/ComingSoon.tsx",
+      "language": "typescript",
+      "sizeLines": 54,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/ContactFormDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 356,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/ContractUploadModal.tsx",
+      "language": "typescript",
+      "sizeLines": 369,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/FileShareDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 235,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/InlineEdit.tsx",
+      "language": "typescript",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/landing/LandingSections.tsx",
+      "language": "typescript",
+      "sizeLines": 839,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/landing/ToolDemos.tsx",
+      "language": "typescript",
+      "sizeLines": 1529,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/layout/MobileNavSheet.tsx",
+      "language": "typescript",
+      "sizeLines": 206,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/layout/NotificationBell.tsx",
+      "language": "typescript",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/layout/PageHeader.tsx",
+      "language": "typescript",
+      "sizeLines": 148,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/NavLink.tsx",
+      "language": "typescript",
+      "sizeLines": 28,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/NewArtistDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 199,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/notes/NotesEditor.tsx",
+      "language": "typescript",
+      "sizeLines": 71,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/notes/NotesSidebar.tsx",
+      "language": "typescript",
+      "sizeLines": 146,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/notes/NotesView.tsx",
+      "language": "typescript",
+      "sizeLines": 92,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/onboarding/OnboardingProgress.tsx",
+      "language": "typescript",
+      "sizeLines": 25,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/onboarding/StepName.tsx",
+      "language": "typescript",
+      "sizeLines": 57,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/onboarding/StepPlan.tsx",
+      "language": "typescript",
+      "sizeLines": 154,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/onboarding/StepPreferences.tsx",
+      "language": "typescript",
+      "sizeLines": 109,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/onboarding/StepReady.tsx",
+      "language": "typescript",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/onboarding/StepWelcome.tsx",
+      "language": "typescript",
+      "sizeLines": 32,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/CalculationResults.tsx",
+      "language": "typescript",
+      "sizeLines": 1076,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/ContractSelector.tsx",
+      "language": "typescript",
+      "sizeLines": 343,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/EarningsBreakdown.tsx",
+      "language": "typescript",
+      "sizeLines": 309,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/ExpenseReviewDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 218,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/analytics/OverviewDashboard.tsx",
+      "language": "typescript",
+      "sizeLines": 240,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/analytics/PayeeTrendChart.tsx",
+      "language": "typescript",
+      "sizeLines": 208,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/NewPayoutModal.tsx",
+      "language": "typescript",
+      "sizeLines": 238,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/PartiesTable.tsx",
+      "language": "typescript",
+      "sizeLines": 172,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/PartyDrawer.tsx",
+      "language": "typescript",
+      "sizeLines": 733,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/PaymentTracking.tsx",
+      "language": "typescript",
+      "sizeLines": 318,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/PayoutDetailModal.tsx",
+      "language": "typescript",
+      "sizeLines": 430,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/PayoutRuns.tsx",
+      "language": "typescript",
+      "sizeLines": 230,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/PayWithPayPalDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 223,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/PeriodsLedger.tsx",
+      "language": "typescript",
+      "sizeLines": 189,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/ReceiptDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 207,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/payments/shared.tsx",
+      "language": "typescript",
+      "sizeLines": 254,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/royalty-results.css",
+      "language": "css",
+      "sizeLines": 177,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "src/components/oneclick/RoyaltyStatementSelector.tsx",
+      "language": "typescript",
+      "sizeLines": 319,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/oneclick/SongMismatchComparison.tsx",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/PaymentDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 327,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/paywall/PaywallCard.tsx",
+      "language": "typescript",
+      "sizeLines": 84,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/paywall/PaywallModal.tsx",
+      "language": "typescript",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/paywall/RequireFeature.tsx",
+      "language": "typescript",
+      "sizeLines": 35,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/profile/ArtistRoyaltiesSection.tsx",
+      "language": "typescript",
+      "sizeLines": 305,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/profile/CredentialsVault.tsx",
+      "language": "typescript",
+      "sizeLines": 379,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/profile/DeleteAccountDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 107,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/profile/PasswordRevealDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 89,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/profile/TeamCardSettings.tsx",
+      "language": "typescript",
+      "sizeLines": 216,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/AddWorkDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/AudioTab.tsx",
+      "language": "typescript",
+      "sizeLines": 654,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/BulkActionReviewDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 75,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/ExpenseFormDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 250,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/ExpenseTrackerTab.tsx",
+      "language": "typescript",
+      "sizeLines": 212,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/FilesTab.tsx",
+      "language": "typescript",
+      "sizeLines": 685,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/integrations/DriveImportDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 315,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/integrations/ProjectSlackSettings.tsx",
+      "language": "typescript",
+      "sizeLines": 92,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/MembersTab.tsx",
+      "language": "typescript",
+      "sizeLines": 382,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/SettingsTab.tsx",
+      "language": "typescript",
+      "sizeLines": 348,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/ShareViaEmailDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 141,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/project/WorksTab.tsx",
+      "language": "typescript",
+      "sizeLines": 135,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/ProjectFormDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 173,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/ProtectedRoute.tsx",
+      "language": "typescript",
+      "sizeLines": 50,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/AddWorkWizard.tsx",
+      "language": "typescript",
+      "sizeLines": 1836,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/AgreementsPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 212,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/Artwork.tsx",
+      "language": "typescript",
+      "sizeLines": 53,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/CollaborationStatus.tsx",
+      "language": "typescript",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/CollaboratorAccessPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 1400,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/DeleteWorkConfirmModal.tsx",
+      "language": "typescript",
+      "sizeLines": 126,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/DeriveCollaboratorSplitDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 505,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/FetchSpotifyMetadataDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 324,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/InviteCollaboratorModal.tsx",
+      "language": "typescript",
+      "sizeLines": 482,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/LicensingPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 218,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/OwnershipPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 246,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/permissions-panel.css",
+      "language": "css",
+      "sizeLines": 819,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "src/components/registry/PermissionsPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 181,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/ProofOfOwnership.tsx",
+      "language": "typescript",
+      "sizeLines": 25,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/RegistryAvatar.tsx",
+      "language": "typescript",
+      "sizeLines": 52,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/RegistryDashboard.tsx",
+      "language": "typescript",
+      "sizeLines": 617,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/RegistryStatusBadge.tsx",
+      "language": "typescript",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/ReleaseTag.tsx",
+      "language": "typescript",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/ResourceGrantPicker.tsx",
+      "language": "typescript",
+      "sizeLines": 184,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/RoyaltySplitsTable.tsx",
+      "language": "typescript",
+      "sizeLines": 300,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/Segmented.tsx",
+      "language": "typescript",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/StatCard.tsx",
+      "language": "typescript",
+      "sizeLines": 43,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/WorkEditor.tsx",
+      "language": "typescript",
+      "sizeLines": 1417,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/registry/WorkRow.tsx",
+      "language": "typescript",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/RoyaltyStatementUploadModal.tsx",
+      "language": "typescript",
+      "sizeLines": 376,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/tester/TesterBadge.tsx",
+      "language": "typescript",
+      "sizeLines": 43,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/tester/TesterBanner.tsx",
+      "language": "typescript",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/ThemeProvider.tsx",
+      "language": "typescript",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/ThemeToggle.tsx",
+      "language": "typescript",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/upgrade/UpgradeRequestModal.tsx",
+      "language": "typescript",
+      "sizeLines": 138,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/walkthrough/ToolHelpButton.tsx",
+      "language": "typescript",
+      "sizeLines": 36,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/walkthrough/ToolIntroModal.tsx",
+      "language": "typescript",
+      "sizeLines": 71,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/walkthrough/WalkthroughProvider.tsx",
+      "language": "typescript",
+      "sizeLines": 180,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/walkthrough/WalkthroughTooltip.tsx",
+      "language": "typescript",
+      "sizeLines": 115,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/BoardFilterBar.tsx",
+      "language": "typescript",
+      "sizeLines": 83,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/BoardSwitcher.tsx",
+      "language": "typescript",
+      "sizeLines": 513,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/CalendarView.tsx",
+      "language": "typescript",
+      "sizeLines": 657,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/ColorPicker.tsx",
+      "language": "typescript",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/CommentSection.tsx",
+      "language": "typescript",
+      "sizeLines": 87,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/DeleteConfirmDialog.tsx",
+      "language": "typescript",
+      "sizeLines": 78,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/KanbanBoard.tsx",
+      "language": "typescript",
+      "sizeLines": 564,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/KanbanCard.tsx",
+      "language": "typescript",
+      "sizeLines": 297,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/KanbanColumn.tsx",
+      "language": "typescript",
+      "sizeLines": 175,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/labelColors.ts",
+      "language": "typescript",
+      "sizeLines": 27,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/MultiSelectCombobox.tsx",
+      "language": "typescript",
+      "sizeLines": 123,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/ParentKanbanCard.tsx",
+      "language": "typescript",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/ParentTaskRow.tsx",
+      "language": "typescript",
+      "sizeLines": 284,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/TaskDetailPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 413,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/TaskFields.tsx",
+      "language": "typescript",
+      "sizeLines": 558,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/TaskLabels.tsx",
+      "language": "typescript",
+      "sizeLines": 78,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/TasksOverview.tsx",
+      "language": "typescript",
+      "sizeLines": 362,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/boards/TaskSubtasks.tsx",
+      "language": "typescript",
+      "sizeLines": 175,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/IntegrationCard.tsx",
+      "language": "typescript",
+      "sizeLines": 94,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/IntegrationHub.tsx",
+      "language": "typescript",
+      "sizeLines": 129,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/integrations/DrivePanel.tsx",
+      "language": "typescript",
+      "sizeLines": 199,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/integrations/SlackPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 157,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/NotificationRow.tsx",
+      "language": "typescript",
+      "sizeLines": 81,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/RegistryNotifications.tsx",
+      "language": "typescript",
+      "sizeLines": 59,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/SlackMentions.tsx",
+      "language": "typescript",
+      "sizeLines": 90,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/teams/TeamsPanel.tsx",
+      "language": "typescript",
+      "sizeLines": 589,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/workspace/WorkspaceSettings.tsx",
+      "language": "typescript",
+      "sizeLines": 302,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/zoe/ContractSlideOver.tsx",
+      "language": "typescript",
+      "sizeLines": 64,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/zoe/types.ts",
+      "language": "typescript",
+      "sizeLines": 77,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/zoe/zoe-chat.css",
+      "language": "css",
+      "sizeLines": 863,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "src/components/zoe/ZoeChatMessages.tsx",
+      "language": "typescript",
+      "sizeLines": 392,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/zoe/ZoeContextPopover.tsx",
+      "language": "typescript",
+      "sizeLines": 288,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/components/zoe/ZoeInputBar.tsx",
+      "language": "typescript",
+      "sizeLines": 253,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/config/toolWalkthroughConfig.ts",
+      "language": "typescript",
+      "sizeLines": 436,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/contexts/AuthContext.tsx",
+      "language": "typescript",
+      "sizeLines": 147,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/use-mobile.tsx",
+      "language": "typescript",
+      "sizeLines": 19,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/use-toast.ts",
+      "language": "typescript",
+      "sizeLines": 186,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useAdmin.ts",
+      "language": "typescript",
+      "sizeLines": 209,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useAdminAnalyticsSummary.ts",
+      "language": "typescript",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useAdminBehaviorSummary.ts",
+      "language": "typescript",
+      "sizeLines": 58,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useAdminPosthogTag.ts",
+      "language": "typescript",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useAdminStatus.ts",
+      "language": "typescript",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useAnalytics.ts",
+      "language": "typescript",
+      "sizeLines": 74,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useAnalyticsContext.ts",
+      "language": "typescript",
+      "sizeLines": 185,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useArtistCredentials.ts",
+      "language": "typescript",
+      "sizeLines": 107,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useArtistsList.ts",
+      "language": "typescript",
+      "sizeLines": 38,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useAudioData.ts",
+      "language": "typescript",
+      "sizeLines": 252,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useBilling.ts",
+      "language": "typescript",
+      "sizeLines": 47,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useBoardPeriod.ts",
+      "language": "typescript",
+      "sizeLines": 130,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useBoards.ts",
+      "language": "typescript",
+      "sizeLines": 448,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useBoardsList.ts",
+      "language": "typescript",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useCalendarTasks.ts",
+      "language": "typescript",
+      "sizeLines": 26,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useConversationPersistence.ts",
+      "language": "typescript",
+      "sizeLines": 176,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useDeleteAccount.ts",
+      "language": "typescript",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useEarningsBreakdown.ts",
+      "language": "typescript",
+      "sizeLines": 42,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useEntitlements.ts",
+      "language": "typescript",
+      "sizeLines": 201,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useGatedAction.tsx",
+      "language": "typescript",
+      "sizeLines": 101,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useGoogleDrive.ts",
+      "language": "typescript",
+      "sizeLines": 70,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useIntegrations.ts",
+      "language": "typescript",
+      "sizeLines": 70,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useNotes.ts",
+      "language": "typescript",
+      "sizeLines": 217,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useOnboardingStatus.ts",
+      "language": "typescript",
+      "sizeLines": 61,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/usePageTimer.ts",
+      "language": "typescript",
+      "sizeLines": 54,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useParentTasks.ts",
+      "language": "typescript",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useParseContractSplits.ts",
+      "language": "typescript",
+      "sizeLines": 52,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/usePortfolioData.ts",
+      "language": "typescript",
+      "sizeLines": 350,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useProjectExpenses.ts",
+      "language": "typescript",
+      "sizeLines": 145,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useProjectIntegrations.ts",
+      "language": "typescript",
+      "sizeLines": 97,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useProjectMembers.ts",
+      "language": "typescript",
+      "sizeLines": 144,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useProjectsList.ts",
+      "language": "typescript",
+      "sizeLines": 125,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useRegistry.ts",
+      "language": "typescript",
+      "sizeLines": 695,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useRegistryNotifications.ts",
+      "language": "typescript",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useReportingCurrency.ts",
+      "language": "typescript",
+      "sizeLines": 48,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useRoyalties.ts",
+      "language": "typescript",
+      "sizeLines": 357,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useRoyaltyAnalytics.ts",
+      "language": "typescript",
+      "sizeLines": 115,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useSlackNotifications.ts",
+      "language": "typescript",
+      "sizeLines": 89,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useSlackSettings.ts",
+      "language": "typescript",
+      "sizeLines": 63,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useSpotifySearch.ts",
+      "language": "typescript",
+      "sizeLines": 77,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useStreamingChat.ts",
+      "language": "typescript",
+      "sizeLines": 480,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useTaskAssignees.ts",
+      "language": "typescript",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useTaskDetail.ts",
+      "language": "typescript",
+      "sizeLines": 59,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useTeamCard.ts",
+      "language": "typescript",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useTeams.ts",
+      "language": "typescript",
+      "sizeLines": 214,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useTesterGrants.ts",
+      "language": "typescript",
+      "sizeLines": 75,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useTesterStatus.ts",
+      "language": "typescript",
+      "sizeLines": 43,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useToolOnboardingStatus.ts",
+      "language": "typescript",
+      "sizeLines": 145,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useToolWalkthrough.ts",
+      "language": "typescript",
+      "sizeLines": 159,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useWalkthrough.ts",
+      "language": "typescript",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useWorkAudio.ts",
+      "language": "typescript",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useWorkFiles.ts",
+      "language": "typescript",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useWorkspaceSettings.ts",
+      "language": "typescript",
+      "sizeLines": 38,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/hooks/useZoeData.ts",
+      "language": "typescript",
+      "sizeLines": 771,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/index.css",
+      "language": "css",
+      "sizeLines": 388,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "src/integrations/supabase/client.ts",
+      "language": "typescript",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/integrations/supabase/types.ts",
+      "language": "typescript",
+      "sizeLines": 2469,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/lib/analytics-tools.ts",
+      "language": "typescript",
+      "sizeLines": 20,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/lib/apiFetch.ts",
+      "language": "typescript",
+      "sizeLines": 67,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/lib/dateUtils.ts",
+      "language": "typescript",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/lib/onboardingCache.ts",
+      "language": "typescript",
+      "sizeLines": 41,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/lib/posthog.ts",
+      "language": "typescript",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/lib/utils.ts",
+      "language": "typescript",
+      "sizeLines": 6,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/main.tsx",
+      "language": "typescript",
+      "sizeLines": 8,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/About.tsx",
+      "language": "typescript",
+      "sizeLines": 174,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/AdminUsers.tsx",
+      "language": "typescript",
+      "sizeLines": 991,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/ArtistProfile.tsx",
+      "language": "typescript",
+      "sizeLines": 1213,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Artists.tsx",
+      "language": "typescript",
+      "sizeLines": 296,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Auth.tsx",
+      "language": "typescript",
+      "sizeLines": 280,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/ConfirmEmail.tsx",
+      "language": "typescript",
+      "sizeLines": 99,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Contacts.tsx",
+      "language": "typescript",
+      "sizeLines": 394,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Dashboard.tsx",
+      "language": "typescript",
+      "sizeLines": 351,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Documentation.tsx",
+      "language": "typescript",
+      "sizeLines": 1309,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/ExpenseTracker.tsx",
+      "language": "typescript",
+      "sizeLines": 299,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Features.tsx",
+      "language": "typescript",
+      "sizeLines": 80,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Index.tsx",
+      "language": "typescript",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/InviteClaim.tsx",
+      "language": "typescript",
+      "sizeLines": 353,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/NewArtist.tsx",
+      "language": "typescript",
+      "sizeLines": 239,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/NotFound.tsx",
+      "language": "typescript",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Notifications.tsx",
+      "language": "typescript",
+      "sizeLines": 16,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Onboarding.tsx",
+      "language": "typescript",
+      "sizeLines": 279,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/OneClick.tsx",
+      "language": "typescript",
+      "sizeLines": 211,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/OneClickDocuments.tsx",
+      "language": "typescript",
+      "sizeLines": 795,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Payments.tsx",
+      "language": "typescript",
+      "sizeLines": 256,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Portfolio.tsx",
+      "language": "typescript",
+      "sizeLines": 796,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Pricing.tsx",
+      "language": "typescript",
+      "sizeLines": 205,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Privacy.tsx",
+      "language": "typescript",
+      "sizeLines": 178,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Profile.tsx",
+      "language": "typescript",
+      "sizeLines": 342,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/ProjectDetail.tsx",
+      "language": "typescript",
+      "sizeLines": 325,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Registry.tsx",
+      "language": "typescript",
+      "sizeLines": 84,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Security.tsx",
+      "language": "typescript",
+      "sizeLines": 145,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/SplitSheet.tsx",
+      "language": "typescript",
+      "sizeLines": 868,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Subscription.tsx",
+      "language": "typescript",
+      "sizeLines": 467,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Team.tsx",
+      "language": "typescript",
+      "sizeLines": 235,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Tools.tsx",
+      "language": "typescript",
+      "sizeLines": 130,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/WorkDetail.tsx",
+      "language": "typescript",
+      "sizeLines": 98,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Workspace.tsx",
+      "language": "typescript",
+      "sizeLines": 268,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/WorkspaceBoards.tsx",
+      "language": "typescript",
+      "sizeLines": 59,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/pages/Zoe.tsx",
+      "language": "typescript",
+      "sizeLines": 301,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/types/audio.ts",
+      "language": "typescript",
+      "sizeLines": 24,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/types/integrations.ts",
+      "language": "typescript",
+      "sizeLines": 137,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/types/teams.ts",
+      "language": "typescript",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "src/vite-env.d.ts",
+      "language": "typescript",
+      "sizeLines": 1,
+      "fileCategory": "code"
+    },
+    {
+      "path": "supabase/config.toml",
+      "language": "toml",
+      "sizeLines": 0,
+      "fileCategory": "config"
+    },
+    {
+      "path": "tailwind.config.ts",
+      "language": "typescript",
+      "sizeLines": 99,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Taskfile.yml",
+      "language": "yaml",
+      "sizeLines": 454,
+      "fileCategory": "config"
+    },
+    {
+      "path": "tsconfig.app.json",
+      "language": "json",
+      "sizeLines": 31,
+      "fileCategory": "config"
+    },
+    {
+      "path": "tsconfig.json",
+      "language": "json",
+      "sizeLines": 16,
+      "fileCategory": "config"
+    },
+    {
+      "path": "tsconfig.node.json",
+      "language": "json",
+      "sizeLines": 22,
+      "fileCategory": "config"
+    },
+    {
+      "path": "vercel.json",
+      "language": "json",
+      "sizeLines": 31,
+      "fileCategory": "config"
+    },
+    {
+      "path": "vite.config.ts",
+      "language": "typescript",
+      "sizeLines": 18,
+      "fileCategory": "code"
+    },
+    {
+      "path": "vitest.config.ts",
+      "language": "typescript",
+      "sizeLines": 28,
+      "fileCategory": "code"
+    }
+  ],
+  "totalFiles": 415,
+  "filteredByIgnore": 281,
+  "estimatedComplexity": "large",
+  "importMap": {
+    ".claude/CLAUDE.md": [],
+    ".claude/skills/chunk-pdf-pinecone/README.md": [],
+    ".claude/skills/chunk-pdf-pinecone/SKILL.md": [],
+    ".env.example": [],
+    ".github/dependabot.yml": [],
+    ".github/workflows/ci.yml": [],
+    ".github/workflows/deploy-backend-dev.yml": [],
+    ".github/workflows/deploy-backend.yml": [],
+    ".github/workflows/deploy-frontend-prod.yml": [],
+    ".github/workflows/sync-vercel-env-from-gsm.yml": [],
+    ".npmrc": [],
+    ".ua/.understandignore": [],
+    "components.json": [],
+    "docs/admin-roles.md": [],
+    "docs/oneclick.md": [],
+    "docs/portfolio.md": [],
+    "docs/README.md": [],
+    "docs/registry.md": [],
+    "docs/secrets.md": [],
+    "docs/split-sheet.md": [],
+    "docs/stripe-integration.md": [],
+    "docs/workspace.md": [],
+    "docs/zoe.md": [],
+    "eslint.config.js": [],
+    "index.html": [],
+    "package.json": [],
+    "postcss.config.js": [],
+    "posthog-setup-report.md": [],
+    "README.md": [],
+    "scripts/populate-gsm-from-env.sh": [],
+    "scripts/seed-gsm-secrets.sh": [],
+    "src/App.css": [],
+    "src/App.tsx": [
+      "src/components/AdminProtectedRoute.tsx",
+      "src/components/ProtectedRoute.tsx",
+      "src/components/tester/TesterBanner.tsx",
+      "src/components/ThemeProvider.tsx",
+      "src/components/ThemeToggle.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAdminPosthogTag.ts",
+      "src/hooks/usePageTimer.ts",
+      "src/pages/Auth.tsx",
+      "src/pages/Dashboard.tsx",
+      "src/pages/Index.tsx",
+      "src/pages/NotFound.tsx"
+    ],
+    "src/backend/.dockerignore": [],
+    "src/backend/admin/__init__.py": [],
+    "src/backend/admin/analytics_models.py": [],
+    "src/backend/admin/analytics_router.py": [
+      "src/backend/admin/analytics_models.py",
+      "src/backend/admin/behavior_queries.py",
+      "src/backend/admin/posthog_client.py",
+      "src/backend/analytics.py",
+      "src/backend/subscriptions/admin_auth.py"
+    ],
+    "src/backend/admin/behavior_queries.py": [],
+    "src/backend/admin/posthog_client.py": [],
+    "src/backend/analytics.py": [],
+    "src/backend/auth.py": [],
+    "src/backend/boards/__init__.py": [],
+    "src/backend/boards/models.py": [],
+    "src/backend/boards/router.py": [
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/boards/__init__.py",
+      "src/backend/boards/models.py",
+      "src/backend/boards/service.py",
+      "src/backend/subscriptions/enforcement.py"
+    ],
+    "src/backend/boards/service.py": [
+      "src/backend/confirm.py",
+      "src/backend/integrations/__init__.py",
+      "src/backend/integrations/events.py",
+      "src/backend/pagination.py",
+      "src/backend/teams/__init__.py",
+      "src/backend/teams/authz.py"
+    ],
+    "src/backend/confirm.py": [],
+    "src/backend/credentials/__init__.py": [],
+    "src/backend/credentials/models.py": [],
+    "src/backend/credentials/router.py": [
+      "src/backend/auth.py",
+      "src/backend/credentials/__init__.py",
+      "src/backend/credentials/models.py",
+      "src/backend/credentials/service.py"
+    ],
+    "src/backend/credentials/service.py": [],
+    "src/backend/Dockerfile": [],
+    "src/backend/integrations/__init__.py": [],
+    "src/backend/integrations/connections_router.py": [
+      "src/backend/auth.py"
+    ],
+    "src/backend/integrations/events.py": [],
+    "src/backend/integrations/google_drive/__init__.py": [],
+    "src/backend/integrations/google_drive/models.py": [],
+    "src/backend/integrations/google_drive/router.py": [
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/integrations/google_drive/models.py",
+      "src/backend/integrations/oauth.py"
+    ],
+    "src/backend/integrations/google_drive/service.py": [],
+    "src/backend/integrations/oauth.py": [],
+    "src/backend/integrations/slack/__init__.py": [],
+    "src/backend/integrations/slack/blocks.py": [],
+    "src/backend/integrations/slack/router.py": [
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/integrations/oauth.py",
+      "src/backend/subscriptions/enforcement.py",
+      "src/backend/subscriptions/models.py"
+    ],
+    "src/backend/integrations/slack/service.py": [
+      "src/backend/analytics.py"
+    ],
+    "src/backend/integrations/spotify/__init__.py": [],
+    "src/backend/integrations/spotify/router.py": [
+      "src/backend/auth.py",
+      "src/backend/integrations/spotify/service.py"
+    ],
+    "src/backend/integrations/spotify/service.py": [],
+    "src/backend/knowledge/__init__.py": [],
+    "src/backend/knowledge/chunking.py": [],
+    "src/backend/knowledge/ingest.py": [
+      "src/backend/knowledge/chunking.py"
+    ],
+    "src/backend/knowledge/reference_search.py": [
+      "src/backend/utils/ingestion/embeddings.py"
+    ],
+    "src/backend/library_summary.txt": [],
+    "src/backend/main.py": [
+      "src/backend/admin/analytics_router.py",
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/boards/router.py",
+      "src/backend/credentials/router.py",
+      "src/backend/integrations/__init__.py",
+      "src/backend/integrations/connections_router.py",
+      "src/backend/integrations/events.py",
+      "src/backend/integrations/google_drive/router.py",
+      "src/backend/integrations/slack/router.py",
+      "src/backend/integrations/slack/service.py",
+      "src/backend/integrations/spotify/router.py",
+      "src/backend/middleware/analytics_middleware.py",
+      "src/backend/oneclick/breakdown.py",
+      "src/backend/oneclick/royalties/analytics_router.py",
+      "src/backend/oneclick/royalties/ingest.py",
+      "src/backend/oneclick/royalties/router.py",
+      "src/backend/oneclick/royalty_calculator.py",
+      "src/backend/oneclick/share.py",
+      "src/backend/pagination.py",
+      "src/backend/projects/router.py",
+      "src/backend/projects/share_email.py",
+      "src/backend/registry/router.py",
+      "src/backend/settings/router.py",
+      "src/backend/splitsheet/router.py",
+      "src/backend/subscriptions/admin_auth.py",
+      "src/backend/subscriptions/admin_router.py",
+      "src/backend/subscriptions/billing_router.py",
+      "src/backend/subscriptions/deps.py",
+      "src/backend/subscriptions/enforcement.py",
+      "src/backend/subscriptions/models.py",
+      "src/backend/subscriptions/pro_requests_router.py",
+      "src/backend/subscriptions/router.py",
+      "src/backend/teams/router.py",
+      "src/backend/users/router.py",
+      "src/backend/zoe_chatbot/contract_chatbot.py",
+      "src/backend/zoe_chatbot/helpers.py"
+    ],
+    "src/backend/middleware/__init__.py": [],
+    "src/backend/middleware/analytics_middleware.py": [
+      "src/backend/analytics.py"
+    ],
+    "src/backend/oneclick/__init__.py": [],
+    "src/backend/oneclick/breakdown.py": [
+      "src/backend/auth.py"
+    ],
+    "src/backend/oneclick/ONECLICK.md": [],
+    "src/backend/oneclick/royalties/__init__.py": [],
+    "src/backend/oneclick/royalties/analytics_router.py": [
+      "src/backend/auth.py",
+      "src/backend/oneclick/royalties/__init__.py",
+      "src/backend/oneclick/royalties/analytics_service.py",
+      "src/backend/subscriptions/enforcement.py",
+      "src/backend/subscriptions/models.py"
+    ],
+    "src/backend/oneclick/royalties/analytics_service.py": [
+      "src/backend/oneclick/royalties/__init__.py",
+      "src/backend/oneclick/royalties/fx.py",
+      "src/backend/oneclick/royalties/models.py",
+      "src/backend/oneclick/royalties/service.py"
+    ],
+    "src/backend/oneclick/royalties/emails.py": [],
+    "src/backend/oneclick/royalties/fx.py": [],
+    "src/backend/oneclick/royalties/ingest.py": [],
+    "src/backend/oneclick/royalties/models.py": [],
+    "src/backend/oneclick/royalties/paypal_client.py": [],
+    "src/backend/oneclick/royalties/pdf.py": [
+      "src/backend/oneclick/royalties/__init__.py",
+      "src/backend/oneclick/royalties/paypal_client.py"
+    ],
+    "src/backend/oneclick/royalties/router.py": [
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/oneclick/royalties/__init__.py",
+      "src/backend/oneclick/royalties/emails.py",
+      "src/backend/oneclick/royalties/models.py",
+      "src/backend/oneclick/royalties/paypal_client.py",
+      "src/backend/oneclick/royalties/pdf.py",
+      "src/backend/oneclick/royalties/service.py",
+      "src/backend/subscriptions/enforcement.py",
+      "src/backend/subscriptions/models.py"
+    ],
+    "src/backend/oneclick/royalties/service.py": [
+      "src/backend/oneclick/royalties/__init__.py",
+      "src/backend/oneclick/royalties/fx.py",
+      "src/backend/oneclick/royalties/ingest.py",
+      "src/backend/oneclick/royalties/models.py",
+      "src/backend/oneclick/royalties/paypal_client.py"
+    ],
+    "src/backend/oneclick/royalty_calculator.py": [
+      "src/backend/knowledge/reference_search.py",
+      "src/backend/utils/contract_parsing/basis_detection.py",
+      "src/backend/utils/contract_parsing/models.py",
+      "src/backend/utils/contract_parsing/parser.py",
+      "src/backend/utils/contract_parsing/split_verification.py",
+      "src/backend/utils/llm/client.py",
+      "src/backend/utils/text/normalize.py"
+    ],
+    "src/backend/oneclick/share.py": [
+      "src/backend/auth.py",
+      "src/backend/integrations/oauth.py"
+    ],
+    "src/backend/pagination.py": [],
+    "src/backend/projects/__init__.py": [],
+    "src/backend/projects/emails.py": [],
+    "src/backend/projects/models.py": [],
+    "src/backend/projects/router.py": [
+      "src/backend/auth.py",
+      "src/backend/projects/__init__.py",
+      "src/backend/projects/models.py",
+      "src/backend/projects/service.py"
+    ],
+    "src/backend/projects/service.py": [],
+    "src/backend/projects/share_email.py": [
+      "src/backend/auth.py",
+      "src/backend/projects/__init__.py",
+      "src/backend/projects/service.py"
+    ],
+    "src/backend/pyproject.toml": [],
+    "src/backend/rag-tools/pinecone_upload_pdf.py": [
+      "src/backend/knowledge/chunking.py",
+      "src/backend/knowledge/ingest.py"
+    ],
+    "src/backend/registry/__init__.py": [],
+    "src/backend/registry/access.py": [],
+    "src/backend/registry/contract_splits.py": [
+      "src/backend/utils/contract_parsing/parser.py",
+      "src/backend/utils/ingestion/pdf_markdown.py",
+      "src/backend/utils/text/normalize.py"
+    ],
+    "src/backend/registry/derive_service.py": [
+      "src/backend/registry/__init__.py",
+      "src/backend/registry/contract_splits.py"
+    ],
+    "src/backend/registry/emails.py": [],
+    "src/backend/registry/grants_service.py": [],
+    "src/backend/registry/models.py": [],
+    "src/backend/registry/pdf_generator.py": [],
+    "src/backend/registry/router.py": [
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/registry/__init__.py",
+      "src/backend/registry/access.py",
+      "src/backend/registry/contract_splits.py",
+      "src/backend/registry/derive_service.py",
+      "src/backend/registry/grants_service.py",
+      "src/backend/registry/models.py",
+      "src/backend/registry/service.py",
+      "src/backend/registry/work_links_service.py",
+      "src/backend/subscriptions/enforcement.py",
+      "src/backend/subscriptions/models.py"
+    ],
+    "src/backend/registry/service.py": [
+      "src/backend/analytics.py",
+      "src/backend/pagination.py",
+      "src/backend/registry/access.py"
+    ],
+    "src/backend/registry/work_links_service.py": [
+      "src/backend/registry/access.py"
+    ],
+    "src/backend/settings/__init__.py": [],
+    "src/backend/settings/models.py": [],
+    "src/backend/settings/router.py": [
+      "src/backend/auth.py",
+      "src/backend/settings/__init__.py",
+      "src/backend/settings/models.py",
+      "src/backend/settings/service.py"
+    ],
+    "src/backend/settings/service.py": [],
+    "src/backend/splitsheet/__init__.py": [],
+    "src/backend/splitsheet/docx_generator.py": [],
+    "src/backend/splitsheet/pdf_generator.py": [],
+    "src/backend/splitsheet/router.py": [
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/splitsheet/docx_generator.py",
+      "src/backend/splitsheet/pdf_generator.py",
+      "src/backend/subscriptions/deps.py",
+      "src/backend/subscriptions/enforcement.py"
+    ],
+    "src/backend/subscriptions/__init__.py": [],
+    "src/backend/subscriptions/admin_auth.py": [
+      "src/backend/auth.py"
+    ],
+    "src/backend/subscriptions/admin_router.py": [
+      "src/backend/auth.py",
+      "src/backend/subscriptions/admin_auth.py",
+      "src/backend/subscriptions/admin_service.py",
+      "src/backend/subscriptions/models.py",
+      "src/backend/subscriptions/service.py"
+    ],
+    "src/backend/subscriptions/admin_service.py": [
+      "src/backend/analytics.py",
+      "src/backend/subscriptions/admin_auth.py",
+      "src/backend/subscriptions/service.py"
+    ],
+    "src/backend/subscriptions/billing_router.py": [
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/subscriptions/stripe_client.py",
+      "src/backend/subscriptions/stripe_events.py"
+    ],
+    "src/backend/subscriptions/deps.py": [
+      "src/backend/subscriptions/service.py"
+    ],
+    "src/backend/subscriptions/enforcement.py": [
+      "src/backend/analytics.py",
+      "src/backend/subscriptions/deps.py",
+      "src/backend/subscriptions/models.py",
+      "src/backend/subscriptions/service.py"
+    ],
+    "src/backend/subscriptions/models.py": [],
+    "src/backend/subscriptions/pro_requests_router.py": [
+      "src/backend/auth.py"
+    ],
+    "src/backend/subscriptions/router.py": [
+      "src/backend/auth.py",
+      "src/backend/subscriptions/admin_auth.py",
+      "src/backend/subscriptions/deps.py"
+    ],
+    "src/backend/subscriptions/service.py": [
+      "src/backend/subscriptions/models.py"
+    ],
+    "src/backend/subscriptions/stripe_client.py": [],
+    "src/backend/subscriptions/stripe_events.py": [
+      "src/backend/analytics.py"
+    ],
+    "src/backend/teams/__init__.py": [],
+    "src/backend/teams/authz.py": [],
+    "src/backend/teams/emails.py": [],
+    "src/backend/teams/models.py": [],
+    "src/backend/teams/router.py": [
+      "src/backend/auth.py",
+      "src/backend/teams/__init__.py",
+      "src/backend/teams/models.py",
+      "src/backend/teams/service.py"
+    ],
+    "src/backend/teams/service.py": [
+      "src/backend/confirm.py",
+      "src/backend/teams/__init__.py",
+      "src/backend/teams/authz.py"
+    ],
+    "src/backend/users/__init__.py": [],
+    "src/backend/users/account_deletion_service.py": [
+      "src/backend/analytics.py",
+      "src/backend/subscriptions/admin_auth.py",
+      "src/backend/subscriptions/stripe_client.py"
+    ],
+    "src/backend/users/emails.py": [],
+    "src/backend/users/router.py": [
+      "src/backend/analytics.py",
+      "src/backend/auth.py",
+      "src/backend/subscriptions/admin_auth.py",
+      "src/backend/users/account_deletion_service.py",
+      "src/backend/users/emails.py"
+    ],
+    "src/backend/utils/__init__.py": [],
+    "src/backend/utils/contract_parsing/__init__.py": [],
+    "src/backend/utils/contract_parsing/basis_detection.py": [
+      "src/backend/analytics.py"
+    ],
+    "src/backend/utils/contract_parsing/models.py": [],
+    "src/backend/utils/contract_parsing/oneclick_context.md": [],
+    "src/backend/utils/contract_parsing/parser.py": [
+      "src/backend/utils/contract_parsing/models.py",
+      "src/backend/utils/llm/client.py",
+      "src/backend/utils/text/normalize.py"
+    ],
+    "src/backend/utils/contract_parsing/split_verification.py": [
+      "src/backend/utils/contract_parsing/basis_detection.py",
+      "src/backend/utils/contract_parsing/models.py"
+    ],
+    "src/backend/utils/ingestion/__init__.py": [],
+    "src/backend/utils/ingestion/embeddings.py": [
+      "src/backend/utils/llm/client.py"
+    ],
+    "src/backend/utils/ingestion/pdf_markdown.py": [],
+    "src/backend/utils/ingestion/sections.py": [],
+    "src/backend/utils/ingestion/tables.py": [
+      "src/backend/utils/ingestion/sections.py"
+    ],
+    "src/backend/utils/llm/__init__.py": [],
+    "src/backend/utils/llm/client.py": [],
+    "src/backend/utils/text/__init__.py": [],
+    "src/backend/utils/text/normalize.py": [],
+    "src/backend/zoe_chatbot/CHATBOT.md": [],
+    "src/backend/zoe_chatbot/contract_chatbot.py": [
+      "src/backend/knowledge/reference_search.py",
+      "src/backend/utils/ingestion/pdf_markdown.py",
+      "src/backend/utils/ingestion/tables.py",
+      "src/backend/utils/text/normalize.py"
+    ],
+    "src/backend/zoe_chatbot/helpers.py": [],
+    "src/backend/zoe_chatbot/music_context.md": [],
+    "src/components/AccessGate.tsx": [],
+    "src/components/admin/AdminBadge.tsx": [
+      "src/hooks/useAdminStatus.ts"
+    ],
+    "src/components/admin/AnalyticsSummaryCard.tsx": [
+      "src/hooks/useAdminAnalyticsSummary.ts"
+    ],
+    "src/components/admin/BehaviorAnalyticsCard.tsx": [
+      "src/hooks/useAdminBehaviorSummary.ts"
+    ],
+    "src/components/AdminProtectedRoute.tsx": [
+      "src/hooks/useAdmin.ts"
+    ],
+    "src/components/AudioSection.tsx": [
+      "src/components/FileShareDialog.tsx",
+      "src/hooks/use-toast.ts",
+      "src/types/audio.ts"
+    ],
+    "src/components/billing/UpgradeBanner.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalyticsContext.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/CalculationProgressModal.tsx": [],
+    "src/components/ComingSoon.tsx": [
+      "src/components/layout/PageHeader.tsx"
+    ],
+    "src/components/ContactFormDialog.tsx": [
+      "src/integrations/supabase/types.ts"
+    ],
+    "src/components/ContractUploadModal.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/FileShareDialog.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/integrations/supabase/client.ts",
+      "src/integrations/supabase/types.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/InlineEdit.tsx": [],
+    "src/components/landing/LandingSections.tsx": [
+      "src/components/landing/ToolDemos.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAdmin.ts"
+    ],
+    "src/components/landing/ToolDemos.tsx": [],
+    "src/components/layout/MobileNavSheet.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/utils.ts"
+    ],
+    "src/components/layout/NotificationBell.tsx": [
+      "src/components/workspace/NotificationRow.tsx",
+      "src/hooks/useRegistryNotifications.ts"
+    ],
+    "src/components/layout/PageHeader.tsx": [
+      "src/components/layout/MobileNavSheet.tsx",
+      "src/components/layout/NotificationBell.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-mobile.tsx",
+      "src/lib/utils.ts"
+    ],
+    "src/components/NavLink.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/NewArtistDialog.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/components/notes/NotesEditor.tsx": [],
+    "src/components/notes/NotesSidebar.tsx": [
+      "src/hooks/useNotes.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/notes/NotesView.tsx": [
+      "src/components/notes/NotesEditor.tsx",
+      "src/components/notes/NotesSidebar.tsx",
+      "src/hooks/useNotes.ts"
+    ],
+    "src/components/onboarding/OnboardingProgress.tsx": [],
+    "src/components/onboarding/StepName.tsx": [],
+    "src/components/onboarding/StepPlan.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/onboarding/StepPreferences.tsx": [],
+    "src/components/onboarding/StepReady.tsx": [],
+    "src/components/onboarding/StepWelcome.tsx": [],
+    "src/components/oneclick/CalculationResults.tsx": [
+      "src/components/oneclick/EarningsBreakdown.tsx",
+      "src/components/oneclick/royalty-results.css",
+      "src/hooks/useIntegrations.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/oneclick/ContractSelector.tsx": [
+      "src/hooks/useAnalytics.ts"
+    ],
+    "src/components/oneclick/EarningsBreakdown.tsx": [
+      "src/hooks/useEarningsBreakdown.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/oneclick/ExpenseReviewDialog.tsx": [
+      "src/components/project/ExpenseFormDialog.tsx",
+      "src/hooks/useProjectExpenses.ts",
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/oneclick/payments/analytics/OverviewDashboard.tsx": [
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/useRoyaltyAnalytics.ts"
+    ],
+    "src/components/oneclick/payments/analytics/PayeeTrendChart.tsx": [
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/useRoyaltyAnalytics.ts"
+    ],
+    "src/components/oneclick/payments/NewPayoutModal.tsx": [
+      "src/components/oneclick/payments/PayWithPayPalDialog.tsx",
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/oneclick/payments/PartiesTable.tsx": [
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/oneclick/payments/PartyDrawer.tsx": [
+      "src/components/oneclick/payments/analytics/PayeeTrendChart.tsx",
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/oneclick/payments/PaymentTracking.tsx": [
+      "src/components/oneclick/payments/analytics/OverviewDashboard.tsx",
+      "src/components/oneclick/payments/NewPayoutModal.tsx",
+      "src/components/oneclick/payments/PartiesTable.tsx",
+      "src/components/oneclick/payments/PartyDrawer.tsx",
+      "src/components/oneclick/payments/PayoutDetailModal.tsx",
+      "src/components/oneclick/payments/PayoutRuns.tsx",
+      "src/components/oneclick/payments/PeriodsLedger.tsx",
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/useReportingCurrency.ts",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/oneclick/payments/PayoutDetailModal.tsx": [
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/apiFetch.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/oneclick/payments/PayoutRuns.tsx": [
+      "src/components/oneclick/payments/PayWithPayPalDialog.tsx",
+      "src/components/oneclick/payments/ReceiptDialog.tsx",
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/oneclick/payments/PayWithPayPalDialog.tsx": [
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/oneclick/payments/PeriodsLedger.tsx": [
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/oneclick/payments/ReceiptDialog.tsx": [
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useRoyalties.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/oneclick/payments/shared.tsx": [
+      "src/lib/apiFetch.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/oneclick/royalty-results.css": [],
+    "src/components/oneclick/RoyaltyStatementSelector.tsx": [
+      "src/hooks/useAnalytics.ts"
+    ],
+    "src/components/oneclick/SongMismatchComparison.tsx": [],
+    "src/components/PaymentDialog.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/integrations/supabase/types.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/paywall/PaywallCard.tsx": [
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useEntitlements.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/paywall/PaywallModal.tsx": [
+      "src/components/paywall/PaywallCard.tsx",
+      "src/hooks/useEntitlements.ts"
+    ],
+    "src/components/paywall/RequireFeature.tsx": [
+      "src/components/paywall/PaywallCard.tsx",
+      "src/hooks/useEntitlements.ts"
+    ],
+    "src/components/profile/ArtistRoyaltiesSection.tsx": [
+      "src/components/oneclick/payments/shared.tsx",
+      "src/hooks/useReportingCurrency.ts",
+      "src/hooks/useRoyaltyAnalytics.ts"
+    ],
+    "src/components/profile/CredentialsVault.tsx": [
+      "src/components/profile/PasswordRevealDialog.tsx",
+      "src/hooks/useArtistCredentials.ts"
+    ],
+    "src/components/profile/DeleteAccountDialog.tsx": [
+      "src/hooks/useDeleteAccount.ts"
+    ],
+    "src/components/profile/PasswordRevealDialog.tsx": [
+      "src/hooks/useArtistCredentials.ts"
+    ],
+    "src/components/profile/TeamCardSettings.tsx": [
+      "src/hooks/useTeamCard.ts"
+    ],
+    "src/components/project/AddWorkDialog.tsx": [
+      "src/components/registry/AddWorkWizard.tsx"
+    ],
+    "src/components/project/AudioTab.tsx": [
+      "src/components/project/BulkActionReviewDialog.tsx",
+      "src/components/project/ShareViaEmailDialog.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useGatedAction.tsx",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts",
+      "src/types/audio.ts"
+    ],
+    "src/components/project/BulkActionReviewDialog.tsx": [],
+    "src/components/project/ExpenseFormDialog.tsx": [
+      "src/hooks/useProjectExpenses.ts",
+      "src/hooks/useProjectsList.ts",
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/project/ExpenseTrackerTab.tsx": [
+      "src/components/project/ExpenseFormDialog.tsx",
+      "src/hooks/useProjectExpenses.ts",
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/project/FilesTab.tsx": [
+      "src/components/project/BulkActionReviewDialog.tsx",
+      "src/components/project/integrations/DriveImportDialog.tsx",
+      "src/components/project/ShareViaEmailDialog.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useGatedAction.tsx",
+      "src/hooks/useGoogleDrive.ts",
+      "src/hooks/useIntegrations.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/project/integrations/DriveImportDialog.tsx": [
+      "src/hooks/useGoogleDrive.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/project/integrations/ProjectSlackSettings.tsx": [
+      "src/hooks/useProjectIntegrations.ts",
+      "src/hooks/useSlackSettings.ts"
+    ],
+    "src/components/project/MembersTab.tsx": [
+      "src/hooks/useProjectMembers.ts",
+      "src/hooks/useRegistry.ts",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/components/project/SettingsTab.tsx": [
+      "src/components/project/integrations/ProjectSlackSettings.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useIntegrations.ts",
+      "src/hooks/useProjectMembers.ts",
+      "src/hooks/useRoyalties.ts",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/components/project/ShareViaEmailDialog.tsx": [
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/project/WorksTab.tsx": [
+      "src/components/InlineEdit.tsx",
+      "src/components/project/AddWorkDialog.tsx",
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/ProjectFormDialog.tsx": [
+      "src/components/NewArtistDialog.tsx",
+      "src/hooks/usePortfolioData.ts"
+    ],
+    "src/components/ProtectedRoute.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useOnboardingStatus.ts",
+      "src/lib/onboardingCache.ts"
+    ],
+    "src/components/registry/AddWorkWizard.tsx": [
+      "src/components/NewArtistDialog.tsx",
+      "src/components/ProjectFormDialog.tsx",
+      "src/components/registry/Artwork.tsx",
+      "src/components/registry/RegistryAvatar.tsx",
+      "src/components/registry/RoyaltySplitsTable.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useParseContractSplits.ts",
+      "src/hooks/useRegistry.ts",
+      "src/hooks/useSpotifySearch.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/AgreementsPanel.tsx": [
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/registry/Artwork.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/CollaborationStatus.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/registry/CollaboratorAccessPanel.tsx": [
+      "src/components/registry/DeriveCollaboratorSplitDialog.tsx",
+      "src/components/registry/permissions-panel.css",
+      "src/components/registry/RegistryAvatar.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useRegistry.ts",
+      "src/hooks/useWorkAudio.ts",
+      "src/hooks/useWorkFiles.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/registry/DeleteWorkConfirmModal.tsx": [
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/registry/DeriveCollaboratorSplitDialog.tsx": [
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useGatedAction.tsx",
+      "src/hooks/useRegistry.ts",
+      "src/hooks/useWorkFiles.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/FetchSpotifyMetadataDialog.tsx": [
+      "src/hooks/useRegistry.ts",
+      "src/hooks/useSpotifySearch.ts",
+      "src/lib/apiFetch.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/InviteCollaboratorModal.tsx": [
+      "src/components/registry/DeriveCollaboratorSplitDialog.tsx",
+      "src/components/registry/ResourceGrantPicker.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useRegistry.ts",
+      "src/hooks/useWorkAudio.ts",
+      "src/hooks/useWorkFiles.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/registry/LicensingPanel.tsx": [
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/registry/OwnershipPanel.tsx": [
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/registry/permissions-panel.css": [],
+    "src/components/registry/PermissionsPanel.tsx": [
+      "src/components/registry/CollaboratorAccessPanel.tsx",
+      "src/components/registry/RegistryAvatar.tsx",
+      "src/hooks/useRegistry.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/ProofOfOwnership.tsx": [
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/registry/RegistryAvatar.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/RegistryDashboard.tsx": [
+      "src/components/project/AddWorkDialog.tsx",
+      "src/components/registry/RegistryAvatar.tsx",
+      "src/components/registry/Segmented.tsx",
+      "src/components/registry/StatCard.tsx",
+      "src/components/registry/WorkRow.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useRegistry.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/RegistryStatusBadge.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/ReleaseTag.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/ResourceGrantPicker.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/RoyaltySplitsTable.tsx": [
+      "src/components/registry/RegistryAvatar.tsx",
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/Segmented.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/StatCard.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/WorkEditor.tsx": [
+      "src/components/registry/DeleteWorkConfirmModal.tsx",
+      "src/components/registry/FetchSpotifyMetadataDialog.tsx",
+      "src/components/registry/PermissionsPanel.tsx",
+      "src/components/registry/RegistryAvatar.tsx",
+      "src/components/registry/RegistryStatusBadge.tsx",
+      "src/components/registry/ReleaseTag.tsx",
+      "src/components/registry/RoyaltySplitsTable.tsx",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useGatedAction.tsx",
+      "src/hooks/useRegistry.ts",
+      "src/hooks/useSpotifySearch.ts",
+      "src/hooks/useWorkFiles.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/registry/WorkRow.tsx": [
+      "src/components/registry/Artwork.tsx",
+      "src/components/registry/RegistryAvatar.tsx",
+      "src/components/registry/RegistryStatusBadge.tsx",
+      "src/components/registry/ReleaseTag.tsx",
+      "src/hooks/useRegistry.ts"
+    ],
+    "src/components/RoyaltyStatementUploadModal.tsx": [
+      "src/hooks/use-toast.ts",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/components/tester/TesterBadge.tsx": [
+      "src/hooks/useTesterStatus.ts"
+    ],
+    "src/components/tester/TesterBanner.tsx": [
+      "src/hooks/useTesterStatus.ts"
+    ],
+    "src/components/ThemeProvider.tsx": [],
+    "src/components/ThemeToggle.tsx": [],
+    "src/components/upgrade/UpgradeRequestModal.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/walkthrough/ToolHelpButton.tsx": [],
+    "src/components/walkthrough/ToolIntroModal.tsx": [
+      "src/config/toolWalkthroughConfig.ts"
+    ],
+    "src/components/walkthrough/WalkthroughProvider.tsx": [
+      "src/components/walkthrough/WalkthroughTooltip.tsx",
+      "src/hooks/useWalkthrough.ts"
+    ],
+    "src/components/walkthrough/WalkthroughTooltip.tsx": [
+      "src/hooks/useWalkthrough.ts"
+    ],
+    "src/components/workspace/boards/BoardFilterBar.tsx": [
+      "src/components/workspace/boards/MultiSelectCombobox.tsx",
+      "src/hooks/useTeams.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/BoardSwitcher.tsx": [
+      "src/components/workspace/boards/DeleteConfirmDialog.tsx",
+      "src/hooks/useBoardsList.ts",
+      "src/hooks/useTeams.ts"
+    ],
+    "src/components/workspace/boards/CalendarView.tsx": [
+      "src/components/workspace/boards/TaskDetailPanel.tsx",
+      "src/hooks/useBoards.ts",
+      "src/hooks/useCalendarTasks.ts",
+      "src/hooks/useWorkspaceSettings.ts",
+      "src/lib/utils.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/ColorPicker.tsx": [
+      "src/lib/utils.ts"
+    ],
+    "src/components/workspace/boards/CommentSection.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/DeleteConfirmDialog.tsx": [],
+    "src/components/workspace/boards/KanbanBoard.tsx": [
+      "src/components/workspace/boards/BoardFilterBar.tsx",
+      "src/components/workspace/boards/KanbanCard.tsx",
+      "src/components/workspace/boards/KanbanColumn.tsx",
+      "src/components/workspace/boards/TaskDetailPanel.tsx",
+      "src/components/workspace/boards/TasksOverview.tsx",
+      "src/hooks/use-mobile.tsx",
+      "src/hooks/useBoardPeriod.ts",
+      "src/hooks/useBoards.ts",
+      "src/hooks/useParentTasks.ts",
+      "src/hooks/useTeams.ts",
+      "src/hooks/useWorkspaceSettings.ts"
+    ],
+    "src/components/workspace/boards/KanbanCard.tsx": [
+      "src/components/workspace/boards/labelColors.ts",
+      "src/lib/dateUtils.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/KanbanColumn.tsx": [
+      "src/components/workspace/boards/KanbanCard.tsx",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/labelColors.ts": [],
+    "src/components/workspace/boards/MultiSelectCombobox.tsx": [],
+    "src/components/workspace/boards/ParentKanbanCard.tsx": [
+      "src/components/workspace/boards/labelColors.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/ParentTaskRow.tsx": [
+      "src/components/workspace/boards/labelColors.ts",
+      "src/lib/utils.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/TaskDetailPanel.tsx": [
+      "src/components/workspace/boards/CommentSection.tsx",
+      "src/components/workspace/boards/TaskFields.tsx",
+      "src/components/workspace/boards/TaskLabels.tsx",
+      "src/components/workspace/boards/TaskSubtasks.tsx",
+      "src/hooks/useArtistsList.ts",
+      "src/hooks/useBoards.ts",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useGatedAction.tsx",
+      "src/hooks/useParentTasks.ts",
+      "src/hooks/useProjectsList.ts",
+      "src/hooks/useTaskDetail.ts",
+      "src/lib/apiFetch.ts",
+      "src/lib/dateUtils.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/TaskFields.tsx": [
+      "src/components/workspace/boards/ColorPicker.tsx",
+      "src/components/workspace/boards/MultiSelectCombobox.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useTaskAssignees.ts",
+      "src/hooks/useTeams.ts",
+      "src/lib/utils.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/TaskLabels.tsx": [
+      "src/components/workspace/boards/labelColors.ts"
+    ],
+    "src/components/workspace/boards/TasksOverview.tsx": [
+      "src/components/workspace/boards/ParentKanbanCard.tsx",
+      "src/components/workspace/boards/ParentTaskRow.tsx",
+      "src/components/workspace/boards/TaskDetailPanel.tsx",
+      "src/hooks/useArtistsList.ts",
+      "src/hooks/useBoards.ts",
+      "src/hooks/useParentTasks.ts",
+      "src/lib/utils.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/boards/TaskSubtasks.tsx": [
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/IntegrationCard.tsx": [
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/IntegrationHub.tsx": [
+      "src/components/paywall/PaywallModal.tsx",
+      "src/components/workspace/IntegrationCard.tsx",
+      "src/components/workspace/integrations/SlackPanel.tsx",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useIntegrations.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/integrations/DrivePanel.tsx": [
+      "src/hooks/useGoogleDrive.ts",
+      "src/hooks/useProjectsList.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/components/workspace/integrations/SlackPanel.tsx": [
+      "src/hooks/useSlackSettings.ts"
+    ],
+    "src/components/workspace/NotificationRow.tsx": [
+      "src/hooks/useRegistryNotifications.ts",
+      "src/hooks/useTeams.ts"
+    ],
+    "src/components/workspace/RegistryNotifications.tsx": [
+      "src/components/workspace/NotificationRow.tsx",
+      "src/components/workspace/SlackMentions.tsx",
+      "src/hooks/useRegistryNotifications.ts"
+    ],
+    "src/components/workspace/SlackMentions.tsx": [
+      "src/hooks/useSlackNotifications.ts"
+    ],
+    "src/components/workspace/teams/TeamsPanel.tsx": [
+      "src/components/workspace/boards/DeleteConfirmDialog.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useTeams.ts",
+      "src/types/teams.ts"
+    ],
+    "src/components/workspace/WorkspaceSettings.tsx": [
+      "src/hooks/useWorkspaceSettings.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/components/zoe/ContractSlideOver.tsx": [
+      "src/lib/apiFetch.ts"
+    ],
+    "src/components/zoe/types.ts": [],
+    "src/components/zoe/zoe-chat.css": [],
+    "src/components/zoe/ZoeChatMessages.tsx": [
+      "src/components/zoe/ContractSlideOver.tsx",
+      "src/hooks/useStreamingChat.ts"
+    ],
+    "src/components/zoe/ZoeContextPopover.tsx": [
+      "src/components/ContractUploadModal.tsx"
+    ],
+    "src/components/zoe/ZoeInputBar.tsx": [
+      "src/components/zoe/ContractSlideOver.tsx",
+      "src/components/zoe/ZoeContextPopover.tsx"
+    ],
+    "src/config/toolWalkthroughConfig.ts": [],
+    "src/contexts/AuthContext.tsx": [
+      "src/hooks/useAnalyticsContext.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts",
+      "src/lib/posthog.ts"
+    ],
+    "src/hooks/use-mobile.tsx": [],
+    "src/hooks/use-toast.ts": [],
+    "src/hooks/useAdmin.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalyticsContext.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useAdminAnalyticsSummary.ts": [
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useAdminBehaviorSummary.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalyticsContext.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useAdminPosthogTag.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAdmin.ts",
+      "src/lib/posthog.ts"
+    ],
+    "src/hooks/useAdminStatus.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalyticsContext.ts"
+    ],
+    "src/hooks/useAnalytics.ts": [
+      "src/lib/analytics-tools.ts",
+      "src/lib/posthog.ts"
+    ],
+    "src/hooks/useAnalyticsContext.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/lib/posthog.ts"
+    ],
+    "src/hooks/useArtistCredentials.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useArtistsList.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useAudioData.ts": [
+      "src/integrations/supabase/client.ts",
+      "src/types/audio.ts"
+    ],
+    "src/hooks/useBilling.ts": [
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useBoardPeriod.ts": [],
+    "src/hooks/useBoards.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useBoardsList.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/teams.ts"
+    ],
+    "src/hooks/useCalendarTasks.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useConversationPersistence.ts": [
+      "src/hooks/useStreamingChat.ts"
+    ],
+    "src/hooks/useDeleteAccount.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useEarningsBreakdown.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useEntitlements.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useGatedAction.tsx": [
+      "src/components/paywall/PaywallModal.tsx",
+      "src/hooks/useEntitlements.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useGoogleDrive.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useIntegrations.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useNotes.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useOnboardingStatus.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/integrations/supabase/client.ts",
+      "src/lib/onboardingCache.ts"
+    ],
+    "src/hooks/usePageTimer.ts": [
+      "src/lib/posthog.ts"
+    ],
+    "src/hooks/useParentTasks.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useParseContractSplits.ts": [
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/usePortfolioData.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useProjectExpenses.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useProjectIntegrations.ts": [
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/hooks/useProjectMembers.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useProjectsList.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useRegistry.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useRegistryNotifications.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useSlackNotifications.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useReportingCurrency.ts": [
+      "src/contexts/AuthContext.tsx"
+    ],
+    "src/hooks/useRoyalties.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useRoyaltyAnalytics.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useSlackNotifications.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/hooks/useSlackSettings.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useSpotifySearch.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useStreamingChat.ts": [
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useTaskAssignees.ts": [
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useTaskDetail.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useTeamCard.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useTeams.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/teams.ts"
+    ],
+    "src/hooks/useTesterGrants.ts": [
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useTesterStatus.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalyticsContext.ts"
+    ],
+    "src/hooks/useToolOnboardingStatus.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/hooks/useToolWalkthrough.ts": [
+      "src/config/toolWalkthroughConfig.ts"
+    ],
+    "src/hooks/useWalkthrough.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/hooks/useWorkAudio.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useWorkFiles.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/hooks/useWorkspaceSettings.ts": [
+      "src/contexts/AuthContext.tsx",
+      "src/lib/apiFetch.ts",
+      "src/types/integrations.ts"
+    ],
+    "src/hooks/useZoeData.ts": [
+      "src/components/zoe/types.ts",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useConversationPersistence.ts",
+      "src/hooks/useRegistry.ts",
+      "src/hooks/useStreamingChat.ts",
+      "src/hooks/useWorkFiles.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/index.css": [],
+    "src/integrations/supabase/client.ts": [
+      "src/integrations/supabase/types.ts"
+    ],
+    "src/integrations/supabase/types.ts": [],
+    "src/lib/analytics-tools.ts": [],
+    "src/lib/apiFetch.ts": [
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/lib/dateUtils.ts": [],
+    "src/lib/onboardingCache.ts": [],
+    "src/lib/posthog.ts": [],
+    "src/lib/utils.ts": [],
+    "src/main.tsx": [
+      "src/App.tsx",
+      "src/index.css",
+      "src/lib/posthog.ts"
+    ],
+    "src/pages/About.tsx": [
+      "src/components/landing/LandingSections.tsx"
+    ],
+    "src/pages/AdminUsers.tsx": [
+      "src/components/admin/AnalyticsSummaryCard.tsx",
+      "src/components/admin/BehaviorAnalyticsCard.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAdmin.ts",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useTesterGrants.ts",
+      "src/lib/utils.ts"
+    ],
+    "src/pages/ArtistProfile.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/notes/NotesView.tsx",
+      "src/components/profile/ArtistRoyaltiesSection.tsx",
+      "src/components/profile/CredentialsVault.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/integrations/supabase/client.ts",
+      "src/integrations/supabase/types.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/pages/Artists.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/pages/Auth.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts"
+    ],
+    "src/pages/ConfirmEmail.tsx": [
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/pages/Contacts.tsx": [
+      "src/components/ContactFormDialog.tsx",
+      "src/components/PaymentDialog.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/integrations/supabase/client.ts",
+      "src/integrations/supabase/types.ts"
+    ],
+    "src/pages/Dashboard.tsx": [
+      "src/components/billing/UpgradeBanner.tsx",
+      "src/components/layout/PageHeader.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAdmin.ts",
+      "src/hooks/useOnboardingStatus.ts",
+      "src/hooks/useWalkthrough.ts",
+      "src/hooks/useWorkspaceSettings.ts",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/pages/Documentation.tsx": [
+      "src/contexts/AuthContext.tsx"
+    ],
+    "src/pages/ExpenseTracker.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/project/ExpenseFormDialog.tsx",
+      "src/hooks/useProjectExpenses.ts"
+    ],
+    "src/pages/Features.tsx": [
+      "src/components/landing/LandingSections.tsx"
+    ],
+    "src/pages/Index.tsx": [
+      "src/components/landing/LandingSections.tsx",
+      "src/contexts/AuthContext.tsx"
+    ],
+    "src/pages/InviteClaim.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useRegistry.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/pages/NewArtist.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useGatedAction.tsx",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/pages/NotFound.tsx": [],
+    "src/pages/Notifications.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/workspace/RegistryNotifications.tsx"
+    ],
+    "src/pages/Onboarding.tsx": [
+      "src/components/onboarding/OnboardingProgress.tsx",
+      "src/components/onboarding/StepName.tsx",
+      "src/components/onboarding/StepPlan.tsx",
+      "src/components/onboarding/StepPreferences.tsx",
+      "src/components/onboarding/StepReady.tsx",
+      "src/components/onboarding/StepWelcome.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useBilling.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/onboardingCache.ts"
+    ],
+    "src/pages/OneClick.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/oneclick/payments/PaymentTracking.tsx",
+      "src/components/paywall/RequireFeature.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalytics.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/pages/OneClickDocuments.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/oneclick/CalculationResults.tsx",
+      "src/components/oneclick/ContractSelector.tsx",
+      "src/components/oneclick/ExpenseReviewDialog.tsx",
+      "src/components/oneclick/RoyaltyStatementSelector.tsx",
+      "src/components/oneclick/SongMismatchComparison.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/pages/Payments.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/integrations/supabase/client.ts",
+      "src/integrations/supabase/types.ts"
+    ],
+    "src/pages/Portfolio.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/ProjectFormDialog.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useGatedAction.tsx",
+      "src/hooks/usePortfolioData.ts",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts",
+      "src/integrations/supabase/client.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/pages/Pricing.tsx": [
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useBilling.ts"
+    ],
+    "src/pages/Privacy.tsx": [
+      "src/components/landing/LandingSections.tsx"
+    ],
+    "src/pages/Profile.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/profile/DeleteAccountDialog.tsx",
+      "src/components/profile/TeamCardSettings.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-toast.ts",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/pages/ProjectDetail.tsx": [
+      "src/components/InlineEdit.tsx",
+      "src/components/layout/MobileNavSheet.tsx",
+      "src/components/notes/NotesView.tsx",
+      "src/components/project/AudioTab.tsx",
+      "src/components/project/ExpenseTrackerTab.tsx",
+      "src/components/project/FilesTab.tsx",
+      "src/components/project/MembersTab.tsx",
+      "src/components/project/SettingsTab.tsx",
+      "src/components/project/WorksTab.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-mobile.tsx",
+      "src/hooks/useIntegrations.ts",
+      "src/hooks/useProjectIntegrations.ts",
+      "src/hooks/useProjectMembers.ts",
+      "src/hooks/useSlackSettings.ts",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts",
+      "src/integrations/supabase/client.ts"
+    ],
+    "src/pages/Registry.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/paywall/RequireFeature.tsx",
+      "src/components/registry/RegistryDashboard.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts"
+    ],
+    "src/pages/Security.tsx": [
+      "src/components/landing/LandingSections.tsx"
+    ],
+    "src/pages/SplitSheet.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useGatedAction.tsx",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts",
+      "src/lib/apiFetch.ts"
+    ],
+    "src/pages/Subscription.tsx": [
+      "src/components/admin/AdminBadge.tsx",
+      "src/components/tester/TesterBadge.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useAnalyticsContext.ts",
+      "src/hooks/useArtistsList.ts",
+      "src/hooks/useBilling.ts",
+      "src/hooks/useBoards.ts",
+      "src/hooks/useEntitlements.ts",
+      "src/hooks/useProjectsList.ts"
+    ],
+    "src/pages/Team.tsx": [
+      "src/components/landing/LandingSections.tsx"
+    ],
+    "src/pages/Tools.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/contexts/AuthContext.tsx",
+      "src/lib/analytics-tools.ts",
+      "src/pages/Dashboard.tsx"
+    ],
+    "src/pages/WorkDetail.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/paywall/RequireFeature.tsx",
+      "src/components/registry/WorkEditor.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/hooks/useRegistry.ts",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts"
+    ],
+    "src/pages/Workspace.tsx": [
+      "src/components/layout/PageHeader.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/components/workspace/boards/BoardSwitcher.tsx",
+      "src/components/workspace/boards/CalendarView.tsx",
+      "src/components/workspace/boards/KanbanBoard.tsx",
+      "src/components/workspace/IntegrationHub.tsx",
+      "src/components/workspace/teams/TeamsPanel.tsx",
+      "src/components/workspace/WorkspaceSettings.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/contexts/AuthContext.tsx",
+      "src/hooks/use-mobile.tsx",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts",
+      "src/hooks/useWorkspaceSettings.ts"
+    ],
+    "src/pages/WorkspaceBoards.tsx": [
+      "src/components/workspace/boards/KanbanBoard.tsx",
+      "src/hooks/useAnalytics.ts"
+    ],
+    "src/pages/Zoe.tsx": [
+      "src/components/paywall/RequireFeature.tsx",
+      "src/components/walkthrough/ToolHelpButton.tsx",
+      "src/components/walkthrough/ToolIntroModal.tsx",
+      "src/components/walkthrough/WalkthroughProvider.tsx",
+      "src/components/zoe/zoe-chat.css",
+      "src/components/zoe/ZoeChatMessages.tsx",
+      "src/components/zoe/ZoeContextPopover.tsx",
+      "src/components/zoe/ZoeInputBar.tsx",
+      "src/config/toolWalkthroughConfig.ts",
+      "src/hooks/useAnalytics.ts",
+      "src/hooks/useToolOnboardingStatus.ts",
+      "src/hooks/useToolWalkthrough.ts",
+      "src/hooks/useZoeData.ts"
+    ],
+    "src/types/audio.ts": [],
+    "src/types/integrations.ts": [],
+    "src/types/teams.ts": [],
+    "src/vite-env.d.ts": [],
+    "supabase/config.toml": [],
+    "tailwind.config.ts": [],
+    "Taskfile.yml": [],
+    "tsconfig.app.json": [],
+    "tsconfig.json": [],
+    "tsconfig.node.json": [],
+    "vercel.json": [],
+    "vite.config.ts": [],
+    "vitest.config.ts": []
+  }
+}

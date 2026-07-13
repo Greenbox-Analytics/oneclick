@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { RegistryAvatar } from "./RegistryAvatar";
+import { clampPct, SPLIT_PALETTE, splitTotals } from "./splitsShared";
 
 export interface SplitRow {
   /** Stable id so React keys are predictable. */
@@ -95,17 +96,7 @@ export function RoyaltySplitsTable({
   showTotals = true,
   showSoundExchange,
 }: RoyaltySplitsTableProps) {
-  const totals = useMemo(
-    () =>
-      rows.reduce(
-        (acc, r) => ({
-          master: acc.master + (r.master || 0),
-          publishing: acc.publishing + (r.publishing || 0),
-        }),
-        { master: 0, publishing: 0 }
-      ),
-    [rows]
-  );
+  const totals = useMemo(() => splitTotals(rows), [rows]);
   const balanced = totals.master === 100 && totals.publishing === 100;
   // SoundExchange shares render in their own section below the table — never
   // as a column, never in `balanced` (SoundExchange pays parties directly, so

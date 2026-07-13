@@ -91,8 +91,10 @@ def _generate_pdf(artist_name: str, payments: list[dict], total: float, message:
     elements = []
 
     # ---- header ----
+    # artist_name is deliberately not printed here — the frontend sends a generic
+    # placeholder ("Artist"); the name still feeds the share filename.
     elements.append(Paragraph("Royalty Calculation Results", title_style))
-    generated = f"Generated {datetime.now().strftime('%B %d, %Y')} &mdash; {artist_name}"
+    generated = f"Generated {datetime.now().strftime('%B %d, %Y')}"
     elements.append(Paragraph(f"{message} &bull; {generated}" if message else generated, sub_style))
     elements.append(Spacer(1, 0.22 * inch))
 

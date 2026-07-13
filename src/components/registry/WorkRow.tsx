@@ -47,7 +47,10 @@ export function WorkRow({ work, onOpen, onOpenProject }: WorkRowProps) {
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-semibold tracking-tight">{work.title}</span>
           <ReleaseTag released={work.released} />
-          <RegistryStatusBadge status={work.status} />
+          {/* Registration status (Draft/Pending/Registered) is a rights-workflow
+              state, independent of release. Hidden for released works so it isn't
+              misread as a release/edit state next to the "Released" tag. */}
+          {!work.released && <RegistryStatusBadge status={work.status} />}
           {issues.length > 0 && (
             <span
               className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5"
