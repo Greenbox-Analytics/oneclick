@@ -11,6 +11,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 from registry import derive_service
+from utils.contract_parsing.cache import deserialize_contract_data
 from utils.contract_parsing.models import ContractData, Party, RoyaltyShare
 
 
@@ -109,20 +110,13 @@ def _db():
         work_files=[{"work_id": "w1", "file_id": "f1"}],
         project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
     )
-    parsed = {
-        "parties": [
-            {
-                "name": "Marcus",
-                "role": "producer",
-                "master_pct": 30,
-                "publishing_pct": 0,
-                "soundexchange_pct": 15,
-            },
-            {"name": "Someone Else", "role": "writer", "master_pct": 10, "publishing_pct": 50},
-        ],
-        "main_artist_found": False,
-    }
-    with patch.object(derive_service, "_parse_pdf_bytes", return_value=parsed) as mock_parse:
+
+
+def test_name_matched_with_pct_high_confidence():
+    db = _db()
+    cd = _cd([("Marcus", "producer", 30, 0), ("Someone Else", "writer", 10, 50)])
+    cd.royalty_shares.append(RoyaltyShare(party_name="Marcus", royalty_type="SoundExchange", percentage=15.0))
+    with patch.object(derive_service, "get_or_parse", return_value=cd) as mock_gop:
         result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
 
     assert mock_gop.call_count == 1
@@ -163,17 +157,27 @@ def test_derivation_uses_get_or_parse_result():
     assert result["matched_file_ids"] == ["f1"]
 
 
-def test_matched_no_pct_low_confidence():
+def test_party_with_no_split_is_dropped_not_found():
+    """A party listed in the contract with no royalty split at all is dropped
+    by the pivot (merely mentioned), so the collaborator is not found."""
     db = _db()
     cd = _cd([("Marcus", "producer", 0, 0)])
     with patch.object(derive_service, "get_or_parse", return_value=cd):
         result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
 
-    assert result["found"] is True
+    assert result["found"] is False
     assert result["confidence"] == "low"
-    assert result["master_pct"] == 0
-    assert result["publishing_pct"] == 0  # pivot yields 0.0, not None
-    assert result["matched_file_ids"] == ["f1"]
+    assert result["master_pct"] is None
+    assert result["matched_file_ids"] == []
+
+
+def test_parse_failure_returns_not_found():
+    db = _db()
+    with patch.object(derive_service, "get_or_parse", side_effect=RuntimeError("boom")):
+        result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
+
+    assert result["found"] is False
+    assert result["matched_file_ids"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -184,19 +188,10 @@ def test_matched_no_pct_low_confidence():
 def test_collaborator_matched_via_alias():
     """A party listed by legal name with the collaborator's stage name in
     `aliases` still matches."""
-    db = _make_db(
-        downloads={"contracts/a.pdf": b"%PDF-bytes"},
-        work_files=[{"work_id": "w1", "file_id": "f1"}],
-        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
-        contract_parse_cache=[],
-    )
-    parsed = {
-        "parties": [
-            {"name": "Marcus Adebayo", "role": "producer", "aliases": ["M-Bay"], "master_pct": 30, "publishing_pct": 0}
-        ],
-        "main_artist_found": False,
-    }
-    with patch.object(derive_service, "_parse_pdf_bytes", return_value=parsed):
+    db = _db()
+    cd = _cd([("Marcus Adebayo", "producer", 30, 0)])
+    cd.parties[0].aliases = ["M-Bay"]
+    with patch.object(derive_service, "get_or_parse", return_value=cd):
         result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "M-Bay"))
 
     assert result["found"] is True
@@ -206,21 +201,20 @@ def test_collaborator_matched_via_alias():
 
 
 def test_stale_cache_payload_without_aliases_still_matches_by_name():
-    """Cached parses from before the aliases field behave exactly as before."""
-    cached_parsed = {
-        "parties": [{"name": "Marcus", "role": "producer", "master_pct": 25, "publishing_pct": 0}],
-        "main_artist_found": False,
+    """Cached parses from before the aliases field deserialize with empty
+    aliases and behave exactly as before (matched by name)."""
+    cached_payload = {
+        "parties": [{"name": "Marcus", "role": "producer"}],  # no "aliases" key
+        "works": [],
+        "royalty_shares": [{"party_name": "Marcus", "royalty_type": "Master", "percentage": 25.0}],
+        "contract_summary": "",
+        "default_basis": None,
     }
-    db = _make_db(
-        work_files=[{"work_id": "w1", "file_id": "f1"}],
-        project_files=[{"id": "f1", "file_path": "contracts/a.pdf", "content_hash": "h1", "file_name": "a.pdf"}],
-        contract_parse_cache=[{"content_hash": "h1", "parsed": cached_parsed}],
-    )
-    with patch.object(derive_service, "_parse_pdf_bytes") as mock_parse:
+    cd = deserialize_contract_data(cached_payload)
+    db = _db()
+    with patch.object(derive_service, "get_or_parse", return_value=cd):
         result = asyncio.run(derive_service.derive_for_collaborator(db, "w1", "Marcus"))
 
-    assert mock_parse.call_count == 0
     assert result["found"] is True
     assert result["master_pct"] == 25
-    # Cached payload predates the soundexchange bucket — tolerated as None.
-    assert result["soundexchange_pct"] is None
+    assert result["matched_file_ids"] == ["f1"]

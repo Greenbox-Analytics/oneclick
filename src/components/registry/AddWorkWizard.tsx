@@ -260,7 +260,6 @@ export function AddWorkWizard({
   const createWork = useCreateWork();
   const createStake = useCreateStake();
   const inviteCollaborator = useInviteCollaborator();
-  const storageStatus = useStorageStatus();
   const [submitting, setSubmitting] = useState(false);
   // Final review dialog shown between "Add work" and the actual submit.
   const [confirmOpen, setConfirmOpen] = useState(false);

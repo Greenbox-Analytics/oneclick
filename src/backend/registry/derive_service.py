@@ -12,9 +12,9 @@ from registry import contract_splits
 from utils.contract_parsing.cache import get_or_parse
 
 
-def _parse_pdf_bytes(content: bytes) -> dict:
-    """Run the existing parser on PDF bytes. main_artist_name="" so the cached result is
-    collaborator-independent (name matching happens in derive_for_collaborator)."""
+def _pdf_bytes_to_markdown(content: bytes) -> str:
+    """Convert PDF bytes to markdown via a temp file (pymupdf4llm, local, no LLM).
+    Page markers are stripped downstream by get_or_parse (canonical parse input)."""
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
