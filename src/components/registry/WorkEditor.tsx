@@ -67,6 +67,7 @@ import { ReleaseTag } from "./ReleaseTag";
 import { RegistryStatusBadge } from "./RegistryStatusBadge";
 import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
+import { EditSplitsDialog } from "./EditSplitsDialog";
 import { DeleteWorkConfirmModal } from "./DeleteWorkConfirmModal";
 import FetchSpotifyMetadataDialog from "./FetchSpotifyMetadataDialog";
 
@@ -859,7 +860,8 @@ function TraceRow({ icon, label, value, ok }: TraceRowProps) {
   );
 }
 
-/** Sidebar splits card — local editable copy, persists on "Done" via stake CRUD. */
+/** Sidebar splits card — read-only display; "Edit" opens EditSplitsDialog, which
+ *  hands back the edited rows to save() for minimal stake create/update/delete. */
 function SplitsSidebar({
   work,
   canEdit,
@@ -871,17 +873,12 @@ function SplitsSidebar({
   canSeeFullOwnership: boolean;
   initialRows: SplitRow[];
 }) {
-  const [isEditing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<SplitRow[]>(initialRows);
+  const [modalOpen, setModalOpen] = useState(false);
   const createStake = useCreateStake();
   const updateStake = useUpdateStake();
   const deleteStake = useDeleteStake();
 
-  useEffect(() => {
-    if (!isEditing) setDraft(initialRows);
-  }, [initialRows, isEditing]);
-
-  const save = async () => {
+  const save = async (rowsToSave: SplitRow[]) => {
     // Diff against work.stakes, emit minimal create/update/delete calls.
     const existing = work.stakes || [];
     const byHolder = new Map<string, { master?: OwnershipStake; publishing?: OwnershipStake }>();
@@ -894,7 +891,7 @@ function SplitsSidebar({
 
     const promises: Promise<unknown>[] = [];
     const seenNames = new Set<string>();
-    for (const row of draft) {
+    for (const row of rowsToSave) {
       const name = (row.name || "").trim();
       if (!name) continue;
       seenNames.add(name);
@@ -964,22 +961,24 @@ function SplitsSidebar({
   };
 
   return (
-    <RoyaltySplitsTable
-      rows={isEditing ? draft : initialRows}
-      onChange={isEditing ? setDraft : undefined}
-      editable={isEditing}
-      showEditToggle={canEdit}
-      isEditing={isEditing}
-      onToggleEdit={async () => {
-        if (isEditing) {
-          await save();
-        }
-        setEditing((v) => !v);
-      }}
-      allowAddRow={isEditing}
-      warnOnImbalance={canEdit}
-      showTotals={canSeeFullOwnership}
-    />
+    <>
+      <RoyaltySplitsTable
+        rows={initialRows}
+        showEditToggle={canEdit}
+        isEditing={false}
+        onToggleEdit={() => setModalOpen(true)}
+        warnOnImbalance={canEdit}
+        showTotals={canSeeFullOwnership}
+      />
+      {canEdit && (
+        <EditSplitsDialog
+          open={modalOpen}
+          onOpenChange={setModalOpen}
+          initialRows={initialRows}
+          onSave={save}
+        />
+      )}
+    </>
   );
 }
 

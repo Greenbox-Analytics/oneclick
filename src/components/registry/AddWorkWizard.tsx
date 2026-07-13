@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
 import {
   useSpotifySearch,
@@ -52,6 +53,11 @@ import {
 import { Artwork } from "./Artwork";
 import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
+import {
+  type QueuedContract,
+  partitionContractsForLinking,
+  persistContractToProject,
+} from "./contractLinking";
 import { NewArtistDialog } from "@/components/NewArtistDialog";
 import { ProjectFormDialog } from "@/components/ProjectFormDialog";
 
@@ -81,21 +87,6 @@ const TYPES = [
   ["composition", "Composition"],
   ["other", "Other"],
 ] as const;
-
-// A contract queued for AI split parsing. Splits are often spread across
-// several contracts (producer deal, feature deal, …) that only together
-// account for 100% — the queue lets the user parse them all and merge.
-interface QueuedContract {
-  id: string;
-  kind: "upload" | "project";
-  file?: File;
-  contractFileId?: string;
-  displayName: string;
-  status: "pending" | "parsing" | "done" | "error";
-  error?: string;
-  parties?: ParsedParty[]; // raw parse result, kept for provenance + re-merge
-  mainArtistFound?: boolean;
-}
 
 interface MergeConflict {
   name: string;
@@ -179,6 +170,7 @@ export function AddWorkWizard({
   // -------- destination state --------
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const storageStatus = useStorageStatus();
   const [selectedArtistId, setSelectedArtistId] = useState<string>(initialArtistId || "");
   const [selectedProjectId, setSelectedProjectId] = useState<string>(initialProjectId || "");
 
@@ -546,6 +538,53 @@ export function AddWorkWizard({
     setRowsDirty(true);
   };
 
+  // Everything the user attached in the "Parse with AI" step is — by their own
+  // selection — related to this work, so link it into Related documents once the
+  // work exists. Best-effort: a failure here must never fail work creation
+  // (mirrors the derive-from-contracts endpoint's auto-link behavior).
+  const linkParsedContractsToWork = async (workId: string) => {
+    const { existingFileIds, uploads } = partitionContractsForLinking(queuedContracts);
+    const fileIds = [...existingFileIds];
+
+    // Uploaded-in-wizard PDFs live only in memory — persist them to the project's
+    // Files (as contracts) so they survive and can be linked.
+    if (uploads.length > 0 && projectIdInUse) {
+      const totalSize = uploads.reduce((n, u) => n + u.file.size, 0);
+      const overCap =
+        storageStatus.cap !== -1 && storageStatus.used + totalSize > storageStatus.cap;
+      if (overCap) {
+        toast.error(
+          "Uploaded contracts couldn't be saved to Related documents — storage limit reached."
+        );
+      } else {
+        for (const u of uploads) {
+          try {
+            fileIds.push(await persistContractToProject(u.file, projectIdInUse));
+          } catch {
+            // one upload failing shouldn't block the rest — or the work itself
+          }
+        }
+      }
+    }
+
+    // Dedup across picked + uploaded ids (an upload may hash to an already-picked
+    // file) so we never hit the work_files UNIQUE(work_id, file_id) constraint.
+    const unique = Array.from(new Set(fileIds));
+    if (unique.length === 0) return;
+
+    const results = await Promise.allSettled(
+      unique.map((fileId) =>
+        apiFetch(`${API_URL}/registry/works/${workId}/files?file_id=${fileId}`, {
+          method: "POST",
+        })
+      )
+    );
+    queryClient.invalidateQueries({ queryKey: ["work-files", workId] });
+    if (results.every((r) => r.status === "rejected")) {
+      toast.error("Couldn't link the contracts to this work's documents.");
+    }
+  };
+
   const finish = async (overrideRows?: SplitRow[]) => {
     const rows = overrideRows ?? splitRows;
     if (!projectIdInUse || !artistIdInUse) {
@@ -603,6 +642,13 @@ export function AddWorkWizard({
               is_owner_stake: row.isYou === true,
             });
           }
+        }
+        // Link everything attached in "Parse with AI" into Related documents.
+        // Best-effort — a linking hiccup must never fail the already-created work.
+        try {
+          await linkParsedContractsToWork(workId);
+        } catch {
+          // swallow: the work exists; linking is a non-blocking nicety
         }
       }
 

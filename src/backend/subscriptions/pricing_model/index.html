@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Msanii — LLM Cost & Credit Model</title>
+<title>Msanii — Per-Tool Pricing & Credit Model</title>
 <style>
   :root{
     --ground:#F7F8F9; --surface:#FFFFFF; --surface-2:#FBFCFC;
@@ -45,62 +45,69 @@
     --warn:#E0A63C; --warn-soft:#E0A63C18; --crit:#E8776B; --crit-soft:#E8776B18; --free:#93A0AD;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.28);
   }
-
   *{box-sizing:border-box}
   body{margin:0}
-  .wrap{
-    font-family:var(--sans); background:var(--ground); color:var(--ink);
-    -webkit-font-smoothing:antialiased; line-height:1.5;
-    padding:clamp(20px,4vw,56px) clamp(16px,4vw,40px);
-  }
+  .wrap{font-family:var(--sans);background:var(--ground);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.5;padding:clamp(20px,4vw,56px) clamp(16px,4vw,40px)}
   .page{max-width:1080px;margin:0 auto}
-  .eyebrow{
-    font-size:11.5px;font-weight:650;letter-spacing:.14em;text-transform:uppercase;
-    color:var(--accent);margin:0 0 10px;
-  }
-  h1{
-    font-size:clamp(26px,4vw,36px);line-height:1.08;letter-spacing:-.02em;font-weight:720;
-    margin:0 0 12px;text-wrap:balance;
-  }
-  .lede{font-size:clamp(15px,1.6vw,17px);color:var(--muted);max-width:64ch;margin:0}
+  .eyebrow{font-size:11.5px;font-weight:650;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+  h1{font-size:clamp(26px,4vw,36px);line-height:1.08;letter-spacing:-.02em;font-weight:720;margin:0 0 12px;text-wrap:balance}
+  .lede{font-size:clamp(15px,1.6vw,17px);color:var(--muted);max-width:66ch;margin:0}
   .lede b{color:var(--ink-soft);font-weight:640}
-
-  .disclaim{
-    margin-top:20px;display:flex;gap:12px;align-items:flex-start;
-    background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);
-    border-radius:11px;padding:13px 16px;font-size:13.5px;color:var(--ink-soft);
-  }
+  .disclaim{margin-top:20px;display:flex;gap:12px;align-items:flex-start;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);border-radius:11px;padding:13px 16px;font-size:13.5px;color:var(--ink-soft)}
   .disclaim .dot{color:var(--warn);font-weight:700;flex:0 0 auto}
-
   section{margin-top:clamp(30px,5vw,52px)}
   .sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
   h2{font-size:13px;font-weight:680;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:0}
   .sec-note{font-size:12.5px;color:var(--faint)}
 
+  /* plans */
+  .plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  .plan{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);padding:clamp(18px,2.4vw,26px)}
+  .plan.pro{border-color:var(--accent-line);box-shadow:0 0 0 1px var(--accent-line),var(--shadow)}
+  .plan .pname{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
+  .plan .pname b{font-size:16px;font-weight:700;letter-spacing:-.01em}
+  .plan .price{font-family:var(--mono);font-size:26px;font-weight:680;letter-spacing:-.02em;margin:6px 0 2px;font-variant-numeric:tabular-nums}
+  .plan .price small{font-size:13px;color:var(--muted);font-weight:500}
+  .plan .psub{font-size:12.5px;color:var(--faint);margin-bottom:14px}
+  .plan ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+  .plan li{font-size:13.5px;color:var(--ink-soft);display:flex;gap:9px;align-items:flex-start}
+  .plan li .mk{flex:0 0 auto;font-weight:700;line-height:1.4}
+  .plan li.on .mk{color:var(--accent)} .plan li.off .mk{color:var(--faint)}
+  .plan li.off{color:var(--faint)}
+  .plan li b{color:var(--ink);font-weight:640;font-variant-numeric:tabular-nums}
+
+  /* tool cards */
+  .tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+  .tcard{background:var(--surface);border:1px solid var(--hair);border-radius:13px;box-shadow:var(--shadow);padding:16px 18px;display:flex;flex-direction:column;gap:11px}
+  .tcard .th{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .tcard .tn{font-size:14.5px;font-weight:680;letter-spacing:-.01em}
+  .tcard .tiers{display:flex;gap:8px}
+  .tier{flex:1;background:var(--surface-2);border:1px solid var(--hair);border-radius:9px;padding:8px 10px;min-width:0}
+  .tier .tl{font-size:10px;font-weight:680;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:3px}
+  .tier .tv{font-size:13px;font-weight:640;color:var(--ink);font-variant-numeric:tabular-nums}
+  .tier.pro{border-color:var(--accent-line);background:var(--accent-soft)}
+  .tcard .costline{font-size:12.5px;color:var(--muted);border-top:1px solid var(--hair-2);padding-top:9px;margin-top:auto}
+  .tcard .costline b{color:var(--accent);font-weight:680;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .tcard .costline.flat b{color:var(--ink-soft)}
+
+  .badge{display:inline-block;font-size:10px;font-weight:680;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:100px;white-space:nowrap}
+  .badge.ai{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line)}
+  .badge.plan{background:var(--surface-2);color:var(--muted);border:1px solid var(--hair)}
+  .toggle{display:inline-flex;background:var(--surface-2);border:1px solid var(--hair);border-radius:9px;padding:3px;gap:2px}
+  .toggle button{font:inherit;font-size:12.5px;font-weight:600;color:var(--muted);background:none;border:none;padding:6px 14px;border-radius:7px;cursor:pointer}
+  .toggle button.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+  .toggle button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
   /* assumptions */
-  .assume{
-    background:var(--surface);border:1px solid var(--hair);border-radius:14px;
-    box-shadow:var(--shadow);padding:clamp(16px,2.4vw,24px);
-    display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:clamp(14px,2vw,22px);
-  }
+  .assume{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);padding:clamp(16px,2.4vw,24px);display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:clamp(14px,2vw,22px)}
   .field{display:flex;flex-direction:column;gap:7px;min-width:0}
   .field label{font-size:12px;font-weight:600;color:var(--ink-soft);display:flex;justify-content:space-between;gap:8px;align-items:baseline}
   .field .val{font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums}
   .field .sub{font-size:11px;color:var(--faint);font-weight:400}
-  input[type=range]{
-    -webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:4px;
-    background:var(--hair);outline:none;margin:4px 0;
-  }
-  input[type=range]::-webkit-slider-thumb{
-    -webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;
-    background:var(--accent);cursor:pointer;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--accent-line);
-  }
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:4px;background:var(--hair);outline:none;margin:4px 0}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--accent-line)}
   input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--surface)}
-  input[type=number]{
-    font-family:var(--mono);font-size:13.5px;font-variant-numeric:tabular-nums;
-    background:var(--surface-2);border:1px solid var(--hair);border-radius:8px;
-    color:var(--ink);padding:8px 10px;width:100%;
-  }
+  input[type=number]{font-family:var(--mono);font-size:13.5px;font-variant-numeric:tabular-nums;background:var(--surface-2);border:1px solid var(--hair);border-radius:8px;color:var(--ink);padding:8px 10px;width:100%}
   input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .prefix{position:relative}
   .prefix span{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--faint);font-family:var(--mono);font-size:13px;pointer-events:none}
@@ -109,54 +116,44 @@
   /* table */
   .tablecard{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
   .tscroll{overflow-x:auto}
-  table{border-collapse:collapse;width:100%;min-width:720px;font-size:13.5px}
-  thead th{
-    text-align:left;font-size:11px;font-weight:640;letter-spacing:.05em;text-transform:uppercase;
-    color:var(--faint);padding:14px 14px 11px;border-bottom:1px solid var(--hair);white-space:nowrap;
-  }
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:13.5px}
+  thead th{text-align:left;font-size:11px;font-weight:640;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);padding:14px 14px 11px;border-bottom:1px solid var(--hair);white-space:nowrap}
   th.num,td.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
-  tbody td{padding:13px 14px;border-bottom:1px solid var(--hair-2);vertical-align:middle}
+  tbody td{padding:12px 14px;border-bottom:1px solid var(--hair-2);vertical-align:middle}
   tbody tr:last-child td{border-bottom:none}
   tbody tr:hover td{background:var(--surface-2)}
   .tool{font-weight:640;color:var(--ink);white-space:nowrap}
   .scen{font-size:12px;color:var(--muted);margin-top:2px}
   .models{font-family:var(--mono);font-size:11.5px;color:var(--ink-soft);white-space:nowrap}
   .cost{font-weight:640;color:var(--ink)}
-  .credits{font-weight:700;color:var(--accent);font-size:14.5px}
+  .credits{font-weight:700;color:var(--accent)}
   .creditsFree{color:var(--free);font-weight:600}
-  .chip{
-    display:inline-block;font-size:10.5px;font-weight:680;letter-spacing:.04em;text-transform:uppercase;
-    padding:3px 8px;border-radius:100px;white-space:nowrap;
-  }
+  .chip{display:inline-block;font-size:10.5px;font-weight:680;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:100px;white-space:nowrap}
   .chip.free{background:var(--surface-2);color:var(--free);border:1px solid var(--hair)}
   .chip.low{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line)}
   .chip.med{background:var(--warn-soft);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}
   .chip.high{background:var(--crit-soft);color:var(--crit);border:1px solid color-mix(in srgb,var(--crit) 35%,transparent)}
-  .bar-wrap{display:flex;align-items:center;gap:9px;min-width:130px}
+  .bar-wrap{display:flex;align-items:center;gap:9px;min-width:120px}
   .bar-track{flex:1;height:7px;border-radius:4px;background:var(--hair-2);overflow:hidden}
   .bar-fill{height:100%;border-radius:4px;background:var(--accent);transition:width .25s ease}
   .bar-fill.med{background:var(--warn)} .bar-fill.high{background:var(--crit)} .bar-fill.free{background:var(--hair)}
 
-  /* callouts */
+  /* storage readout */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:16px}
+  .stat{background:var(--surface);border:1px solid var(--hair);border-radius:12px;box-shadow:var(--shadow);padding:15px 16px}
+  .stat .sl{font-size:11px;font-weight:640;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-bottom:7px}
+  .stat .sv{font-family:var(--mono);font-size:22px;font-weight:680;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
+  .stat .sv.pos{color:var(--accent)} .stat .sv.neg{color:var(--crit)}
+  .stat .snote{font-size:11.5px;color:var(--muted);margin-top:6px}
+
   .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}
   .card{background:var(--surface);border:1px solid var(--hair);border-radius:13px;box-shadow:var(--shadow);padding:18px 20px}
-  .card h3{margin:0 0 8px;font-size:14.5px;font-weight:680;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+  .card h3{margin:0 0 8px;font-size:14.5px;font-weight:680;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .card p{margin:0;font-size:13.5px;color:var(--muted)}
   .card p+p{margin-top:9px}
   .card code{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--hair);border-radius:5px;padding:1px 5px;color:var(--ink-soft)}
   .tag{font-size:10.5px;font-weight:680;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:5px}
-  .tag.save{background:var(--accent-soft);color:var(--accent)}
-  .tag.watch{background:var(--crit-soft);color:var(--crit)}
-
-  .steps{counter-reset:s;display:flex;flex-direction:column;gap:2px}
-  .step{display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--hair-2)}
-  .step:last-child{border-bottom:none}
-  .step .n{counter-increment:s;flex:0 0 auto;width:24px;height:24px;border-radius:7px;background:var(--accent-soft);color:var(--accent);font-family:var(--mono);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;margin-top:1px}
-  .step .n::before{content:counter(s)}
-  .step .body{min-width:0}
-  .step .body b{font-size:14px;font-weight:640;color:var(--ink)}
-  .step .body p{margin:4px 0 0;font-size:13px;color:var(--muted)}
-  .step .body code{font-family:var(--mono);font-size:11.5px;background:var(--surface-2);border:1px solid var(--hair);border-radius:5px;padding:1px 5px;color:var(--ink-soft);word-break:break-word}
+  .tag.save{background:var(--accent-soft);color:var(--accent)} .tag.watch{background:var(--crit-soft);color:var(--crit)}
 
   footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--hair);font-size:12px;color:var(--faint);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
   a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-line)}
@@ -169,110 +166,144 @@
 <div class="page">
 
   <p class="eyebrow">Msanii · Unit economics</p>
-  <h1>Per-tool LLM cost &amp; credit model</h1>
-  <p class="lede">What each tool actually spends on OpenAI per use, and how many credits to charge to cover it. Every figure below is <b>modeled from the code</b> — the call graph, prompt sizes and model tiers — then recomputed live against the assumptions you set. Updated for the <b>shipped unified parse cache</b>: OneClick now shows separate <b>cold</b> (first parse) and <b>warm</b> (extraction cached) runs, blended by your cache-hit-rate.</p>
+  <h1>Per-tool pricing &amp; credit model</h1>
+  <p class="lede">How each tool and integration is priced — the <b>plan limits</b> that gate the non-AI features, and the <b>credit cost</b> the AI tools rack up per use. Plan caps are the <b>live values from the code</b>; AI costs are modeled from the call graph; the storage overage / add-on economics are a <b>proposal</b> for you to tune.</p>
 
   <div class="disclaim">
     <span class="dot">▲</span>
-    <div><b>Still estimates, not measurements.</b> Token counts are modeled — the backend doesn't yet log <code style="font-family:var(--mono)">response.usage</code>. Treat this as a planning model; instrument real usage (last section) before locking prices. The parse cache <em>is</em> live, so the warm/blended numbers reflect real behavior.</div>
+    <div><b>Two things are live, one is a proposal.</b> The plan caps (Free vs Pro) are exactly what the app enforces today. AI token costs are <em>modeled</em> — the backend doesn't yet log <code style="font-family:var(--mono)">response.usage</code>. Storage <b>overage &amp; add-on bundles do not exist yet</b> — that section models what you'd add to cover Supabase.</div>
   </div>
 
-  <!-- ASSUMPTIONS -->
+  <!-- PLANS -->
   <section>
-    <div class="sec-head"><h2>Assumptions</h2><span class="sec-note">Drag to re-price everything below</span></div>
-    <div class="assume">
-      <div class="field">
-        <label>Contract length <span class="val" id="v_pages">15 pg</span></label>
-        <input type="range" id="pages" min="3" max="45" step="1" value="15">
-        <span class="sub">≈ 650 tokens / page</span>
+    <div class="sec-head"><h2>The two plans (live)</h2><span class="sec-note">Enforced today — from <code style="font-family:var(--mono);font-size:11px">tier_entitlements</code></span></div>
+    <div class="plans">
+      <div class="plan">
+        <div class="pname"><b>Free</b><span class="badge plan">solo, getting started</span></div>
+        <div class="price">$0<small>/month</small></div>
+        <div class="psub">Hard-capped; uploads/actions past a limit return HTTP 402.</div>
+        <ul>
+          <li class="on"><span class="mk">✓</span><span><b>3</b> artists · <b>3</b> projects · <b>50</b> tasks</span></li>
+          <li class="on"><span class="mk">✓</span><span><b>1 GB</b> storage</span></li>
+          <li class="on"><span class="mk">✓</span><span><b>5</b> split sheets / month</span></li>
+          <li class="on"><span class="mk">✓</span><span>OneClick — <b>1 run</b> / month</span></li>
+          <li class="on"><span class="mk">✓</span><span>Google Drive integration</span></li>
+          <li class="off"><span class="mk">✗</span><span>Zoe AI · Metadata Registry · Slack</span></li>
+        </ul>
       </div>
-      <div class="field">
-        <label>Contracts in a run <span class="val" id="v_contracts">3</span></label>
-        <input type="range" id="contracts" min="2" max="8" step="1" value="3">
-        <span class="sub">multi-contract scenarios</span>
-      </div>
-      <div class="field">
-        <label>Retail price / credit <span class="sub">what you sell 1 for</span></label>
-        <div class="prefix"><span>$</span><input type="number" id="creditPrice" min="0.005" max="1" step="0.005" value="0.02"></div>
-      </div>
-      <div class="field">
-        <label>Markup on COGS <span class="val" id="v_markup">4.0×</span></label>
-        <input type="range" id="markup" min="1" max="10" step="0.5" value="4">
-        <span class="sub">margin + Pinecone/compute/Supabase</span>
-      </div>
-      <div class="field">
-        <label>Parse-cache hit rate <span class="val" id="v_hit">70%</span></label>
-        <input type="range" id="hit" min="0" max="100" step="5" value="70">
-        <span class="sub">OneClick runs whose extraction is already cached</span>
+      <div class="plan pro">
+        <div class="pname"><b>Pro</b><span class="badge ai">most popular</span></div>
+        <div class="price">$25<small>/mo &nbsp;·&nbsp; $250/yr</small></div>
+        <div class="psub">Annual ≈ $20.83/mo (save 2 months).</div>
+        <ul>
+          <li class="on"><span class="mk">✓</span><span><b>Unlimited</b> artists · projects · tasks</span></li>
+          <li class="on"><span class="mk">✓</span><span><b>Unlimited</b> split sheets &amp; OneClick runs</span></li>
+          <li class="on"><span class="mk">✓</span><span>Zoe AI contract analysis · Metadata Registry</span></li>
+          <li class="on"><span class="mk">✓</span><span>Google Drive <b>+</b> Slack</span></li>
+          <li class="on"><span class="mk">✓</span><span>Storage: <b>100 GB</b> included, then overage / add-on <span style="color:var(--faint)">(proposed)</span></span></li>
+        </ul>
       </div>
     </div>
   </section>
 
-  <!-- TABLE -->
+  <!-- PER-TOOL -->
   <section>
-    <div class="sec-head">
-      <h2>Cost per use</h2>
-      <span class="sec-note"><span id="ocHeadline"></span> · <span id="stamp"></span></span>
+    <div class="sec-head"><h2>Per tool &amp; integration</h2>
+      <div class="toggle" id="modelToggle" role="group" aria-label="pricing model">
+        <button type="button" data-m="live" class="active">Live caps</button>
+        <button type="button" data-m="proposed">Proposed</button>
+      </div>
     </div>
-    <div class="tablecard"><div class="tscroll">
-      <table>
-        <thead><tr>
-          <th>Tool &amp; scenario</th>
-          <th>Load</th>
-          <th class="num">LLM calls</th>
-          <th>Models</th>
-          <th class="num">Tokens in / out</th>
-          <th class="num">$ / use</th>
-          <th style="min-width:130px">Relative</th>
-          <th class="num">Credits</th>
-        </tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div></div>
+    <p class="sec-note" id="modelNote" style="margin:-4px 0 14px;max-width:74ch"></p>
+    <div class="tools" id="tools"></div>
+  </section>
+
+  <!-- AI ASSUMPTIONS -->
+  <section>
+    <div class="sec-head"><h2>AI credit assumptions</h2><span class="sec-note">Drives the credit cost of Zoe / OneClick / Registry</span></div>
+    <div class="assume">
+      <div class="field"><label>Contract length <span class="val" id="v_pages">15 pg</span></label><input type="range" id="pages" min="3" max="45" step="1" value="15"><span class="sub">≈ 650 tokens / page</span></div>
+      <div class="field"><label>Contracts / run <span class="val" id="v_contracts">3</span></label><input type="range" id="contracts" min="2" max="8" step="1" value="3"><span class="sub">multi-contract OneClick</span></div>
+      <div class="field"><label>Retail price / credit <span class="sub">what you sell 1 for</span></label><div class="prefix"><span>$</span><input type="number" id="creditPrice" min="0.005" max="1" step="0.005" value="0.02"></div></div>
+      <div class="field"><label>Markup on COGS <span class="val" id="v_markup">4.0×</span></label><input type="range" id="markup" min="1" max="10" step="0.5" value="4"><span class="sub">margin + infra</span></div>
+      <div class="field"><label>Parse-cache hit rate <span class="val" id="v_hit">70%</span></label><input type="range" id="hit" min="0" max="100" step="5" value="70"><span class="sub">OneClick extraction cached</span></div>
+    </div>
+  </section>
+
+  <!-- AI COST TABLE -->
+  <section>
+    <div class="sec-head"><h2>AI credit cost per use</h2><span class="sec-note"><span id="ocHeadline"></span> · <span id="stamp"></span></span></div>
+    <div class="tablecard"><div class="tscroll"><table>
+      <thead><tr><th>Tool &amp; scenario</th><th>Load</th><th class="num">Calls</th><th>Models</th><th class="num">Tok in/out</th><th class="num">$ / use</th><th style="min-width:120px">Relative</th><th class="num">Credits</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div></div>
+  </section>
+
+  <!-- MODEL RATES -->
+  <section>
+    <div class="sec-head"><h2>OpenAI model rates</h2><span class="sec-note">USD per 1M tokens · standard tier · source: <a href="https://platform.openai.com/docs/pricing" target="_blank" rel="noopener">OpenAI pricing</a></span></div>
+    <div class="tablecard"><div class="tscroll"><table>
+      <thead><tr><th>Model</th><th>Used for</th><th class="num">Input / 1M</th><th class="num">Cached input / 1M</th><th class="num">Output / 1M</th></tr></thead>
+      <tbody id="rateRows"></tbody>
+    </table></div></div>
+  </section>
+
+  <!-- CREDIT ALLOWANCE -->
+  <section>
+    <div class="sec-head"><h2>Credits instead of AI caps <span class="badge plan" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent)">proposed</span></h2><span class="sec-note">Drop the per-tool AI limits — each plan just includes a monthly credit balance</span></div>
+    <div class="assume">
+      <div class="field"><label>Free credits / mo <span class="val" id="v_fc">50</span></label><input type="range" id="freeCredits" min="0" max="500" step="10" value="50"><span class="sub">replaces "1 OneClick run · Zoe/Registry off"</span></div>
+      <div class="field"><label>Pro credits / mo <span class="val" id="v_pc">3000</span></label><input type="range" id="proCredits" min="200" max="12000" step="100" value="3000"><span class="sub">replaces "unlimited AI" — and caps your COGS</span></div>
+    </div>
+    <div class="tablecard" style="margin-top:16px"><div class="tscroll"><table>
+      <thead><tr><th>Plan</th><th class="num">Credits / mo</th><th class="num">≈ OneClick runs</th><th class="num">≈ Zoe messages</th><th class="num">≈ Registry parses</th><th class="num">Max OpenAI COGS</th></tr></thead>
+      <tbody id="allowRows"></tbody>
+    </table></div></div>
+    <p class="sec-note" style="margin-top:11px;max-width:74ch;line-height:1.6">Under this model AI tools have <b style="color:var(--ink-soft)">no separate on/off or run cap</b> — the credit balance <em>is</em> the limit, and running out just pauses AI until next period (or a top-up). It also <b style="color:var(--ink-soft)">caps your runaway AI spend</b> — today Pro is "unlimited", so one power user's OneClick loop is uncapped COGS. Pair it with dropping the zero-cost paywalls (projects, tasks, split-sheets, artists) — flip the tool cards to <b style="color:var(--ink-soft)">Proposed</b> — and the only things you meter are <b style="color:var(--ink-soft)">AI (credits)</b> and <b style="color:var(--ink-soft)">storage (GB)</b>: the two things that actually cost you money.</p>
+  </section>
+
+  <!-- STORAGE ECONOMICS -->
+  <section>
+    <div class="sec-head"><h2>Storage economics <span class="badge plan" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent)">proposed</span></h2><span class="sec-note">Cover Supabase: $25 Pro base includes 100 GB, then ~$0.0213/GB/mo</span></div>
+    <div class="assume">
+      <div class="field"><label>A Pro user's storage <span class="val" id="v_gb">250 GB</span></label><input type="range" id="gb" min="0" max="2000" step="10" value="250"><span class="sub">total used</span></div>
+      <div class="field"><label>Included in Pro <span class="val" id="v_incl">100 GB</span></label><input type="range" id="incl" min="0" max="500" step="10" value="100"><span class="sub">covered by the $25 base</span></div>
+      <div class="field"><label>Your overage charge <span class="sub">per GB / mo</span></label><div class="prefix"><span>$</span><input type="number" id="ovRate" min="0" max="1" step="0.005" value="0.05"></div></div>
+      <div class="field"><label>Supabase cost <span class="sub">per GB / mo (fixed)</span></label><div class="prefix"><span>$</span><input type="number" id="sbRate" min="0" max="1" step="0.001" value="0.0213"></div></div>
+    </div>
+    <div class="stats" id="storeStats"></div>
+    <div class="sec-head" style="margin-top:22px"><h2 style="letter-spacing:.06em">Or: add-on bundles</h2><span class="sec-note">Fixed +GB packs — edit prices/sizes to taste</span></div>
+    <div class="tablecard"><div class="tscroll"><table>
+      <thead><tr><th>Bundle</th><th class="num">Extra storage</th><th class="num">Your price / mo</th><th class="num">Supabase cost / mo</th><th class="num">Margin / mo</th><th class="num">Margin %</th></tr></thead>
+      <tbody id="bundleRows"></tbody>
+    </table></div></div>
   </section>
 
   <!-- LEVERS -->
   <section>
-    <div class="sec-head"><h2>Cost levers — decide these before you price</h2><span class="sec-note">Each meaningfully moves the numbers above</span></div>
+    <div class="sec-head"><h2>Notes &amp; levers</h2></div>
     <div class="grid2">
       <div class="card">
         <h3><span class="tag save">✓ shipped</span> Unified parse cache</h3>
-        <p>OneClick and Registry now share one cache keyed on the canonical contract text. The <b>extraction call</b> — the biggest of OneClick's gpt-5.2 calls — is served from cache on any repeat or cross-tool run, and a contract parsed in Add Work makes OneClick's first calc a hit.</p>
-        <p>Warm runs drop <b>3 → 2</b> gpt-5.2 calls (single), ≈ <b>−⅓ to −40%</b> each. Drag <b>cache hit rate</b> to see the blended steady state.</p>
+        <p>OneClick + Registry share one canonical-text cache. The extraction call is served from cache on repeat/cross-tool runs, so a <b>warm</b> OneClick run drops 3→2 gpt-5.2 calls. Drag <b>cache hit rate</b> to see the blend.</p>
       </div>
       <div class="card">
-        <h3><span class="tag watch">next win</span> Cache or downgrade the advisory passes</h3>
-        <p>With extraction cached, <b>basis-detection + split-verification</b> are now the entire OneClick bill on a warm run — 2 gpt-5.2 calls that re-send the full contract every time and are <b>log-only / advisory</b> (never change a payout).</p>
-        <p>Cache them by the same text hash, gate them behind a flag, or move them to a mini tier → a warm OneClick run approaches free.</p>
+        <h3><span class="tag watch">next win</span> Cache/downgrade the advisory passes</h3>
+        <p>With extraction cached, <b>basis + split-verify</b> are the whole warm-run bill — 2 gpt-5.2 calls that are log-only/advisory. Cache or downgrade them and a warm OneClick approaches free.</p>
       </div>
       <div class="card">
-        <h3><span class="tag watch">up to −90% input</span> Turn on prompt caching</h3>
-        <p>The advisory passes (and Zoe's answer + page-citation calls) still re-send the same contract text uncached.</p>
-        <p>Cached input is <code>$0.175</code> vs <code>$1.75</code>/1M on gpt-5.2 — reusing the contract prefix cuts most of the remaining input bill.</p>
+        <h3><span class="tag watch">to build</span> Credits ledger replaces AI caps</h3>
+        <p>Today AI is gated by on/off flags + per-period counters. The proposed model swaps those for a <code>credits</code> balance the AI tools debit per use — no more `oneclick_enabled` / `max_oneclick_runs`. Needs a ledger column + measured <code>response.usage</code> so debits reflect real spend, not estimates.</p>
       </div>
       <div class="card">
-        <h3><span class="tag watch">uncapped</span> Cap reasoning output</h3>
-        <p>OneClick's gpt-5.2 calls leave <code>max_completion_tokens</code> unset. On a reasoning model, output = hidden reasoning + JSON, billed at <code>$14</code>/1M and effectively unbounded.</p>
-        <p>Set a cap / lower reasoning effort — output is the single biggest driver on the calls that remain.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- INSTRUMENT -->
-  <section>
-    <div class="sec-head"><h2>Bill on real numbers, not estimates</h2><span class="sec-note">≈ half a day of work; reuses your metering table</span></div>
-    <div class="tablecard" style="padding:6px 22px 10px">
-      <div class="steps">
-        <div class="step"><span class="n"></span><div class="body"><b>Capture usage at every call site</b><p>Read <code>response.usage</code> (prompt / completion / total tokens). For the streaming Zoe calls, pass <code>stream_options={"include_usage": True}</code> so the final chunk carries a usage payload — it isn't there otherwise.</p></div></div>
-        <div class="step"><span class="n"></span><div class="body"><b>Log one row per call</b><p>New <code>llm_usage_events</code> table: <code>user_id, tool, model, prompt_tokens, completion_tokens, cost_usd, created_at</code>. Wrap the 13 call sites in one thin helper so it's a single choke point.</p></div></div>
-        <div class="step"><span class="n"></span><div class="body"><b>Roll it into the counters you already have</b><p><code>usage_counters</code> + the <code>increment_usage_counter</code> RPC already meter per-period usage. Add a <code>credits_this_period</code> column and debit it from measured cost — the plumbing and period-rollover logic exist.</p></div></div>
-        <div class="step"><span class="n"></span><div class="body"><b>Reconcile monthly</b><p>Compare logged <code>cost_usd</code> against your OpenAI invoice and against these estimates. Re-tune credit prices from ground truth instead of assumptions.</p></div></div>
+        <h3><span class="tag watch">gap</span> No storage overage today</h3>
+        <p>Pro storage is <code>-1</code> (unlimited) — a hard binary cap on Free (1 GB), nothing metered on Pro. The economics above are a <b>proposal</b> to recover Supabase's ~$0.0213/GB above 100 GB.</p>
       </div>
     </div>
   </section>
 
   <footer>
-    <span>Modeled from <code style="font-family:var(--mono);font-size:11px">src/backend</code> — Zoe, OneClick, contract-parsing &amp; embedding call graphs.</span>
+    <span>Plan caps: live from <code style="font-family:var(--mono);font-size:11px">tier_entitlements</code>. AI cost: modeled. Storage: proposed.</span>
     <span id="foot-rates"></span>
   </footer>
 
@@ -281,124 +312,173 @@
 
 <script>
 (function(){
-  // ---- OpenAI rates, USD per 1M tokens (standard, non-batch) ----
   var MODELS = {
-    'gpt-5.2':     {in:1.75, out:14,  label:'gpt-5.2'},
-    'gpt-5':       {in:1.25, out:10,  label:'gpt-5'},
-    'gpt-5-mini':  {in:0.25, out:2.0, label:'gpt-5-mini'},
-    'gpt-5.4-mini':{in:0.75, out:4.50,label:'5.4-mini'},
-    'embed':       {in:0.02, out:0,   label:'embed-3-sm'}
+    'gpt-5.2':     {in:1.75, out:14,  cached:0.175, label:'gpt-5.2',   name:'gpt-5.2',              use:'Contract extraction · basis · split-verify'},
+    'gpt-5':       {in:1.25, out:10,  cached:0.125, label:'gpt-5',     name:'gpt-5',                use:'Zoe answer (2+ contracts)'},
+    'gpt-5-mini':  {in:0.25, out:2.0, cached:0.025, label:'gpt-5-mini',name:'gpt-5-mini',           use:'Zoe default · routing · page citations'},
+    'gpt-5.4-mini':{in:0.75, out:4.50,cached:0.075, label:'5.4-mini',  name:'gpt-5.4-mini',         use:'OneClick payable-column detect'},
+    'embed':       {in:0.02, out:0,   cached:null,  label:'embed-3-sm',name:'text-embedding-3-small',use:'Zoe / OneClick retrieval'}
   };
-  var TPP = 650; // tokens per contract page
-
+  var RATE_ORDER=['gpt-5.2','gpt-5','gpt-5-mini','gpt-5.4-mini','embed'];
+  var TPP = 650;
   function el(id){return document.getElementById(id);}
-  var pages=el('pages'), contracts=el('contracts'), creditPrice=el('creditPrice'), markup=el('markup'), hit=el('hit');
+  var pages=el('pages'),contracts=el('contracts'),creditPrice=el('creditPrice'),markup=el('markup'),hit=el('hit');
+  var gb=el('gb'),incl=el('incl'),ovRate=el('ovRate'),sbRate=el('sbRate');
+  var freeCredits=el('freeCredits'),proCredits=el('proCredits');
+  var model='live';
 
-  // OneClick single run. warm = extraction (parse) served from the shared cache.
-  // basis + verify are advisory and NOT cached, so they run every time.
-  function ocSingle(ct, warm){
-    var c=[];
-    if(!warm) c.push({m:'gpt-5.2', tin:ct+2100, tout:2500}); // extraction (now cached)
-    c.push({m:'gpt-5.2', tin:ct+350, tout:1500});            // basis (advisory)
-    c.push({m:'gpt-5.2', tin:ct+500, tout:2000});            // split-verify (advisory)
-    c.push({m:'gpt-5.4-mini', tin:300, tout:200});            // payable-column detect
-    return c;
-  }
-  function ocMulti(ct, N, warm){
-    var c=[{m:'gpt-5.4-mini', tin:300, tout:200}];
-    for(var i=0;i<N;i++){
-      if(!warm) c.push({m:'gpt-5.2', tin:ct+2100, tout:2500}); // extraction / contract
-      c.push({m:'gpt-5.2', tin:ct+500, tout:2000});            // verify / contract
-    }
-    return c;
-  }
+  function cost(calls){var c=0;for(var i=0;i<calls.length;i++){var k=calls[i],m=MODELS[k.m];c+=(k.tin*m.in+k.tout*m.out)/1e6;}return c;}
+  function tokens(calls){var ti=0,to=0;calls.forEach(function(k){ti+=k.tin;to+=k.tout;});return{ti:ti,to:to};}
+  function modelSet(calls){var s=[];calls.forEach(function(k){var l=MODELS[k.m].label;if(s.indexOf(l)<0)s.push(l);});return s.length?s.join(', '):'—';}
+  function fmtTok(n){if(n>=1000)return(n/1000).toFixed(n>=10000?0:1)+'k';return String(n);}
+  function fmtUSD(n){if(n===0)return'$0';if(n<0.1)return'$'+n.toFixed(4);return'$'+n.toFixed(3);}
+  function fmtMoney(n){return'$'+n.toFixed(2);}
+
+  function ocSingle(ct,warm){var c=[];if(!warm)c.push({m:'gpt-5.2',tin:ct+2100,tout:2500});c.push({m:'gpt-5.2',tin:ct+350,tout:1500});c.push({m:'gpt-5.2',tin:ct+500,tout:2000});c.push({m:'gpt-5.4-mini',tin:300,tout:200});return c;}
+  function ocMulti(ct,N,warm){var c=[{m:'gpt-5.4-mini',tin:300,tout:200}];for(var i=0;i<N;i++){if(!warm)c.push({m:'gpt-5.2',tin:ct+2100,tout:2500});c.push({m:'gpt-5.2',tin:ct+500,tout:2000});}return c;}
+  function zoe1(ct){return[{m:'gpt-5-mini',tin:800,tout:500},{m:'gpt-5-mini',tin:1500+ct+2000,tout:2000},{m:'gpt-5-mini',tin:ct+2000,tout:1000},{m:'embed',tin:20,tout:0}];}
+  function zoeN(ct,N){return[{m:'gpt-5-mini',tin:800,tout:500},{m:'gpt-5',tin:1500+N*ct+2000,tout:2000},{m:'gpt-5-mini',tin:N*ct+2000,tout:1000},{m:'embed',tin:20,tout:0}];}
+  function registry(ct){return[{m:'gpt-5.2',tin:ct+2100,tout:2500}];}
+
+  function toCredits(c,mk,cp){return c===0?0:Math.max(1,Math.ceil(c*mk/cp));}
 
   function scenarios(a){
-    var ct = a.pages*TPP, N = a.contracts, h = a.hit;
-    var coldS=ocSingle(ct,false), warmS=ocSingle(ct,true);
-    var blendS = cost(coldS)*(1-h) + cost(warmS)*h;
+    var ct=a.pages*TPP,N=a.contracts,h=a.hit;
+    var coldS=ocSingle(ct,false),warmS=ocSingle(ct,true);
+    var blendS=cost(coldS)*(1-h)+cost(warmS)*h;
     return [
-      { tool:'SplitSheet', scen:'Generate a split sheet (PDF/DOCX)', sev:'free', calls:[] },
-      { tool:'Zoe — chat message', scen:'1 contract in context', sev:'low', calls:[
-        {m:'gpt-5-mini', tin:800, tout:500},
-        {m:'gpt-5-mini', tin:1500+ct+2000, tout:2000},
-        {m:'gpt-5-mini', tin:ct+2000, tout:1000},
-        {m:'embed', tin:20, tout:0}
-      ]},
-      { tool:'Zoe — chat message', scen:N+' contracts in context', sev:'med', calls:[
-        {m:'gpt-5-mini', tin:800, tout:500},
-        {m:'gpt-5', tin:1500+N*ct+2000, tout:2000},
-        {m:'gpt-5-mini', tin:N*ct+2000, tout:1000},
-        {m:'embed', tin:20, tout:0}
-      ]},
-      { tool:'Registry — Add Work', scen:'first parse of a new contract', sev:'low', calls:[
-        {m:'gpt-5.2', tin:ct+2100, tout:2500}
-      ]},
-      { tool:'Registry / OneClick', scen:'parse of a contract seen before (cache hit)', sev:'free', calls:[] },
-      { tool:'OneClick — single', scen:'cold · first-ever parse (extraction miss)', sev:'high', calls:coldS },
-      { tool:'OneClick — single', scen:'warm · extraction served from cache', sev:'med', calls:warmS },
-      { tool:'OneClick — single', scen:'blended @ '+Math.round(h*100)+'% hit — steady state', sev:'med', costOverride:blendS, highlight:true, calls:[] },
-      { tool:'OneClick — single', scen:'result-cache hit (unchanged calc re-run)', sev:'free', calls:[] },
-      { tool:'OneClick — '+N+' contracts', scen:'cold · all extractions uncached', sev:'high', calls:ocMulti(ct,N,false) },
-      { tool:'OneClick — '+N+' contracts', scen:'warm · extractions cached (verify still runs)', sev:'med', calls:ocMulti(ct,N,true) }
+      {tool:'Zoe',scen:'chat message · 1 contract',sev:'low',calls:zoe1(ct)},
+      {tool:'Zoe',scen:'chat message · '+N+' contracts',sev:'med',calls:zoeN(ct,N)},
+      {tool:'Registry',scen:'add work · new contract',sev:'low',calls:registry(ct)},
+      {tool:'Registry / OneClick',scen:'contract seen before (cache hit)',sev:'free',calls:[]},
+      {tool:'OneClick',scen:'single · cold (extraction miss)',sev:'high',calls:coldS},
+      {tool:'OneClick',scen:'single · warm (extraction cached)',sev:'med',calls:warmS},
+      {tool:'OneClick',scen:'single · blended @ '+Math.round(h*100)+'% hit',sev:'med',costOverride:blendS,highlight:true,calls:[]},
+      {tool:'OneClick',scen:'result-cache hit (unchanged re-run)',sev:'free',calls:[]},
+      {tool:'OneClick',scen:N+' contracts · warm',sev:'med',calls:ocMulti(ct,N,true)}
     ];
   }
 
-  function cost(calls){
-    var c=0; for(var i=0;i<calls.length;i++){var k=calls[i],m=MODELS[k.m]; c+=(k.tin*m.in + k.tout*m.out)/1e6;} return c;
+  // per-tool cards — Free/Pro behaviour depends on the model (live caps vs proposed)
+  function toolCards(a,mk,cp,model){
+    var ct=a.pages*TPP, P=(model==='proposed'), un='no marginal cost — unmetered';
+    var warm=toCredits(cost(ocSingle(ct,true)),mk,cp), cold=toCredits(cost(ocSingle(ct,false)),mk,cp);
+    var zc=toCredits(cost(zoe1(ct)),mk,cp), rc=toCredits(cost(registry(ct)),mk,cp);
+    return [
+      {n:'OneClick',ai:true,free:P?'credits':'1 run / mo',pro:P?'credits':'unlimited',cost:'≈ <b>'+warm+' cr</b> warm · '+cold+' cold · 0 cached'},
+      {n:'Zoe',ai:true,free:P?'credits':'off',pro:P?'credits':'unlimited',cost:'≈ <b>'+zc+' cr</b> / message'},
+      {n:'Registry',ai:true,free:P?'credits':'off',pro:P?'credits':'unlimited',cost:'≈ <b>'+rc+' cr</b> / new contract · 0 cached'},
+      {n:'Split sheet',ai:false,free:P?'unlimited':'5 / mo',pro:'unlimited',flat:true,cost:P?un:'no LLM — <b>$0</b> marginal'},
+      {n:'Artists',ai:false,free:P?'unlimited':'3',pro:'unlimited',flat:true,cost:P?un:'cap defined, not yet enforced'},
+      {n:'Projects',ai:false,free:P?'unlimited':'3',pro:'unlimited',flat:true,cost:P?un:'hard cap · 402 on exceed'},
+      {n:'Tasks',ai:false,free:P?'unlimited':'50',pro:'unlimited',flat:true,cost:P?un:'hard cap · 402 on exceed'},
+      {n:'Storage',ai:false,free:'1 GB',pro:'100 GB +',flat:true,cost:'metered — Supabase ~$0.0213/GB'},
+      {n:'Google Drive',ai:false,free:'✓',pro:'✓',flat:true,cost:'free · no per-use cost'},
+      {n:'Slack',ai:false,free:P?'✓':'✗',pro:'✓',flat:true,cost:P?'no cost — available to all':'Pro-only · no per-use cost'}
+    ];
   }
-  function tokens(calls){var ti=0,to=0;calls.forEach(function(k){ti+=k.tin;to+=k.tout;});return {ti:ti,to:to};}
-  function modelSet(calls){
-    var seen=[]; calls.forEach(function(k){var l=MODELS[k.m].label; if(seen.indexOf(l)<0)seen.push(l);});
-    return seen.length? seen.join(', ') : '—';
-  }
-  function fmtTok(n){ if(n>=1000) return (n/1000).toFixed(n>=10000?0:1)+'k'; return String(n); }
-  function fmtUSD(n){ if(n===0) return '$0'; if(n<0.1) return '$'+n.toFixed(4); return '$'+n.toFixed(3); }
+
+  var BUNDLES=[{n:'Starter +',gb:100,price:5},{n:'Studio +',gb:500,price:20},{n:'Label +',gb:2000,price:50}];
 
   function render(){
-    var a={pages:+pages.value, contracts:+contracts.value, hit:(+hit.value)/100};
-    el('v_pages').textContent = a.pages+' pg';
-    el('v_contracts').textContent = a.contracts;
-    el('v_markup').textContent = (+markup.value).toFixed(1)+'×';
-    el('v_hit').textContent = (+hit.value)+'%';
-    var cp = Math.max(.001,+creditPrice.value), mk=+markup.value;
-    var toCredits = function(c){ return c===0?0:Math.max(1, Math.ceil(c*mk/cp)); };
+    var a={pages:+pages.value,contracts:+contracts.value,hit:(+hit.value)/100};
+    el('v_pages').textContent=a.pages+' pg';el('v_contracts').textContent=a.contracts;
+    el('v_markup').textContent=(+markup.value).toFixed(1)+'×';el('v_hit').textContent=(+hit.value)+'%';
+    var cp=Math.max(.001,+creditPrice.value),mk=+markup.value;
 
-    var rows = scenarios(a).map(function(s){
-      var c = (s.costOverride!=null) ? s.costOverride : cost(s.calls);
-      return {s:s, c:c, tk:tokens(s.calls), credits:toCredits(c)};
-    });
-    var maxC = Math.max.apply(null, rows.map(function(r){return r.c;})) || 1;
+    // per-tool cards
+    el('modelNote').innerHTML = model==='proposed'
+      ? 'Meter only what costs you money — <b style="color:var(--ink-soft)">AI usage (credits)</b> and <b style="color:var(--ink-soft)">storage (GB)</b>. Everything with zero marginal cost is unlimited on both plans; Free vs Pro differ by credit allowance + storage (+ priority support).'
+      : 'Free is hard-capped today — projects, tasks, uploads, split-sheets and OneClick runs return HTTP 402 past their limit; Zoe / Registry / Slack are Pro-only.';
+    el('tools').innerHTML=toolCards(a,mk,cp,model).map(function(t){
+      return '<div class="tcard">'+
+        '<div class="th"><span class="tn">'+t.n+'</span><span class="badge '+(t.ai?'ai">AI':'plan">plan')+'</span></div>'+
+        '<div class="tiers"><div class="tier"><div class="tl">Free</div><div class="tv">'+t.free+'</div></div>'+
+        '<div class="tier pro"><div class="tl">Pro</div><div class="tv">'+t.pro+'</div></div></div>'+
+        '<div class="costline'+(t.flat?' flat':'')+'">'+t.cost+'</div>'+
+      '</div>';
+    }).join('');
 
-    el('rows').innerHTML = rows.map(function(r){
-      var s=r.s, w=Math.max(r.c>0?4:0, r.c/maxC*100), over=(s.costOverride!=null), callN=s.calls.length;
-      var credCls = r.credits===0 ? 'creditsFree' : 'credits';
-      var credTxt = r.credits===0 ? 'free' : r.credits;
-      var callsTxt = over ? '~' : (callN||'0');
-      var modelsTxt = over ? 'gpt-5.2 mix' : modelSet(s.calls);
-      var tokTxt = over ? '—' : (callN? fmtTok(r.tk.ti)+' / '+fmtTok(r.tk.to) : '—');
-      var rowAttr = s.highlight ? ' style="background:var(--accent-soft)"' : '';
+    // AI cost table
+    var rows=scenarios(a).map(function(s){var c=(s.costOverride!=null)?s.costOverride:cost(s.calls);return{s:s,c:c,tk:tokens(s.calls),credits:toCredits(c,mk,cp)};});
+    var maxC=Math.max.apply(null,rows.map(function(r){return r.c;}))||1;
+    el('rows').innerHTML=rows.map(function(r){
+      var s=r.s,w=Math.max(r.c>0?4:0,r.c/maxC*100),over=(s.costOverride!=null),callN=s.calls.length;
+      var credCls=r.credits===0?'creditsFree':'credits',credTxt=r.credits===0?'free':r.credits;
+      var rowAttr=s.highlight?' style="background:var(--accent-soft)"':'';
       return '<tr'+rowAttr+'>'+
         '<td><div class="tool">'+s.tool+'</div><div class="scen">'+s.scen+'</div></td>'+
         '<td><span class="chip '+s.sev+'">'+({free:'none',low:'light',med:'medium',high:'heavy'}[s.sev])+'</span></td>'+
-        '<td class="num">'+callsTxt+'</td>'+
-        '<td class="models">'+modelsTxt+'</td>'+
-        '<td class="num">'+tokTxt+'</td>'+
+        '<td class="num">'+(over?'~':(callN||'0'))+'</td>'+
+        '<td class="models">'+(over?'gpt-5.2 mix':modelSet(s.calls))+'</td>'+
+        '<td class="num">'+(over?'—':(callN?fmtTok(r.tk.ti)+' / '+fmtTok(r.tk.to):'—'))+'</td>'+
         '<td class="num cost">'+fmtUSD(r.c)+'</td>'+
         '<td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill '+s.sev+'" style="width:'+w+'%"></div></div></div></td>'+
         '<td class="num '+credCls+'">'+credTxt+'</td>'+
       '</tr>';
     }).join('');
 
-    // Headline: blended OneClick single steady-state + savings vs a cold run.
-    var ct=a.pages*TPP, coldC=cost(ocSingle(ct,false)), warmC=cost(ocSingle(ct,true));
-    var blend=coldC*(1-a.hit)+warmC*a.hit, save=Math.round((1-blend/coldC)*100);
-    el('ocHeadline').innerHTML = 'OneClick single ≈ <b>'+fmtUSD(blend)+'</b> ('+toCredits(blend)+' cr) @ '+(+hit.value)+'% hit · <b>−'+save+'%</b> vs cold';
-    el('stamp').textContent = '1 cr = $'+cp.toFixed(3)+' · '+mk.toFixed(1)+'× markup';
-    el('foot-rates').textContent = 'gpt-5.2 $1.75/$14 · gpt-5 $1.25/$10 · gpt-5-mini $0.25/$2 · 5.4-mini $0.75/$4.50 · embed $0.02 (per 1M in/out)';
+    var _ct=a.pages*TPP,coldC=cost(ocSingle(_ct,false)),warmC=cost(ocSingle(_ct,true));
+    var blend=coldC*(1-a.hit)+warmC*a.hit;
+    el('ocHeadline').innerHTML='OneClick ≈ <b>'+toCredits(blend,mk,cp)+' cr</b> @ '+(+hit.value)+'% hit';
+    el('stamp').textContent='1 cr = $'+cp.toFixed(3)+' · '+mk.toFixed(1)+'× markup';
+    el('foot-rates').textContent='Rates: OpenAI platform pricing · Supabase storage $0.0213/GB/mo';
+
+    // OpenAI model rates table
+    el('rateRows').innerHTML=RATE_ORDER.map(function(k){var m=MODELS[k];
+      return '<tr><td class="tool" style="font-family:var(--mono);font-size:12.5px">'+m.name+'</td>'+
+        '<td style="color:var(--muted);font-size:12.5px">'+m.use+'</td>'+
+        '<td class="num cost">$'+m.in.toFixed(2)+'</td>'+
+        '<td class="num">'+(m.cached!=null?'$'+m.cached.toFixed(3):'—')+'</td>'+
+        '<td class="num cost">'+(m.out>0?'$'+m.out.toFixed(2):'—')+'</td></tr>';
+    }).join('');
+
+    // credit allowance — what a monthly balance buys per AI tool
+    el('v_fc').textContent=+freeCredits.value; el('v_pc').textContent=+proCredits.value;
+    var warmCr=toCredits(warmC,mk,cp), zoeCr=toCredits(cost(zoe1(_ct)),mk,cp), regCr=toCredits(cost(registry(_ct)),mk,cp);
+    var allow=function(name,credits){
+      return '<tr><td class="tool">'+name+'</td><td class="num">'+credits+'</td>'+
+        '<td class="num">'+Math.floor(credits/warmCr)+'</td>'+
+        '<td class="num">'+Math.floor(credits/zoeCr)+'</td>'+
+        '<td class="num">'+Math.floor(credits/regCr)+'</td>'+
+        '<td class="num cost">'+fmtMoney(credits*cp/mk)+'</td></tr>';
+    };
+    el('allowRows').innerHTML=allow('Free',+freeCredits.value)+allow('Pro',+proCredits.value);
+
+    // storage economics
+    var used=+gb.value,inc=+incl.value,ov=Math.max(0,+ovRate.value),sb=Math.max(0,+sbRate.value);
+    el('v_gb').textContent=used+' GB';el('v_incl').textContent=inc+' GB';
+    var overGB=Math.max(0,used-inc);
+    var youCharge=overGB*ov, youPay=overGB*sb, margin=youCharge-youPay;
+    var pct=youCharge>0?Math.round(margin/youCharge*100):0;
+    el('storeStats').innerHTML=
+      stat('Storage over 100 GB',overGB.toFixed(0)+' GB', overGB>0?'billable overage':'within included',null)+
+      stat('You charge (overage)',fmtMoney(youCharge)+'<span style="font-size:12px;color:var(--muted)">/mo</span>','at $'+ov.toFixed(3)+'/GB',null)+
+      stat('Supabase costs you',fmtMoney(youPay)+'<span style="font-size:12px;color:var(--muted)">/mo</span>','at $'+sb.toFixed(4)+'/GB',null)+
+      stat('Your margin',fmtMoney(margin)+'<span style="font-size:12px;color:var(--muted)">/mo</span>',pct+'% of overage revenue',margin>=0?'pos':'neg');
+
+    el('bundleRows').innerHTML=BUNDLES.map(function(b){
+      var sbCost=b.gb*sb, m=b.price-sbCost, mp=b.price>0?Math.round(m/b.price*100):0;
+      return '<tr><td class="tool">'+b.n+'</td>'+
+        '<td class="num">+'+b.gb+' GB</td>'+
+        '<td class="num cost">'+fmtMoney(b.price)+'</td>'+
+        '<td class="num">'+fmtMoney(sbCost)+'</td>'+
+        '<td class="num '+(m>=0?'credits':'creditsFree')+'" style="'+(m<0?'color:var(--crit)':'')+'">'+fmtMoney(m)+'</td>'+
+        '<td class="num">'+mp+'%</td></tr>';
+    }).join('');
+  }
+  function stat(label,val,note,cls){
+    return '<div class="stat"><div class="sl">'+label+'</div><div class="sv'+(cls?' '+cls:'')+'">'+val+'</div><div class="snote">'+note+'</div></div>';
   }
 
-  [pages,contracts,creditPrice,markup,hit].forEach(function(i){i.addEventListener('input',render);});
+  [pages,contracts,creditPrice,markup,hit,gb,incl,ovRate,sbRate,freeCredits,proCredits].forEach(function(i){i.addEventListener('input',render);});
+  Array.prototype.forEach.call(document.querySelectorAll('#modelToggle button'),function(b){
+    b.addEventListener('click',function(){
+      model=b.getAttribute('data-m');
+      Array.prototype.forEach.call(document.querySelectorAll('#modelToggle button'),function(x){x.classList.toggle('active',x===b);});
+      render();
+    });
+  });
   render();
 })();
 </script>

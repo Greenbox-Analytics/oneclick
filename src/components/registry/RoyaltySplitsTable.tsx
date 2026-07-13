@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { RegistryAvatar } from "./RegistryAvatar";
+import { clampPct, SPLIT_PALETTE, splitTotals } from "./splitsShared";
 
 export interface SplitRow {
   /** Stable id so React keys are predictable. */
@@ -45,21 +46,6 @@ interface RoyaltySplitsTableProps {
   showTotals?: boolean;
 }
 
-const clampPct = (v: string | number): number => {
-  const n = parseInt(String(v).replace(/[^0-9]/g, ""), 10);
-  if (Number.isNaN(n)) return 0;
-  return Math.max(0, Math.min(100, n));
-};
-
-const COLLAB_PALETTE = [
-  "#7c5cff",
-  "#1f8a5b",
-  "#d9762b",
-  "#d24b6e",
-  "#2a6fdb",
-  "#0f6b43",
-];
-
 const fmtDate = (iso: string): string => {
   if (!iso) return "";
   try {
@@ -85,17 +71,7 @@ export function RoyaltySplitsTable({
   warnOnImbalance = true,
   showTotals = true,
 }: RoyaltySplitsTableProps) {
-  const totals = useMemo(
-    () =>
-      rows.reduce(
-        (acc, r) => ({
-          master: acc.master + (r.master || 0),
-          publishing: acc.publishing + (r.publishing || 0),
-        }),
-        { master: 0, publishing: 0 }
-      ),
-    [rows]
-  );
+  const totals = useMemo(() => splitTotals(rows), [rows]);
   const balanced = totals.master === 100 && totals.publishing === 100;
 
   const setRow = (idx: number, patch: Partial<SplitRow>) => {
@@ -176,7 +152,7 @@ export function RoyaltySplitsTable({
       {/* rows */}
       <div className="divide-y divide-border/60">
         {rows.map((r, idx) => {
-          const palette = COLLAB_PALETTE[idx % COLLAB_PALETTE.length];
+          const palette = SPLIT_PALETTE[idx % SPLIT_PALETTE.length];
           return (
             <div
               key={r.key}
