@@ -1,0 +1,51 @@
+# .understandignore — patterns for files/dirs to exclude from analysis
+# Syntax: same as .gitignore (globs, # comments, ! negation, trailing / for dirs)
+#
+# Built-in defaults (always excluded unless negated):
+#   node_modules/, .git/, dist/, build/, obj/, *.lock, *.min.js, etc.
+#
+# Goal: a PRODUCT/FEATURE-oriented graph (OneClick, Zoe, Registry, SplitSheet,
+# Workspace/Boards, Integrations, Projects/Portfolio) spanning frontend + backend.
+# Exclude non-product noise below.
+
+# --- Database migrations (data model is captured via generated types.ts) ---
+supabase/migrations/
+
+# --- Static assets / binaries (not product code) ---
+public/
+Royalty Statement.xlsx
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.webp
+*.ico
+
+# --- Vendored shadcn UI primitives (generic building blocks, not product) ---
+src/components/ui/
+
+# --- Tests & one-off scripts (not product surface) ---
+src/backend/tests/
+src/backend/scripts/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# --- Lock / generated files ---
+package-lock.json
+bun.lockb
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Superpowers scratch (gitignored) ---
+docs/superpowers/plans/
+docs/superpowers/specs/
+
+# --- Python bytecode ---
+*.pyc
+*.pyo
+*.pyd

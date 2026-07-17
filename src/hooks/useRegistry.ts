@@ -516,23 +516,35 @@ export function useDeclineInvitation() {
 export function useExportProof() {
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async (workId: string) => {
+    mutationFn: async ({
+      workId,
+      hiddenParties = [],
+    }: {
+      workId: string;
+      hiddenParties?: string[];
+    }) => {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/registry/works/${workId}/export`, {
-        headers: authHeaders,
-      });
-      if (!res.ok) throw new Error("Failed to generate proof of ownership");
+      // Repeated `hide_split` params — one per party whose splits are withheld.
+      // Repeated params encode any characters safely and keep this a GET download.
+      const params = new URLSearchParams();
+      for (const name of hiddenParties) params.append("hide_split", name);
+      const qs = params.toString();
+      const res = await fetch(
+        `${API_URL}/registry/works/${workId}/export${qs ? `?${qs}` : ""}`,
+        { headers: authHeaders }
+      );
+      if (!res.ok) throw new Error("Failed to generate metadata export");
       const blob = await res.blob();
       const disposition = res.headers.get("Content-Disposition") || "";
       const match = disposition.match(/filename="?(.+?)"?$/);
-      const filename = match ? match[1] : "Proof_of_Ownership.pdf";
+      const filename = match ? match[1] : "Work_Metadata.pdf";
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = filename;
       document.body.appendChild(a); a.click();
       document.body.removeChild(a); URL.revokeObjectURL(url);
     },
-    onSuccess: () => toast.success("Proof of ownership downloaded"),
+    onSuccess: () => toast.success("Metadata PDF downloaded"),
     onError: (e: Error) => toast.error(e.message),
   });
 }

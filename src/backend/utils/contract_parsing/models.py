@@ -1,12 +1,15 @@
 """Dataclasses representing structured contract data extracted by the parser."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class Party:
     name: str
     role: str
+    # Alternate names the contract uses for this party (p/k/a, a/k/a, d/b/a,
+    # stage names). The primary/legal name stays in `name`.
+    aliases: list[str] = field(default_factory=list)
 
 
 @dataclass

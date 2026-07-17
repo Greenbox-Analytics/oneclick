@@ -364,8 +364,11 @@ const SplitSheet = () => {
         <div data-walkthrough="splitsheet-info" className="flex gap-2 items-start mb-6 px-4 py-3 rounded-lg bg-primary/5 border border-primary/20">
           <Info className="w-4 h-4 text-primary mt-0.5 shrink-0" />
           <p className="text-xs text-muted-foreground leading-relaxed">
-            A <span className="font-medium text-foreground">split sheet</span> documents who owns what
-            share of a song's royalties. It can cover <span className="font-medium text-foreground">publishing</span> (songwriting),{" "}
+            A <span className="font-medium text-foreground">split sheet</span> is a legally binding contract
+            that identifies all co-creators of a song and dictates their exact percentage ownership of the
+            composition. It serves as a paper trail to prevent disputes and ensures accurate royalty payouts
+            from Performing Rights Organizations (PROs) and publishers. It can cover{" "}
+            <span className="font-medium text-foreground">publishing</span> (composition),{" "}
             <span className="font-medium text-foreground">master</span> (sound recording), or both.
           </p>
         </div>
@@ -495,7 +498,7 @@ const SplitSheet = () => {
                   </div>
                   <p className="text-xs text-muted-foreground mt-1.5">
                     {splitType === "publishing"
-                      ? "Songwriting royalties — composition & lyrics"
+                      ? "Composition royalties — music & lyrics"
                       : splitType === "master"
                       ? "Sound recording royalties — master ownership"
                       : "Both publishing and master royalty splits"}

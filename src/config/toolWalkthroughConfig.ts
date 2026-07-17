@@ -121,14 +121,14 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="splitsheet-royalty-type"]',
         title: "Royalty Type",
         description:
-          "Choose Publishing (songwriting), Master (recording), or Both. Each type tracks splits independently.",
+          "Choose Publishing (composition), Master (recording), or Both. Each type tracks splits independently.",
         placement: "bottom",
       },
       {
         targetSelector: '[data-walkthrough="splitsheet-info"]',
         title: "Quick Tip",
         description:
-          "Publishing royalties come from songwriting. Master royalties come from the recording. This box explains the difference.",
+          "Publishing royalties come from the composition. Master royalties come from the recording. This box explains the difference.",
         placement: "bottom",
       },
     ],
@@ -387,7 +387,7 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       icon: FileText,
       title: "Work Detail",
       description:
-        "This is where you manage a single work — a track, composition, or recording. Set its identity codes and release status, record ownership splits, link documents, and export proof of ownership. Everything about this work lives on one page.",
+        "This is where you manage a single work — a track, composition, or recording. Set its identity codes and release status, record ownership splits, link documents, and export its metadata. Everything about this work lives on one page.",
     },
     steps: [
       {
@@ -420,9 +420,9 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
       },
       {
         targetSelector: '[data-walkthrough="work-trace"]',
-        title: "Traceability & Proof",
+        title: "Traceability & Export",
         description:
-          "A quick audit of what's on file — linked documents, ISRC, and recorded stakes — with a one-click Export Proof of Ownership PDF.",
+          "A quick audit of what's on file — linked documents, ISRC, and recorded stakes — with a one-click Export Metadata PDF.",
         placement: "left",
       },
     ],

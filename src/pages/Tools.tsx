@@ -29,7 +29,7 @@ const DESC_FOR_TOOL: Partial<Record<ToolId, string>> = {
   oneclick: "Calculate royalty splits and manage contracts for your artists in one click.",
   zoe: "Ask questions about your contracts and get AI-powered answers with source citations.",
   splitsheet: "Generate professional split sheet agreements to document royalty ownership for your music.",
-  registry: "Track master ownership, publishing splits, licensing rights, and generate proof-of-ownership documents.",
+  registry: "Track master ownership, publishing splits, licensing rights, and export work metadata documents.",
   "expense-tracker": "Track project expenses by category and link them to tracks for accurate net royalty calculations.",
 };
 

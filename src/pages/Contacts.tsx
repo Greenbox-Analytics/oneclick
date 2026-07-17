@@ -18,12 +18,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { ContactFormDialog } from "@/components/ContactFormDialog";
 import { PaymentDialog } from "@/components/PaymentDialog";
 import type { Tables } from "@/integrations/supabase/types";
 
 const Contacts = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/dashboard");
   const { toast } = useToast();
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
@@ -180,7 +182,7 @@ const Contacts = () => {
               variant="ghost"
               size="sm"
               className="text-muted-foreground hover:text-foreground"
-              onClick={() => navigate(-1)}
+              onClick={goBack}
             >
               <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>

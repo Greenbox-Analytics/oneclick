@@ -4,6 +4,7 @@ import { ArrowLeft, CreditCard, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 import { cn } from "@/lib/utils";
@@ -55,10 +56,13 @@ export function PageHeader({
 
   const notificationBell = user ? <NotificationBell /> : null;
 
+  // A string `backTo` is treated as a *fallback* route, not a forced
+  // destination: Back returns the user to the page they actually came from,
+  // and only lands on `backTo` when there's no in-app history to go back to.
+  const smartBack = useSmartBack(typeof backTo === "string" ? backTo : "/dashboard");
   const handleBack = () => {
     if (typeof backTo === "function") backTo();
-    else if (typeof backTo === "string") navigate(backTo);
-    else navigate(-1);
+    else smartBack();
   };
 
   if (isMobile) {

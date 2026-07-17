@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -25,7 +26,19 @@ import SongMismatchComparison from "@/components/oneclick/SongMismatchComparison
 
 interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; basis?: string; gross_amount?: number; expenses_applied?: number; net_amount?: number; }
 interface ReviewExpense { id: string; description?: string; amount: number; category?: string | null; incurred_on?: string | null; work_ids?: string[]; work_titles?: string[]; }
-interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; calculation_id?: string; expense_review_required?: boolean; expenses?: ReviewExpense[]; }
+interface SplitFinding {
+  party_name: string;
+  royalty_type: string;
+  extracted_percentage: number;
+  extracted_basis?: string | null;
+  verdict: "verified" | "mismatch" | "unverified";
+  contract_percentage?: number | null;
+  contract_basis?: string | null;
+  contract_quote?: string;
+  note?: string;
+}
+interface SplitReview { overall: "verified" | "needs_review" | "unavailable"; checked: number; flagged: number; findings: SplitFinding[]; }
+interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; calculation_id?: string; expense_review_required?: boolean; expenses?: ReviewExpense[]; review?: SplitReview | null; }
 interface CalculationErrorState {
   message: string;
   code?: string;
@@ -45,6 +58,7 @@ interface Artist { id: string; name: string; }
 
 const OneClickDocuments = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/tools/oneclick");
   const { artistId } = useParams<{ artistId: string }>();
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -381,7 +395,7 @@ const OneClickDocuments = () => {
                 } else if (data.type === 'complete' || (data.status === 'success' && data.payments)) {
                     clearTimeout(timeout);
                     const needsReview = !!data.expense_review_required && !data.is_cached;
-                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached, calculation_id: data.calculation_id, expense_review_required: needsReview, expenses: data.expenses || [] });
+                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached, calculation_id: data.calculation_id, expense_review_required: needsReview, expenses: data.expenses || [], review: data.review ?? null });
                     setShowProgressModal(false);
                     if (needsReview) {
                         setExpenseReview(data.expenses || []);
@@ -541,9 +555,9 @@ const OneClickDocuments = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools/oneclick")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Artist Selection
+              Back
             </Button>
           </>
         }

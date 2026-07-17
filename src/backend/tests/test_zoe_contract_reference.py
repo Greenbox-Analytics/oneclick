@@ -65,9 +65,10 @@ def test_reference_message_added_and_after_contract():
     assert contract_idx < ref_idx  # contract governs; reference comes after
 
 
-def test_reference_message_instructs_supplemental_structure():
+def test_reference_message_instructs_general_guidance_structure():
     # When book context is present, the model is told to answer from the contract first
-    # and only append a short supplemental section if the background is applicable.
+    # and use the background for a clearly-separated "General guidance" section when the
+    # contract doesn't fully answer — never presenting background as contract terms.
     captured = {}
 
     def _capture(messages, *a, **k):
@@ -89,8 +90,15 @@ def test_reference_message_instructs_supplemental_structure():
     # Target the actual background message (the one carrying the passage text), not the
     # system-prompt rule that also mentions "BACKGROUND REFERENCE".
     ref_msg = next(m["content"] for m in captured["messages"] if "Net royalty basis." in m["content"])
-    assert "Supplemental" in ref_msg  # the supplemental section is specified
-    assert "STOP" in ref_msg  # instructed to add nothing when the contract fully answers
+    assert "General guidance" in ref_msg  # the fallback section is specified by name
+    assert "Never present background as if it were written in the contract" in ref_msg
+    assert "Supplemental" not in ref_msg  # old section name fully retired
+    # Pin the static system prompt too — a Rule 2/5 revert must fail this test.
+    system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
+    static_prompt = system_msgs[0]  # first system message is the static rules prompt
+    assert "General guidance" in static_prompt
+    assert all("Supplemental" not in c for c in system_msgs)
+    assert "add nothing extra" not in static_prompt
 
 
 def test_no_reference_keeps_empty_sources():

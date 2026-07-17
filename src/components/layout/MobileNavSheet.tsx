@@ -49,7 +49,7 @@ const TOP_LEVEL: NavItem[] = [
 ];
 
 const TOOLS: NavItem[] = [
-  { label: "Registry", path: "/tools/registry", icon: FileText, disabled: true },
+  { label: "Metadata Registry", path: "/tools/registry", icon: FileText },
   { label: "OneClick", path: "/tools/oneclick", icon: Calculator },
   { label: "Zoe", path: "/tools/zoe", icon: MessageSquare },
   { label: "Split Sheet", path: "/tools/split-sheet", icon: PieChart },

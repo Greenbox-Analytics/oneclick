@@ -41,6 +41,7 @@ init_analytics()
 from admin.analytics_router import router as admin_analytics_router
 from boards.router import router as boards_router
 from credentials.router import router as credentials_router
+from expenses.router import router as expenses_router
 from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
 from integrations.slack.router import router as slack_router
@@ -79,6 +80,7 @@ app.include_router(
     royalties_analytics_router, prefix="/oneclick/royalties/analytics", tags=["OneClick Royalties Analytics"]
 )
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
+app.include_router(expenses_router, prefix="/expenses", tags=["Expenses"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
 app.include_router(subscriptions_admin_router, tags=["Admin"])
@@ -1913,6 +1915,7 @@ class OneClickRoyaltyResponse(BaseModel):
     excel_file_url: str | None = None
     message: str
     is_cached: bool | None = False
+    review: dict[str, Any] | None = None
 
 
 class ConfirmCalculationRequest(BaseModel):
@@ -2541,12 +2544,43 @@ async def oneclick_calculate_royalties_stream(
             await asyncio.sleep(0.3)
 
             # Calculate payments
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Processing royalty statement...', 'progress': 80, 'stage': 'processing'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Processing statement and verifying splits against the contract(s)...', 'progress': 80, 'stage': 'processing'})}\n\n"
 
             # Load project expenses so net-basis shares can be calculated.
             calc_expenses, review_expenses = _load_oneclick_expenses(get_supabase_client(), project_id)
 
-            payments = calculate_royalty_payments(
+            # Pre-parse each contract through the shared cache, in parallel so a cold
+            # multi-contract run doesn't serialize N extractions. NOTE: force_recalculate
+            # recomputes the PAYOUT (statement/expenses changed) — the contract bytes are
+            # unchanged, so we still READ the parse cache here (do NOT bypass it).
+            #
+            # Concurrency note: get_supabase_client() is a process-wide singleton, so all
+            # workers share one httpx-backed client — thread-safe for concurrent requests,
+            # and the default pool covers max_workers=4. If a cold multi-contract run ever
+            # surfaces PostgREST/connection-pool errors, switch to a fresh create_client(...)
+            # per worker (NOT get_supabase_client(), which returns the same singleton).
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            from utils.contract_parsing.cache import get_or_parse
+
+            db_client = get_supabase_client()
+            contract_data_by_id = {}
+            parse_targets = [
+                (cid, contract_markdowns[cid]) for cid in target_contract_ids if contract_markdowns.get(cid)
+            ]
+            if parse_targets:
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    fut_to_cid = {
+                        executor.submit(get_or_parse, db_client, (lambda m=md: m)): cid for cid, md in parse_targets
+                    }
+                    for future in as_completed(fut_to_cid):
+                        cid = fut_to_cid[future]
+                        try:
+                            contract_data_by_id[cid] = future.result()
+                        except Exception as e:
+                            print(f"Warning: pre-parse failed for contract {cid}: {e}")
+
+            payments, review = calculate_royalty_payments(
                 contract_path=contract_path,
                 statement_path=statement_path,
                 user_id=user_id,
@@ -2554,6 +2588,7 @@ async def oneclick_calculate_royalties_stream(
                 contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
                 contract_markdowns=contract_markdowns if contract_markdowns else None,
                 expenses=calc_expenses,
+                contract_data_by_id=contract_data_by_id if contract_data_by_id else None,
             )
 
             yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
@@ -2601,9 +2636,24 @@ async def oneclick_calculate_royalties_stream(
                 "stage": "complete",
                 "expense_review_required": expense_review_required,
                 "expenses": review_expenses if expense_review_required else [],
+                "review": review,
             }
 
             yield f"data: {json.dumps(result)}\n\n"
+
+            # Fires for overall="unavailable" too — the event's `overall` property lets
+            # dashboards separate completed verifications from failed passes.
+            if review:
+                analytics_capture(
+                    user_id,
+                    "oneclick_split_verification_run",
+                    {
+                        "tool": "oneclick",
+                        "checked": review.get("checked", 0),
+                        "flagged": review.get("flagged", 0),
+                        "overall": review.get("overall"),
+                    },
+                )
 
             _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
             analytics_capture(
@@ -2785,7 +2835,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
             print("\n--- Step 3: Calculating Royalty Payments ---")
 
             # Use helper function from helpers.py
-            payments = calculate_royalty_payments(
+            payments, review = calculate_royalty_payments(
                 contract_path=contract_path,
                 statement_path=statement_path,
                 user_id=user_id,
@@ -2837,6 +2887,7 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
                 payments=payment_responses,
                 excel_file_url=None,
                 message=f"Successfully calculated {len(payments)} royalty payments",
+                review=review,
             )
 
         finally:
