@@ -69,6 +69,7 @@ import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
 import { EditRoyaltySplitsDialog } from "./EditRoyaltySplitsDialog";
 import { DeleteWorkConfirmModal } from "./DeleteWorkConfirmModal";
+import { ExportMetadataDialog } from "./ExportMetadataDialog";
 import FetchSpotifyMetadataDialog from "./FetchSpotifyMetadataDialog";
 
 interface WorkEditorProps {
@@ -313,6 +314,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
   const workFiles = workFilesQuery.data || [];
   const [linkOpen, setLinkOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   return (
     // 380px sidebar so party names in the Royalty splits table fit on one line.
@@ -740,7 +742,7 @@ export function WorkEditor({ work }: WorkEditorProps) {
             variant="outline"
             size="sm"
             className="w-full mt-4"
-            onClick={() => exportProof.mutate(work.id)}
+            onClick={() => setExportOpen(true)}
             disabled={exportProof.isPending}
           >
             {exportProof.isPending ? (
@@ -772,6 +774,19 @@ export function WorkEditor({ work }: WorkEditorProps) {
           onDeleted={() => navigate("/tools/registry")}
         />
       )}
+
+      <ExportMetadataDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        parties={stakeRows}
+        isExporting={exportProof.isPending}
+        onExport={(hidden) =>
+          exportProof.mutate(
+            { workId: work.id, hiddenParties: hidden },
+            { onSuccess: () => setExportOpen(false) }
+          )
+        }
+      />
 
       <FetchSpotifyMetadataDialog
         open={spotifyFetchOpen}

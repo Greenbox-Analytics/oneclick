@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { PaymentTracking } from "@/components/oneclick/payments/PaymentTracking";
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
@@ -24,6 +25,7 @@ interface Artist {
 const OneClick = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const goBack = useSmartBack("/tools");
   const { user } = useAuth();
 
   // When arriving from a OneClick calculation's "Pay Royalties" button, open the
@@ -112,9 +114,9 @@ const OneClick = () => {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Tools
+              Back
             </Button>
           </>
         }

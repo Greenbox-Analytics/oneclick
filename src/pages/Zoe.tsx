@@ -22,6 +22,7 @@ import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { useZoeData } from "@/hooks/useZoeData";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import "@/components/zoe/zoe-chat.css";
 
 // ── Inline SVGs matching the mockup ──────────────────────────────────────
@@ -106,6 +107,7 @@ const Zoe = () => {
   } = useZoeData();
 
   const navigate = useNavigate();
+  const goBack = useSmartBack("/dashboard");
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
   const walkthrough = useToolWalkthrough(TOOL_CONFIGS.zoe, {
     onComplete: () => markToolCompleted("zoe"),
@@ -138,9 +140,9 @@ const Zoe = () => {
             <div className="brand">
               <button
                 className="topbar-back"
-                onClick={() => navigate("/dashboard")}
-                title="Back to dashboard"
-                aria-label="Back to dashboard"
+                onClick={goBack}
+                title="Back"
+                aria-label="Back"
               >
                 <ArrowLeft />
               </button>

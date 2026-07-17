@@ -9,11 +9,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Music, Search, DollarSign, CheckCircle2, XCircle, Clock, Loader2, ArrowLeft, BookOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { useToast } from "@/hooks/use-toast";
 import type { Tables } from "@/integrations/supabase/types";
 
 const Payments = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/dashboard");
   const { toast } = useToast();
   const { user } = useAuth();
   const [payments, setPayments] = useState<Tables<"payments">[]>([]);
@@ -113,7 +115,7 @@ const Payments = () => {
               variant="ghost"
               size="sm"
               className="text-muted-foreground hover:text-foreground"
-              onClick={() => navigate(-1)}
+              onClick={goBack}
             >
               <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>

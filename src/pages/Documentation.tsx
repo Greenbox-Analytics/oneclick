@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -1093,6 +1094,7 @@ interface DocHeading { id: string; label: string; level: number; }
 
 const Documentation = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/dashboard");
   const [searchParams] = useSearchParams();
   const { user, signOut } = useAuth();
   // Deep-linkable: /docs?section=oneclick opens straight to that section.
@@ -1177,7 +1179,7 @@ const Documentation = () => {
           {user ? (
             <>
               <div className="flex items-center gap-3">
-                <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="text-muted-foreground hover:text-foreground">
+                <Button variant="ghost" size="sm" onClick={goBack} className="text-muted-foreground hover:text-foreground">
                   <ArrowLeft className="w-4 h-4 mr-1" /> Back
                 </Button>
                 <div className="w-px h-5 bg-border" />

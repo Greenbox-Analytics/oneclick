@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 export type ExpenseCategory =
   | "studio"
@@ -85,6 +85,49 @@ export function useExpenseSummary() {
       return data.expenses;
     },
     enabled: !!user?.id,
+  });
+}
+
+export type ExportFormat = "pdf" | "xlsx";
+
+export interface ExportExpensesVars {
+  format: ExportFormat;
+  /** Omit / "all" to export every project (overall report). */
+  projectId?: string;
+  /** Omit / "all" to include every category. */
+  category?: string;
+}
+
+// Streaming download can't use apiFetch (JSON-only). Mirror useExportProof:
+// raw fetch with auth headers → blob → anchor download, filename from header.
+export function useExportExpenses() {
+  return useMutation({
+    mutationFn: async ({ format, projectId, category }: ExportExpensesVars) => {
+      const params = new URLSearchParams({ format });
+      if (projectId && projectId !== "all") params.set("project_id", projectId);
+      if (category && category !== "all") params.set("category", category);
+
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API_URL}/expenses/export?${params.toString()}`, {
+        headers: authHeaders,
+      });
+      if (!res.ok) throw new Error("Failed to generate expense report");
+
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?(.+?)"?$/);
+      const filename = match ? match[1] : `Expense_Report.${format}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    onSuccess: () => toast.success("Expense report downloaded"),
+    onError: (e: Error) => toast.error(e.message),
   });
 }
 

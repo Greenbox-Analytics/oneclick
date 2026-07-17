@@ -36,7 +36,14 @@ def _wrap(value, style):
     return Paragraph(html.escape(text), style)
 
 
-def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
+WITHHELD_TEXT = "Withheld"
+
+
+def generate_proof_of_ownership_pdf(work_data: dict, hidden_parties: set[str] | None = None) -> io.BytesIO:
+    # Parties (by holder_name) whose ownership percentages should be redacted in
+    # this export — the exporter chose not to disclose their splits. The party is
+    # still listed, but its % (and section total) show a "Withheld" message.
+    hidden_parties = hidden_parties or set()
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -129,6 +136,7 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
 
         header = ["Holder", "Role", "%", "Publisher/Label", "Approval"]
         rows = [header]
+        section_has_hidden = False
         for s in stake_list:
             approval = "—"
             sid = s.get("id")
@@ -137,6 +145,17 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
                 approval = stake_approval[sid]["status"].title()
             elif hemail and hemail in email_approval:
                 approval = email_approval[hemail]["status"].title()
+            # Redact this party's split if the exporter withheld it: keep the
+            # holder/role/approval so the party is still listed, but replace the
+            # percentage (and publisher/label, which can imply the split) with a
+            # "Withheld" message.
+            is_hidden = s.get("holder_name") in hidden_parties
+            if is_hidden:
+                section_has_hidden = True
+            pct_cell = WITHHELD_TEXT if is_hidden else f"{s.get('percentage', 0):.2f}%"
+            publisher_cell = (
+                _wrap(WITHHELD_TEXT, cell_style) if is_hidden else _wrap(s.get("publisher_or_label"), cell_style)
+            )
             # Free-text cells are wrapped so long names can't overlap the next
             # column; % and Approval stay plain strings — the per-row TEXTCOLOR
             # styling below only applies to string cells.
@@ -144,13 +163,19 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
                 [
                     _wrap(s.get("holder_name", ""), cell_style),
                     _wrap(s.get("holder_role", ""), cell_style),
-                    f"{s.get('percentage', 0):.2f}%",
-                    _wrap(s.get("publisher_or_label"), cell_style),
+                    pct_cell,
+                    publisher_cell,
                     approval,
                 ]
             )
-        total = sum(s.get("percentage", 0) for s in stake_list)
-        rows.append(["", "TOTAL", f"{total:.2f}%", "", ""])
+        # When any party in this section is withheld, redact the total too —
+        # otherwise a recipient could derive a hidden split by subtracting the
+        # visible ones from the total.
+        if section_has_hidden:
+            rows.append(["", "TOTAL", WITHHELD_TEXT, "", ""])
+        else:
+            total = sum(s.get("percentage", 0) for s in stake_list)
+            rows.append(["", "TOTAL", f"{total:.2f}%", "", ""])
 
         col_widths = [1.5 * inch, 1.0 * inch, 0.8 * inch, 1.5 * inch, 1.2 * inch]
         tbl = Table(rows, colWidths=col_widths)
@@ -198,6 +223,16 @@ def generate_proof_of_ownership_pdf(work_data: dict) -> io.BytesIO:
                 "SoundExchange royalties (US non-interactive digital performance) are "
                 "collected and paid directly by SoundExchange. They are tracked "
                 "separately and are not counted in the master ownership totals above.",
+                small_style,
+            )
+        )
+        elements.append(Spacer(1, 8))
+
+    # Explain the "Withheld" cells whenever the exporter hid one or more splits.
+    if hidden_parties:
+        elements.append(
+            Paragraph(
+                f"Splits marked '{WITHHELD_TEXT}' were hidden by the exporter and are not disclosed in this document.",
                 small_style,
             )
         )

@@ -516,11 +516,23 @@ export function useDeclineInvitation() {
 export function useExportProof() {
   const { user } = useAuth();
   return useMutation({
-    mutationFn: async (workId: string) => {
+    mutationFn: async ({
+      workId,
+      hiddenParties = [],
+    }: {
+      workId: string;
+      hiddenParties?: string[];
+    }) => {
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/registry/works/${workId}/export`, {
-        headers: authHeaders,
-      });
+      // Repeated `hide_split` params — one per party whose splits are withheld.
+      // Repeated params encode any characters safely and keep this a GET download.
+      const params = new URLSearchParams();
+      for (const name of hiddenParties) params.append("hide_split", name);
+      const qs = params.toString();
+      const res = await fetch(
+        `${API_URL}/registry/works/${workId}/export${qs ? `?${qs}` : ""}`,
+        { headers: authHeaders }
+      );
       if (!res.ok) throw new Error("Failed to generate metadata export");
       const blob = await res.blob();
       const disposition = res.headers.get("Content-Disposition") || "";
