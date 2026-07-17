@@ -10,6 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -57,6 +58,7 @@ interface Artist { id: string; name: string; }
 
 const OneClickDocuments = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/tools/oneclick");
   const { artistId } = useParams<{ artistId: string }>();
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -553,9 +555,9 @@ const OneClickDocuments = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools/oneclick")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Artist Selection
+              Back
             </Button>
           </>
         }

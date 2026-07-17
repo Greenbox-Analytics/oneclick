@@ -4,9 +4,11 @@ import { Music, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { useSmartBack } from "@/hooks/useSmartBack";
 
 const WorkspaceBoards = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/workspace?tab=boards");
   const { artistId } = useParams<{ artistId?: string }>();
   const { captureToolOpened } = useAnalytics();
 
@@ -22,7 +24,7 @@ const WorkspaceBoards = () => {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => navigate("/workspace?tab=boards")}
+            onClick={goBack}
           >
             <ArrowLeft className="w-5 h-5" />
           </Button>
