@@ -4,8 +4,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { ArrowLeft, BookOpen, Plus, Receipt, ChevronRight, Loader2 } from "lucide-react";
+import { ArrowLeft, BookOpen, Plus, Receipt, ChevronRight, Loader2, Download, FileText, FileSpreadsheet } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 import {
   ChartContainer,
@@ -15,11 +21,14 @@ import {
 } from "@/components/ui/chart";
 import {
   useExpenseSummary,
+  useExportExpenses,
   EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_LABELS,
   type ExpenseSummaryRow,
+  type ExportFormat,
 } from "@/hooks/useProjectExpenses";
 import ExpenseFormDialog from "@/components/project/ExpenseFormDialog";
+import { useSmartBack } from "@/hooks/useSmartBack";
 
 const formatCurrency = (n: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
@@ -81,12 +90,18 @@ export function filterExpenseRows(
 
 const ExpenseTracker = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/tools");
   const { data: expenses, isLoading, isError } = useExpenseSummary();
   const [granularity, setGranularity] = useState<Granularity>("month");
   const [addOpen, setAddOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const filtersActive = projectFilter !== "all" || categoryFilter !== "all";
+  const exportExpenses = useExportExpenses();
+
+  const handleExport = (format: ExportFormat) => {
+    exportExpenses.mutate({ format, projectId: projectFilter, category: categoryFilter });
+  };
 
   const rows: ExpenseSummaryRow[] = useMemo(() => expenses ?? [], [expenses]);
 
@@ -181,9 +196,9 @@ const ExpenseTracker = () => {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
+            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Tools
+              Back
             </Button>
           </>
         }
@@ -259,6 +274,31 @@ const ExpenseTracker = () => {
                   Clear filters
                 </Button>
               )}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto"
+                    disabled={filteredRows.length === 0 || exportExpenses.isPending}
+                  >
+                    {exportExpenses.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4 mr-2" />
+                    )}
+                    Export
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => handleExport("pdf")}>
+                    <FileText className="w-4 h-4 mr-2" /> PDF
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport("xlsx")}>
+                    <FileSpreadsheet className="w-4 h-4 mr-2" /> Excel (.xlsx)
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
 
             {filteredRows.length === 0 ? (

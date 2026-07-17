@@ -9,8 +9,8 @@ import fitz
 from registry.pdf_generator import generate_proof_of_ownership_pdf
 
 
-def _pdf_text(work_data: dict) -> str:
-    buffer = generate_proof_of_ownership_pdf(work_data)
+def _pdf_text(work_data: dict, hidden_parties: set[str] | None = None) -> str:
+    buffer = generate_proof_of_ownership_pdf(work_data, hidden_parties=hidden_parties)
     with fitz.open(stream=buffer.read(), filetype="pdf") as doc:
         return "\n".join(page.get_text() for page in doc)
 
@@ -75,3 +75,39 @@ class TestSignatureSection:
         assert "Signatures" in text
         assert "No stakeholders recorded for this work." in text
         assert "Signature:" not in text
+
+
+class TestWithheldSplits:
+    def _two_party_master(self) -> dict:
+        return _base_work(
+            [
+                {"holder_name": "Alex", "holder_role": "Producer", "stake_type": "master", "percentage": 40.0},
+                {"holder_name": "Jordan", "holder_role": "Writer", "stake_type": "master", "percentage": 60.0},
+            ]
+        )
+
+    def test_hidden_party_percentage_is_withheld(self):
+        text = _pdf_text(self._two_party_master(), hidden_parties={"Jordan"})
+        # Hidden party's split is redacted; visible party's split is intact.
+        assert "60.00%" not in text
+        assert "40.00%" in text
+        assert "Withheld" in text
+        # Both parties are still listed by name.
+        assert "Alex" in text
+        assert "Jordan" in text
+        # Explanatory legend appears.
+        assert "hidden by the exporter" in text
+
+    def test_hidden_party_redacts_section_total(self):
+        text = _pdf_text(self._two_party_master(), hidden_parties={"Jordan"})
+        # The true master total (100.00%) must not leak — subtracting the visible
+        # 40% from it would reveal the withheld 60%.
+        assert "100.00%" not in text
+
+    def test_no_hidden_parties_shows_full_splits_and_total(self):
+        text = _pdf_text(self._two_party_master())
+        assert "40.00%" in text
+        assert "60.00%" in text
+        assert "100.00%" in text
+        assert "Withheld" not in text
+        assert "hidden by the exporter" not in text

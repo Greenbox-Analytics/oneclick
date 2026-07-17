@@ -195,13 +195,17 @@ async def submit_for_approval(work_id: str, user_id: str = Depends(get_current_u
 
 
 @router.get("/works/{work_id}/export")
-async def export_proof_of_ownership(work_id: str, user_id: str = Depends(get_current_user_id)):
+async def export_proof_of_ownership(
+    work_id: str,
+    hide_split: list[str] = Query(default=[]),
+    user_id: str = Depends(get_current_user_id),
+):
     from registry.pdf_generator import generate_proof_of_ownership_pdf
 
     data = await service.get_work_full(_get_supabase(), user_id, work_id)
     if not data:
         raise HTTPException(status_code=404, detail="Work not found")
-    buffer = generate_proof_of_ownership_pdf(data)
+    buffer = generate_proof_of_ownership_pdf(data, hidden_parties=set(hide_split))
     safe_title = re.sub(r"[^a-zA-Z0-9._-]", "_", data.get("title", "work"))
     return StreamingResponse(
         buffer,

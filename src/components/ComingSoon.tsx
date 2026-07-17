@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { useSmartBack } from "@/hooks/useSmartBack";
 
 interface ComingSoonProps {
   icon: LucideIcon;
@@ -13,6 +14,7 @@ interface ComingSoonProps {
 
 export function ComingSoon({ icon: Icon, title, message }: ComingSoonProps) {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/tools");
 
   return (
     <div className="min-h-screen bg-background">
@@ -28,8 +30,8 @@ export function ComingSoon({ icon: Icon, title, message }: ComingSoonProps) {
             >
               <BookOpen className="w-4 h-4" />
             </Button>
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
-              Back to Tools
+            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
+              Back
             </Button>
           </>
         }

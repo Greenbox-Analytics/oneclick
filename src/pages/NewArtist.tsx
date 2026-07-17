@@ -9,6 +9,7 @@ import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { useGatedAction } from "@/hooks/useGatedAction";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useQuery } from "@tanstack/react-query";
@@ -16,6 +17,7 @@ import { ApiError } from "@/lib/apiFetch";
 
 const NewArtist = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/artists");
   const { toast } = useToast();
   const { user } = useAuth();
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
@@ -117,7 +119,7 @@ const NewArtist = () => {
               variant="ghost"
               size="sm"
               className="text-muted-foreground hover:text-foreground"
-              onClick={() => navigate(-1)}
+              onClick={goBack}
             >
               <ArrowLeft className="w-4 h-4 mr-1" /> Back
             </Button>

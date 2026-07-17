@@ -45,6 +45,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { useGatedAction } from "@/hooks/useGatedAction";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { apiFetch, API_URL, ApiError } from "@/lib/apiFetch";
@@ -77,6 +78,7 @@ function getArtistColor(name: string) {
 
 const Portfolio = () => {
   const navigate = useNavigate();
+  const goBack = useSmartBack("/dashboard");
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { toast } = useToast();
@@ -366,7 +368,7 @@ const Portfolio = () => {
         {/* === PAGE TITLE === */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
+            <Button variant="ghost" size="icon" onClick={goBack}>
               <ArrowLeft className="w-5 h-5" />
             </Button>
             <div>

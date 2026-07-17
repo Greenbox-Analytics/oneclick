@@ -41,6 +41,7 @@ init_analytics()
 from admin.analytics_router import router as admin_analytics_router
 from boards.router import router as boards_router
 from credentials.router import router as credentials_router
+from expenses.router import router as expenses_router
 from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
 from integrations.slack.router import router as slack_router
@@ -79,6 +80,7 @@ app.include_router(
     royalties_analytics_router, prefix="/oneclick/royalties/analytics", tags=["OneClick Royalties Analytics"]
 )
 app.include_router(credentials_router, prefix="/credentials", tags=["Credentials Vault"])
+app.include_router(expenses_router, prefix="/expenses", tags=["Expenses"])
 app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
 app.include_router(subscriptions_admin_router, tags=["Admin"])

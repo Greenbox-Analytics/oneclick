@@ -30,6 +30,7 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
+import { useSmartBack } from "@/hooks/useSmartBack";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useIsMobile } from "@/hooks/use-mobile";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
@@ -46,6 +47,7 @@ const canEdit = (role: string | null) => role === "owner" || role === "admin" ||
 const ProjectDetail = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const goBack = useSmartBack("/portfolio");
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const userRole = useMyRole(projectId);
@@ -124,8 +126,8 @@ const ProjectDetail = () => {
     return (
       <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Project not found or access denied.</p>
-        <Button variant="outline" onClick={() => navigate("/portfolio")}>
-          <ArrowLeft className="w-4 h-4 mr-2" /> Back to Portfolio
+        <Button variant="outline" onClick={goBack}>
+          <ArrowLeft className="w-4 h-4 mr-2" /> Back
         </Button>
       </div>
     );
@@ -145,9 +147,9 @@ const ProjectDetail = () => {
                 variant="ghost"
                 size="sm"
                 className="shrink-0 text-muted-foreground hover:text-foreground hidden md:inline-flex"
-                onClick={() => navigate("/portfolio")}
+                onClick={goBack}
               >
-                <ArrowLeft className="w-4 h-4 mr-1" /> Portfolio
+                <ArrowLeft className="w-4 h-4 mr-1" /> Back
               </Button>
               <div
                 className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
