@@ -38,9 +38,8 @@ jobs:
             exit 0
           fi
           echo "Diffing $PREV_TAG..HEAD"
-          # Exclude oneclick/royalties/** (persistence/tracking layer — doesn't change
-          # calc results) so only real calc-logic changes trigger the cache wipe.
-          if git diff --name-only "$PREV_TAG..HEAD" | grep "^src/backend/oneclick/" | grep -qv "^src/backend/oneclick/royalties/"; then
+          # Any change under src/backend/oneclick/ (royalties included) clears the cache.
+          if git diff --name-only "$PREV_TAG..HEAD" | grep -q "^src/backend/oneclick/"; then
             echo "oneclick=true" >> "$GITHUB_OUTPUT"
           else
             echo "oneclick=false" >> "$GITHUB_OUTPUT"
