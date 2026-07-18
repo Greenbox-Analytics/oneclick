@@ -33,11 +33,12 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
+            # Any change under src/backend/oneclick/ (royalties included) clears the
+            # OneClick calc cache. Kept as a single glob on purpose: dorny/paths-filter
+            # OR-combines list patterns, so a '!...' negation line matches nearly every
+            # file and would fire on every deploy.
             oneclick:
               - 'src/backend/oneclick/**'
-              # royalties/** is the persistence/tracking layer — it does NOT change
-              # calc results, so changes there must not trigger the calc-cache wipe.
-              - '!src/backend/oneclick/royalties/**'
 
       - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
