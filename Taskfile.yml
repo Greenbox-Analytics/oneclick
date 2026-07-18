@@ -278,6 +278,27 @@ tasks:
         try_gsm_scoped "PAYPAL_CLIENT_ID"
         try_gsm_scoped "PAYPAL_CLIENT_SECRET"
         try_gsm_scoped "VITE_PAYPAL_CLIENT_ID" "PAYPAL_CLIENT_ID"
+        # On DEV (sandbox) runs, also drop the LIVE creds in COMMENTED-OUT, so a
+        # local live-payment smoke test is just: uncomment the three lines below and
+        # flip PAYPAL_ENV to live. They override the sandbox values above (last
+        # duplicate key in the file wins). Idempotent — the marker guards re-adds.
+        if [[ "{{.ENV_SUFFIX}}" == "DEV" ]] && ! grep -q "LIVE PayPal override" .env; then
+          live_id=$(gcloud secrets versions access latest --secret="PAYPAL_CLIENT_ID_PROD" --project="{{.GCP_PROJECT}}" 2>/dev/null || true)
+          live_secret=$(gcloud secrets versions access latest --secret="PAYPAL_CLIENT_SECRET_PROD" --project="{{.GCP_PROJECT}}" 2>/dev/null || true)
+          if [[ -n "$live_id" && -n "$live_secret" ]]; then
+            PENDING_LINES+=("")
+            PENDING_LINES+=("# --- LIVE PayPal override (local live-transaction testing) ---")
+            PENDING_LINES+=("# To test LIVE payments: uncomment the three lines below and set")
+            PENDING_LINES+=("# PAYPAL_ENV=live above. They override the sandbox values above.")
+            PENDING_LINES+=("# Use the smallest real amount and refund it afterward.")
+            PENDING_LINES+=("# PAYPAL_CLIENT_ID=${live_id}")
+            PENDING_LINES+=("# PAYPAL_CLIENT_SECRET=${live_secret}")
+            PENDING_LINES+=("# VITE_PAYPAL_CLIENT_ID=${live_id}")
+            echo "  ✓ LIVE PayPal override (commented, from *_PROD)"
+          else
+            echo "  ✗ PAYPAL_*_PROD not in GSM / no access — skipped live override"
+          fi
+        fi
         end_section
 
         start_section "RESEND SMTP"
