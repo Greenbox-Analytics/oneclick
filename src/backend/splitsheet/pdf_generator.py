@@ -100,13 +100,22 @@ def generate_split_sheet_pdf(
     for c in contributors:
         name = c.get("name", "")
         role = c.get("role", "")
-        publisher = c.get("publisher_or_label", "") or ""
-        ipi = c.get("ipi_number", "") or ""
         party_line = f'<b>{name}</b> (hereinafter referred to as "{role}")'
-        if publisher:
-            party_line += f", affiliated with {publisher}"
-        if ipi:
-            party_line += f", IPI/CAE #{ipi}"
+        # IPI and publisher affiliation only apply to the publishing (composition) side.
+        if needs_pub:
+            ipi = c.get("ipi_number", "") or ""
+            if ipi:
+                party_line += f", IPI/CAE #{ipi}"
+            if c.get("is_published"):
+                publisher_name = c.get("publisher_name", "") or "their publisher"
+                party_line += f", published by {publisher_name}"
+                publisher_ipi = c.get("publisher_ipi", "") or ""
+                if publisher_ipi:
+                    party_line += f" (IPI/CAE #{publisher_ipi})"
+            else:
+                party_line += ", self-published"
+        elif c.get("label"):
+            party_line += f", {c.get('label')}"
         elements.append(Paragraph(party_line, body_style))
         elements.append(Spacer(1, 4))
 
@@ -146,52 +155,13 @@ def generate_split_sheet_pdf(
     # --- Section 3: Royalty Splits ---
     elements.append(Paragraph("Section 3: Royalty Percentage Splits", section_heading_style))
 
-    def build_royalty_section(royalty_type_label, royalty_type_key, pct_key):
-        """Build a royalty split section with clear, extractable language."""
-        elements.append(Spacer(1, 4))
-        elements.append(
-            Paragraph(
-                f"<b>{royalty_type_label} Royalties:</b> The parties agree to the following "
-                f"{royalty_type_key.lower()} royalty percentage splits for the work titled "
-                f'"{work_title}":',
-                body_style,
-            )
-        )
-        elements.append(Spacer(1, 8))
+    def _styled_table(table_data, col_widths, center_from_col):
+        """Common table styling: brand header, zebra body rows, bold TOTAL row.
 
-        # Explicit text for each party's share (easy for LLM to parse)
-        for c in contributors:
-            name = c.get("name", "")
-            role = c.get("role", "")
-            pct = c.get(pct_key, 0) or 0
-            elements.append(
-                Paragraph(
-                    f'• {name} ("{role}") shall receive <b>{pct:.2f}%</b> of all {royalty_type_key.lower()} royalties.',
-                    body_style,
-                )
-            )
-        elements.append(Spacer(1, 8))
-
-        # Table format
-        header_row = ["Party Name", "Role", f"{royalty_type_label} Royalty %"]
-        table_data = [header_row]
-
-        for c in contributors:
-            pct = c.get(pct_key, 0) or 0
-            table_data.append(
-                [
-                    c.get("name", ""),
-                    c.get("role", ""),
-                    f"{pct:.2f}%",
-                ]
-            )
-
-        total_pct = sum((c.get(pct_key, 0) or 0) for c in contributors)
-        table_data.append(["", "TOTAL", f"{total_pct:.2f}%"])
-
-        col_widths = [2.5 * inch, 2.0 * inch, 2.0 * inch]
+        `center_from_col` is the first column index whose values should be centered
+        (the numeric percentage columns).
+        """
         tbl = Table(table_data, colWidths=col_widths)
-
         cmds = [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a3a2a")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -200,7 +170,7 @@ def generate_split_sheet_pdf(
             ("ALIGN", (0, 0), (-1, 0), "CENTER"),
             ("FONTNAME", (0, 1), (-1, -2), "Helvetica"),
             ("FONTSIZE", (0, 1), (-1, -1), 9),
-            ("ALIGN", (2, 1), (2, -1), "CENTER"),
+            ("ALIGN", (center_from_col, 1), (-1, -1), "CENTER"),
             ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
             ("LINEABOVE", (0, -1), (-1, -1), 1, colors.black),
             ("GRID", (0, 0), (-1, -2), 0.5, colors.HexColor("#cccccc")),
@@ -214,16 +184,134 @@ def generate_split_sheet_pdf(
         for row_idx in range(1, len(table_data) - 1):
             if row_idx % 2 == 0:
                 cmds.append(("BACKGROUND", (0, row_idx), (-1, row_idx), colors.HexColor("#f5f5f5")))
-
         tbl.setStyle(TableStyle(cmds))
         elements.append(tbl)
         elements.append(Spacer(1, 16))
 
+    def build_publishing_section():
+        """Publishing splits — writer's share and publisher's share per writer."""
+        elements.append(Spacer(1, 4))
+        elements.append(
+            Paragraph(
+                "<b>Publishing Royalties:</b> Publishing income is divided into a "
+                "writer's share and a publisher's share. The parties agree to the "
+                "following publishing royalty percentage splits for the work titled "
+                f'"{work_title}":',
+                body_style,
+            )
+        )
+        elements.append(Spacer(1, 8))
+
+        for c in contributors:
+            name = c.get("name", "")
+            if c.get("is_published"):
+                writer_pct = c.get("writer_share", 0) or 0
+                publisher_pct = c.get("publisher_share", 0) or 0
+                recipient = c.get("publisher_name", "") or "their publisher"
+                elements.append(
+                    Paragraph(
+                        f"• {name} shall receive <b>{writer_pct:.2f}%</b> as Writer's Share; "
+                        f"{recipient} shall receive <b>{publisher_pct:.2f}%</b> as Publisher's Share.",
+                        body_style,
+                    )
+                )
+            else:
+                pub_pct = c.get("publishing_share", 0) or 0
+                elements.append(
+                    Paragraph(
+                        f"• {name} shall receive <b>{pub_pct:.2f}%</b> of all publishing royalties (self-published).",
+                        body_style,
+                    )
+                )
+        elements.append(Spacer(1, 8))
+
+        table_data = [["Writer", "Role", "Writer's Share %", "Publisher", "Publisher's Share %"]]
+        writer_total = 0.0
+        publisher_total = 0.0
+        for c in contributors:
+            if c.get("is_published"):
+                writer_pct = c.get("writer_share", 0) or 0
+                publisher_pct = c.get("publisher_share", 0) or 0
+                publisher = c.get("publisher_name", "") or ""
+            else:
+                writer_pct = c.get("publishing_share", 0) or 0
+                publisher_pct = 0
+                publisher = "Self-published"
+            writer_total += writer_pct
+            publisher_total += publisher_pct
+            table_data.append(
+                [
+                    c.get("name", ""),
+                    c.get("role", ""),
+                    f"{writer_pct:.2f}%",
+                    publisher,
+                    f"{publisher_pct:.2f}%",
+                ]
+            )
+
+        table_data.append(["", "TOTAL", f"{writer_total:.2f}%", "", f"{publisher_total:.2f}%"])
+
+        _styled_table(
+            table_data,
+            [1.5 * inch, 1.1 * inch, 1.2 * inch, 1.5 * inch, 1.2 * inch],
+            center_from_col=2,
+        )
+
+    def build_master_section():
+        """Master splits — sound recording ownership. No IPI, no publisher share."""
+        has_label = any((c.get("label") or "").strip() for c in contributors)
+        elements.append(Spacer(1, 4))
+        elements.append(
+            Paragraph(
+                "<b>Master Royalties:</b> The parties agree to the following master "
+                f'royalty percentage splits for the work titled "{work_title}":',
+                body_style,
+            )
+        )
+        elements.append(Spacer(1, 8))
+
+        for c in contributors:
+            name = c.get("name", "")
+            role = c.get("role", "")
+            pct = c.get("master_percentage", 0) or 0
+            elements.append(
+                Paragraph(
+                    f'• {name} ("{role}") shall receive <b>{pct:.2f}%</b> of all master royalties.',
+                    body_style,
+                )
+            )
+        elements.append(Spacer(1, 8))
+
+        if has_label:
+            header_row = ["Party Name", "Role", "Label / Master Owner", "Master Royalty %"]
+        else:
+            header_row = ["Party Name", "Role", "Master Royalty %"]
+        table_data = [header_row]
+
+        for c in contributors:
+            pct = c.get("master_percentage", 0) or 0
+            if has_label:
+                table_data.append([c.get("name", ""), c.get("role", ""), c.get("label", "") or "", f"{pct:.2f}%"])
+            else:
+                table_data.append([c.get("name", ""), c.get("role", ""), f"{pct:.2f}%"])
+
+        total_pct = sum((c.get("master_percentage", 0) or 0) for c in contributors)
+        if has_label:
+            table_data.append(["", "TOTAL", "", f"{total_pct:.2f}%"])
+            col_widths = [1.9 * inch, 1.4 * inch, 1.9 * inch, 1.3 * inch]
+            center_col = 3
+        else:
+            table_data.append(["", "TOTAL", f"{total_pct:.2f}%"])
+            col_widths = [2.5 * inch, 2.0 * inch, 2.0 * inch]
+            center_col = 2
+
+        _styled_table(table_data, col_widths, center_from_col=center_col)
+
     if needs_pub:
-        build_royalty_section("Publishing", "Publishing", "publishing_percentage")
+        build_publishing_section()
 
     if needs_master:
-        build_royalty_section("Master", "Master", "master_percentage")
+        build_master_section()
 
     # --- Section 4: Signatures ---
     elements.append(Paragraph("Section 4: Signatures", section_heading_style))
