@@ -156,9 +156,9 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
             buckets[(stmt_id, proj_id)].append(line)
 
     # Reporting-currency accumulators
-    earned_r = paid_r = drafted_r = owed_r = 0.0
+    earned_r = paid_r = drafted_r = owed_r = unpaid_r = 0.0
     # Native (payout_currency) accumulators
-    earned_n = paid_n = drafted_n = owed_n = 0.0
+    earned_n = paid_n = drafted_n = owed_n = unpaid_n = 0.0
 
     # Collect project ids
     project_ids: set[str] = set()
@@ -172,6 +172,10 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
         paid_b = cov_paid.get((stmt_id, proj_id), 0.0)
         drafted_b = cov_drafted.get((stmt_id, proj_id), 0.0)
         owed_b = max(0.0, earned_b - paid_b - drafted_b)
+        # Outstanding = still owed until actually paid. Unlike owed_b it does NOT
+        # subtract drafted amounts — a draft is a plan, not a payment, so the
+        # money stays outstanding until the payout is completed.
+        unpaid_b = max(0.0, earned_b - paid_b)
 
         # Convert each component → reporting base (on_missing="none" → skip unconvertible buckets)
         earned_conv = fx.convert(db, earned_b, ccy, base, on_missing="none")
@@ -181,17 +185,20 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
         paid_conv = fx.convert(db, paid_b, ccy, base, on_missing="none")
         drafted_conv = fx.convert(db, drafted_b, ccy, base, on_missing="none")
         owed_conv = fx.convert(db, owed_b, ccy, base, on_missing="none")
+        unpaid_conv = fx.convert(db, unpaid_b, ccy, base, on_missing="none")
 
         earned_r += earned_conv
         paid_r += paid_conv if paid_conv is not None else 0.0
         drafted_r += drafted_conv if drafted_conv is not None else 0.0
         owed_r += owed_conv if owed_conv is not None else 0.0
+        unpaid_r += unpaid_conv if unpaid_conv is not None else 0.0
 
         # Convert each component → payout_currency (native) — use default "amount" fallback
         earned_n += fx.convert(db, earned_b, ccy, payout_ccy)
         paid_n += fx.convert(db, paid_b, ccy, payout_ccy)
         drafted_n += fx.convert(db, drafted_b, ccy, payout_ccy)
         owed_n += fx.convert(db, owed_b, ccy, payout_ccy)
+        unpaid_n += fx.convert(db, unpaid_b, ccy, payout_ccy)
 
         if proj_id:
             project_ids.add(proj_id)
@@ -201,10 +208,12 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
         "paid": paid_r,
         "drafted": drafted_r,
         "owed": owed_r,
+        "unpaid": unpaid_r,
         "earned_native": earned_n,
         "paid_native": paid_n,
         "drafted_native": drafted_n,
         "owed_native": owed_n,
+        "unpaid_native": unpaid_n,
         "project_ids": project_ids,
         "unconvertible_count": unconvertible_count,
     }
@@ -255,10 +264,12 @@ def payee_summary(db, user_id: str, base: str = "USD") -> list[dict]:
                 paid=totals["paid"],
                 drafted=totals["drafted"],
                 owed=owed,
+                unpaid=totals["unpaid"],
                 earned_native=totals["earned_native"],
                 paid_native=totals["paid_native"],
                 drafted_native=totals["drafted_native"],
                 owed_native=totals["owed_native"],
+                unpaid_native=totals["unpaid_native"],
                 unconvertible_count=totals["unconvertible_count"],
             ).model_dump()
         )
@@ -307,10 +318,12 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
         paid=totals["paid"],
         drafted=totals["drafted"],
         owed=owed,
+        unpaid=totals["unpaid"],
         earned_native=totals["earned_native"],
         paid_native=totals["paid_native"],
         drafted_native=totals["drafted_native"],
         owed_native=totals["owed_native"],
+        unpaid_native=totals["unpaid_native"],
         unconvertible_count=totals["unconvertible_count"],
     )
 
@@ -359,6 +372,7 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
             paid_b = cov_paid_stmt.get((sid, pid), 0.0)
             drafted_b = cov_drafted_stmt.get((sid, pid), 0.0)
             owed_b = max(0.0, earned_b - paid_b - drafted_b)
+            unpaid_b = max(0.0, earned_b - paid_b)
 
             if owed_b > 0:
                 st_state = "owed"
@@ -400,6 +414,7 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
                     paid=paid_b,
                     drafted=drafted_b,
                     owed=owed_b,
+                    unpaid=unpaid_b,
                     state=st_state,
                     lines=lines_out,
                 )

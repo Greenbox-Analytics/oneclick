@@ -254,15 +254,17 @@ class TestEmptyData:
 
 
 # ---------------------------------------------------------------------------
-# Test: fully-drafted payee → draft_count=1 but outstanding_total=0
+# Test: fully-drafted payee → still Outstanding (until paid) AND drafted
 # ---------------------------------------------------------------------------
 
 
-class TestOverviewExcludesDraftPaidAtNull:
-    """A fully-drafted payee (owed==0, drafted>0) must appear in drafted_total /
-    draft_count but NOT in outstanding_total / payees_owed_count.
+class TestOverviewDraftedPayeeStaysOutstanding:
+    """A fully-drafted payee (owed==0, drafted>0) still counts as Outstanding.
 
-    The draft payout has paid_at=None → excluded from paid_total too.
+    A draft is a plan, not a payment: outstanding = earned − paid (NOT minus
+    drafted), so the money stays in outstanding_total / payees_owed_count until
+    the payout is actually completed. It also shows in drafted_total /
+    draft_count. The draft payout has paid_at=None → excluded from paid_total.
     """
 
     def setup_method(self):
@@ -280,17 +282,20 @@ class TestOverviewExcludesDraftPaidAtNull:
             coverage_by_payee={PAYEE_A: [self.coverage]},
         )
 
-    def test_overview_excludes_draft_paid_at_null(self):
+    def test_drafted_payee_still_counts_as_outstanding(self):
         with patch("oneclick.royalties.analytics_service.fx.convert", side_effect=_identity_fx):
             result = analytics_service.overview(self.db, USER_ID, base="USD")
 
-        # owed = max(0, 100 - 0 - 100) = 0 → does NOT count as outstanding
-        assert result.outstanding_total == pytest.approx(0.0), (
-            f"fully-drafted payee must not appear in outstanding_total; got {result.outstanding_total}"
+        # unpaid = max(0, 100 - 0) = 100 → still Outstanding until actually paid
+        assert result.outstanding_total == pytest.approx(100.0), (
+            f"drafted-but-unpaid payee must stay in outstanding_total; got {result.outstanding_total}"
         )
-        assert result.payees_owed_count == 0
+        assert result.payees_owed_count == 1
+        # ...and appears in Top outstanding with the full unpaid amount
+        assert len(result.top_owed) == 1
+        assert result.top_owed[0].owed == pytest.approx(100.0)
 
-        # drafted>0 → shows in drafted_total and draft_count
+        # drafted>0 → also shows in drafted_total and draft_count
         assert result.drafted_total == pytest.approx(100.0), (
             f"drafted_total must include fully-drafted payee; got {result.drafted_total}"
         )

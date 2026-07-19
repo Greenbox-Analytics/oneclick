@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
@@ -19,12 +19,14 @@ export interface PayeeSummary {
   earned: number;
   paid: number;
   drafted: number;
-  owed: number;
+  owed: number; // earned − paid − drafted (available to draft; drives status/eligibility)
+  unpaid: number; // earned − paid (outstanding until actually paid; drives "Outstanding" displays)
   // payee payout-currency totals
   earned_native: number;
   paid_native: number;
   drafted_native: number;
   owed_native: number;
+  unpaid_native: number;
 }
 
 export interface PayeeLine {
@@ -47,6 +49,7 @@ export interface PayeeStatement {
   paid: number;
   drafted: number;
   owed: number;
+  unpaid: number; // earned − paid (outstanding until actually paid)
   state: string; // "owed" | "scheduled" | "settled"
   lines: PayeeLine[];
 }
@@ -186,6 +189,22 @@ export function useRoyaltyPayouts() {
 // ---------------------------------------------------------------------------
 
 /** POST /oneclick/royalties/payouts */
+/**
+ * A payout/payee financial change also feeds the analytics dashboards
+ * (overview "Paid over time" + "Top outstanding", per-artist, per-payee).
+ * Invalidate those alongside the core lists on every such change, or the
+ * charts stay stale until a full page reload.
+ */
+function invalidateRoyaltyData(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ["royalty-payees"] });
+  qc.invalidateQueries({ queryKey: ["royalty-payee"] });
+  qc.invalidateQueries({ queryKey: ["royalty-payouts"] });
+  qc.invalidateQueries({ queryKey: ["royalty-periods"] });
+  qc.invalidateQueries({ queryKey: ["royalty-analytics-overview"] });
+  qc.invalidateQueries({ queryKey: ["royalty-analytics-artist"] });
+  qc.invalidateQueries({ queryKey: ["royalty-analytics-payee"] });
+}
+
 export function useCreatePayout() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -197,11 +216,7 @@ export function useCreatePayout() {
         body: JSON.stringify(payload),
       });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["royalty-payees"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-payouts"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-periods"] });
-    },
+    onSuccess: () => invalidateRoyaltyData(queryClient),
   });
 }
 
@@ -216,11 +231,7 @@ export function useMarkPayoutPaid() {
         method: "POST",
       });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["royalty-payees"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-payouts"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-periods"] });
-    },
+    onSuccess: () => invalidateRoyaltyData(queryClient),
   });
 }
 
@@ -235,11 +246,7 @@ export function useCancelPayout() {
         method: "POST",
       });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["royalty-payees"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-payouts"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-periods"] });
-    },
+    onSuccess: () => invalidateRoyaltyData(queryClient),
   });
 }
 
@@ -268,12 +275,7 @@ export function useCapturePaypalOrder() {
         method: "POST",
       });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["royalty-payees"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-payee"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-payouts"] });
-      queryClient.invalidateQueries({ queryKey: ["royalty-periods"] });
-    },
+    onSuccess: () => invalidateRoyaltyData(queryClient),
   });
 }
 

@@ -47,12 +47,14 @@ class PayeeSummary(BaseModel):
     earned: float
     paid: float
     drafted: float
-    owed: float
+    owed: float  # earned − paid − drafted (available to draft; drives status/eligibility)
+    unpaid: float  # earned − paid (outstanding until actually paid; drives "Outstanding" displays)
     # payee payout-currency totals
     earned_native: float
     paid_native: float
     drafted_native: float
     owed_native: float
+    unpaid_native: float
     # buckets whose statement currency could not be converted to the reporting base
     unconvertible_count: int = 0
 
@@ -76,7 +78,8 @@ class PayeeStatement(BaseModel):
     earned: float
     paid: float
     drafted: float
-    owed: float
+    owed: float  # earned − paid − drafted
+    unpaid: float  # earned − paid (outstanding until actually paid)
     state: str  # "owed" | "scheduled" | "settled"
     lines: list[PayeeLine]
 

@@ -60,7 +60,7 @@ All colors MUST be HSL.
     /* Royalty Payments status tones */
     --pay-paid-bg: 150 55% 92%;   --pay-paid-fg: 150 55% 28%;
     --pay-sched-bg: 217 80% 93%;  --pay-sched-fg: 217 65% 43%;
-    --pay-out-bg: 28 80% 92%;     --pay-out-fg: 28 62% 38%;
+    --pay-out-bg: 0 80% 94%;      --pay-out-fg: 0 70% 45%;
     --pay-partial-bg: 38 90% 90%; --pay-partial-fg: 35 80% 38%;
   }
 
@@ -108,7 +108,7 @@ All colors MUST be HSL.
     /* Royalty Payments status tones (dark) */
     --pay-paid-bg: 150 40% 18%;   --pay-paid-fg: 150 55% 70%;
     --pay-sched-bg: 217 45% 22%;  --pay-sched-fg: 217 80% 78%;
-    --pay-out-bg: 28 35% 20%;     --pay-out-fg: 28 70% 72%;
+    --pay-out-bg: 0 45% 22%;      --pay-out-fg: 0 75% 74%;
     --pay-partial-bg: 38 45% 20%; --pay-partial-fg: 40 85% 70%;
   }
 }

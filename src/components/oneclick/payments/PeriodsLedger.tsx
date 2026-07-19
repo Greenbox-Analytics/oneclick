@@ -13,7 +13,7 @@ interface PeriodsLedgerProps {
 const DOT: Record<string, string> = {
   paid:     "bg-[hsl(150_55%_45%)]",
   sched:    "bg-[hsl(217_70%_58%)]",
-  owed:     "bg-[hsl(28_75%_55%)]",
+  owed:     "bg-[hsl(0_72%_55%)]",
   // aliases so server strings map directly
   settled:  "bg-[hsl(150_55%_45%)]",
   scheduled: "bg-[hsl(217_70%_58%)]",
@@ -151,7 +151,7 @@ export function PeriodsLedger({ ledger, onOpenParty }: PeriodsLedgerProps) {
                           <span>{fmtMoney(cell.earned, base, { dp: 0 })}</span>
                           <span
                             className={cn("h-[7px] w-[7px] rounded-full", dotClass(cell.state))}
-                            title={cell.state === "settled" ? "Paid" : cell.state === "scheduled" ? "Scheduled" : "Outstanding"}
+                            title={cell.state === "settled" ? "Paid" : cell.state === "scheduled" ? "Draft" : "Unpaid"}
                           />
                         </span>
                       ) : (
@@ -180,8 +180,8 @@ export function PeriodsLedger({ ledger, onOpenParty }: PeriodsLedgerProps) {
       <div className="flex flex-wrap items-center gap-4 border-t border-border px-4 py-3 text-[11.5px] text-muted-foreground">
         <span className="font-semibold">Settlement state:</span>
         <span className="flex items-center gap-1.5"><span className={cn("h-2 w-2 rounded-full", DOT.paid)} /> Paid</span>
-        <span className="flex items-center gap-1.5"><span className={cn("h-2 w-2 rounded-full", DOT.sched)} /> Scheduled</span>
-        <span className="flex items-center gap-1.5"><span className={cn("h-2 w-2 rounded-full", DOT.owed)} /> Outstanding</span>
+        <span className="flex items-center gap-1.5"><span className={cn("h-2 w-2 rounded-full", DOT.sched)} /> Draft</span>
+        <span className="flex items-center gap-1.5"><span className={cn("h-2 w-2 rounded-full", DOT.owed)} /> Unpaid</span>
         <span className="ml-auto">All values in {base}</span>
       </div>
     </div>
