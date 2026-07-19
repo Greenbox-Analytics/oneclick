@@ -66,7 +66,14 @@ export const money = fmtMoney;
 
 export function fmtDate(iso: string | null, opts?: Intl.DateTimeFormatOptions) {
   if (!iso) return "—";
-  return new Date(iso + "T00:00:00").toLocaleDateString("en-US", opts ?? { year: "numeric", month: "short", day: "numeric" });
+  // Accept both date-only ("2026-07-18") and full ISO timestamps
+  // ("2026-07-18T14:23:45+00:00"). For a date-only string we append T00:00:00
+  // so it parses as local midnight (avoids an off-by-one day in negative
+  // timezones); a full timestamp must be parsed as-is or it becomes NaN.
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(iso);
+  const d = new Date(dateOnly ? iso + "T00:00:00" : iso);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", opts ?? { year: "numeric", month: "short", day: "numeric" });
 }
 
 export const initials = (name: string) =>
@@ -249,6 +256,33 @@ export function partyStatusKind(status: string): "out" | "sched" | "settled" {
   if (status === "owed") return "out";
   if (status === "scheduled") return "sched";
   return "settled";
+}
+
+// User-facing label for a party's derived status. Server strings stay
+// "owed"/"scheduled"/"settled"; the UI shows "Unpaid" (money owed, nothing
+// drafted), "Draft" (a draft payout exists), "Settled" (fully paid).
+export function partyStatusLabel(status: string): string {
+  if (status === "owed") return "Unpaid";
+  if (status === "scheduled") return "Draft";
+  return "Settled";
+}
+
+// Square selection checkbox used by the Parties and Payouts tables.
+export function SelectBox({ on, disabled, onClick }: { on: boolean; disabled?: boolean; onClick: () => void }) {
+  return (
+    <span
+      role="checkbox"
+      aria-checked={on}
+      onClick={(e) => { e.stopPropagation(); if (!disabled) onClick(); }}
+      className={cn(
+        "inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border-[1.5px] transition-colors",
+        on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background",
+        disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer",
+      )}
+    >
+      {on && <Check className="h-3 w-3" />}
+    </span>
+  );
 }
 
 export const STATUS_ICON = { out: Hourglass, sched: Clock, settled: CheckCheck } as const;

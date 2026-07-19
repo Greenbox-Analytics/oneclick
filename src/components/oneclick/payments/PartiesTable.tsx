@@ -1,9 +1,9 @@
 // src/components/oneclick/payments/PartiesTable.tsx
-import { AlertTriangle, ChevronRight, Check as CheckIcon, Send } from "lucide-react";
+import { AlertTriangle, ChevronRight, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { PayeeSummary } from "@/hooks/useRoyalties";
-import { PartyAvatar, StatusBadge, partyStatusKind, STATUS_ICON, fmtMoney } from "./shared";
+import { PartyAvatar, StatusBadge, partyStatusKind, partyStatusLabel, STATUS_ICON, SelectBox, fmtMoney } from "./shared";
 
 interface PartiesTableProps {
   parties: PayeeSummary[];
@@ -14,23 +14,6 @@ interface PartiesTableProps {
   onOpenParty: (id: string) => void;
   onPaySelected: () => void;
   onClear: () => void;
-}
-
-function SelectBox({ on, disabled, onClick }: { on: boolean; disabled?: boolean; onClick: () => void }) {
-  return (
-    <span
-      role="checkbox"
-      aria-checked={on}
-      onClick={(e) => { e.stopPropagation(); if (!disabled) onClick(); }}
-      className={cn(
-        "inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border-[1.5px] transition-colors",
-        on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background",
-        disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer",
-      )}
-    >
-      {on && <CheckIcon className="h-3 w-3" />}
-    </span>
-  );
 }
 
 // 5 cols on mobile (earned/paid hidden via `hidden md:block`), 7 on md+.
@@ -69,7 +52,7 @@ export function PartiesTable({
         const sel = selection.includes(payee.id);
         const kind = partyStatusKind(payee.status);
         const StatusIcon = STATUS_ICON[kind];
-        const statusLabel = kind === "out" ? "Owed" : kind === "sched" ? "Scheduled" : "Settled";
+        const statusLabel = partyStatusLabel(payee.status);
         return (
           <button
             key={payee.id}
@@ -126,14 +109,14 @@ export function PartiesTable({
               </span>
             </span>
 
-            {/* Owed (base) — with optional native sub-line */}
+            {/* Outstanding (base) = earned − paid — with optional native sub-line */}
             <span className="text-right">
               <span className="font-mono text-[14px] font-bold tabular-nums">
-                {fmtMoney(payee.owed, base, { dp: 0 })}
+                {fmtMoney(payee.unpaid, base, { dp: 0 })}
               </span>
-              {payee.payout_currency !== base && payee.owed_native > 0 && (
+              {payee.payout_currency !== base && payee.unpaid_native > 0 && (
                 <div className="mt-px font-mono text-[11px] text-muted-foreground">
-                  {fmtMoney(payee.owed_native, payee.payout_currency, { dp: 0 })}
+                  {fmtMoney(payee.unpaid_native, payee.payout_currency, { dp: 0 })}
                 </div>
               )}
             </span>

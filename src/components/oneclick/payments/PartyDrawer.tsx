@@ -36,6 +36,7 @@ import type { PayeeStatement, PayeeLine } from "@/hooks/useRoyalties";
 import {
   PartyAvatar,
   StatusBadge,
+  partyStatusLabel,
   fmtMoney,
   fmtDate,
   CURRENCIES,
@@ -72,7 +73,7 @@ function periodLabel(s: PayeeStatement): string {
 function stateDotColor(state: string): string {
   if (state === "settled") return "bg-[hsl(150_55%_45%)]";
   if (state === "scheduled") return "bg-[hsl(217_70%_58%)]";
-  return "bg-[hsl(28_75%_55%)]";
+  return "bg-[hsl(0_72%_55%)]"; // unpaid — red
 }
 
 // ---------------------------------------------------------------------------
@@ -343,11 +344,7 @@ export function PartyDrawer({
                   <StatusBadge
                     kind={summary.status as "owed" | "scheduled" | "settled"}
                   >
-                    {summary.status === "owed"
-                      ? "Owed"
-                      : summary.status === "scheduled"
-                        ? "Scheduled"
-                        : "Settled"}
+                    {partyStatusLabel(summary.status)}
                   </StatusBadge>
                 </>
               )}
@@ -407,9 +404,9 @@ export function PartyDrawer({
                       hl: false,
                     },
                     {
-                      label: "Owed",
-                      base: summary.owed,
-                      native: summary.owed_native,
+                      label: "Outstanding",
+                      base: summary.unpaid,
+                      native: summary.unpaid_native,
                       hl: true,
                     },
                   ] as const
@@ -567,7 +564,7 @@ export function PartyDrawer({
                                   </span>
                                 </span>
                                 <span className="shrink-0 font-mono tabular-nums text-muted-foreground">
-                                  {fmtMoney(stmt.owed, stmt.statement_currency)}
+                                  {fmtMoney(stmt.unpaid, stmt.statement_currency)}
                                 </span>
                               </div>
 
