@@ -10,10 +10,14 @@ Covers:
 CONTRIBUTOR = {
     "name": "Jane Doe",
     "role": "Songwriter",
-    "publishing_percentage": 50.0,
-    "master_percentage": 50.0,
-    "publisher_or_label": "Indie Label",
+    "writer_share": 25.0,
+    "publisher_share": 25.0,
     "ipi_number": "00123456789",
+    "is_published": True,
+    "publisher_name": "Indie Publishing",
+    "publisher_ipi": "00987654321",
+    "master_percentage": 50.0,
+    "label": "Indie Label",
 }
 
 BASE_PAYLOAD = {
@@ -57,7 +61,8 @@ class TestGenerateSplitSheetPDF:
         contributor_2 = {
             "name": "John Smith",
             "role": "Producer",
-            "publishing_percentage": 50.0,
+            "is_published": False,
+            "publishing_share": 50.0,
             "master_percentage": 50.0,
         }
         payload = {**BASE_PAYLOAD, "contributors": [CONTRIBUTOR, contributor_2]}
@@ -122,6 +127,104 @@ class TestGenerateSplitSheetDOCX:
         assert response.status_code == 200
         cd = response.headers.get("content-disposition", "")
         assert ".docx" in cd
+
+
+class TestDocxContent:
+    """Directly exercise the DOCX generator to assert publishing/master rendering."""
+
+    @staticmethod
+    def _docx_text(buffer):
+        from docx import Document
+
+        doc = Document(buffer)
+        parts = [p.text for p in doc.paragraphs]
+        for table in doc.tables:
+            for row in table.rows:
+                parts.extend(cell.text for cell in row.cells)
+        return "\n".join(parts)
+
+    def test_master_only_omits_ipi(self):
+        """A master-only sheet must never render IPI/CAE text."""
+        from splitsheet.docx_generator import generate_split_sheet_docx
+
+        contributors = [
+            {
+                "name": "Jane Doe",
+                "role": "Producer",
+                "ipi_number": "00123456789",  # should be ignored on master-only
+                "master_percentage": 100.0,
+                "label": "Sub Pop",
+            }
+        ]
+        text = self._docx_text(
+            generate_split_sheet_docx(
+                work_title="Track",
+                work_type="single",
+                split_type="master",
+                date="2026-07-19",
+                contributors=contributors,
+            )
+        )
+        assert "IPI" not in text
+        assert "00123456789" not in text
+        assert "Master Royalty %" in text
+        assert "Sub Pop" in text  # optional label column renders
+
+    def test_published_writer_renders_writer_and_publisher_shares(self):
+        """A published writer shows both a writer's share and a distinct publisher recipient."""
+        from splitsheet.docx_generator import generate_split_sheet_docx
+
+        contributors = [
+            {
+                "name": "Jane Doe",
+                "role": "Songwriter",
+                "writer_share": 25.0,
+                "publisher_share": 25.0,
+                "ipi_number": "00123456789",
+                "is_published": True,
+                "publisher_name": "Big Publisher",
+                "publisher_ipi": "00987654321",
+            }
+        ]
+        text = self._docx_text(
+            generate_split_sheet_docx(
+                work_title="Track",
+                work_type="single",
+                split_type="publishing",
+                date="2026-07-19",
+                contributors=contributors,
+            )
+        )
+        assert "Writer's Share" in text
+        assert "Publisher's Share" in text
+        assert "Big Publisher" in text
+        assert "IPI/CAE #00123456789" in text  # writer IPI in parties prose
+        assert "self-published" not in text.lower()
+
+    def test_self_published_writer_labeled(self):
+        """A self-published writer is labeled as such, with no separate publisher."""
+        from splitsheet.docx_generator import generate_split_sheet_docx
+
+        contributors = [
+            {
+                "name": "Solo Writer",
+                "role": "Composer",
+                "is_published": False,
+                "publishing_share": 100.0,
+            }
+        ]
+        text = self._docx_text(
+            generate_split_sheet_docx(
+                work_title="Track",
+                work_type="single",
+                split_type="publishing",
+                date="2026-07-19",
+                contributors=contributors,
+            )
+        )
+        assert "self-published" in text.lower()
+        assert "Self-published" in text  # publisher column value
+        assert "100.00%" in text  # their full publishing share renders
 
 
 class TestGenerateSplitSheetValidation:
