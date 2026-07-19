@@ -45,6 +45,15 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
+      - name: Debug Vercel auth
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_PROD_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ github.event.inputs.project == 'prod' && secrets.VERCEL_PROD_PROJECT_ID || secrets.VERCEL_PROJECT_ID }}
+        run: |
+          vercel whoami --token="$VERCEL_TOKEN" || echo "::warning::whoami FAILED — token invalid or expired"
+          vercel project ls --token="$VERCEL_TOKEN" 2>&1 | head -25 || echo "::warning::project ls FAILED"
+
       - name: Sync GSM → Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_PROD_TOKEN }}
