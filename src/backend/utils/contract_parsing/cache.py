@@ -66,6 +66,38 @@ def deserialize_contract_data(d: dict) -> ContractData:
     )
 
 
+def peek_cached_parse(db, full_text: str) -> ContractData | None:
+    """Read-only cache probe: the parsed ContractData if this exact canonical text is
+    cached under the current parser_version, else None.
+
+    `full_text` is canonicalized (idempotent [[PAGE n]] marker stripping) before hashing, so
+    callers may pass either raw or already-stripped markdown. Never raises — a read failure
+    or a missing/unreadable entry both resolve to None (logged on failure) — so callers can
+    treat a non-None result as a guaranteed, side-effect-free cache hit (e.g. to decide a
+    request is free BEFORE walling it on credits; spec §3).
+    """
+    if db is None or not full_text:
+        return None
+    text = strip_page_markers(full_text)
+    if not text:
+        return None
+    cache_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    try:
+        hit = (
+            db.table("contract_parse_cache")
+            .select("parsed")
+            .eq("content_hash", cache_key)
+            .eq("parser_version", parser_version())
+            .maybe_single()
+            .execute()
+        )
+        if hit and hit.data:
+            return deserialize_contract_data(hit.data["parsed"])
+    except Exception:
+        logger.exception("parse cache peek failed; treating as miss")
+    return None
+
+
 def get_or_parse(
     db,
     load_text: Callable[[], str],
@@ -107,20 +139,13 @@ def get_or_parse(
 
     cache_key = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
 
-    if db is not None and not bypass:
-        try:
-            hit = (
-                db.table("contract_parse_cache")
-                .select("parsed")
-                .eq("content_hash", cache_key)
-                .eq("parser_version", version)
-                .maybe_single()
-                .execute()
-            )
-            if hit and hit.data:
-                return deserialize_contract_data(hit.data["parsed"])
-        except Exception:
-            logger.exception("parse cache read failed; falling back to live parse")
+    if not bypass:
+        # Single read implementation shared with the pre-gate peek (see peek_cached_parse) —
+        # full_text is already canonical here, and stripping is idempotent, so the redundant
+        # strip inside peek is harmless.
+        cached = peek_cached_parse(db, full_text)
+        if cached is not None:
+            return cached
 
     # Cache missed (or was bypassed / unreadable): a live LLM parse happens next.
     if on_miss is not None:

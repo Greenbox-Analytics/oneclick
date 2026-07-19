@@ -99,6 +99,31 @@ def _make_chatbot(events):
 
 
 # ---------------------------------------------------------------------------
+# Zero-cost query predicate (pure, module-level — no chatbot construction)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("hi", True),
+        ("Thanks!", True),
+        ("good morning", True),
+        ("ok", False),  # affirmative-overlap: may route to a real answer
+        ("okay", False),
+        ("sure", False),
+        ("yes please", False),
+        ("what is my split?", False),
+        ("", False),
+    ],
+)
+def test_is_zero_cost_query(query, expected):
+    from zoe_chatbot.contract_chatbot import is_zero_cost_query
+
+    assert is_zero_cost_query(query) is expected
+
+
+# ---------------------------------------------------------------------------
 # 402 walls
 # ---------------------------------------------------------------------------
 
@@ -111,6 +136,15 @@ class TestCreditWalls:
         assert detail["upgradeRequired"] is True
         assert detail["reason"] == "You've used this month's credits."
         broke_free_service.check_credits.assert_called_once_with(TEST_USER_ID, "zoe_message", is_admin=False)
+
+    def test_zoe_conversational_bypasses_wall_when_broke(self, client, broke_free_service, debit_spy):
+        events = ['data: {"type": "complete", "confidence": "conversational", "answer": "Hey!"}\n\n']
+        with patch("main.get_zoe_chatbot", return_value=_make_chatbot(events)):
+            resp = client.post("/zoe/ask-stream", json={"query": "hi", "contract_ids": []})
+        assert resp.status_code == 200
+        # Gate skipped entirely — no check, no debit, no 402 at zero balance.
+        broke_free_service.check_credits.assert_not_called()
+        debit_spy.debit_for_action.assert_not_called()
 
     def test_oneclick_json_402_when_broke(self, client, broke_free_service):
         resp = client.post(
@@ -137,12 +171,93 @@ class TestCreditWalls:
         assert resp.status_code == 402
         assert resp.json()["detail"]["upgradeRequired"] is True
 
-    def test_registry_parse_402_when_broke(self, client, broke_free_service):
-        # gated_feature(USE_REGISTRY) passes (can() allows); the credit gate fires.
+    def test_registry_parse_402_when_broke(self, client, mock_supabase, broke_free_service, monkeypatch):
+        # gated_feature(USE_REGISTRY) passes (can() allows). Ownership + text-load now run
+        # BEFORE the credit gate (review fix #3b), so wire them to succeed with a genuinely
+        # UNCACHED contract (contract_parse_cache miss) — the credit gate must still fire.
+        monkeypatch.setattr("main.verify_user_owns_contract", lambda user_id, contract_id: True)
+
+        def _side_effect(name):
+            if name in (
+                "subscriptions",
+                "tier_entitlements",
+                "tier_overrides",
+                "usage_counters",
+                "profiles",
+                "credit_wallets",
+                "credit_prices",
+                "credit_ledger",
+            ):
+                return _default_table_side_effect(name)
+            b = MockQueryBuilder()
+            if name == "project_files":
+                b.execute.return_value = MagicMock(
+                    data={"file_path": "c/a.pdf", "file_name": "a.pdf", "contract_markdown": "# Contract"}
+                )
+            elif name == "contract_parse_cache":
+                b.execute.return_value = MagicMock(data=None)  # cache miss
+            else:
+                b.execute.return_value = MagicMock(data=[], count=0)
+            return b
+
+        mock_supabase.table.side_effect = _side_effect
+
         resp = client.post("/registry/parse-contract-splits", data={"contract_file_id": CONTRACT_ID})
         assert resp.status_code == 402
         assert resp.json()["detail"]["upgradeRequired"] is True
         broke_free_service.check_credits.assert_called_once_with(TEST_USER_ID, "registry_parse", is_admin=False)
+
+    def test_registry_cached_parse_bypasses_wall_when_broke(
+        self, client, mock_supabase, broke_free_service, monkeypatch
+    ):
+        """Zero balance + already-cached contract → 200, free, no wall.
+        (Review fix #3b: the credit gate used to fire before the parse-cache peek.)"""
+        ent = MagicMock()
+        monkeypatch.setattr("subscriptions.deps._get_entitlements_service", lambda: ent)
+        monkeypatch.setattr("main.verify_user_owns_contract", lambda user_id, contract_id: True)
+
+        empty_parsed = {
+            "parties": [],
+            "works": [],
+            "royalty_shares": [],
+            "contract_summary": None,
+            "default_basis": None,
+        }
+
+        def _side_effect(name):
+            if name in (
+                "subscriptions",
+                "tier_entitlements",
+                "tier_overrides",
+                "usage_counters",
+                "profiles",
+                "credit_wallets",
+                "credit_prices",
+                "credit_ledger",
+            ):
+                return _default_table_side_effect(name)
+            b = MockQueryBuilder()
+            if name == "project_files":
+                b.execute.return_value = MagicMock(
+                    data={"file_path": "c/a.pdf", "file_name": "a.pdf", "contract_markdown": "# Contract"}
+                )
+            elif name == "contract_parse_cache":
+                b.execute.return_value = MagicMock(data={"parsed": empty_parsed})  # cache hit
+            else:
+                b.execute.return_value = MagicMock(data=[], count=0)
+            return b
+
+        mock_supabase.table.side_effect = _side_effect
+
+        with patch(
+            "registry.contract_splits.parse_royalty_splits",
+            return_value={"parties": [], "main_artist_found": False},
+        ):
+            resp = client.post("/registry/parse-contract-splits", data={"contract_file_id": CONTRACT_ID})
+
+        assert resp.status_code == 200
+        broke_free_service.check_credits.assert_not_called()
+        ent.debit_for_action.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +491,34 @@ class TestOneClickStreamCharge:
         assert resp.status_code == 200
         assert '"is_cached": true' in resp.text
         # Cached re-runs are FREE (spec §3) — no ledger debit.
+        debit_spy.debit_for_action.assert_not_called()
+
+    def test_cached_run_bypasses_wall_when_broke(self, client, mock_supabase, broke_free_service, debit_spy):
+        """Zero balance + already-analyzed statement → 200, free, no wall.
+        (Review fix #3: the gate used to fire before the cache check.)"""
+        cached_result = {"status": "success", "total_payments": 1, "payments": [SAMPLE_PAYMENTS[0]], "message": "1"}
+        sequences = [
+            [{"id": CALCULATION_ID, "results": cached_result}],  # royalty_calculations
+            [{"calculation_id": CALCULATION_ID, "contract_id": CONTRACT_ID}],  # junction
+        ]
+        call_idx = [0]
+
+        def _side_effect(name):
+            if name in ("subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"):
+                return _default_table_side_effect(name)
+            data = sequences[call_idx[0]] if call_idx[0] < len(sequences) else []
+            call_idx[0] += 1
+            return self._builder(data)
+
+        mock_supabase.table.side_effect = _side_effect
+
+        with patch("main.calculate_royalty_payments") as mock_calc:
+            resp = client.get("/oneclick/calculate-royalties-stream", params=self._params())
+            mock_calc.assert_not_called()
+
+        assert resp.status_code == 200
+        assert '"is_cached": true' in resp.text
+        broke_free_service.check_credits.assert_not_called()
         debit_spy.debit_for_action.assert_not_called()
 
     def test_failed_run_no_debit(self, client, mock_supabase, credit_service, debit_spy):

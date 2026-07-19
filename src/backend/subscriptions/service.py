@@ -669,6 +669,20 @@ class EntitlementsService:
                 return CreditCheckResult(allowed=True, price=price, reset_date=reset_date)
 
             if tier in self.PAID_TIERS:
+                if sub.get("status") == "past_due":
+                    # A failing renewal must not accrue MORE debt via
+                    # pay-per-use (Stripe retries can run for weeks before
+                    # subscription.deleted fires). Balance spending above
+                    # stays allowed; only overage pauses.
+                    return CreditCheckResult(
+                        allowed=False,
+                        price=price,
+                        reset_date=reset_date,
+                        reason=(
+                            "Your last payment didn't go through, so pay-per-use is paused. "
+                            "Update your payment method in Billing to keep going."
+                        ),
+                    )
                 if sub.get("overage_enabled"):
                     cap = sub.get("overage_cap_credits")
                     used = wallet.get("overage_this_period", 0)

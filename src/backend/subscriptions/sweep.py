@@ -17,7 +17,7 @@ from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Header, HTTPException
 
 import subscriptions.stripe_client as stripe_client_module
-from subscriptions.overage_billing import bill_pending_overage
+from subscriptions.overage_billing import bill_pending_overage, invoice_unswept_items
 from subscriptions.service import _parse_iso, credits_enabled
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,23 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     # Single lookup table for the per-user rows so steps 2 & 4 don't re-query
     # `subscriptions` once per wallet/user.
     subs_by_uid = {s["user_id"]: s for s in paid_subs}
+
+    # Per-user monthly_credits overrides (VIPs; NOT the tester path, which uses
+    # one-time reserve grants): the lazy path merges these in _merge(), so the
+    # sweep must agree — rollover fires once per period, so a wrong grant here
+    # sticks for a whole month. Expiry/revoked semantics mirror _read_override.
+    override_rows = _capped(
+        sb.table("tier_overrides").select("user_id, monthly_credits, reason, expires_at"),
+        "tier_overrides",
+    )
+    override_grants: dict = {}
+    for r in override_rows:
+        if r.get("monthly_credits") is None or r.get("reason") == "tester_revoked":
+            continue
+        exp = _parse_iso(r.get("expires_at"))
+        if exp is not None and exp < now:
+            continue
+        override_grants[r["user_id"]] = r["monthly_credits"]
 
     # --- 1. Storage overage snapshot — BEFORE rollover, so it's keyed on the
     # period that is about to close. Semantics (spec §5 refined): a monthly
@@ -186,7 +203,7 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
                 "rollover_wallet",
                 {
                     "p_wallet_id": wallet["id"],
-                    "p_monthly_grant": grants.get(tier, 0),
+                    "p_monthly_grant": override_grants.get(wallet["owner_id"], grants.get(tier, 0)),
                     "p_new_period_start": (new_end - relativedelta(months=1)).isoformat(),
                     "p_new_period_end": new_end.isoformat(),
                 },
@@ -240,46 +257,20 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
             last_at = _parse_iso(wallet.get("last_standalone_invoice_at"))
             if last_at is not None and last_at > cadence_floor:
                 continue  # already invoiced within the cadence window this month
-            rows_res = (
-                sb.table("credit_ledger")
-                .select("id, kind, metadata")
-                .eq("wallet_id", wallet["id"])
-                .in_("kind", ["overage_debit", "storage_bill"])
-                .execute()
+            result = invoice_unswept_items(
+                sb,
+                wallet["id"],
+                sub["stripe_customer_id"],
+                idempotency_key=f"annual:{wallet['id']}:{now.date().isoformat()}",
             )
-            # Unswept billable items: overage_debit rows already turned into a
-            # pending InvoiceItem (invoice_item_id set) PLUS storage_bill rows.
-            # The `swept` stamp — not invoice_item_id, which persists forever —
-            # is what stops us re-invoicing the same items every month, so an
-            # empty invoice (invoice_no_customer_line_items) never fires.
-            unswept = []
-            for r in rows_res.data or []:
-                meta = r.get("metadata") or {}
-                if meta.get("swept"):
-                    continue
-                # Both kinds require a backfilled invoice_item_id — it proves a
-                # real pending Stripe item exists. A storage_bill row whose
-                # step-1 InvoiceItem.create never landed (insert-first crash)
-                # would otherwise trigger an empty Invoice.create
-                # (invoice_no_customer_line_items) that retries every daily
-                # sweep and sticks the cadence until the next period.
-                if meta.get("invoice_item_id"):
-                    unswept.append(r)
-            if not unswept:
-                continue
-            stripe = stripe_client_module.get_stripe()
-            stripe.Invoice.create(customer=sub["stripe_customer_id"], auto_advance=True)
-            # Stamp rows swept, then record the cadence timestamp. Both happen
-            # only after the invoice succeeds, so a failed create retries next
-            # sweep (last_standalone_invoice_at stays put).
-            for r in unswept:
-                sb.table("credit_ledger").update({"metadata": {**(r.get("metadata") or {}), "swept": True}}).eq(
-                    "id", r["id"]
+            # Cadence recorded whenever rows were handled — including the
+            # consumed-elsewhere case — so a doomed invoice never retries daily.
+            if result["stamped"]:
+                sb.table("credit_wallets").update({"last_standalone_invoice_at": now.isoformat()}).eq(
+                    "id", wallet["id"]
                 ).execute()
-            sb.table("credit_wallets").update({"last_standalone_invoice_at": now.isoformat()}).eq(
-                "id", wallet["id"]
-            ).execute()
-            annual_invoiced += 1
+            if result["invoiced"]:
+                annual_invoiced += 1
         except Exception:
             logger.exception("sweep annual invoicing failed user=%s", sub.get("user_id"))
 

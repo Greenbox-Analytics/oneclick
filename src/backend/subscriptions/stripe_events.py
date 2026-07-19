@@ -277,6 +277,33 @@ def handle_subscription_deleted(event, supabase) -> None:
     except Exception as e:
         logger.warning("analytics identify on subscription_canceled failed: %s", e)
 
+    from subscriptions.service import credits_enabled
+
+    if credits_enabled():
+        # Final billing (spec §7 gap): after deletion this user leaves the
+        # paid-tier sweep population, so any unbilled overage would be orphaned
+        # forever, and already-created pending InvoiceItems would float until a
+        # future re-subscribe surprise-bills them. Convert stragglers to pending
+        # items, then collect EVERYTHING floating onto one final auto-advancing
+        # invoice. No try/except: a failure 500s the webhook so Stripe retries;
+        # every step is idempotent (invoice_item_id checks, Stripe idempotency
+        # keys, swept stamps).
+        from subscriptions.overage_billing import bill_pending_overage, invoice_unswept_items
+
+        customer_id = getattr(sub, "customer", None)
+        if not customer_id:
+            row = supabase.table("subscriptions").select("stripe_customer_id").eq("user_id", user_id).execute()
+            customer_id = row.data[0].get("stripe_customer_id") if row.data else None
+        if customer_id:
+            bill_pending_overage(supabase, user_id)
+            wallet_res = (
+                supabase.table("credit_wallets").select("id").eq("owner_type", "user").eq("owner_id", user_id).execute()
+            )
+            if wallet_res.data:
+                invoice_unswept_items(
+                    supabase, wallet_res.data[0]["id"], customer_id, idempotency_key=f"final:{event.id}"
+                )
+
 
 def handle_invoice_payment_failed(event, supabase) -> None:
     """Failed renewal charge → status=past_due. Tier stays 'pro' during retries.

@@ -165,6 +165,7 @@ def _paid_supabase(
     tier="pro",
     overage_used=0,
     storage_overage_enabled=False,
+    status="active",
 ):
     sb = MagicMock()
     wallet = dict(
@@ -184,7 +185,7 @@ def _paid_supabase(
                     {
                         "user_id": TEST_USER_ID,
                         "tier": tier,
-                        "status": "active",
+                        "status": status,
                         "overage_enabled": overage_enabled,
                         "overage_cap_credits": cap,
                         "storage_overage_enabled": storage_overage_enabled,
@@ -436,6 +437,34 @@ class TestCheckCredits:
         assert r.allowed and r.price == 0
         tables_touched = {c.args[0] for c in sb.table.call_args_list}
         assert "credit_wallets" not in tables_touched
+
+
+class TestPastDueOveragePause:
+    """past_due must pause pay-per-use (a failing card must not accrue more
+    debt) while spending an existing balance stays allowed."""
+
+    def test_past_due_blocks_overage_even_when_opted_in(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=0, overage_enabled=True, status="past_due")
+        r = EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message")
+        assert r.allowed is False
+        assert r.use_overage is False
+        assert r.overage_available is False
+        assert "payment" in (r.reason or "").lower()
+
+    def test_past_due_still_spends_existing_balance(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100, status="past_due")
+        r = EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message")
+        assert r.allowed is True
+        assert r.use_overage is False
+
+    def test_active_overage_path_unchanged(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=0, overage_enabled=True, status="active")
+        r = EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message")
+        assert r.allowed is True
+        assert r.use_overage is True
 
 
 class TestDebitForAction:

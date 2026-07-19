@@ -104,6 +104,70 @@ class TestAdminCredits:
         assert resp.status_code == 200
         assert isinstance(resp.json()["entries"], list)
 
+
+class TestGrantInitialTesterCredits:
+    @staticmethod
+    def _sb_with_wallet(wallet_rows):
+        sb = MagicMock()
+        b = MagicMock()
+        for m in ("select", "eq"):
+            getattr(b, m).return_value = b
+        b.execute.return_value = MagicMock(data=wallet_rows)
+        sb.table.return_value = b
+        return sb
+
+    def test_credits_off_is_noop(self, monkeypatch):
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions.admin_service import grant_initial_tester_credits
+
+        sb = self._sb_with_wallet([{"id": "w1"}])
+        assert grant_initial_tester_credits(sb, "u1") is False
+        sb.rpc.assert_not_called()
+
+    def test_grants_reserve_with_once_per_user_key(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.admin_service import grant_initial_tester_credits
+
+        sb = self._sb_with_wallet([{"id": "w1"}])
+        assert grant_initial_tester_credits(sb, "u1", 500) is True
+        name, params = sb.rpc.call_args[0]
+        assert name == "grant_credits"
+        assert params["p_wallet_id"] == "w1"
+        assert params["p_amount"] == 500
+        assert params["p_kind"] == "admin_grant"
+        assert params["p_bucket"] == "reserve"
+        # Once-per-user FOREVER: the ledger's unique request_id index dedupes
+        # bootstrap re-runs and admin re-grants. Top-ups use the grant endpoint.
+        assert params["p_request_id"] == "tester-init:u1"
+
+    def test_amount_defaults_from_env(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("TESTER_INITIAL_CREDITS", "250")
+        from subscriptions.admin_service import grant_initial_tester_credits
+
+        sb = self._sb_with_wallet([{"id": "w1"}])
+        grant_initial_tester_credits(sb, "u1")
+        assert sb.rpc.call_args[0][1]["p_amount"] == 250
+
+    def test_bad_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("TESTER_INITIAL_CREDITS", "not-a-number")
+        from subscriptions.admin_service import grant_initial_tester_credits
+
+        sb = self._sb_with_wallet([{"id": "w1"}])
+        grant_initial_tester_credits(sb, "u1")
+        assert sb.rpc.call_args[0][1]["p_amount"] == 1000
+
+    def test_missing_wallet_skips_without_raising(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.admin_service import grant_initial_tester_credits
+
+        sb = self._sb_with_wallet([])
+        assert grant_initial_tester_credits(sb, "u1") is False
+        sb.rpc.assert_not_called()
+
+
+class TestAdminCreditsGrantRequiresAdmin:
     def test_grant_requires_admin(self, client, monkeypatch):
         """No require_admin override → the dependency's real logic runs.
 

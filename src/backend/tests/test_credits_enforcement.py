@@ -91,3 +91,15 @@ class TestGatedCredits:
         with pytest.raises(HTTPException) as exc:
             enforcement.gated_credits(TEST_USER, CreditAction.ZOE_MESSAGE)
         assert exc.value.status_code == 402
+
+
+def test_free_credit_grant_is_disabled_and_priced_zero():
+    from subscriptions.enforcement import free_credit_grant
+    from subscriptions.models import CreditAction
+
+    g = free_credit_grant(CreditAction.ZOE_MESSAGE)
+    assert g.enabled is False
+    assert g.price == 0
+    assert g.kind == "debit"
+    assert g.action == "zoe_message"
+    assert g.request_id == ""

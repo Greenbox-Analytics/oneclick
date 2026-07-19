@@ -535,6 +535,33 @@ class TestBillOverageRow:
         assert result is None
         mock_get_stripe.assert_not_called()
 
+    def test_invoice_attached_row_is_stamped_swept(self):
+        from subscriptions.overage_billing import bill_overage_row
+
+        sb, builders = _customer_sb()
+        fake_stripe = MagicMock()
+        fake_stripe.InvoiceItem.create.return_value = MagicMock(id="ii_new")
+        row = {"id": "lr1", "delta": 0, "action": "zoe_message", "metadata": {"credits_billed": 3}}
+        with patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe):
+            bill_overage_row(sb, TEST_USER_ID, row, invoice_id="in_123")
+        updated_meta = builders["credit_ledger"].update.call_args[0][0]["metadata"]
+        assert updated_meta["invoice_item_id"] == "ii_new"
+        # Attached directly to a real invoice → already consumed; without this
+        # stamp the annual sweep retries an empty standalone invoice forever.
+        assert updated_meta["swept"] is True
+
+    def test_floating_row_is_not_stamped_swept(self):
+        from subscriptions.overage_billing import bill_overage_row
+
+        sb, builders = _customer_sb()
+        fake_stripe = MagicMock()
+        fake_stripe.InvoiceItem.create.return_value = MagicMock(id="ii_new")
+        row = {"id": "lr1", "delta": 0, "action": "zoe_message", "metadata": {"credits_billed": 3}}
+        with patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe):
+            bill_overage_row(sb, TEST_USER_ID, row)
+        updated_meta = builders["credit_ledger"].update.call_args[0][0]["metadata"]
+        assert "swept" not in updated_meta  # floating item — step 4 sweeps it later
+
 
 class TestBillPendingOverage:
     def test_bills_only_unbilled_rows(self):
@@ -670,6 +697,117 @@ class TestHandleInvoiceCreated:
         from subscriptions.stripe_events import HANDLERS, handle_invoice_created
 
         assert HANDLERS.get("invoice.created") is handle_invoice_created
+
+
+# ---------------------------------------------------------------------------
+# handle_subscription_deleted — final billing on cancellation (review finding #1)
+# ---------------------------------------------------------------------------
+
+
+def _deleted_event(user_id=TEST_USER_ID, customer="cus_del_1", event_id="evt_del_1"):
+    sub = MagicMock()
+    sub.metadata = {"user_id": user_id}
+    sub.customer = customer
+    sub.canceled_at = 1752000000
+    event = MagicMock()
+    event.id = event_id
+    event.data.object = sub
+    return event
+
+
+class TestSubscriptionDeletedFinalBilling:
+    def test_final_billing_runs_when_credits_on(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = _mock_supabase(
+            {
+                "subscriptions": [{"user_id": TEST_USER_ID, "stripe_customer_id": "cus_del_1"}],
+                "credit_wallets": [{"id": "w-del", "owner_type": "user", "owner_id": TEST_USER_ID}],
+            }
+        )
+        with (
+            patch("subscriptions.overage_billing.bill_pending_overage", return_value=0) as bpo,
+            patch(
+                "subscriptions.overage_billing.invoice_unswept_items",
+                return_value={"invoiced": True, "stamped": 2},
+            ) as inv,
+        ):
+            stripe_events.handle_subscription_deleted(_deleted_event(), sb)
+        bpo.assert_called_once_with(sb, TEST_USER_ID)
+        inv.assert_called_once_with(sb, "w-del", "cus_del_1", idempotency_key="final:evt_del_1")
+
+    def test_credits_off_no_billing_calls(self, monkeypatch):
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = _mock_supabase({"subscriptions": [{"user_id": TEST_USER_ID}]})
+        with (
+            patch("subscriptions.overage_billing.bill_pending_overage") as bpo,
+            patch("subscriptions.overage_billing.invoice_unswept_items") as inv,
+        ):
+            stripe_events.handle_subscription_deleted(_deleted_event(), sb)
+        bpo.assert_not_called()
+        inv.assert_not_called()
+
+    def test_no_wallet_skips_final_invoice(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = _mock_supabase(
+            {"subscriptions": [{"user_id": TEST_USER_ID, "stripe_customer_id": "cus_del_1"}], "credit_wallets": []}
+        )
+        with (
+            patch("subscriptions.overage_billing.bill_pending_overage", return_value=0),
+            patch("subscriptions.overage_billing.invoice_unswept_items") as inv,
+        ):
+            stripe_events.handle_subscription_deleted(_deleted_event(), sb)
+        inv.assert_not_called()
+
+    def test_no_customer_id_anywhere_skips_both_but_tier_still_updates(self, monkeypatch):
+        """No customer id on the event AND none in the subscriptions row → both
+        billing calls are skipped, but the tier/status write (unconditional,
+        earlier in the function) still happens."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = _mock_supabase(
+            {
+                "subscriptions": [{"user_id": TEST_USER_ID}],  # no stripe_customer_id key
+                "credit_wallets": [{"id": "w-del"}],
+            }
+        )
+        event = _deleted_event(customer=None)
+        with (
+            patch("subscriptions.overage_billing.bill_pending_overage") as bpo,
+            patch("subscriptions.overage_billing.invoice_unswept_items") as inv,
+        ):
+            stripe_events.handle_subscription_deleted(event, sb)
+        bpo.assert_not_called()
+        inv.assert_not_called()
+        update_payload = builders["subscriptions"].update.call_args[0][0]
+        assert update_payload["tier"] == "free"
+        assert update_payload["status"] == "canceled"
+
+    def test_billing_failure_propagates_so_stripe_retries(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = _mock_supabase(
+            {
+                "subscriptions": [{"user_id": TEST_USER_ID, "stripe_customer_id": "cus_del_1"}],
+                "credit_wallets": [{"id": "w-del"}],
+            }
+        )
+        with (
+            patch("subscriptions.overage_billing.bill_pending_overage", return_value=0),
+            patch(
+                "subscriptions.overage_billing.invoice_unswept_items",
+                side_effect=RuntimeError("stripe down"),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            stripe_events.handle_subscription_deleted(_deleted_event(), sb)
 
 
 # ---------------------------------------------------------------------------

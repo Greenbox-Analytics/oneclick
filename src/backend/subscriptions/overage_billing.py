@@ -9,6 +9,8 @@ NEVER called on the request path — only from the sweep and invoice.created.
 import logging
 import os
 
+import stripe as stripe_errors
+
 import subscriptions.stripe_client as stripe_client_module
 
 logger = logging.getLogger(__name__)
@@ -54,9 +56,13 @@ def bill_overage_row(supabase, user_id: str, ledger_row: dict, *, invoice_id: st
     # both pass the check-then-act above, but Stripe rejects reuse of the
     # key, so the race cannot double-charge.
     item = stripe.InvoiceItem.create(idempotency_key=f"overage:{ledger_row['id']}", **kwargs)
-    supabase.table("credit_ledger").update(
-        {"metadata": {**ledger_row.get("metadata", {}), "invoice_item_id": item.id}}
-    ).eq("id", ledger_row["id"]).execute()
+    new_meta = {**ledger_row.get("metadata", {}), "invoice_item_id": item.id}
+    if invoice_id:
+        # Attached directly to a real invoice → already consumed. Without this
+        # stamp the annual sweep would fold it into a standalone invoice that
+        # Stripe rejects as empty (invoice_no_customer_line_items) every day.
+        new_meta["swept"] = True
+    supabase.table("credit_ledger").update({"metadata": new_meta}).eq("id", ledger_row["id"]).execute()
     try:
         from analytics import capture as analytics_capture
 
@@ -96,3 +102,54 @@ def bill_pending_overage(supabase, user_id: str, *, invoice_id: str | None = Non
             except Exception:
                 logger.exception("bill_overage_row failed row=%s", row.get("id"))
     return billed
+
+
+def invoice_unswept_items(supabase, wallet_id: str, customer_id: str, *, idempotency_key: str | None = None) -> dict:
+    """Collect this wallet's floating pending InvoiceItems onto ONE standalone
+    auto-advancing invoice, then stamp the rows `swept`.
+
+    Rows counted: overage_debit / storage_bill rows with a backfilled
+    invoice_item_id (proves a real pending Stripe item exists) and no `swept`
+    stamp. Returns {"invoiced": bool, "stamped": int}.
+
+    If Stripe reports nothing to invoice (invoice_no_customer_line_items — the
+    items were already consumed by another invoice, e.g. attached to a renewal
+    by handle_invoice_created), rows are stamped swept anyway: the money IS
+    billed, only our bookkeeping lagged. Without this the caller would retry a
+    doomed empty Invoice.create forever.
+    """
+    rows_res = (
+        supabase.table("credit_ledger")
+        .select("id, kind, metadata")
+        .eq("wallet_id", wallet_id)
+        .in_("kind", ["overage_debit", "storage_bill"])
+        .execute()
+    )
+    unswept = [
+        r
+        for r in (rows_res.data or [])
+        if not (r.get("metadata") or {}).get("swept") and (r.get("metadata") or {}).get("invoice_item_id")
+    ]
+    if not unswept:
+        return {"invoiced": False, "stamped": 0}
+
+    stripe = stripe_client_module.get_stripe()
+    kwargs = {"customer": customer_id, "auto_advance": True}
+    if idempotency_key:
+        kwargs["idempotency_key"] = idempotency_key
+    invoiced = True
+    try:
+        stripe.Invoice.create(**kwargs)
+    except stripe_errors.InvalidRequestError as exc:
+        if getattr(exc, "code", None) != "invoice_no_customer_line_items":
+            raise
+        # Invariant: Stripe raises this code only when the customer has ZERO
+        # floating items (we never pass explicit line items), so stamping the
+        # whole unswept set below cannot orphan a still-billable item.
+        invoiced = False  # items consumed elsewhere — stamp and stop retrying
+
+    for r in unswept:
+        supabase.table("credit_ledger").update({"metadata": {**(r.get("metadata") or {}), "swept": True}}).eq(
+            "id", r["id"]
+        ).execute()
+    return {"invoiced": invoiced, "stamped": len(unswept)}

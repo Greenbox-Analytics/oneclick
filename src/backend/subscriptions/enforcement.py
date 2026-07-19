@@ -174,3 +174,13 @@ def gated_credits(
         kind="overage_debit" if result.use_overage else "debit",
         enabled=result.price > 0,
     )
+
+
+def free_credit_grant(action: CreditAction) -> CreditGrant:
+    """Grant for a PRE-VERIFIED zero-cost invocation (result-cache hit,
+    conversational fast-path): skips the wall AND the debit. Only correct when
+    the caller has deterministically established no LLM cost will be incurred
+    (spec §3: cached/canned actions are free and must stay reachable at zero
+    balance). Callers gate usage on credits_enabled() so legacy-mode feature
+    gating is preserved when the flag is off."""
+    return CreditGrant(request_id="", action=str(action), price=0, kind="debit", enabled=False)

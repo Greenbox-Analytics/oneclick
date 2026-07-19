@@ -243,6 +243,65 @@ class TestSweepRollover:
 
 
 # ---------------------------------------------------------------------------
+# Rollover — per-user tier_overrides.monthly_credits wins over tier default
+# ---------------------------------------------------------------------------
+
+
+class TestSweepOverrideGrants:
+    def _setup(self, override_rows):
+        return _sweep_mock_supabase(
+            {
+                "tier_entitlements": [{"tier": "free", "monthly_credits": 50, "included_storage_bytes": -1}],
+                "subscriptions": [],  # free user — not in the paid set
+                "tier_overrides": override_rows,
+                "credit_wallets": [
+                    {
+                        "id": "w-ovr",
+                        "owner_type": "user",
+                        "owner_id": "u-tester",
+                        "period_end": _iso_days_ago(3),
+                    }
+                ],
+            }
+        )
+
+    async def test_override_monthly_credits_wins_over_tier_default(self, monkeypatch):
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = self._setup([{"user_id": "u-tester", "monthly_credits": 5000, "reason": "tester", "expires_at": None}])
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+        assert result["walletsRolled"] == 1
+        assert sb.rpc.call_args[0][1]["p_monthly_grant"] == 5000
+
+    async def test_expired_override_falls_back_to_tier_default(self, monkeypatch):
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = self._setup(
+            [{"user_id": "u-tester", "monthly_credits": 5000, "reason": "tester", "expires_at": _iso_days_ago(1)}]
+        )
+        with patch("main.get_supabase_client", return_value=sb):
+            await billing_sweep(x_sweep_token="s3cret")
+        assert sb.rpc.call_args[0][1]["p_monthly_grant"] == 50
+
+    async def test_tester_revoked_marker_ignored(self, monkeypatch):
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = self._setup(
+            [{"user_id": "u-tester", "monthly_credits": 5000, "reason": "tester_revoked", "expires_at": None}]
+        )
+        with patch("main.get_supabase_client", return_value=sb):
+            await billing_sweep(x_sweep_token="s3cret")
+        assert sb.rpc.call_args[0][1]["p_monthly_grant"] == 50
+
+
+# ---------------------------------------------------------------------------
 # Paid-only — the .in_("tier", PAID_TIERS) filter scopes billing (filter-aware)
 # ---------------------------------------------------------------------------
 
@@ -571,7 +630,13 @@ class TestSweepAnnual:
             result = await billing_sweep(x_sweep_token="s3cret")
 
         assert result["annualInvoiced"] == 1
-        fake_stripe.Invoice.create.assert_called_once_with(customer="cus_u5", auto_advance=True)
+        fake_stripe.Invoice.create.assert_called_once()
+        kwargs = fake_stripe.Invoice.create.call_args.kwargs
+        assert kwargs["customer"] == "cus_u5"
+        assert kwargs["auto_advance"] is True
+        # Prefix-only check: re-deriving today's date here would flake if the
+        # test straddles UTC midnight between the sweep call and the assert.
+        assert kwargs["idempotency_key"].startswith("annual:wallet-u5:")
         assert builders["credit_ledger"].update.call_args[0][0]["metadata"]["swept"] is True
         # cadence timestamp recorded so next-day re-run no-ops
         assert "last_standalone_invoice_at" in builders["credit_wallets"].update.call_args[0][0]
@@ -721,3 +786,34 @@ class TestSweepAnnual:
 
         assert result["annualInvoiced"] == 0
         fake_stripe.Invoice.create.assert_not_called()
+
+    async def test_consumed_items_stamp_swept_without_invoice(self, monkeypatch):
+        """Items already attached to a renewal invoice (via invoice.created):
+        Stripe rejects the empty standalone invoice — rows must be stamped
+        swept and the cadence recorded so the sweep doesn't retry daily."""
+        import stripe as stripe_lib
+
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, builders = _annual_setup(
+            "u9",
+            "price_annual_xyz",
+            [{"id": "ledger-consumed-1", "kind": "overage_debit", "metadata": {"invoice_item_id": "ii_attached"}}],
+            last_standalone_invoice_at=None,
+        )
+        fake_stripe = _fake_stripe()
+        fake_stripe.Invoice.create.side_effect = stripe_lib.InvalidRequestError(
+            "Nothing to invoice for customer", None, code="invoice_no_customer_line_items"
+        )
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["annualInvoiced"] == 0  # nothing actually invoiced
+        assert builders["credit_ledger"].update.call_args[0][0]["metadata"]["swept"] is True
+        assert "last_standalone_invoice_at" in builders["credit_wallets"].update.call_args[0][0]

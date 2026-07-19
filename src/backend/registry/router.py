@@ -38,7 +38,7 @@ from registry.models import (
     WorkRoleUpdate,
     WorkUpdate,
 )
-from subscriptions.enforcement import gated_create, gated_credits, gated_feature
+from subscriptions.enforcement import free_credit_grant, gated_create, gated_credits, gated_feature
 from subscriptions.models import Action, CreditAction
 from subscriptions.service import credits_enabled
 from utils.llm.tracking import set_llm_context
@@ -1111,8 +1111,6 @@ async def parse_contract_splits(
     and the frontend prompts the user to enter their own split manually.
     """
     gated_feature(user_id, Action.USE_REGISTRY)
-    # SP3/credits: gate the contract parse; 402 for users without access or credits.
-    parse_grant = gated_credits(user_id, CreditAction.REGISTRY_PARSE)
 
     import os
     import tempfile
@@ -1156,7 +1154,7 @@ async def parse_contract_splits(
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=f"Failed to download contract: {exc}") from exc
 
-    from utils.contract_parsing.cache import get_or_parse
+    from utils.contract_parsing.cache import get_or_parse, peek_cached_parse
     from utils.ingestion.pdf_markdown import pdf_to_markdown
 
     def _load_text() -> str:
@@ -1177,12 +1175,31 @@ async def parse_contract_splits(
                 except OSError:
                     pass
 
+    # Load the text FIRST (pdf→markdown is local compute, no LLM cost), then peek the parse
+    # cache: a guaranteed hit is free (spec §3) and must not be walled at zero balance.
+    # Legacy mode (credits off) skips the peek and always takes the gate below.
+    try:
+        text = _load_text()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Contract parsing failed: {e}")
+
+    cached_peek = peek_cached_parse(_get_supabase(), text) if credits_enabled() else None
+    if credits_enabled() and cached_peek is not None:
+        parse_grant = free_credit_grant(CreditAction.REGISTRY_PARSE)
+    else:
+        # SP3/credits: gate the contract parse; 402 without access or credits.
+        parse_grant = gated_credits(user_id, CreditAction.REGISTRY_PARSE)
+
     try:
         with set_llm_context(user_id, "registry"):
             # Route through the shared parse cache so this Add-Work parse is cached and
             # canonicalized (marker-stripped) like every other contract parse.
             cache_missed = {"v": False}
-            contract_data = get_or_parse(_get_supabase(), _load_text, on_miss=lambda: cache_missed.update(v=True))
+            contract_data = get_or_parse(_get_supabase(), lambda: text, on_miss=lambda: cache_missed.update(v=True))
             result = contract_splits.parse_royalty_splits(
                 contract_data=contract_data,
                 main_artist_name=main_artist_name or "",

@@ -238,8 +238,9 @@ def normalize_file_name(file_name: str) -> str:
 # cycle with subscriptions/enforcement.py. Re-export here so SP1/SP2 callers
 # in this file (Zoe/OneClick increments, etc.) keep working unchanged.
 from subscriptions.deps import _get_entitlements_service  # noqa: I001
-from subscriptions.enforcement import gated_create, gated_credits, gated_upload
+from subscriptions.enforcement import free_credit_grant, gated_create, gated_credits, gated_upload
 from subscriptions.models import CreditAction
+from subscriptions.service import credits_enabled
 
 
 # --- Ownership verification helpers ---
@@ -747,6 +748,16 @@ async def bootstrap_tester(
         "granted_at": granted_at,
     }
     sb.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
+
+    # Initial tester credits: once-per-user idempotent (tester-init request_id),
+    # so re-running bootstrap can never double-fill. Best-effort: a sign-in
+    # must never 500 over a credits blip; admins can top up manually.
+    try:
+        from subscriptions.admin_service import grant_initial_tester_credits
+
+        grant_initial_tester_credits(sb, user_id)
+    except Exception as exc:
+        logger.warning("bootstrap tester initial credits failed for %s: %s", user_id, exc)
 
     try:
         analytics_identify(
@@ -1726,7 +1737,16 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
     _zoe_session_owners[session_id] = user_id
 
     # SP3/credits: gate Zoe; 402 for users without access or credits.
-    zoe_grant = gated_credits(user_id, CreditAction.ZOE_MESSAGE, host_user_id=request.host_user_id)
+    # Deterministic conversational fast-path ("hi", "thanks") is FREE (spec §3)
+    # and must stay reachable at zero balance — skip the wall when the pure
+    # text predicate guarantees no LLM call. Legacy mode (credits off) keeps
+    # the feature gate for every query, preserving pre-credits behavior.
+    from zoe_chatbot.contract_chatbot import is_zero_cost_query
+
+    if credits_enabled() and is_zero_cost_query(request.query or ""):
+        zoe_grant = free_credit_grant(CreditAction.ZOE_MESSAGE)
+    else:
+        zoe_grant = gated_credits(user_id, CreditAction.ZOE_MESSAGE, host_user_id=request.host_user_id)
 
     # Step event: fire BEFORE any work begins so we capture even early failures.
     import time as _time
@@ -2268,6 +2288,34 @@ async def expenses_summary(user_id: str = Depends(get_current_user_id)):
     return {"expenses": expenses}
 
 
+def _find_cached_oneclick_calc(sb, royalty_statement_file_id: str, target_contract_ids: list[str]) -> dict | None:
+    """Deterministic result-cache probe: a prior calculation for this statement
+    with EXACTLY this contract set, or None. No LLM cost — safe to run before
+    the credit gate so cached re-runs stay free at zero balance (spec §3)."""
+    calcs_res = (
+        sb.table("royalty_calculations")
+        .select("id, results")
+        .eq("royalty_statement_id", royalty_statement_file_id)
+        .execute()
+    )
+    if not calcs_res.data:
+        return None
+    calc_ids = [calc["id"] for calc in calcs_res.data]
+    assoc_res = (
+        sb.table("royalty_calculation_contracts")
+        .select("calculation_id, contract_id")
+        .in_("calculation_id", calc_ids)
+        .execute()
+    )
+    contract_map: dict = {}
+    for row in assoc_res.data or []:
+        contract_map.setdefault(row["calculation_id"], set()).add(row["contract_id"])
+    for calc in calcs_res.data:
+        if contract_map.get(calc["id"], set()) == set(target_contract_ids):
+            return calc
+    return None
+
+
 @app.get("/oneclick/calculate-royalties-stream")
 async def oneclick_calculate_royalties_stream(
     project_id: str,
@@ -2309,8 +2357,22 @@ async def oneclick_calculate_royalties_stream(
         royalty_statement_file_id,
         (contract_ids or []) + ([contract_id] if contract_id else []),
     )
-    # SP3/credits: gate OneClick; 402 for users without access or credits.
-    oneclick_grant = gated_credits(user_id, CreditAction.ONECLICK_RUN, host_user_id=host_user_id)
+    # Result-cache probe BEFORE the gate: a cached re-run is free (spec §3) and
+    # must never be walled behind the balance. Probe failure = miss (gate applies).
+    target_contract_ids = list(contract_ids) if contract_ids else ([contract_id] if contract_id else [])
+    cached_calc = None
+    if not force_recalculate and target_contract_ids:
+        try:
+            cached_calc = _find_cached_oneclick_calc(
+                get_supabase_client(), royalty_statement_file_id, target_contract_ids
+            )
+        except Exception as e:
+            print(f"Cache probe failed (continuing as miss): {e}")
+    if credits_enabled() and cached_calc is not None:
+        oneclick_grant = free_credit_grant(CreditAction.ONECLICK_RUN)
+    else:
+        # SP3/credits: gate OneClick; 402 for users without access or credits.
+        oneclick_grant = gated_credits(user_id, CreditAction.ONECLICK_RUN, host_user_id=host_user_id)
     # SP2: track per-period OneClick usage; best-effort, never blocks.
     _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
     analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
@@ -2334,13 +2396,8 @@ async def oneclick_calculate_royalties_stream(
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0, 'stage': 'starting'})}\n\n"
                 await asyncio.sleep(0.1)
 
-                # Determine contracts to process
-                target_contract_ids = []
-                if contract_ids:
-                    target_contract_ids = contract_ids
-                elif contract_id:
-                    target_contract_ids = [contract_id]
-
+                # target_contract_ids is computed once at the endpoint level (used
+                # for the pre-gate cache probe) and closed over here — no re-derive.
                 if not target_contract_ids:
                     analytics_capture(
                         user_id,
@@ -2350,109 +2407,69 @@ async def oneclick_calculate_royalties_stream(
                     yield f"data: {json.dumps({'type': 'error', 'message': 'No contracts specified'})}\n\n"
                     return
 
-                # --- CACHE CHECK ---
-                if not force_recalculate:
+                # --- CACHE HIT (probed pre-gate; no re-query) ---
+                if cached_calc is not None:
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
+
+                    result = cached_calc["results"]
+                    # Ensure is_cached flag is set
+                    result["is_cached"] = True
+                    # Expose the calculation id so the Earnings
+                    # Breakdown tab can load on cache hits (no
+                    # confirm round-trip happens for cached results).
+                    result["calculation_id"] = cached_calc["id"]
+                    # Add type field so frontend SSE handler recognizes it
+                    result["type"] = "complete"
+
+                    # Cache hit: fire paired _started + _completed so
+                    # the funnel sees the same volume on each step.
+                    analytics_capture(
+                        user_id,
+                        "oneclick_calc_started",
+                        {"tool": "oneclick", "contract_count": _contract_count, "cached": True},
+                    )
+                    analytics_capture(
+                        user_id,
+                        "oneclick_calc_completed",
+                        {
+                            "tool": "oneclick",
+                            "duration_ms": 0,
+                            "contract_count": _contract_count,
+                            "cached": True,
+                        },
+                    )
+
+                    # Cache-hit: sync royalty_lines. Self-heal statement rows — if this
+                    # cached calc has none persisted yet (e.g. it was first run before
+                    # royalty_statement_rows existed), parse + backfill them so periods/
+                    # totals become real; otherwise skip the re-parse (cheap).
                     try:
-                        yield f"data: {json.dumps({'type': 'status', 'message': 'Checking cache...', 'progress': 5, 'stage': 'starting'})}\n\n"
-
-                        # Find calculations that match the statement ID
-                        # We need to find a calculation that has EXACTLY the same set of contracts
-
-                        # 1. Get all calculations for this statement
-                        calcs_res = (
-                            get_supabase_client()
-                            .table("royalty_calculations")
-                            .select("id, results")
-                            .eq("royalty_statement_id", royalty_statement_file_id)
+                        _db = get_supabase_client()
+                        _existing_rows = (
+                            _db.table("royalty_statement_rows")
+                            .select("id", count="exact")
+                            .eq("calculation_id", cached_calc["id"])
+                            .limit(1)
                             .execute()
                         )
-
-                        if calcs_res.data:
-                            calc_ids = [calc["id"] for calc in calcs_res.data]
-
-                            # Single batch query for ALL calculation-contract associations
-                            all_contracts_res = (
-                                get_supabase_client()
-                                .table("royalty_calculation_contracts")
-                                .select("calculation_id, contract_id")
-                                .in_("calculation_id", calc_ids)
-                                .execute()
-                            )
-
-                            # Build lookup map: calculation_id -> set of contract_ids
-                            contract_map = {}
-                            for row in all_contracts_res.data or []:
-                                contract_map.setdefault(row["calculation_id"], set()).add(row["contract_id"])
-
-                            # Check each cached calculation against target contracts
-                            for calc in calcs_res.data:
-                                cached_ids = contract_map.get(calc["id"], set())
-                                if cached_ids == set(target_contract_ids):
-                                    # CACHE HIT!
-                                    yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
-
-                                    result = calc["results"]
-                                    # Ensure is_cached flag is set
-                                    result["is_cached"] = True
-                                    # Expose the calculation id so the Earnings
-                                    # Breakdown tab can load on cache hits (no
-                                    # confirm round-trip happens for cached results).
-                                    result["calculation_id"] = calc["id"]
-                                    # Add type field so frontend SSE handler recognizes it
-                                    result["type"] = "complete"
-
-                                    # Cache hit: fire paired _started + _completed so
-                                    # the funnel sees the same volume on each step.
-                                    analytics_capture(
-                                        user_id,
-                                        "oneclick_calc_started",
-                                        {"tool": "oneclick", "contract_count": _contract_count, "cached": True},
-                                    )
-                                    analytics_capture(
-                                        user_id,
-                                        "oneclick_calc_completed",
-                                        {
-                                            "tool": "oneclick",
-                                            "duration_ms": 0,
-                                            "contract_count": _contract_count,
-                                            "cached": True,
-                                        },
-                                    )
-
-                                    # Cache-hit: sync royalty_lines. Self-heal statement rows — if this
-                                    # cached calc has none persisted yet (e.g. it was first run before
-                                    # royalty_statement_rows existed), parse + backfill them so periods/
-                                    # totals become real; otherwise skip the re-parse (cheap).
-                                    try:
-                                        _db = get_supabase_client()
-                                        _existing_rows = (
-                                            _db.table("royalty_statement_rows")
-                                            .select("id", count="exact")
-                                            .eq("calculation_id", calc["id"])
-                                            .limit(1)
-                                            .execute()
-                                        )
-                                        _rows_for_sync = None
-                                        if not (getattr(_existing_rows, "count", 0) or 0):
-                                            _rows_for_sync = _parse_statement_rows(_db, royalty_statement_file_id)
-                                        sync_calc_royalties(
-                                            _db,
-                                            user_id,
-                                            calc["id"],
-                                            royalty_statement_file_id,
-                                            project_id,
-                                            calc["results"],
-                                            _statement_currency(royalty_statement_file_id),
-                                            statement_rows=_rows_for_sync,
-                                        )
-                                    except Exception as e:
-                                        print(f"[royalties] cache-hit sync failed for calc {calc['id']}: {e}")
-
-                                    yield f"data: {json.dumps(result)}\n\n"
-                                    return
-
+                        _rows_for_sync = None
+                        if not (getattr(_existing_rows, "count", 0) or 0):
+                            _rows_for_sync = _parse_statement_rows(_db, royalty_statement_file_id)
+                        sync_calc_royalties(
+                            _db,
+                            user_id,
+                            cached_calc["id"],
+                            royalty_statement_file_id,
+                            project_id,
+                            cached_calc["results"],
+                            _statement_currency(royalty_statement_file_id),
+                            statement_rows=_rows_for_sync,
+                        )
                     except Exception as e:
-                        print(f"Cache check failed (continuing to calculate): {e}")
+                        print(f"[royalties] cache-hit sync failed for calc {cached_calc['id']}: {e}")
+
+                    yield f"data: {json.dumps(result)}\n\n"
+                    return
 
                 # Cache miss (or force_recalculate) — fire `_started` AFTER the
                 # cache check so cache hits don't double-fire.

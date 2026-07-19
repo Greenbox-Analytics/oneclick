@@ -25,6 +25,8 @@ class CreateTesterGrantRequest(BaseModel):
     email: EmailStr
     expires_at: str | None = None
     reason: str = "tester"
+    # Initial reserve-credit allocation; None = TESTER_INITIAL_CREDITS default.
+    credits: int | None = Field(None, gt=0, le=1_000_000)
 
 
 class CreditGrantPayload(BaseModel):
@@ -231,6 +233,7 @@ async def create_tester_grant(
             email=body.email,
             expires_at=body.expires_at,
             reason=body.reason,
+            credits=body.credits,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

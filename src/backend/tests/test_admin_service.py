@@ -482,6 +482,34 @@ class TestTesterGrants:
         assert result["user_id"] == "uid-10"
         assert result["email"] == "tester@example.com"
 
+    def test_create_tester_grant_grants_initial_credits(self):
+        """create_tester_grant should delegate initial credit allocation to
+        grant_initial_tester_credits, passing (supabase, user_id, credits)."""
+        from unittest.mock import patch
+
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        sb = MagicMock()
+        sb.auth.admin.list_users.return_value = [
+            MagicMock(id="uid-10", email="tester@example.com"),
+        ]
+
+        def _table(name):
+            return MockQueryBuilder()
+
+        sb.table.side_effect = _table
+        svc = AdminService(sb, EntitlementsService(sb))
+
+        with patch("subscriptions.admin_service.grant_initial_tester_credits") as gitc:
+            svc.create_tester_grant(email="tester@example.com", credits=750)
+
+        gitc.assert_called_once()
+        args = gitc.call_args[0]
+        assert args[0] is sb
+        assert args[1] == "uid-10"
+        assert args[2] == 750  # (supabase, user_id, credits)
+
     def test_create_tester_grant_normalizes_reason(self):
         """`reason` must always satisfy LIKE 'tester%' so list_tester_grants
         returns the row. Empty → 'tester'. Already-prefixed (case-insensitive)

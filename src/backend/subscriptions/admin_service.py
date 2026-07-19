@@ -6,6 +6,7 @@ itself does NOT re-check admin permissions.
 """
 
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -282,6 +283,7 @@ class AdminService:
         email: str,
         expires_at: str | None = None,
         reason: str = "tester",
+        credits: int | None = None,
     ) -> dict:
         """Look up user by email, upsert a full-Pro override with reason='tester*'.
 
@@ -312,6 +314,12 @@ class AdminService:
             "granted_at": datetime.now(UTC).isoformat(),
         }
         self.supabase.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
+
+        # Initial credit allocation — once-per-user idempotent, so an admin
+        # re-grant (e.g. extending expiry) never double-fills. Unguarded on
+        # purpose: a failure 500s the admin call, and a retry converges.
+        grant_initial_tester_credits(self.supabase, user_id, credits)
+
         try:
             analytics_identify(
                 user_id,
@@ -401,6 +409,54 @@ class AdminService:
 # ------------------------------------------------------------------
 # Admin credit tooling — manual credit grants + ledger inspection
 # ------------------------------------------------------------------
+
+TESTER_INITIAL_CREDITS_DEFAULT = 1000
+
+
+def _tester_initial_credits_default() -> int:
+    try:
+        return int(os.getenv("TESTER_INITIAL_CREDITS", str(TESTER_INITIAL_CREDITS_DEFAULT)))
+    except ValueError:
+        return TESTER_INITIAL_CREDITS_DEFAULT
+
+
+def grant_initial_tester_credits(supabase, user_id: str, amount: int | None = None) -> bool:
+    """One-time reserve grant for a new tester (replaces the old idea of a
+    monthly_credits override, which the sweep couldn't see — review 2026-07-19).
+
+    Idempotent FOREVER per user: request_id `tester-init:{user_id}` hits the
+    ledger's unique index, so bootstrap re-runs and admin re-grants can never
+    double-fill. Top-ups go through POST /admin/users/{id}/credits/grant.
+    Reserve bucket on purpose: tester credits must survive rollover (spec §6).
+
+    Returns True when a grant RPC was issued; False when skipped (credits off,
+    non-positive amount, or missing wallet — warn-logged, never raised).
+    """
+    from subscriptions.service import credits_enabled
+
+    if not credits_enabled():
+        return False
+    amount = amount if amount is not None else _tester_initial_credits_default()
+    if amount <= 0:
+        return False
+    wallet_res = (
+        supabase.table("credit_wallets").select("id").eq("owner_type", "user").eq("owner_id", user_id).execute()
+    )
+    if not wallet_res.data:
+        logger.warning("tester credits: no wallet for user %s — skipping initial grant", user_id)
+        return False
+    supabase.rpc(
+        "grant_credits",
+        {
+            "p_wallet_id": wallet_res.data[0]["id"],
+            "p_amount": amount,
+            "p_kind": "admin_grant",
+            "p_bucket": "reserve",
+            "p_metadata": {"reason": "tester_initial"},
+            "p_request_id": f"tester-init:{user_id}",
+        },
+    ).execute()
+    return True
 
 
 def grant_user_credits(
