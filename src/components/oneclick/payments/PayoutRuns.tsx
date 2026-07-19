@@ -1,6 +1,6 @@
 // src/components/oneclick/payments/PayoutRuns.tsx
 import { useState } from "react";
-import { CheckCheck, Clock, PieChart, X, Send, MoreHorizontal } from "lucide-react";
+import { CheckCheck, Clock, PieChart, X, Send, MoreHorizontal, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,7 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useMarkPayoutPaid, useCancelPayout } from "@/hooks/useRoyalties";
+import { useMarkPayoutPaid, useCancelPayout, useRevertPayout } from "@/hooks/useRoyalties";
 import type { PayoutOut, PayeeSummary } from "@/hooks/useRoyalties";
 import { PartyAvatar, StatusBadge, SelectBox, fmtMoney, fmtDate } from "./shared";
 import { PayWithPayPalDialog, isPaypalEnabled } from "./PayWithPayPalDialog";
@@ -63,6 +63,7 @@ function RunCard({
   const { toast } = useToast();
   const markPaid = useMarkPayoutPaid();
   const cancelPayout = useCancelPayout();
+  const revert = useRevertPayout();
 
   const isDraft = payout.status === "draft";
   const isPaid = payout.status === "paid";
@@ -115,8 +116,8 @@ function RunCard({
           </div>
         </div>
 
-        {/* Amount + actions */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Amount + actions — one evenly-spaced cluster on the right */}
+        <div className="flex items-center gap-7 shrink-0">
           <div className="text-right">
             <div className="font-mono text-[18px] font-bold tabular-nums tracking-tight">
               {fmtMoney(payout.total_amount, payout.pay_currency)}
@@ -187,11 +188,43 @@ function RunCard({
             </>
           )}
 
-          {/* Paid action */}
+          {/* Paid actions: Receipt + overflow menu (Revert to draft — manual only) */}
           {isPaid && (
-            <Button size="sm" variant="outline" onClick={() => onReceipt(payout)}>
-              Receipt
-            </Button>
+            <>
+              <Button size="sm" variant="outline" onClick={() => onReceipt(payout)}>
+                Receipt
+              </Button>
+              {/* PayPal payouts moved real money — reverting our status wouldn't
+                  undo that, so revert is offered for manual completions only. */}
+              {payout.payment_method !== "paypal" && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 shrink-0 text-muted-foreground"
+                      aria-label="More payout actions"
+                      disabled={revert.isPending}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuItem
+                      disabled={revert.isPending}
+                      onClick={() =>
+                        revert.mutate(payout.id, {
+                          onError: () =>
+                            toast({ variant: "destructive", title: "Failed to revert payout" }),
+                        })
+                      }
+                    >
+                      <Undo2 className="mr-2 h-4 w-4" /> Revert to draft
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </>
           )}
         </div>
       </div>

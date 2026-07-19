@@ -85,6 +85,7 @@ def _make_payout(
     total_amount=200.0,
     pay_currency="USD",
     idempotency_key=None,
+    payment_method="manual",
 ):
     return {
         "id": payout_id,
@@ -99,6 +100,7 @@ def _make_payout(
         "note": None,
         "breakdown_snapshot": {"projects": [{"project_id": "proj-1", "name": "Project One", "statements": []}]},
         "idempotency_key": idempotency_key,
+        "payment_method": payment_method,
     }
 
 
@@ -643,6 +645,49 @@ class TestCancelPayout:
         db = MockDB(payouts=[])
         with pytest.raises(PermissionError):
             service.cancel_payout(db, USER_ID, "nonexistent-id")
+
+
+# ---------------------------------------------------------------------------
+# Tests: revert_payout_to_draft — undo an accidental mark-paid
+# ---------------------------------------------------------------------------
+
+
+class TestRevertPayout:
+    def test_reverts_manual_paid_to_draft(self):
+        payout = _make_payout(status="paid", payment_method="manual")
+        db = MockDB(payouts=[payout])
+        result = service.revert_payout_to_draft(db, USER_ID, PAYOUT_ID)
+        assert result["status"] == "draft"
+
+    def test_clears_paid_at(self):
+        payout = _make_payout(status="paid", payment_method="manual")
+        payout["paid_at"] = "2026-06-23T00:00:00Z"
+        db = MockDB(payouts=[payout])
+        result = service.revert_payout_to_draft(db, USER_ID, PAYOUT_ID)
+        assert result.get("paid_at") is None
+
+    def test_non_paid_raises_value_error(self):
+        payout = _make_payout(status="draft")
+        db = MockDB(payouts=[payout])
+        with pytest.raises(ValueError, match="Only completed payouts"):
+            service.revert_payout_to_draft(db, USER_ID, PAYOUT_ID)
+
+    def test_paypal_payout_cannot_be_reverted(self):
+        payout = _make_payout(status="paid", payment_method="paypal")
+        db = MockDB(payouts=[payout])
+        with pytest.raises(ValueError, match="paid through PayPal"):
+            service.revert_payout_to_draft(db, USER_ID, PAYOUT_ID)
+
+    def test_wrong_user_raises_permission_error(self):
+        payout = _make_payout(status="paid", user_id=USER_ID)
+        db = MockDB(payouts=[payout])
+        with pytest.raises(PermissionError):
+            service.revert_payout_to_draft(db, OTHER_USER_ID, PAYOUT_ID)
+
+    def test_nonexistent_payout_raises_permission_error(self):
+        db = MockDB(payouts=[])
+        with pytest.raises(PermissionError):
+            service.revert_payout_to_draft(db, USER_ID, "nonexistent-id")
 
 
 # ---------------------------------------------------------------------------

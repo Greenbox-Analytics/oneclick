@@ -291,6 +291,16 @@ def generate_receipt_pdf(payout: dict, payer_name: str | None = None) -> io.Byte
         )
     )
 
+    elements.append(
+        Paragraph(
+            "<b>Please verify:</b> This is a system-generated record of a payment marked as "
+            "completed in Msanii OneClick — it is not proof that funds were received. Always "
+            "confirm the transaction independently (e.g. through your bank or PayPal) to ensure "
+            "the payment actually reached the recipient.",
+            styles["small"],
+        )
+    )
+
     doc.build(elements)
     buffer.seek(0)
     return buffer

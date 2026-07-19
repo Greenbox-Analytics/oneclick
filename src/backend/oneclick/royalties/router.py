@@ -189,6 +189,22 @@ def cancel_payout(
         raise HTTPException(status_code=409, detail=str(exc))
 
 
+@router.post("/payouts/{payout_id}/revert")
+def revert_payout(
+    payout_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Revert a manually-completed payout back to draft (undo an accidental
+    mark-paid).  409 if not paid or if it was completed through PayPal."""
+    gated_feature(user_id, Action.USE_ONECLICK)
+    try:
+        return service.revert_payout_to_draft(_get_supabase(), user_id, payout_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 def _handle_paypal_endpoint(fn, user_id: str, payout_id: str, stage: str):
     """Run a PayPal service call with shared error mapping + failure analytics.
 
