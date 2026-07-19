@@ -76,7 +76,8 @@ def _sub_builder(name):
 MINIMAL_CONTRIBUTOR = {
     "name": "Alice",
     "role": "Composer",
-    "publishing_percentage": 100.0,
+    "writer_share": 50.0,
+    "publisher_share": 50.0,
 }
 
 VALID_PAYLOAD = {
