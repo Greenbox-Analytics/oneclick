@@ -252,7 +252,7 @@ export function PayoutRuns({ payouts, payees = [], onOpenDetail }: PayoutRunsPro
   const paid = payouts.filter((r) => r.status === "paid").sort(byDate);
   const activeList = subView === "drafts" ? drafts : paid;
 
-  // Bulk selection — drafts only (Mark all as paid / Cancel all).
+  // Bulk selection — drafts only (Mark as Paid / Cancel).
   const { toast } = useToast();
   const bulkMarkPaid = useMarkPayoutPaid();
   const bulkCancel = useCancelPayout();
@@ -359,7 +359,7 @@ export function PayoutRuns({ payouts, payees = [], onOpenDetail }: PayoutRunsPro
                 Clear
               </Button>
               <Button size="sm" variant="outline" disabled={bulkBusy} onClick={() => setConfirmAction("markPaid")}>
-                <CheckCheck className="mr-1.5 h-3.5 w-3.5" /> Mark all as paid
+                <CheckCheck className="mr-1.5 h-3.5 w-3.5" /> Mark as Paid
               </Button>
               <Button
                 size="sm"
@@ -368,7 +368,7 @@ export function PayoutRuns({ payouts, payees = [], onOpenDetail }: PayoutRunsPro
                 disabled={bulkBusy}
                 onClick={() => setConfirmAction("cancel")}
               >
-                <X className="mr-1 h-3.5 w-3.5" /> Cancel all
+                <X className="mr-1 h-3.5 w-3.5" /> Cancel
               </Button>
             </div>
           )}

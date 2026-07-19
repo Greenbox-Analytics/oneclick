@@ -1,6 +1,6 @@
 // src/components/oneclick/payments/NewPayoutModal.tsx
 import { useState } from "react";
-import { Send, Check as CheckIcon, CheckCheck, Info } from "lucide-react";
+import { FileText, Check as CheckIcon, CheckCheck, Info } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,6 +16,8 @@ interface NewPayoutModalProps {
   initialIds: string[];
   base: string;
   onClose: () => void;
+  /** Jump to the Payouts → Drafts tab after drafts are created. */
+  onViewDrafts?: () => void;
 }
 
 function SelectBox({ on, partial, onClick }: { on: boolean; partial?: boolean; onClick: () => void }) {
@@ -37,7 +39,7 @@ function SelectBox({ on, partial, onClick }: { on: boolean; partial?: boolean; o
   );
 }
 
-export function NewPayoutModal({ payees, base, initialIds, onClose }: NewPayoutModalProps) {
+export function NewPayoutModal({ payees, base, initialIds, onClose, onViewDrafts }: NewPayoutModalProps) {
   // One idempotency key per modal open — stable for the lifetime of this modal.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [note, setNote] = useState("");
@@ -118,8 +120,11 @@ export function NewPayoutModal({ payees, base, initialIds, onClose }: NewPayoutM
                 </>
               )}
             </p>
-            <div className="mt-6 flex justify-end">
-              <Button onClick={onClose}>Done</Button>
+            <div className="mt-6 flex justify-center gap-2.5">
+              <Button variant="outline" onClick={onClose}>Done</Button>
+              {onViewDrafts && (
+                <Button onClick={onViewDrafts}>View drafts</Button>
+              )}
             </div>
           </div>
         ) : (
@@ -224,8 +229,8 @@ export function NewPayoutModal({ payees, base, initialIds, onClose }: NewPayoutM
                   "Creating…"
                 ) : (
                   <>
-                    <Send className="mr-1.5 h-4 w-4" />
-                    Pay Royalties ({sel.length})
+                    <FileText className="mr-1.5 h-4 w-4" />
+                    Draft {sel.length} payout{sel.length !== 1 ? "s" : ""}
                   </>
                 )}
               </Button>

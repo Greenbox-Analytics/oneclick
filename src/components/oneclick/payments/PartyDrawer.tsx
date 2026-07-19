@@ -2,7 +2,7 @@
 import { useState } from "react";
 import {
   X,
-  Send,
+  FileText,
   AlertTriangle,
   Folder,
   ChevronRight,
@@ -718,10 +718,10 @@ export function PartyDrawer({
             disabled={!summary || summary.owed <= 0}
             onClick={() => onPayout([payeeId])}
           >
-            <Send className="mr-1.5 h-4 w-4" />
+            <FileText className="mr-1.5 h-4 w-4" />
             {summary && summary.owed > 0
-              ? `Send ${fmtMoney(summary.owed_native, summary.payout_currency)} owed`
-              : "Nothing to pay"}
+              ? `Draft ${fmtMoney(summary.owed_native, summary.payout_currency)} payout`
+              : "Nothing owed"}
           </Button>
         </div>
       </aside>
