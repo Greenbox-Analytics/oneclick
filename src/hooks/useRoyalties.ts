@@ -250,6 +250,21 @@ export function useCancelPayout() {
   });
 }
 
+/** POST /oneclick/royalties/payouts/{id}/revert — undo an accidental mark-paid (manual payouts only). */
+export function useRevertPayout() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => {
+      if (!user?.id) throw new Error("Not authenticated");
+      return apiFetch<PayoutOut>(`${API_URL}/oneclick/royalties/payouts/${id}/revert`, {
+        method: "POST",
+      });
+    },
+    onSuccess: () => invalidateRoyaltyData(queryClient),
+  });
+}
+
 /** POST /oneclick/royalties/payouts/{id}/paypal/order — create a PayPal checkout order for a draft payout. */
 export function useCreatePaypalOrder() {
   const { user } = useAuth();

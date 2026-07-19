@@ -836,6 +836,38 @@ def cancel_payout(db, user_id: str, payout_id: str) -> None:
     db.table("royalty_payouts").delete().eq("id", payout_id).eq("user_id", user_id).execute()
 
 
+def revert_payout_to_draft(db, user_id: str, payout_id: str) -> dict:
+    """Revert a manually-completed payout back to draft (undo an accidental
+    mark-paid). The coverage rows stay attached and move from paid→drafted on
+    their own, because the paid/drafted split is derived from the payout status.
+
+    Only *manual* payouts can be reverted: a payout completed through PayPal moved
+    real money on PayPal's side, and flipping our status would not undo that — so
+    those are blocked here (issue a PayPal refund instead).
+
+    Raises PermissionError for ownership violations.
+    Raises ValueError if the payout is not a manually-completed payout.
+    """
+    res = db.table("royalty_payouts").select("*").eq("id", payout_id).eq("user_id", user_id).execute()
+    rows = res.data or []
+    if not rows:
+        raise PermissionError("Payout not found")
+    payout = rows[0]
+    if payout.get("status") != "paid":
+        raise ValueError("Only completed payouts can be reverted to draft")
+    if payout.get("payment_method") == "paypal":
+        raise ValueError("This payout was paid through PayPal and can't be reverted here")
+
+    update_res = (
+        db.table("royalty_payouts")
+        .update({"status": "draft", "paid_at": None})
+        .eq("id", payout_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return (update_res.data or [{}])[0]
+
+
 def _derive_orphan_state(db, payout_id: str, snapshot: dict) -> str:
     """Derive orphan_state for a payout by querying remaining coverage.
 
