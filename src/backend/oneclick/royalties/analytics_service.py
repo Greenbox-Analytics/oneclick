@@ -130,13 +130,17 @@ def overview(db, user_id: str, base: str, now: date | None = None) -> "OverviewO
 
         total_unconvertible += totals["unconvertible_count"]
 
-        owed = totals["owed"]
+        # Outstanding = earned − paid (a draft is a plan, not a payment, so the
+        # money stays outstanding until the payout is actually completed). The
+        # separate `drafted` bucket still tracks in-flight drafts for draft_count.
+        unpaid = totals["unpaid"]
         drafted = totals["drafted"]
 
-        if owed > 0:
-            outstanding_total += owed
+        if unpaid > 0:
+            outstanding_total += unpaid
             payees_owed_count += 1
-            top_owed_list.append({"payee_id": payee_id, "display_name": payee.get("display_name", ""), "owed": owed})
+            # TopOwed.owed carries the outstanding figure (earned − paid).
+            top_owed_list.append({"payee_id": payee_id, "display_name": payee.get("display_name", ""), "owed": unpaid})
 
         if drafted > 0:
             drafted_total += drafted

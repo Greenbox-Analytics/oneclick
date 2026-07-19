@@ -51,15 +51,17 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
 
   // ── Derived totals — amounts already in base; no client FX ───────────────
   const totals = useMemo(() => {
-    let earned = 0, paid = 0, owed = 0, awaitingCount = 0;
+    let earned = 0, paid = 0, outstanding = 0, awaitingCount = 0;
     payees.forEach((p) => {
       earned += p.earned;
       paid   += p.paid;
-      owed   += p.owed;
-      if (p.owed > 0) awaitingCount++;
+      outstanding += p.unpaid;    // earned − paid (still owed until actually paid)
+      // "Awaiting payout" = any unpaid balance, drafted or not — consistent with
+      // the Outstanding total above.
+      if (p.unpaid > 0) awaitingCount++;
     });
     const runsPaid = payouts.filter((r) => r.status === "paid").length;
-    return { earned, paid, owed, awaitingCount, runsPaid };
+    return { earned, paid, outstanding, awaitingCount, runsPaid };
   }, [payees, payouts]);
 
   // ── Filtered + sorted parties list ───────────────────────────────────────
@@ -68,7 +70,7 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
     const filtered = needle
       ? payees.filter((p) => p.display_name.toLowerCase().includes(needle))
       : payees;
-    return [...filtered].sort((a, b) => b.owed - a.owed);
+    return [...filtered].sort((a, b) => b.unpaid - a.unpaid);
   }, [payees, query]);
 
   const toggleSel = (id: string) =>
@@ -247,7 +249,7 @@ function StatBand({ totals, base, isLoading }: { totals: StatTotals; base: strin
       ic: Hourglass,
       tone: "bg-[hsl(var(--pay-out-bg))] text-[hsl(var(--pay-out-fg))]",
       label: "Outstanding",
-      num: f(totals.owed),
+      num: f(totals.outstanding),
       sub: `${totals.awaitingCount} part${totals.awaitingCount !== 1 ? "ies" : "y"} awaiting payout`,
     },
   ];

@@ -375,6 +375,7 @@ const LOGOS: readonly LogoEntry[] = [
   { name: "SoundCloud", src: "/soundcloud.png" },
   { name: "Google Drive", src: "/drive.webp" },
   { name: "Slack", src: "/slack.png" },
+  { name: "PayPal", src: "/paypal.png" },
 ];
 
 // Doubled so the keyframes can translate -50% and loop seamlessly.
