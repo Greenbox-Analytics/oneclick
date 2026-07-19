@@ -67,10 +67,17 @@ jobs:
           MAPPING[VITE_SUPABASE_ANON_KEY]=VITE_SUPABASE_ANON_KEY
           MAPPING[VITE_POSTHOG_HOST]=VITE_POSTHOG_HOST
 
+          missing=()
           for vercel_name in "${!MAPPING[@]}"; do
             gsm_name="${MAPPING[$vercel_name]}"
             echo "Syncing $vercel_name <- gsm:$gsm_name ($TARGET)"
-            value=$(gcloud secrets versions access latest --secret="$gsm_name")
+            # A missing GSM secret skips only this var (leaving any existing
+            # Vercel value untouched) instead of aborting the whole sync.
+            if ! value=$(gcloud secrets versions access latest --secret="$gsm_name" 2>/dev/null); then
+              echo "::warning::Skipped $vercel_name — GSM secret $gsm_name not found"
+              missing+=("$vercel_name <- gsm:$gsm_name")
+              continue
+            fi
             # vercel env add is not idempotent — remove existing first (ignore error
             # if missing), then add.
             vercel env rm "$vercel_name" "$TARGET" --yes --token="$VERCEL_TOKEN" 2>/dev/null || true
@@ -78,5 +85,10 @@ jobs:
           done
 
           echo
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "⚠️  Skipped ${#missing[@]} var(s) whose GSM secret doesn't exist:"
+            printf '   %s\n' "${missing[@]}"
+            echo "Create those secrets in GSM and re-run this workflow to sync them."
+          fi
           echo "✅ Sync complete. Now redeploy the frontend for changes to take effect:"
           echo "   gh workflow run deploy-frontend-prod.yml"
