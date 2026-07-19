@@ -25,6 +25,9 @@ class Caps:
     max_storage_bytes: int
     max_split_sheets_per_month: int
     max_oneclick_runs_per_month: int = 1
+    monthly_credits: int = 0
+    max_works: int = -1
+    included_storage_bytes: int = -1
 
 
 @dataclass
@@ -47,13 +50,14 @@ class Usage:
 @dataclass
 class Entitlements:
     user_id: str
-    tier: Literal["free", "pro"]
+    tier: Literal["free", "pro", "pro_max"]
     status: Literal["active", "canceled", "past_due", "trialing"]
     caps: Caps
     features: Features
     usage: Usage
     has_overrides: bool
     degraded: bool = False
+    credits: "CreditsInfo | None" = None
     # Stripe billing fields — None for free / admin-override-only users
     stripe_subscription_id: str | None = None
     stripe_price_id: str | None = None
@@ -77,6 +81,9 @@ class Entitlements:
                 "maxStorageBytes": self.caps.max_storage_bytes,
                 "maxSplitSheetsPerMonth": self.caps.max_split_sheets_per_month,
                 "maxOneclickRunsPerMonth": self.caps.max_oneclick_runs_per_month,
+                "maxWorks": self.caps.max_works,
+                "includedStorageBytes": self.caps.included_storage_bytes,
+                "monthlyCredits": self.caps.monthly_credits,
             },
             "features": {
                 "zoeEnabled": self.features.zoe_enabled,
@@ -91,6 +98,26 @@ class Entitlements:
                 "oneclickRunsThisPeriod": self.usage.oneclick_runs_this_period,
                 "periodEnd": self.usage.period_end.isoformat(),
             },
+            "credits": (
+                {
+                    "balance": self.credits.balance,
+                    "bundleBalance": self.credits.bundle_balance,
+                    "reserveBalance": self.credits.reserve_balance,
+                    "monthlyGrant": self.credits.monthly_grant,
+                    "overageThisPeriod": self.credits.overage_this_period,
+                    "overageEnabled": self.credits.overage_enabled,
+                    "overageCapCredits": self.credits.overage_cap_credits,
+                    "storageOverageEnabled": self.credits.storage_overage_enabled,
+                    "periodEnd": self.credits.period_end.isoformat() if self.credits.period_end else None,
+                    "prices": {
+                        "zoeMessage": self.credits.prices.get("zoe_message", 0),
+                        "oneclickRun": self.credits.prices.get("oneclick_run", 0),
+                        "registryParse": self.credits.prices.get("registry_parse", 0),
+                    },
+                }
+                if self.credits
+                else None
+            ),
             "hasOverrides": self.has_overrides,
             "degraded": self.degraded,
             "subscription": {
@@ -129,6 +156,7 @@ class Action(StrEnum):
     CREATE_ARTIST = "create_artist"
     CREATE_PROJECT = "create_project"
     CREATE_TASK = "create_task"
+    CREATE_WORK = "create_work"
     UPLOAD_BYTES = "upload_bytes"
     GENERATE_SPLIT_SHEET = "generate_split_sheet"
     USE_ZOE = "use_zoe"
@@ -144,6 +172,61 @@ class CheckResult:
     upgrade_required: bool
 
 
+class CreditAction(StrEnum):
+    """Metered actions that draw down credits. Values ARE the credit_prices keys."""
+
+    ZOE_MESSAGE = "zoe_message"
+    ONECLICK_RUN = "oneclick_run"
+    REGISTRY_PARSE = "registry_parse"
+
+
+@dataclass
+class CreditsInfo:
+    """Wallet state surfaced in Entitlements (spec §6/§7)."""
+
+    bundle_balance: int
+    reserve_balance: int
+    monthly_grant: int
+    overage_this_period: int
+    overage_enabled: bool
+    overage_cap_credits: int | None
+    storage_overage_enabled: bool
+    period_end: datetime | None
+    prices: dict[str, int]
+
+    @property
+    def balance(self) -> int:
+        return self.bundle_balance + self.reserve_balance
+
+
+@dataclass
+class CreditCheckResult:
+    """Outcome of EntitlementsService.check_credits()."""
+
+    allowed: bool
+    price: int
+    reason: str | None = None
+    use_overage: bool = False  # allowed only via opt-in pay-per-use
+    overage_available: bool = False  # paid tier could enable overage to proceed
+    upgrade_required: bool = False  # free tier: upgrade is the unlock
+    reset_date: datetime | None = None
+    degraded: bool = False
+
+
+@dataclass
+class CreditGrant:
+    """Handed from gated_credits() to debit_for_action() at a call site.
+
+    enabled=False → debit_for_action is a no-op (credits disabled / admin bypass).
+    """
+
+    request_id: str
+    action: str
+    price: int
+    kind: Literal["debit", "overage_debit"]
+    enabled: bool
+
+
 class OverridePayload(BaseModel):
     """Sparse override payload for POST /admin/users/{id}/override.
 
@@ -157,6 +240,8 @@ class OverridePayload(BaseModel):
     max_tasks: int | None = Field(None, ge=-1)
     max_storage_bytes: int | None = Field(None, ge=-1)
     max_split_sheets_per_month: int | None = Field(None, ge=-1)
+    monthly_credits: int | None = Field(None, ge=0)
+    max_works: int | None = Field(None, ge=-1)
     zoe_enabled: bool | None = None
     oneclick_enabled: bool | None = None
     registry_enabled: bool | None = None

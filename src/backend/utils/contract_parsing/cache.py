@@ -72,6 +72,7 @@ def get_or_parse(
     *,
     parser: MusicContractParser | None = None,
     bypass: bool = False,
+    on_miss: Callable[[], None] | None = None,
 ) -> ContractData:
     """Return parsed ContractData for a contract, using contract_parse_cache.
 
@@ -88,6 +89,9 @@ def get_or_parse(
         parser: Optional MusicContractParser (constructed if omitted).
         bypass: If True, ignore any cached entry but still write the fresh result back.
             Reserved for a future explicit re-parse flag; NOT wired to force_recalculate.
+        on_miss: Optional observer invoked when a live LLM parse is about to happen
+            (genuine cache miss, cache-read failure, or bypass=True). Lets callers
+            meter/charge for real parses only — cache hits never invoke it.
 
     Cache I/O is best-effort: a read or write failure never propagates — the caller always
     gets a valid ContractData (falling back to a live parse).
@@ -117,6 +121,13 @@ def get_or_parse(
                 return deserialize_contract_data(hit.data["parsed"])
         except Exception:
             logger.exception("parse cache read failed; falling back to live parse")
+
+    # Cache missed (or was bypassed / unreadable): a live LLM parse happens next.
+    if on_miss is not None:
+        try:
+            on_miss()
+        except Exception:
+            pass  # observer must never break the parse
 
     parser = parser or MusicContractParser()
     contract_data = parser.parse_contract(full_text=full_text)

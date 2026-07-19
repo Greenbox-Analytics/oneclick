@@ -1,6 +1,6 @@
 """EntitlementsService — single chokepoint for tier/cap/feature checks.
 
-Reads four tables on every request (no cache; see spec §3.1 / §4.1 #4).
+Reads four tables on every request (six when CREDITS_ENABLED) (no cache; see spec §3.1 / §4.1 #4).
 Per-field override merge with integrations_allowed replace-semantics.
 Lazy period rollover and the can() chokepoint are added in Tasks 4 and 5.
 """
@@ -32,6 +32,16 @@ def _bypass_paywalls_enabled() -> bool:
     return os.getenv("BYPASS_PAYWALLS", "").strip().lower() == "true"
 
 
+def credits_enabled() -> bool:
+    """True when the credits system is live (CREDITS_ENABLED env var).
+
+    Flag retirement is CODE-LEVEL (spec §9): when on, zoe/oneclick/registry
+    feature flags resolve true for every tier; stored values are never
+    mutated so flipping this off restores legacy gating exactly.
+    """
+    return os.getenv("CREDITS_ENABLED", "").strip().lower() == "true"
+
+
 def _patch_for_max_pro(ent: Entitlements) -> Entitlements:
     """Return a copy of *ent* with all caps set to -1 (unlimited) and all features enabled.
 
@@ -45,6 +55,11 @@ def _patch_for_max_pro(ent: Entitlements) -> Entitlements:
         max_storage_bytes=-1,
         max_split_sheets_per_month=-1,
         max_oneclick_runs_per_month=-1,
+        # -1 = unlimited, consistent with every other cap sentinel; never used
+        # as a wallet grant (grant is hoisted pre-patch in get_for_user).
+        monthly_credits=-1,
+        max_works=-1,
+        included_storage_bytes=-1,
     )
     max_features = Features(
         zoe_enabled=True,
@@ -88,6 +103,16 @@ class EntitlementsService:
 
         caps, features, has_overrides = self._merge(tier_row, override)
 
+        # Code-level flag retirement (spec §9): under CREDITS_ENABLED the credit
+        # balance IS the AI gate; stored flags are preserved untouched as the
+        # rollback path.
+        if credits_enabled():
+            features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
+
+        # captured BEFORE any admin/bypass caps patch — the wallet grant must
+        # always be the tier's real grant, never a patched sentinel.
+        merged_monthly_grant = caps.monthly_credits
+
         # Admin = implicit Pro. Admins (profiles.is_admin=True) get unlimited
         # caps + all features regardless of subscription tier or override state.
         # Cleaner than maintaining a synthetic 'admin' tier_overrides row that
@@ -107,6 +132,11 @@ class EntitlementsService:
                 max_storage_bytes=-1,
                 max_split_sheets_per_month=-1,
                 max_oneclick_runs_per_month=-1,
+                # -1 = unlimited, consistent with every other cap sentinel; never
+                # used as a wallet grant (grant is hoisted pre-patch above).
+                monthly_credits=-1,
+                max_works=-1,
+                included_storage_bytes=-1,
             )
             features = Features(
                 zoe_enabled=True,
@@ -123,6 +153,24 @@ class EntitlementsService:
             period_end=_parse_iso(usage_row["period_end"]),
         )
 
+        credits_info = None
+        if credits_enabled():
+            from subscriptions.models import CreditsInfo
+
+            wallet = self._read_or_create_wallet(user_id)
+            wallet = self._maybe_rollover_wallet(wallet, merged_monthly_grant)
+            credits_info = CreditsInfo(
+                bundle_balance=wallet.get("bundle_balance", 0),
+                reserve_balance=wallet.get("reserve_balance", 0),
+                monthly_grant=merged_monthly_grant,
+                overage_this_period=wallet.get("overage_this_period", 0),
+                overage_enabled=bool(sub.get("overage_enabled", False)),
+                overage_cap_credits=sub.get("overage_cap_credits"),
+                storage_overage_enabled=bool(sub.get("storage_overage_enabled", False)),
+                period_end=_parse_iso(wallet.get("period_end")),
+                prices=self._get_credit_prices(),
+            )
+
         ent = Entitlements(
             user_id=user_id,
             tier=sub["tier"],
@@ -131,6 +179,7 @@ class EntitlementsService:
             features=features,
             usage=usage,
             has_overrides=has_overrides,
+            credits=credits_info,
             stripe_subscription_id=sub.get("stripe_subscription_id"),
             stripe_price_id=sub.get("stripe_price_id"),
             current_period_end=_parse_iso(sub.get("current_period_end")),
@@ -213,6 +262,84 @@ class EntitlementsService:
             }
         )
 
+    def _read_or_create_wallet(self, user_id: str) -> dict:
+        res = (
+            self.supabase.table("credit_wallets").select("*").eq("owner_type", "user").eq("owner_id", user_id).execute()
+        )
+        if res.data:
+            return res.data[0]
+        now = datetime.now(UTC)
+        # period_end = now: the caller's _maybe_rollover_wallet fires immediately
+        # and grants the tier's monthly credits (same seeding trick as the
+        # migration's trigger/backfill — no wallet ever starts un-granted).
+        self.supabase.table("credit_wallets").upsert(
+            {
+                "owner_type": "user",
+                "owner_id": user_id,
+                "period_start": (now - relativedelta(months=1)).isoformat(),
+                "period_end": now.isoformat(),
+            },
+            on_conflict="owner_type,owner_id",
+        ).execute()
+        res = (
+            self.supabase.table("credit_wallets").select("*").eq("owner_type", "user").eq("owner_id", user_id).execute()
+        )
+        return (
+            res.data[0]
+            if res.data
+            else {
+                "id": None,
+                "owner_type": "user",
+                "owner_id": user_id,
+                "bundle_balance": 0,
+                "reserve_balance": 0,
+                "overage_this_period": 0,
+                "period_start": (now - relativedelta(months=1)).isoformat(),
+                "period_end": now.isoformat(),
+            }
+        )
+
+    def _get_credit_prices(self) -> dict[str, int]:
+        res = self.supabase.table("credit_prices").select("*").execute()
+        return {row["action"]: row["credits"] for row in (res.data or [])}
+
+    def _maybe_rollover_wallet(self, wallet: dict, monthly_grant: int) -> dict:
+        """Lazy monthly rollover: advance period (month steps), expire bundle, grant.
+
+        NOTE: the boundary operators are DELIBERATELY flipped versus
+        _maybe_rollover_period (guard `period_end > now` here vs `>= now` there;
+        month-step loop `<= now` here vs `< now` there). Wallets are seeded with
+        period_end = now() exactly, so an exactly-now bound must roll (and the
+        loop must still advance it) for the seed-grant to fire on first read.
+        Do NOT "fix" this asymmetry. The RPC is race-guarded (period must have
+        actually ended AND new bound must advance it), so concurrent racers
+        converge and clock-skewed callers can't double-roll.
+        """
+        period_end = _parse_iso(wallet.get("period_end"))
+        now = datetime.now(UTC)
+        if wallet.get("id") is None or period_end is None or period_end > now:
+            return wallet
+        new_period_end = period_end
+        while new_period_end <= now:
+            new_period_end = new_period_end + relativedelta(months=1)
+        new_period_start = new_period_end - relativedelta(months=1)
+        try:
+            self.supabase.rpc(
+                "rollover_wallet",
+                {
+                    "p_wallet_id": wallet["id"],
+                    "p_monthly_grant": monthly_grant,
+                    "p_new_period_start": new_period_start.isoformat(),
+                    "p_new_period_end": new_period_end.isoformat(),
+                },
+            ).execute()
+        except Exception:
+            import logging
+
+            logging.exception("rollover_wallet failed wallet=%s", wallet.get("id"))
+        res = self.supabase.table("credit_wallets").select("*").eq("id", wallet["id"]).execute()
+        return res.data[0] if res.data else wallet
+
     # -----------------------------------------------------------------------
     # Lazy period rollover (race-fixed)
     # -----------------------------------------------------------------------
@@ -271,6 +398,11 @@ class EntitlementsService:
                 return override[field]
             return tier_row[field]
 
+        def pick_default(field: str, default):
+            if override is not None and override.get(field) is not None:
+                return override[field]
+            return tier_row.get(field, default)
+
         caps = Caps(
             max_artists=pick("max_artists"),
             max_projects=pick("max_projects"),
@@ -278,6 +410,9 @@ class EntitlementsService:
             max_storage_bytes=pick("max_storage_bytes"),
             max_split_sheets_per_month=pick("max_split_sheets_per_month"),
             max_oneclick_runs_per_month=pick("max_oneclick_runs_per_month"),
+            monthly_credits=pick_default("monthly_credits", 0),
+            max_works=pick_default("max_works", -1),
+            included_storage_bytes=pick_default("included_storage_bytes", -1),
         )
         features = Features(
             zoe_enabled=pick("zoe_enabled"),
@@ -320,6 +455,9 @@ class EntitlementsService:
         if action == Action.CREATE_TASK:
             return self._check_count_cap(ctx.get("current_count", 0), ent.caps.max_tasks, "tasks")
 
+        if action == Action.CREATE_WORK:
+            return self._check_count_cap(ctx.get("current_count", 0), ent.caps.max_works, "registered works")
+
         if action == Action.GENERATE_SPLIT_SHEET:
             cap = ent.caps.max_split_sheets_per_month
             if cap == -1:
@@ -335,13 +473,23 @@ class EntitlementsService:
             if host_user_id and host_user_id != user_id:
                 owner_ent = self.get_for_user(host_user_id)
             cap = owner_ent.caps.max_storage_bytes
-            if cap == -1:
-                return allow()
-            if owner_ent.usage.total_storage_bytes + size > cap:
+            projected = owner_ent.usage.total_storage_bytes + size
+            if cap != -1 and projected > cap:
                 return deny(
                     f"Upload would exceed the project owner's storage limit "
                     f"({owner_ent.usage.total_storage_bytes} + {size} > {cap} bytes)."
                 )
+            # Credits model: paid tiers have unlimited hard cap (-1) but an
+            # included allowance; past it, uploads need storage pay-per-use
+            # opt-in (spec §5). Existing files are never touched.
+            if credits_enabled() and owner_ent.tier in self.PAID_TIERS:
+                included = owner_ent.caps.included_storage_bytes
+                storage_ok = owner_ent.credits.storage_overage_enabled if owner_ent.credits else False
+                if included != -1 and projected > included and not storage_ok:
+                    return deny(
+                        "This upload goes past the storage included in your plan. "
+                        "Turn on storage pay-per-use in Billing settings to continue."
+                    )
             return allow()
 
         # Feature actions — host-wins
@@ -437,6 +585,248 @@ class EntitlementsService:
             logging.exception("increment_usage failed user_id=%s counter=%s", user_id, counter_name)
 
     # -----------------------------------------------------------------------
+    # Credits: decision + debit (spec §3, §4, §7)
+    # -----------------------------------------------------------------------
+
+    PAID_TIERS = ("pro", "pro_max")
+
+    def check_credits(self, user_id: str, action: str, *, is_admin: bool = False):
+        """Can this user run `action` right now, and at what price?
+
+        Order: bypass/admin → price lookup → wallet balance → opt-in overage →
+        wall. Degraded policy (spec §12): paid fails open (uncharged), free
+        fails closed. NOTE: re-reads tables per call like the rest of this
+        service (no-cache philosophy) — optimization deferred deliberately.
+        """
+        import logging
+
+        from subscriptions.admin_auth import is_db_admin
+        from subscriptions.models import CreditCheckResult
+
+        if not credits_enabled():
+            return CreditCheckResult(allowed=True, price=0)
+        if _bypass_paywalls_enabled() or is_admin or is_db_admin(self.supabase, user_id):
+            # Short-circuit BEFORE wallet read/debit — no ledger rows for admins.
+            return CreditCheckResult(allowed=True, price=0)
+
+        try:
+            sub = self._read_or_create_subscription(user_id)
+        except Exception:
+            # Full outage: the tier is unknowable without the subscription row,
+            # so even genuinely paid users fail CLOSED here — a deliberate
+            # conservative call (spec §12 tension: fail-open is reserved for
+            # KNOWN paid tiers in the degraded handler below).
+            logging.exception("check_credits: subscription read failed user=%s", user_id)
+            return CreditCheckResult(
+                allowed=False,
+                price=0,
+                degraded=True,
+                reason="We couldn't check your plan just now — please try again in a moment.",
+            )
+        tier = sub.get("tier", "free")
+
+        try:
+            prices = self._get_credit_prices()
+        except Exception:
+            logging.exception("check_credits: price read failed user=%s", user_id)
+            prices = None
+        if prices is not None and action not in prices:
+            # Config error (unseeded action), NOT an outage: deny every tier
+            # with honest copy so the gap surfaces in the first QA run instead
+            # of silently leaking COGS (paid) or lying about a retry (free).
+            logging.error("check_credits: no credit price seeded for action %r", action)
+            return CreditCheckResult(
+                allowed=False,
+                price=0,
+                reason="This action isn't set up for credits yet. Please contact support.",
+            )
+
+        try:
+            if prices is None:
+                # A price READ failure (unlike the missing-key config error
+                # above) is an outage — route into the degraded policy below.
+                raise RuntimeError("credit price read failed")
+            price = prices[action]
+            if price <= 0:
+                # Retuned-to-0 actions (or negative drift in seeded data) are
+                # free — never wall a zero-price action behind the balance check.
+                return CreditCheckResult(allowed=True, price=0, reset_date=None)
+            tier_row = self._read_tier_entitlements(tier)
+            if tier_row is None:
+                # Operator misconfig — fail LOUD into the degraded policy
+                # (paid open, free closed) with the wallet untouched, never
+                # a destructive 0-grant rollover. Mirrors get_for_user.
+                raise RuntimeError(f"Missing tier_entitlements row for tier={tier!r}")
+            override = self._read_override(user_id)
+            caps, _, _ = self._merge(tier_row, override)
+            monthly_grant = caps.monthly_credits
+            wallet = self._read_or_create_wallet(user_id)
+            wallet = self._maybe_rollover_wallet(wallet, monthly_grant)
+            balance = wallet.get("bundle_balance", 0) + wallet.get("reserve_balance", 0)
+            reset_date = _parse_iso(wallet.get("period_end"))
+
+            if balance >= price:
+                return CreditCheckResult(allowed=True, price=price, reset_date=reset_date)
+
+            if tier in self.PAID_TIERS:
+                if sub.get("overage_enabled"):
+                    cap = sub.get("overage_cap_credits")
+                    used = wallet.get("overage_this_period", 0)
+                    # Accepted bounded overshoot: N concurrent racers can each
+                    # pass this check before any debit lands, exceeding the cap
+                    # by at most (N-1) x price — same acceptance as the
+                    # balance-drift concurrency policy.
+                    if cap is not None and used + price > cap:
+                        return CreditCheckResult(
+                            allowed=False,
+                            price=price,
+                            reset_date=reset_date,
+                            reason=(
+                                "You've reached your pay-per-use limit for this month. "
+                                "Raise it in Billing settings, or wait for your credits to reset."
+                            ),
+                        )
+                    return CreditCheckResult(allowed=True, price=price, use_overage=True, reset_date=reset_date)
+                return CreditCheckResult(
+                    allowed=False,
+                    price=price,
+                    overage_available=True,
+                    reset_date=reset_date,
+                    reason="You've used your included credits for this month.",
+                )
+
+            return CreditCheckResult(
+                allowed=False,
+                price=price,
+                upgrade_required=True,
+                reset_date=reset_date,
+                reason="You've used this month's credits.",
+            )
+        except Exception:
+            logging.exception("check_credits degraded user=%s action=%s", user_id, action)
+            if tier in self.PAID_TIERS:
+                # Fail open for paying users; the action goes uncharged (accepted).
+                return CreditCheckResult(allowed=True, price=0, degraded=True)
+            return CreditCheckResult(
+                allowed=False,
+                price=0,
+                degraded=True,
+                reason="Credits are temporarily unavailable — please try again in a moment.",
+            )
+
+    def debit_for_action(self, user_id: str, grant) -> None:
+        """Debit a CreditGrant after the action succeeded. Best-effort, never raises.
+
+        NOTE: overage_debit rows are billed OFF the request path — daily
+        sweep creates pending InvoiceItems; invoice.created attaches
+        stragglers to the draft renewal invoice. Never call Stripe here.
+        """
+        import logging
+
+        if grant is None or not grant.enabled or grant.price <= 0:
+            return
+        try:
+            wallet = self._read_or_create_wallet(user_id)
+            if wallet.get("id") is None:
+                return
+            self.supabase.rpc(
+                "debit_credits",
+                {
+                    "p_wallet_id": wallet["id"],
+                    "p_amount": grant.price,
+                    "p_action": grant.action,
+                    "p_request_id": grant.request_id,
+                    "p_kind": grant.kind,
+                    "p_metadata": {},
+                },
+            ).execute()
+        except Exception:
+            logging.exception(
+                "debit_for_action failed user=%s action=%s request=%s",
+                user_id,
+                grant.action,
+                grant.request_id,
+            )
+
+    # -----------------------------------------------------------------------
+    # Per-tool credit usage (Account & Billing usage view)
+    # -----------------------------------------------------------------------
+
+    def get_credit_usage(self, user_id: str) -> dict:
+        """Per-tool credit spend for the current wallet period (Account & Billing usage view).
+
+        Returns {"enabled": False} when credits are off. Otherwise aggregates
+        credit_ledger debit/overage rows since period_start, grouped by action.
+        """
+        if not credits_enabled():
+            return {"enabled": False}
+
+        sub = self._read_or_create_subscription(user_id)
+        tier = sub.get("tier", "free")
+        tier_row = self._read_tier_entitlements(tier)
+        if tier_row is None:
+            raise RuntimeError(f"Missing tier_entitlements row for tier={tier!r}")
+        override = self._read_override(user_id)
+        caps, _, _ = self._merge(tier_row, override)
+        monthly_grant = caps.monthly_credits
+
+        wallet = self._read_or_create_wallet(user_id)
+        wallet = self._maybe_rollover_wallet(wallet, monthly_grant)
+        period_start = wallet.get("period_start")
+        prices = self._get_credit_prices()
+
+        agg: dict[str, dict] = {}
+        if wallet.get("id") is not None and period_start is not None:
+            rows = (
+                self.supabase.table("credit_ledger")
+                .select("action, delta, kind, metadata")
+                .eq("wallet_id", wallet["id"])
+                .gte("created_at", period_start)
+                .in_("kind", ["debit", "overage_debit"])
+                .execute()
+            )
+            for r in rows.data or []:
+                action = r.get("action")
+                if not action:
+                    continue
+                if r.get("kind") == "overage_debit":
+                    amt = (r.get("metadata") or {}).get("credits_billed") or 0
+                else:
+                    amt = -(r.get("delta") or 0)
+                a = agg.setdefault(action, {"count": 0, "spent": 0})
+                a["count"] += 1
+                a["spent"] += amt
+
+        tools = []
+        for action in ("oneclick_run", "registry_parse", "zoe_message"):
+            a = agg.get(action, {"count": 0, "spent": 0})
+            tools.append({"action": action, "price": prices.get(action), "count": a["count"], "spent": a["spent"]})
+
+        bundle = wallet.get("bundle_balance", 0)
+        reserve = wallet.get("reserve_balance", 0)
+        return {
+            "enabled": True,
+            "periodStart": period_start,
+            "periodEnd": wallet.get("period_end"),
+            "monthlyGrant": monthly_grant,
+            "bundleBalance": bundle,
+            "reserveBalance": reserve,
+            "balance": bundle + reserve,
+            "overageThisPeriod": wallet.get("overage_this_period", 0),
+            "tools": tools,
+        }
+
+    def get_credit_usage_safe(self, user_id: str) -> dict:
+        """Never-raises wrapper for the endpoint."""
+        import logging
+
+        try:
+            return self.get_credit_usage(user_id)
+        except Exception:
+            logging.exception("get_credit_usage failed user=%s", user_id)
+            return {"enabled": False}
+
+    # -----------------------------------------------------------------------
     # Bulk-resolve for list endpoints (no period rollover side effects)
     # -----------------------------------------------------------------------
 
@@ -485,6 +875,10 @@ class EntitlementsService:
                     ovr = None
             usage_row = usage_by_uid.get(uid, {})
             caps, features, has_overrides = self._merge(tier_row, ovr)
+            # Code-level flag retirement (spec §9) — keep in lockstep with
+            # get_for_user so bulk resolution can never disagree with it.
+            if credits_enabled():
+                features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
             usage = Usage(
                 total_storage_bytes=usage_row.get("total_storage_bytes", 0),
                 split_sheets_this_period=usage_row.get("split_sheets_this_period", 0),
@@ -549,6 +943,9 @@ class EntitlementsService:
                     max_storage_bytes=1073741824,
                     max_split_sheets_per_month=5,
                     max_oneclick_runs_per_month=1,
+                    monthly_credits=50,
+                    max_works=10,
+                    included_storage_bytes=1073741824,
                 ),
                 features=Features(
                     zoe_enabled=False,

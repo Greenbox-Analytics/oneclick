@@ -373,7 +373,12 @@ const OneClickDocuments = () => {
 
         if (!response.ok) {
             const body = await response.json().catch(() => ({}));
-            throw new Error(body.detail || `Calculation request failed: ${response.status}`);
+            // detail is a string for legacy errors; structured 402s carry an
+            // object with a human-readable `reason`.
+            const message = typeof body.detail === "string"
+                ? body.detail
+                : body.detail?.reason ?? `Calculation request failed: ${response.status}`;
+            throw new Error(message);
         }
 
         const reader = response.body?.getReader();

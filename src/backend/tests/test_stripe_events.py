@@ -89,10 +89,25 @@ class TestHandleCheckoutSessionCompleted:
 
 
 class TestHandleSubscriptionUpdated:
-    def test_syncs_status_and_period_without_tier(self):
+    def test_syncs_status_period_and_tier(self, monkeypatch):
+        """Task 11: tier IS now synced here — portal-driven Pro<->Pro Max switches
+        surface via this event. This deliberately supersedes the old "never touch
+        tier" isolation (checkout.session.completed and subscription.deleted are no
+        longer the only tier-mutating events). Gated behind CREDITS_ENABLED (see
+        test_credits_off_does_not_sync_tier for the rollback path)."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions import stripe_events
 
         sb = _mock_supabase()
+        # This bare mock's .table() ignores the table name, so every query with
+        # the same .select()/.eq() shape shares one chain — the credit_wallets
+        # read (two chained .eq() calls) is the only one with that exact shape,
+        # so this targets it precisely. Empty data => the upgrade top-up block's
+        # `if wallet_res.data:` short-circuits before doing any real dict
+        # arithmetic on the (unconfigured, non-dict-shaped) mock wallet row.
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[]
+        )
         event = _subscription_event("customer.subscription.updated", status="active", cancel_at_period_end=True)
 
         stripe_events.handle_subscription_updated(event, sb)
@@ -102,8 +117,28 @@ class TestHandleSubscriptionUpdated:
         payload = update_call[0][0]
         assert payload["status"] == "active"
         assert payload["cancel_at_period_end"] is True
-        # tier is NOT in the update payload — only subscription.deleted changes tier
+        # price_id "price_monthly_123" is not a pro_max price → tier resolves to "pro"
+        assert payload["tier"] == "pro"
+
+    def test_credits_off_does_not_sync_tier(self, monkeypatch):
+        """Pins the clean-rollback guarantee: with CREDITS_ENABLED off, tier is
+        NOT included in the update payload (pre-credits behavior), while every
+        other field is still synced exactly as today."""
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        from subscriptions import stripe_events
+
+        sb = _mock_supabase()
+        event = _subscription_event("customer.subscription.updated", status="active", cancel_at_period_end=True)
+
+        stripe_events.handle_subscription_updated(event, sb)
+
+        update_call = sb.table("subscriptions").update.call_args
+        payload = update_call[0][0]
         assert "tier" not in payload
+        assert payload["status"] == "active"
+        assert payload["cancel_at_period_end"] is True
+        assert payload["current_period_start"] is not None
+        assert payload["current_period_end"] is not None
 
     def test_no_op_when_user_id_missing(self):
         from subscriptions import stripe_events

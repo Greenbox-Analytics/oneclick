@@ -33,6 +33,7 @@ from openai import OpenAI
 from knowledge.reference_search import search_reference
 from utils.ingestion.pdf_markdown import strip_page_markers
 from utils.ingestion.tables import detect_and_extract_tables, linearize_table
+from utils.llm.tracking import TrackedOpenAI
 from utils.text.normalize import normalize_name
 
 # Configure logging
@@ -508,7 +509,7 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env file")
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None)
+openai_client = TrackedOpenAI(OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None))
 
 # Configuration
 DEFAULT_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")  # Updated to stable model

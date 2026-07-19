@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,16 @@ class CreateTesterGrantRequest(BaseModel):
     email: EmailStr
     expires_at: str | None = None
     reason: str = "tester"
+
+
+class CreditGrantPayload(BaseModel):
+    # le ceiling is a fat-finger guard: there's no admin revoke/debit endpoint yet,
+    # so an over-grant (e.g. an extra zero) is otherwise uncorrectable in-app.
+    amount: int = Field(gt=0, le=1_000_000)
+    reason: str
+    # Client-supplied stable key per user-initiated grant action so a retry /
+    # double-submit dedupes at the RPC; two deliberate grants use different keys.
+    idempotency_key: str | None = None
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -233,3 +243,37 @@ async def revoke_tester_grant(
 ) -> Response:
     _get_admin_service().revoke_tester_grant(user_id)
     return Response(status_code=204)
+
+
+@router.post("/users/{target_user_id}/credits/grant")
+async def admin_grant_credits(
+    target_user_id: str,
+    body: CreditGrantPayload,
+    admin_email: str = Depends(require_admin),
+):
+    from main import get_supabase_client
+    from subscriptions.admin_service import grant_user_credits
+
+    try:
+        result = grant_user_credits(
+            get_supabase_client(),
+            target_user_id,
+            body.amount,
+            body.reason,
+            admin_email,
+            request_id=body.idempotency_key,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"granted": body.amount, "result": result}
+
+
+@router.get("/users/{target_user_id}/credits/ledger")
+async def admin_credit_ledger(
+    target_user_id: str,
+    _admin: str = Depends(require_admin),
+):
+    from main import get_supabase_client
+    from subscriptions.admin_service import get_user_credit_ledger
+
+    return {"entries": get_user_credit_ledger(get_supabase_client(), target_user_id)}

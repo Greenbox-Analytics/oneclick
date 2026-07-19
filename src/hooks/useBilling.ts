@@ -1,5 +1,6 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, API_URL } from "@/lib/apiFetch";
+import { useAuth } from "@/contexts/AuthContext";
 
 /**
  * Create a Stripe Checkout Session and return the URL to redirect the user to.
@@ -42,6 +43,32 @@ export function useCreatePortalSession() {
         method: "POST",
       });
       return (res as { url: string }).url;
+    },
+  });
+}
+
+/**
+ * Toggle pay-per-use overage opt-in (credits system). Sparse update — only the
+ * fields you pass are written. Invalidates entitlements so the new state shows.
+ * Backend 400s if a free-tier user tries to ENABLE credit overage.
+ */
+export interface BillingPrefs {
+  overage_enabled?: boolean;
+  overage_cap_credits?: number | null;
+  storage_overage_enabled?: boolean;
+}
+
+export function useSetBillingPrefs() {
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  return useMutation<unknown, Error, BillingPrefs>({
+    mutationFn: async (prefs) =>
+      apiFetch(`${API_URL}/me/billing-prefs`, {
+        method: "POST",
+        body: JSON.stringify(prefs),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["entitlements", user?.id] });
     },
   });
 }

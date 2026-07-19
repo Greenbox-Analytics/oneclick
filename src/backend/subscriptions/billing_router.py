@@ -40,12 +40,16 @@ async def create_checkout_session(
     email: str = Depends(get_current_user_email),
 ):
     """Create a Stripe Checkout session for the requested plan; return redirect URL."""
-    if body.plan == "monthly":
-        price_id = os.environ["STRIPE_PRICE_MONTHLY"]
-    elif body.plan == "annual":
-        price_id = os.environ["STRIPE_PRICE_ANNUAL"]
-    else:
+    PLAN_TO_ENV = {
+        "monthly": "STRIPE_PRICE_MONTHLY",
+        "annual": "STRIPE_PRICE_ANNUAL",
+        "pro_max_monthly": "STRIPE_PRICE_PRO_MAX_MONTHLY",
+        "pro_max_annual": "STRIPE_PRICE_PRO_MAX_ANNUAL",
+    }
+    env_key = PLAN_TO_ENV.get(body.plan)
+    if env_key is None:
         raise HTTPException(status_code=400, detail=f"Invalid plan: {body.plan}")
+    price_id = os.environ[env_key]
 
     frontend_url = os.environ["FRONTEND_URL"]
     success_path = _safe_return_path(

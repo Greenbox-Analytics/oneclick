@@ -48,7 +48,15 @@ export function useParseContractSplits() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new ApiError(body.detail || `Request failed: ${res.status}`, res.status);
+        // detail is a string for legacy errors; structured 402s carry an
+        // object with a human-readable `reason`.
+        const message =
+          typeof body.detail === "string"
+            ? body.detail
+            : body.detail?.reason ?? `Request failed: ${res.status}`;
+        const err = new ApiError(message, res.status);
+        err.detail = body.detail;
+        throw err;
       }
       return res.json();
     },

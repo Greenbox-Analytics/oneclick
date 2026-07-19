@@ -38,8 +38,10 @@ from registry.models import (
     WorkRoleUpdate,
     WorkUpdate,
 )
-from subscriptions.enforcement import gated_feature
-from subscriptions.models import Action
+from subscriptions.enforcement import gated_create, gated_credits, gated_feature
+from subscriptions.models import Action, CreditAction
+from subscriptions.service import credits_enabled
+from utils.llm.tracking import set_llm_context
 
 router = APIRouter()
 
@@ -120,6 +122,13 @@ def _raise_503_if_schema_stale(e: APIError) -> None:
 @router.post("/works")
 async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
+    # max_works ships with the credits launch (spec: everything behind
+    # CREDITS_ENABLED); the migration seeds the cap but it must not bite
+    # before the flag flips.
+    if credits_enabled():
+        # SP3/credits: per-tier max_works cap — 402 when the user is at the limit.
+        count_res = _get_supabase().table("works_registry").select("id", count="exact").eq("user_id", user_id).execute()
+        gated_create(user_id, "work", count_res.count or 0)
     data = body.model_dump(exclude_none=True)
     if "release_date" in data and data["release_date"]:
         data["release_date"] = data["release_date"].isoformat()
@@ -1102,6 +1111,8 @@ async def parse_contract_splits(
     and the frontend prompts the user to enter their own split manually.
     """
     gated_feature(user_id, Action.USE_REGISTRY)
+    # SP3/credits: gate the contract parse; 402 for users without access or credits.
+    parse_grant = gated_credits(user_id, CreditAction.REGISTRY_PARSE)
 
     import os
     import tempfile
@@ -1167,13 +1178,20 @@ async def parse_contract_splits(
                     pass
 
     try:
-        # Route through the shared parse cache so this Add-Work parse is cached and
-        # canonicalized (marker-stripped) like every other contract parse.
-        contract_data = get_or_parse(_get_supabase(), _load_text)
-        result = contract_splits.parse_royalty_splits(
-            contract_data=contract_data,
-            main_artist_name=main_artist_name or "",
-        )
+        with set_llm_context(user_id, "registry"):
+            # Route through the shared parse cache so this Add-Work parse is cached and
+            # canonicalized (marker-stripped) like every other contract parse.
+            cache_missed = {"v": False}
+            contract_data = get_or_parse(_get_supabase(), _load_text, on_miss=lambda: cache_missed.update(v=True))
+            result = contract_splits.parse_royalty_splits(
+                contract_data=contract_data,
+                main_artist_name=main_artist_name or "",
+            )
+        # Charge only when a real LLM parse happened — cache hits are free (spec §3).
+        if cache_missed["v"]:
+            from subscriptions.deps import _get_entitlements_service
+
+            _get_entitlements_service().debit_for_action(user_id, parse_grant)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

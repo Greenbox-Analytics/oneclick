@@ -2,7 +2,7 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
-export type Tier = "free" | "pro";
+export type Tier = "free" | "pro" | "pro_max";
 export type SubscriptionStatus = "active" | "canceled" | "past_due" | "trialing";
 
 export interface EntitlementCaps {
@@ -12,6 +12,39 @@ export interface EntitlementCaps {
   maxStorageBytes: number;
   maxSplitSheetsPerMonth: number;
   maxOneclickRunsPerMonth: number;
+  /** Credits system (present when the backend has the columns). */
+  maxWorks?: number;
+  includedStorageBytes?: number;
+  monthlyCredits?: number;
+}
+
+/** Per-action credit prices (backend `credit_prices`, camelCase). */
+export interface CreditPrices {
+  zoeMessage: number;
+  oneclickRun: number;
+  registryParse: number;
+}
+
+/**
+ * Wallet state — present only when CREDITS_ENABLED is on (else `credits` is null).
+ * Shape mirrors the backend Entitlements.to_dict()["credits"] block.
+ */
+export interface EntitlementCredits {
+  /** Spendable = bundleBalance + reserveBalance. */
+  balance: number;
+  /** Monthly grant remainder; expires at period rollover. */
+  bundleBalance: number;
+  /** Admin grants; never expire. */
+  reserveBalance: number;
+  /** This tier's monthly credit grant. */
+  monthlyGrant: number;
+  overageThisPeriod: number;
+  overageEnabled: boolean;
+  overageCapCredits: number | null;
+  storageOverageEnabled: boolean;
+  /** ISO timestamp when the credit period resets. */
+  periodEnd: string | null;
+  prices: CreditPrices;
 }
 
 export interface EntitlementFeatures {
@@ -54,6 +87,8 @@ export interface Entitlements {
   degraded: boolean;
   /** Stripe billing details — always present; fields are null for free users. */
   subscription: EntitlementSubscription;
+  /** Credit wallet — null unless CREDITS_ENABLED is on. */
+  credits?: EntitlementCredits | null;
 }
 
 /**

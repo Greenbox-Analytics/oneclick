@@ -194,6 +194,8 @@ class AdminService:
             "max_tasks",
             "max_storage_bytes",
             "max_split_sheets_per_month",
+            "monthly_credits",
+            "max_works",
             "zoe_enabled",
             "oneclick_enabled",
             "registry_enabled",
@@ -394,3 +396,59 @@ class AdminService:
         except Exception as exc:
             logger.warning("get_email_for_user_id lookup failed for %s: %s", user_id, exc)
             return None
+
+
+# ------------------------------------------------------------------
+# Admin credit tooling — manual credit grants + ledger inspection
+# ------------------------------------------------------------------
+
+
+def grant_user_credits(
+    supabase, user_id: str, amount: int, reason: str, granted_by: str, request_id: str | None = None
+) -> dict:
+    """Admin grant → reserve bucket (never expires; spec §6 two-bucket rationale).
+
+    `request_id` is a client-supplied idempotency key. The frontend supplies a
+    stable key per user-initiated grant action, so a retry / double-submit of the
+    SAME action dedupes at the RPC (grant_credits keys on p_request_id) instead of
+    creating a second ledger row. Two DELIBERATE separate grants use different keys
+    and both apply. When None, no dedupe key is passed (each call is distinct).
+
+    NOTE: there is no admin revoke/debit endpoint yet, so an over-grant (e.g. a
+    fat-fingered amount) currently requires a follow-up revoke endpoint or a manual
+    support process to unwind. That companion endpoint is a tracked follow-up.
+    """
+    wallet_res = (
+        supabase.table("credit_wallets").select("id").eq("owner_type", "user").eq("owner_id", user_id).execute()
+    )
+    if not wallet_res.data:
+        raise ValueError("User has no credit wallet")
+    res = supabase.rpc(
+        "grant_credits",
+        {
+            "p_wallet_id": wallet_res.data[0]["id"],
+            "p_amount": amount,
+            "p_kind": "admin_grant",
+            "p_bucket": "reserve",
+            "p_metadata": {"reason": reason, "granted_by": granted_by},
+            "p_request_id": f"admin-grant:{request_id}" if request_id else None,
+        },
+    ).execute()
+    return res.data if isinstance(res.data, dict) else {"granted": amount}
+
+
+def get_user_credit_ledger(supabase, user_id: str, limit: int = 100) -> list[dict]:
+    wallet_res = (
+        supabase.table("credit_wallets").select("id").eq("owner_type", "user").eq("owner_id", user_id).execute()
+    )
+    if not wallet_res.data:
+        return []
+    res = (
+        supabase.table("credit_ledger")
+        .select("*")
+        .eq("wallet_id", wallet_res.data[0]["id"])
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []
