@@ -195,6 +195,10 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
           base={baseCur}
           initialIds={payoutOpen.initialIds}
           onClose={() => setPayoutOpen(null)}
+          onViewDrafts={() => {
+            setPayoutOpen(null);
+            setView("runs");
+          }}
         />
       )}
 
