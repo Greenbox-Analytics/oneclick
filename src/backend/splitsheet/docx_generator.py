@@ -70,8 +70,6 @@ def generate_split_sheet_docx(
     for c in contributors:
         name = c.get("name", "")
         role = c.get("role", "")
-        publisher = c.get("publisher_or_label", "") or ""
-        ipi = c.get("ipi_number", "") or ""
 
         p = doc.add_paragraph()
         run = p.add_run(f"{name}")
@@ -79,11 +77,25 @@ def generate_split_sheet_docx(
         run.font.size = Pt(10)
         run = p.add_run(f' (hereinafter referred to as "{role}")')
         run.font.size = Pt(10)
-        if publisher:
-            run = p.add_run(f", affiliated with {publisher}")
-            run.font.size = Pt(10)
-        if ipi:
-            run = p.add_run(f", IPI/CAE #{ipi}")
+        # IPI and publisher affiliation only apply to the publishing (composition) side.
+        if needs_pub:
+            ipi = c.get("ipi_number", "") or ""
+            if ipi:
+                run = p.add_run(f", IPI/CAE #{ipi}")
+                run.font.size = Pt(10)
+            if c.get("is_published"):
+                publisher_name = c.get("publisher_name", "") or "their publisher"
+                suffix = f", published by {publisher_name}"
+                publisher_ipi = c.get("publisher_ipi", "") or ""
+                if publisher_ipi:
+                    suffix += f" (IPI/CAE #{publisher_ipi})"
+                run = p.add_run(suffix)
+                run.font.size = Pt(10)
+            else:
+                run = p.add_run(", self-published")
+                run.font.size = Pt(10)
+        elif c.get("label"):
+            run = p.add_run(f", {c.get('label')}")
             run.font.size = Pt(10)
 
     doc.add_paragraph()
@@ -119,32 +131,11 @@ def generate_split_sheet_docx(
     for run in heading.runs:
         run.font.color.rgb = brand_color
 
-    def build_royalty_section(royalty_type_label, royalty_type_key, pct_key):
-        # Explicit prose for each party's share
-        p = doc.add_paragraph()
-        run = p.add_run(f"{royalty_type_label} Royalties:")
-        run.bold = True
-        run.font.size = Pt(10)
-        run = p.add_run(
-            f" The parties agree to the following {royalty_type_key.lower()} royalty "
-            f'percentage splits for the work titled "{work_title}":'
-        )
-        run.font.size = Pt(10)
+    def _render_table(headers, body_rows, total_row_values):
+        """Render a styled table: brand header, zebra body rows, bold TOTAL row.
 
-        doc.add_paragraph()
-
-        for c in contributors:
-            name = c.get("name", "")
-            role = c.get("role", "")
-            pct = c.get(pct_key, 0) or 0
-            p = doc.add_paragraph(style="List Bullet")
-            run = p.add_run(f'{name} ("{role}") shall receive {pct:.2f}% of all {royalty_type_key.lower()} royalties.')
-            run.font.size = Pt(10)
-
-        doc.add_paragraph()
-
-        # Table
-        headers = ["Party Name", "Role", f"{royalty_type_label} Royalty %"]
+        `body_rows` and `total_row_values` are lists of already-stringified cells.
+        """
         table = doc.add_table(rows=1, cols=len(headers))
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
         table.style = "Table Grid"
@@ -161,10 +152,8 @@ def generate_split_sheet_docx(
                     run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
             _add_shading(cell, "1A3A2A")
 
-        for idx, c in enumerate(contributors, 1):
-            pct = c.get(pct_key, 0) or 0
+        for idx, values in enumerate(body_rows, 1):
             row = table.add_row()
-            values = [c.get("name", ""), c.get("role", ""), f"{pct:.2f}%"]
             for i, val in enumerate(values):
                 cell = row.cells[i]
                 cell.text = val
@@ -175,10 +164,9 @@ def generate_split_sheet_docx(
                 for cell in row.cells:
                     _add_shading(cell, "F5F5F5")
 
-        total_pct = sum((c.get(pct_key, 0) or 0) for c in contributors)
         total_row = table.add_row()
-        total_row.cells[1].text = "TOTAL"
-        total_row.cells[2].text = f"{total_pct:.2f}%"
+        for i, val in enumerate(total_row_values):
+            total_row.cells[i].text = val
         for cell in total_row.cells:
             for paragraph in cell.paragraphs:
                 for run in paragraph.runs:
@@ -187,11 +175,117 @@ def generate_split_sheet_docx(
 
         doc.add_paragraph()
 
+    def build_publishing_section():
+        """Publishing splits — writer's share and publisher's share per writer."""
+        p = doc.add_paragraph()
+        run = p.add_run("Publishing Royalties:")
+        run.bold = True
+        run.font.size = Pt(10)
+        run = p.add_run(
+            " Publishing income is divided into a writer's share and a publisher's "
+            "share. The parties agree to the following publishing royalty percentage "
+            f'splits for the work titled "{work_title}":'
+        )
+        run.font.size = Pt(10)
+
+        doc.add_paragraph()
+
+        for c in contributors:
+            name = c.get("name", "")
+            p = doc.add_paragraph(style="List Bullet")
+            if c.get("is_published"):
+                writer_pct = c.get("writer_share", 0) or 0
+                publisher_pct = c.get("publisher_share", 0) or 0
+                recipient = c.get("publisher_name", "") or "their publisher"
+                run = p.add_run(
+                    f"{name} shall receive {writer_pct:.2f}% as Writer's Share; "
+                    f"{recipient} shall receive {publisher_pct:.2f}% as Publisher's Share."
+                )
+            else:
+                pub_pct = c.get("publishing_share", 0) or 0
+                run = p.add_run(f"{name} shall receive {pub_pct:.2f}% of all publishing royalties (self-published).")
+            run.font.size = Pt(10)
+
+        doc.add_paragraph()
+
+        body_rows = []
+        writer_total = 0.0
+        publisher_total = 0.0
+        for c in contributors:
+            if c.get("is_published"):
+                writer_pct = c.get("writer_share", 0) or 0
+                publisher_pct = c.get("publisher_share", 0) or 0
+                publisher = c.get("publisher_name", "") or ""
+            else:
+                writer_pct = c.get("publishing_share", 0) or 0
+                publisher_pct = 0
+                publisher = "Self-published"
+            writer_total += writer_pct
+            publisher_total += publisher_pct
+            body_rows.append(
+                [
+                    c.get("name", ""),
+                    c.get("role", ""),
+                    f"{writer_pct:.2f}%",
+                    publisher,
+                    f"{publisher_pct:.2f}%",
+                ]
+            )
+
+        _render_table(
+            ["Writer", "Role", "Writer's Share %", "Publisher", "Publisher's Share %"],
+            body_rows,
+            ["", "TOTAL", f"{writer_total:.2f}%", "", f"{publisher_total:.2f}%"],
+        )
+
+    def build_master_section():
+        """Master splits — sound recording ownership. No IPI, no publisher share."""
+        has_label = any((c.get("label") or "").strip() for c in contributors)
+
+        p = doc.add_paragraph()
+        run = p.add_run("Master Royalties:")
+        run.bold = True
+        run.font.size = Pt(10)
+        run = p.add_run(
+            f' The parties agree to the following master royalty percentage splits for the work titled "{work_title}":'
+        )
+        run.font.size = Pt(10)
+
+        doc.add_paragraph()
+
+        for c in contributors:
+            name = c.get("name", "")
+            role = c.get("role", "")
+            pct = c.get("master_percentage", 0) or 0
+            p = doc.add_paragraph(style="List Bullet")
+            run = p.add_run(f'{name} ("{role}") shall receive {pct:.2f}% of all master royalties.')
+            run.font.size = Pt(10)
+
+        doc.add_paragraph()
+
+        body_rows = []
+        for c in contributors:
+            pct = c.get("master_percentage", 0) or 0
+            if has_label:
+                body_rows.append([c.get("name", ""), c.get("role", ""), c.get("label", "") or "", f"{pct:.2f}%"])
+            else:
+                body_rows.append([c.get("name", ""), c.get("role", ""), f"{pct:.2f}%"])
+
+        total_pct = sum((c.get("master_percentage", 0) or 0) for c in contributors)
+        if has_label:
+            headers = ["Party Name", "Role", "Label / Master Owner", "Master Royalty %"]
+            total_row_values = ["", "TOTAL", "", f"{total_pct:.2f}%"]
+        else:
+            headers = ["Party Name", "Role", "Master Royalty %"]
+            total_row_values = ["", "TOTAL", f"{total_pct:.2f}%"]
+
+        _render_table(headers, body_rows, total_row_values)
+
     if needs_pub:
-        build_royalty_section("Publishing", "Publishing", "publishing_percentage")
+        build_publishing_section()
 
     if needs_master:
-        build_royalty_section("Master", "Master", "master_percentage")
+        build_master_section()
 
     # --- Section 4: Signatures ---
     heading = doc.add_heading("Section 4: Signatures", level=2)

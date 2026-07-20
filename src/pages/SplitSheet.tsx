@@ -57,10 +57,19 @@ interface Contributor {
   id: string;
   name: string;
   role: string;
-  publishingPercentage: string;
+  // Publishing side — composition. publishingShare is the contributor's total slice of
+  // the song's publishing. Self-published writers keep it all; published writers split it
+  // with their publisher per their deal (dealWriterPct = % of that slice the writer keeps),
+  // and the absolute writer/publisher shares are derived from those two numbers.
+  publishingShare: string;
+  dealWriterPct: string; // used when isPublished; defaults to 50 (traditional deal)
+  ipi: string; // writer's IPI/CAE — publishing only
+  isPublished: boolean; // false = self-published
+  publisherName: string;
+  publisherIpi: string;
+  // Master side — sound recording.
   masterPercentage: string;
-  publisherOrLabel: string;
-  ipi: string;
+  label: string; // optional "Label / Master Owner"
 }
 
 interface Artist {
@@ -77,10 +86,14 @@ const createEmptyContributor = (): Contributor => ({
   id: crypto.randomUUID(),
   name: "",
   role: "",
-  publishingPercentage: "",
-  masterPercentage: "",
-  publisherOrLabel: "",
+  publishingShare: "",
+  dealWriterPct: "50",
   ipi: "",
+  isPublished: false,
+  publisherName: "",
+  publisherIpi: "",
+  masterPercentage: "",
+  label: "",
 });
 
 const STEPS = [
@@ -176,9 +189,21 @@ const SplitSheet = () => {
       .finally(() => setLoadingProjects(false));
   }, [selectedArtistId]);
 
-  // Validation
+  const needsPublishing = splitType === "publishing" || splitType === "both";
+  const needsMaster = splitType === "master" || splitType === "both";
+
+  // Publishing derivation: publishingShare is the contributor's total slice of the
+  // song's publishing. For published writers, their deal (dealWriterPct) divides that
+  // slice into an absolute writer's share and publisher's share.
+  const dealPct = (c: Contributor) => parseFloat(c.dealWriterPct) || 0;
+  const calcWriterShare = (c: Contributor) =>
+    ((parseFloat(c.publishingShare) || 0) * dealPct(c)) / 100;
+  const calcPublisherShare = (c: Contributor) =>
+    ((parseFloat(c.publishingShare) || 0) * (100 - dealPct(c))) / 100;
+
+  // Running totals — publishing is simply the sum of each contributor's total slice.
   const pubTotal = contributors.reduce(
-    (sum, c) => sum + (parseFloat(c.publishingPercentage) || 0),
+    (sum, c) => sum + (parseFloat(c.publishingShare) || 0),
     0
   );
   const masterTotal = contributors.reduce(
@@ -186,26 +211,33 @@ const SplitSheet = () => {
     0
   );
 
-  const needsPublishing = splitType === "publishing" || splitType === "both";
-  const needsMaster = splitType === "master" || splitType === "both";
-
-  const isPubValid = !needsPublishing || Math.abs(pubTotal - 100) < 0.01;
-  const isMasterValid = !needsMaster || Math.abs(masterTotal - 100) < 0.01;
-  const isValidTotal = isPubValid && isMasterValid;
+  // Tolerance matches the displayed precision (one decimal): any total that rounds to
+  // 100.0% counts as exactly 100 — e.g. six shares of 16.67 (100.02) is treated as 100,
+  // never flagged as "over" while displaying 100.0%.
+  const isPubValid = !needsPublishing || Math.abs(pubTotal - 100) < 0.05;
+  const isMasterValid = !needsMaster || Math.abs(masterTotal - 100) < 0.05;
+  // Totals over 100% are impossible splits — these block advancing. Under 100% is
+  // allowed (soft tip only). A deal split over 100% is equally impossible.
+  const pubOver = needsPublishing && pubTotal - 100 >= 0.05;
+  const masterOver = needsMaster && masterTotal - 100 >= 0.05;
+  const dealOver =
+    needsPublishing && contributors.some((c) => c.isPublished && dealPct(c) > 100);
 
   const allNamesPresent =
     contributors.length > 0 && contributors.every((c) => c.name.trim() !== "");
   const allRolesPresent = contributors.every((c) => c.role !== "");
-  const allPctPresent = contributors.every(
-    (c) =>
-      (!needsPublishing || c.publishingPercentage.trim() !== "") &&
-      (!needsMaster || c.masterPercentage.trim() !== ""),
-  );
 
   const canProceedStep1 = workTitle.trim() !== "" && selectedArtistId !== "";
-  const canProceedStep2 = allNamesPresent && allRolesPresent && allPctPresent && isValidTotal;
+  // Name + role are required so we never emit a blank party. Percentages are optional
+  // (blank → 0); totals under 100% can advance, but over 100% cannot.
+  const canProceedStep2 =
+    allNamesPresent && allRolesPresent && !pubOver && !masterOver && !dealOver;
 
-  const updateContributor = (id: string, field: keyof Contributor, value: string) => {
+  const updateContributor = (
+    id: string,
+    field: keyof Contributor,
+    value: string | boolean
+  ) => {
     setContributors((prev) =>
       prev.map((c) => (c.id === id ? { ...c, [field]: value } : c))
     );
@@ -231,10 +263,15 @@ const SplitSheet = () => {
     contributors: {
       name: string;
       role: string;
-      publishing_percentage: number | null;
-      master_percentage: number | null;
-      publisher_or_label: string | null;
+      publishing_share: number | null;
+      writer_share: number | null;
+      publisher_share: number | null;
       ipi_number: string | null;
+      is_published: boolean;
+      publisher_name: string | null;
+      publisher_ipi: string | null;
+      master_percentage: number | null;
+      label: string | null;
     }[];
   };
 
@@ -285,10 +322,16 @@ const SplitSheet = () => {
       contributors: contributors.map((c) => ({
         name: c.name,
         role: c.role,
-        publishing_percentage: needsPublishing ? parseFloat(c.publishingPercentage) || 0 : null,
+        publishing_share:
+          needsPublishing && !c.isPublished ? parseFloat(c.publishingShare) || 0 : null,
+        writer_share: needsPublishing && c.isPublished ? calcWriterShare(c) : null,
+        publisher_share: needsPublishing && c.isPublished ? calcPublisherShare(c) : null,
+        ipi_number: needsPublishing ? c.ipi || null : null,
+        is_published: needsPublishing ? c.isPublished : false,
+        publisher_name: needsPublishing && c.isPublished ? c.publisherName || null : null,
+        publisher_ipi: needsPublishing && c.isPublished ? c.publisherIpi || null : null,
         master_percentage: needsMaster ? parseFloat(c.masterPercentage) || 0 : null,
-        publisher_or_label: c.publisherOrLabel || null,
-        ipi_number: c.ipi || null,
+        label: needsMaster ? c.label || null : null,
       })),
     });
   };
@@ -541,12 +584,28 @@ const SplitSheet = () => {
                   <span>Contributors</span>
                   <div className="flex gap-3 text-xs font-medium">
                     {needsPublishing && (
-                      <span className={isPubValid ? "text-green-600" : "text-red-500"}>
-                        Pub: {pubTotal.toFixed(1)}%
+                      <span
+                        className={
+                          pubOver
+                            ? "text-red-500"
+                            : isPubValid
+                            ? "text-green-600"
+                            : "text-muted-foreground"
+                        }
+                      >
+                        Publishing: {pubTotal.toFixed(1)}%
                       </span>
                     )}
                     {needsMaster && (
-                      <span className={isMasterValid ? "text-green-600" : "text-red-500"}>
+                      <span
+                        className={
+                          masterOver
+                            ? "text-red-500"
+                            : isMasterValid
+                            ? "text-green-600"
+                            : "text-muted-foreground"
+                        }
+                      >
                         Master: {masterTotal.toFixed(1)}%
                       </span>
                     )}
@@ -589,51 +648,146 @@ const SplitSheet = () => {
                       </Select>
                     </div>
 
-                    <div className={`grid gap-2 ${splitType === "both" ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
-                      {needsPublishing && (
-                        <Input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          required
-                          placeholder={splitType === "both" ? "Publishing % *" : "Ownership % *"}
-                          value={c.publishingPercentage}
-                          onChange={(e) =>
-                            updateContributor(c.id, "publishingPercentage", e.target.value)
-                          }
-                        />
-                      )}
-                      {needsMaster && (
-                        <Input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          required
-                          placeholder={splitType === "both" ? "Master % *" : "Ownership % *"}
-                          value={c.masterPercentage}
-                          onChange={(e) =>
-                            updateContributor(c.id, "masterPercentage", e.target.value)
-                          }
-                        />
-                      )}
-                    </div>
+                    {/* Master section — sound recording. No IPI, no publisher. */}
+                    {needsMaster && (
+                      <div className="rounded-md border border-border/70 bg-muted/30 p-2.5 space-y-2">
+                        {splitType === "both" && (
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            Master (Recording)
+                          </span>
+                        )}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <Input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.01"
+                            placeholder="Master %"
+                            value={c.masterPercentage}
+                            onChange={(e) =>
+                              updateContributor(c.id, "masterPercentage", e.target.value)
+                            }
+                          />
+                          <Input
+                            placeholder="Label / Master Owner"
+                            value={c.label}
+                            onChange={(e) => updateContributor(c.id, "label", e.target.value)}
+                            className="text-sm"
+                          />
+                        </div>
+                      </div>
+                    )}
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <Input
-                        placeholder="Publisher / Label"
-                        value={c.publisherOrLabel}
-                        onChange={(e) => updateContributor(c.id, "publisherOrLabel", e.target.value)}
-                        className="text-sm"
-                      />
-                      <Input
-                        placeholder="IPI / CAE #"
-                        value={c.ipi}
-                        onChange={(e) => updateContributor(c.id, "ipi", e.target.value)}
-                        className="text-sm"
-                      />
-                    </div>
+                    {/* Publishing section — composition. */}
+                    {needsPublishing && (
+                      <div className="rounded-md border border-border/70 bg-muted/30 p-2.5 space-y-2">
+                        {splitType === "both" && (
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            Publishing (Composition)
+                          </span>
+                        )}
+
+                        {/* Publishing status — gates the writer/publisher split */}
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                            Publishing status
+                          </label>
+                          <Select
+                            value={c.isPublished ? "published" : "self"}
+                            onValueChange={(val) =>
+                              updateContributor(c.id, "isPublished", val === "published")
+                            }
+                          >
+                            <SelectTrigger><SelectValue placeholder="Publishing status" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="self">Self-published</SelectItem>
+                              <SelectItem value="published">Published</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {!c.isPublished ? (
+                          <Input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.01"
+                            placeholder="Publishing %"
+                            value={c.publishingShare}
+                            onChange={(e) =>
+                              updateContributor(c.id, "publishingShare", e.target.value)
+                            }
+                          />
+                        ) : (
+                          <>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                                  Total Publishing %
+                                </label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="0.01"
+                                  placeholder="e.g. 50"
+                                  value={c.publishingShare}
+                                  onChange={(e) =>
+                                    updateContributor(c.id, "publishingShare", e.target.value)
+                                  }
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                                  Writer keeps % (per your deal)
+                                </label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="0.01"
+                                  placeholder="e.g. 50"
+                                  value={c.dealWriterPct}
+                                  onChange={(e) =>
+                                    updateContributor(c.id, "dealWriterPct", e.target.value)
+                                  }
+                                />
+                              </div>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {dealPct(c) <= 100
+                                ? `Publisher gets ${(100 - dealPct(c)).toFixed(0)}% of the deal → Writer's Share: ${calcWriterShare(c).toFixed(2)}% · Publisher's Share: ${calcPublisherShare(c).toFixed(2)}%`
+                                : "Writer's deal split can't exceed 100%"}
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <Input
+                                placeholder="Publisher Name"
+                                value={c.publisherName}
+                                onChange={(e) =>
+                                  updateContributor(c.id, "publisherName", e.target.value)
+                                }
+                                className="text-sm"
+                              />
+                              <Input
+                                placeholder="Publisher IPI / CAE # (optional)"
+                                value={c.publisherIpi}
+                                onChange={(e) =>
+                                  updateContributor(c.id, "publisherIpi", e.target.value)
+                                }
+                                className="text-sm"
+                              />
+                            </div>
+                          </>
+                        )}
+
+                        <Input
+                          placeholder="Writer IPI / CAE # (optional)"
+                          value={c.ipi}
+                          onChange={(e) => updateContributor(c.id, "ipi", e.target.value)}
+                          className="text-sm"
+                        />
+                      </div>
+                    )}
                   </div>
                 ))}
 
@@ -644,20 +798,33 @@ const SplitSheet = () => {
               </CardContent>
             </Card>
 
-            {!canProceedStep2 && (
-              <p className="text-xs text-muted-foreground text-center">
+            {!canProceedStep2 ? (
+              <p className={`text-xs text-center ${pubOver || masterOver || dealOver ? "text-red-500" : "text-muted-foreground"}`}>
                 {!allNamesPresent
                   ? "All contributors need a name"
                   : !allRolesPresent
                   ? "All contributors need a role"
-                  : !allPctPresent
-                  ? "All contributors need a percentage in each active split field"
-                  : !isPubValid
-                  ? `Publishing splits must total 100% (currently ${pubTotal.toFixed(1)}%)`
-                  : !isMasterValid
-                  ? `Master splits must total 100% (currently ${masterTotal.toFixed(1)}%)`
+                  : pubOver
+                  ? `Publishing splits can't exceed 100% (currently ${pubTotal.toFixed(1)}%)`
+                  : masterOver
+                  ? `Master splits can't exceed 100% (currently ${masterTotal.toFixed(1)}%)`
+                  : dealOver
+                  ? "A writer's deal split can't exceed 100%"
                   : ""}
               </p>
+            ) : (
+              (needsPublishing && !isPubValid) || (needsMaster && !isMasterValid) ? (
+                <p className="text-xs text-muted-foreground text-center">
+                  Tip: splits usually total 100%
+                  {needsPublishing && !isPubValid
+                    ? ` — publishing is at ${pubTotal.toFixed(1)}%`
+                    : ""}
+                  {needsMaster && !isMasterValid
+                    ? `${needsPublishing && !isPubValid ? "," : " —"} master is at ${masterTotal.toFixed(1)}%`
+                    : ""}
+                  . You can still continue.
+                </p>
+              ) : null
             )}
 
             <div className="flex justify-between">
@@ -700,15 +867,25 @@ const SplitSheet = () => {
                   {needsPublishing && (
                     <div>
                       <div className="text-xs font-medium text-muted-foreground mb-1.5">
-                        {splitType === "both" ? "Publishing Splits" : "Ownership Splits"}
+                        Publishing Splits
                       </div>
                       {contributors.map((c) => (
-                        <div key={c.id} className="flex justify-between text-sm py-0.5">
-                          <span>
+                        <div key={c.id} className="flex justify-between text-sm py-0.5 gap-2">
+                          <span className="min-w-0 truncate">
                             {c.name} <span className="text-muted-foreground">· {c.role}</span>
+                            <span className="text-muted-foreground">
+                              {" "}·{" "}
+                              {c.isPublished
+                                ? c.publisherName
+                                  ? `Published (${c.publisherName})`
+                                  : "Published"
+                                : "Self-published"}
+                            </span>
                           </span>
-                          <span className="font-medium">
-                            {parseFloat(c.publishingPercentage).toFixed(2)}%
+                          <span className="font-medium whitespace-nowrap">
+                            {c.isPublished
+                              ? `Writer ${calcWriterShare(c).toFixed(2)}% · Pub ${calcPublisherShare(c).toFixed(2)}%`
+                              : `Publishing ${(parseFloat(c.publishingShare) || 0).toFixed(2)}%`}
                           </span>
                         </div>
                       ))}
@@ -717,15 +894,18 @@ const SplitSheet = () => {
                   {needsMaster && (
                     <div>
                       <div className="text-xs font-medium text-muted-foreground mb-1.5">
-                        {splitType === "both" ? "Master Splits" : "Ownership Splits"}
+                        Master Splits
                       </div>
                       {contributors.map((c) => (
-                        <div key={c.id} className="flex justify-between text-sm py-0.5">
-                          <span>
+                        <div key={c.id} className="flex justify-between text-sm py-0.5 gap-2">
+                          <span className="min-w-0 truncate">
                             {c.name} <span className="text-muted-foreground">· {c.role}</span>
+                            {c.label && (
+                              <span className="text-muted-foreground"> · {c.label}</span>
+                            )}
                           </span>
-                          <span className="font-medium">
-                            {parseFloat(c.masterPercentage).toFixed(2)}%
+                          <span className="font-medium whitespace-nowrap">
+                            {(parseFloat(c.masterPercentage) || 0).toFixed(2)}%
                           </span>
                         </div>
                       ))}

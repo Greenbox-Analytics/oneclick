@@ -24,10 +24,19 @@ router = APIRouter()
 class ContributorInput(BaseModel):
     name: str
     role: str
-    publishing_percentage: float | None = None
+    # Publishing side — composition. Publishing income splits into a writer's share
+    # and a publisher's share. A self-published writer keeps both; a published writer
+    # collects the writer's share while their publisher collects the publisher's share.
+    publishing_share: float | None = None  # self-published total (used when not is_published)
+    writer_share: float | None = None
+    publisher_share: float | None = None
+    ipi_number: str | None = None  # writer's IPI/CAE — publishing only
+    is_published: bool = False
+    publisher_name: str | None = None
+    publisher_ipi: str | None = None
+    # Master side — sound recording. No IPI, no publisher share.
     master_percentage: float | None = None
-    publisher_or_label: str | None = None
-    ipi_number: str | None = None
+    label: str | None = None
 
 
 class SplitSheetRequest(BaseModel):

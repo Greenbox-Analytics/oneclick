@@ -3,14 +3,23 @@ name: Sync Vercel env vars from GSM
 # Manual-only. Run this whenever a Vercel-bound secret rotates in GSM.
 # After running, you must redeploy the frontend (Vercel env changes don't
 # auto-trigger a build).
+#
+# There are TWO Vercel projects (see deploy-frontend-prod.yml):
+#   dev  (VERCEL_PROJECT_ID)      — serves the dev site from `main` via Vercel's
+#                                   GitHub integration. Its Production env builds
+#                                   the dev site, Preview builds PR branches —
+#                                   both get _DEV secret values (e.g. sandbox
+#                                   PayPal).
+#   prod (VERCEL_PROD_PROJECT_ID) — deployed by deploy-frontend-prod.yml on tag
+#                                   releases. Production env, _PROD values.
 on:
   workflow_dispatch:
     inputs:
-      target:
-        description: "Vercel environment to sync (production, preview, development)"
+      project:
+        description: "Which Vercel project to sync (dev = site auto-deployed from main, prod = tag releases)"
         type: choice
-        options: [production, preview, development]
-        default: production
+        options: [dev, prod]
+        default: dev
 
 permissions:
   contents: read
@@ -36,47 +45,75 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
+      - name: Debug Vercel auth
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_PROD_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ github.event.inputs.project == 'prod' && secrets.VERCEL_PROD_PROJECT_ID || secrets.VERCEL_PROJECT_ID }}
+        run: |
+          vercel whoami --token="$VERCEL_TOKEN" || echo "::warning::whoami FAILED — token invalid or expired"
+          vercel project ls --token="$VERCEL_TOKEN" 2>&1 | head -25 || echo "::warning::project ls FAILED"
+
       - name: Sync GSM → Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_PROD_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-          TARGET: ${{ github.event.inputs.target }}
+          VERCEL_PROJECT_ID: ${{ github.event.inputs.project == 'prod' && secrets.VERCEL_PROD_PROJECT_ID || secrets.VERCEL_PROJECT_ID }}
+          PROJECT: ${{ github.event.inputs.project }}
         run: |
           set -euo pipefail
 
+          if [[ "$PROJECT" == "prod" ]]; then
+            SUFFIX=_PROD
+            ENVS=(production)
+          else
+            SUFFIX=_DEV
+            ENVS=(production preview)
+          fi
+
           # Map: Vercel env var name <- GSM secret name.
           # Add rows here when a new VITE_ var should come from GSM.
-          # For env-divergent secrets (PostHog), choose the right suffix per Vercel env:
-          # production -> _PROD, preview/development -> _DEV.
           declare -A MAPPING
-          if [[ "$TARGET" == "production" ]]; then
-            MAPPING[VITE_POSTHOG_PROJECT_TOKEN]=VITE_POSTHOG_PROJECT_TOKEN_PROD
-            MAPPING[VITE_POSTHOG_DASHBOARD_URL]=VITE_POSTHOG_DASHBOARD_URL_PROD
-            MAPPING[VITE_APP_ENV]=VITE_APP_ENV_PROD
-            # Public PayPal JS SDK client id — reuses the backend client-id secret.
-            MAPPING[VITE_PAYPAL_CLIENT_ID]=PAYPAL_CLIENT_ID_PROD
-          else
-            MAPPING[VITE_POSTHOG_PROJECT_TOKEN]=VITE_POSTHOG_PROJECT_TOKEN_DEV
-            MAPPING[VITE_POSTHOG_DASHBOARD_URL]=VITE_POSTHOG_DASHBOARD_URL_DEV
-            MAPPING[VITE_APP_ENV]=VITE_APP_ENV_DEV
-            MAPPING[VITE_PAYPAL_CLIENT_ID]=PAYPAL_CLIENT_ID_DEV
-          fi
+          MAPPING[VITE_POSTHOG_PROJECT_TOKEN]=VITE_POSTHOG_PROJECT_TOKEN$SUFFIX
+          MAPPING[VITE_POSTHOG_DASHBOARD_URL]=VITE_POSTHOG_DASHBOARD_URL$SUFFIX
+          MAPPING[VITE_APP_ENV]=VITE_APP_ENV$SUFFIX
+          # Public PayPal JS SDK client id — reuses the backend client-id secret.
+          MAPPING[VITE_PAYPAL_CLIENT_ID]=PAYPAL_CLIENT_ID$SUFFIX
           # Shared secrets (same value across all envs):
           MAPPING[VITE_SUPABASE_URL]=VITE_SUPABASE_URL
           MAPPING[VITE_SUPABASE_ANON_KEY]=VITE_SUPABASE_ANON_KEY
           MAPPING[VITE_POSTHOG_HOST]=VITE_POSTHOG_HOST
 
+          # `vercel env` needs a linked project (.vercel/project.json); pull
+          # creates it from VERCEL_ORG_ID/VERCEL_PROJECT_ID — same pattern as
+          # deploy-frontend-prod.yml.
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+          missing=()
           for vercel_name in "${!MAPPING[@]}"; do
             gsm_name="${MAPPING[$vercel_name]}"
-            echo "Syncing $vercel_name <- gsm:$gsm_name ($TARGET)"
-            value=$(gcloud secrets versions access latest --secret="$gsm_name")
-            # vercel env add is not idempotent — remove existing first (ignore error
-            # if missing), then add.
-            vercel env rm "$vercel_name" "$TARGET" --yes --token="$VERCEL_TOKEN" 2>/dev/null || true
-            printf '%s' "$value" | vercel env add "$vercel_name" "$TARGET" --token="$VERCEL_TOKEN"
+            # A missing GSM secret skips only this var (leaving any existing
+            # Vercel value untouched) instead of aborting the whole sync.
+            if ! value=$(gcloud secrets versions access latest --secret="$gsm_name" 2>/dev/null); then
+              echo "::warning::Skipped $vercel_name — GSM secret $gsm_name not found"
+              missing+=("$vercel_name <- gsm:$gsm_name")
+              continue
+            fi
+            for target in "${ENVS[@]}"; do
+              echo "Syncing $vercel_name <- gsm:$gsm_name ($PROJECT project, $target env)"
+              # vercel env add is not idempotent — remove existing first (ignore
+              # error if missing), then add.
+              vercel env rm "$vercel_name" "$target" --yes --token="$VERCEL_TOKEN" 2>/dev/null || true
+              printf '%s' "$value" | vercel env add "$vercel_name" "$target" --token="$VERCEL_TOKEN"
+            done
           done
 
           echo
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "⚠️  Skipped ${#missing[@]} var(s) whose GSM secret doesn't exist:"
+            printf '   %s\n' "${missing[@]}"
+            echo "Create those secrets in GSM and re-run this workflow to sync them."
+          fi
           echo "✅ Sync complete. Now redeploy the frontend for changes to take effect:"
-          echo "   gh workflow run deploy-frontend-prod.yml"
+          echo "   dev:  redeploy latest main deployment in the Vercel dashboard (or push to main)"
+          echo "   prod: gh workflow run deploy-frontend-prod.yml"
