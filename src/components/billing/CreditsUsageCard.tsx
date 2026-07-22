@@ -2,15 +2,22 @@
 // The "Credits & usage" card from the Account & Billing mockup: a donut ring of
 // remaining credits + a per-tool cost/usage breakdown + a pay-per-use toggle.
 // Renders nothing when the credits system is off (backend `enabled:false`).
-import { Coins } from "lucide-react";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Coins, Plus, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useCreditUsage, type CreditAction } from "@/hooks/useCreditUsage";
+import { useCreditPacks } from "@/hooks/useCreditPacks";
 import { useSetBillingPrefs } from "@/hooks/useBilling";
 import { CreditRing, type RingSegment } from "@/components/billing/CreditRing";
+import { TopUpCreditsDialog } from "@/components/billing/TopUpCreditsDialog";
+import { isPaidTier, tierLabel, ENTERPRISE_LABEL } from "@/lib/tiers";
+import { fmtDate } from "@/lib/utils";
 
 type ToolMeta = { label: string; color: string; note?: string };
 const TOOL_META: Record<CreditAction, ToolMeta> = {
@@ -21,13 +28,6 @@ const TOOL_META: Record<CreditAction, ToolMeta> = {
 // Ring/list order matches the mockup.
 const ORDER: CreditAction[] = ["oneclick_run", "registry_parse", "zoe_message"];
 
-const fmtDate = (iso?: string | null): string => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? "—"
-    : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-};
 const fmtDay = (iso?: string | null): string => {
   if (!iso) return "";
   const d = new Date(iso);
@@ -47,9 +47,68 @@ export function CreditsUsageCard() {
   const { data: usage, isLoading } = useCreditUsage();
   const { data: ent } = useEntitlements();
   const setPrefs = useSetBillingPrefs();
+  const { data: packsData } = useCreditPacks();
+  const [topUpOpen, setTopUpOpen] = useState(false);
+  const navigate = useNavigate();
 
   if (isLoading || !usage) return null;
   if (!usage.enabled) return null; // flag off → no credit surfaces
+
+  // Key org identity off billingContext (present regardless of CREDITS_ENABLED —
+  // Licensing follow-ups Task 3), falling back to credits.managedByOrg for
+  // safety. In practice credits-off + org context never reaches here — the
+  // `usage.enabled` early-return above already hides this card when credits
+  // are off — but this keeps the two signals consistent going forward.
+  const managedByOrg =
+    ent?.billingContext?.type === "org" ? ent.billingContext : ent?.credits?.managedByOrg;
+
+  // Org billing context (Licensing Phase B, spec §5): credits are a seat
+  // allocation from the org's pool, not a personal monthly grant — no pack
+  // picker, no pay-per-use toggle. Seat balance comes straight off
+  // entitlements (context-aware) rather than the per-tool usage breakdown,
+  // which is a personal-wallet concept.
+  if (managedByOrg) {
+    const seatBalance = ent?.credits?.balance ?? 0;
+    return (
+      <Card className="overflow-hidden">
+        <div className="flex items-start justify-between gap-4 px-6 pt-[22px] pb-1.5">
+          <div>
+            <div className="flex items-center gap-2.5 text-[15px] font-semibold">
+              <Coins className="w-[18px] h-[18px] text-muted-foreground" />
+              Credits &amp; usage
+            </div>
+            <div className="text-[13.5px] text-muted-foreground mt-0.5">
+              Your credits from {managedByOrg.orgName}
+            </div>
+          </div>
+          <Badge className="uppercase">{ENTERPRISE_LABEL}</Badge>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 flex-wrap px-6 pt-3.5 pb-[22px]">
+          <div>
+            <div className="text-[32px] font-bold tracking-tight tabular-nums">
+              {seatBalance.toLocaleString()}{" "}
+              <span className="text-sm font-normal text-muted-foreground">credits available</span>
+            </div>
+            <p className="text-[12.5px] text-muted-foreground mt-1 max-w-[420px]">
+              Allocated by your organization. Running low? Ask your admin for more.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 flex-none"
+            onClick={() => navigate("/organization")}
+          >
+            <Send className="w-3.5 h-3.5" />
+            Request more credits
+          </Button>
+        </div>
+      </Card>
+    );
+  }
+
+  const showAddCredits = usage.enabled && (packsData?.packs?.length ?? 0) > 0;
 
   const grant = usage.monthlyGrant ?? 0;
   const bundle = usage.bundleBalance ?? 0;
@@ -86,7 +145,7 @@ export function CreditsUsageCard() {
   }));
 
   const tier = ent?.tier ?? "free";
-  const isPaid = tier === "pro" || tier === "pro_max";
+  const isPaid = isPaidTier(tier);
   const overageOn = ent?.credits?.overageEnabled ?? false;
 
   const toggleOverage = (next: boolean) =>
@@ -111,7 +170,15 @@ export function CreditsUsageCard() {
             Billing period · {fmtDay(usage.periodStart)} – {fmtDate(usage.periodEnd)}
           </div>
         </div>
-        <Badge className="uppercase">{tier === "pro_max" ? "Pro Max" : tier}</Badge>
+        <div className="flex items-center gap-2">
+          {showAddCredits && (
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setTopUpOpen(true)}>
+              <Plus className="w-3.5 h-3.5" />
+              Add credits
+            </Button>
+          )}
+          <Badge className="uppercase">{tierLabel(tier)}</Badge>
+        </div>
       </div>
 
       {/* ring + breakdown */}
@@ -184,6 +251,8 @@ export function CreditsUsageCard() {
           <Switch checked={overageOn} onCheckedChange={toggleOverage} disabled={setPrefs.isPending} />
         </div>
       )}
+
+      <TopUpCreditsDialog open={topUpOpen} onOpenChange={setTopUpOpen} />
     </Card>
   );
 }

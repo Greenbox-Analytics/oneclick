@@ -11,15 +11,21 @@ import { useAuth } from "@/contexts/AuthContext";
  *
  * Optional `cancel_path` / `success_path` let callers route returns to a
  * non-default page (e.g., onboarding). Backend whitelists to relative paths.
+ *
+ * `plan` values map to Stripe prices server-side (billing_router.py
+ * PLAN_TO_ENV): "monthly"/"annual" is the "pro" DB tier (labeled Basic);
+ * "pro_max_monthly"/"pro_max_annual" is the "pro_max" DB tier (labeled Pro).
  */
+export type CheckoutPlan = "monthly" | "annual" | "pro_max_monthly" | "pro_max_annual";
+
 export interface CheckoutArgs {
-  plan: "monthly" | "annual";
+  plan: CheckoutPlan;
   cancel_path?: string;
   success_path?: string;
 }
 
 export function useCreateCheckoutSession() {
-  return useMutation<string, Error, CheckoutArgs | "monthly" | "annual">({
+  return useMutation<string, Error, CheckoutArgs | CheckoutPlan>({
     mutationFn: async (arg) => {
       // Back-compat: callers can still pass just the plan string.
       const body = typeof arg === "string" ? { plan: arg } : arg;

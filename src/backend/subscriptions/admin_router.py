@@ -39,6 +39,16 @@ class CreditGrantPayload(BaseModel):
     idempotency_key: str | None = None
 
 
+class CreditAdjustPayload(BaseModel):
+    # le ceiling mirrors CreditGrantPayload's fat-finger guard.
+    amount: int = Field(gt=0, le=1_000_000)
+    reason: str
+    # REQUIRED (unlike the grant payload's optional key): a double-submitted
+    # clawback removes a real customer's credits twice. Support uses the
+    # Stripe refund/dispute id they already have in hand at this moment.
+    idempotency_key: str = Field(min_length=1)
+
+
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 # Module-level singleton — one AdminService per FastAPI process.
@@ -271,6 +281,36 @@ async def admin_grant_credits(
     return {"granted": body.amount, "result": result}
 
 
+@router.post("/users/{target_user_id}/credits/adjust")
+async def admin_adjust_credits(
+    target_user_id: str,
+    body: CreditAdjustPayload,
+    admin_email: str = Depends(require_admin),
+):
+    """Admin clawback (pack refunds / chargebacks) — see
+    admin_service.adjust_user_credits for full semantics. The ONLY sanctioned
+    way to remove credits; never a hand-written UPDATE against wallet tables.
+    """
+    from main import get_supabase_client
+    from subscriptions.admin_service import adjust_user_credits
+
+    try:
+        result = adjust_user_credits(
+            get_supabase_client(),
+            target_user_id,
+            body.amount,
+            body.reason,
+            admin_email,
+            request_id=body.idempotency_key,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    # Verbatim relay: {removed, shortfall, balance_after} on a fresh
+    # clawback, or {duplicate, balance_after} on a replayed idempotency key —
+    # whatever the RPC reports, not a massaged shape.
+    return {"requested": body.amount, "result": result}
+
+
 @router.get("/users/{target_user_id}/credits/ledger")
 async def admin_credit_ledger(
     target_user_id: str,
@@ -280,3 +320,118 @@ async def admin_credit_ledger(
     from subscriptions.admin_service import get_user_credit_ledger
 
     return {"entries": get_user_credit_ledger(get_supabase_client(), target_user_id)}
+
+
+# ---------------------------------------------------------------------------
+# Platform org suspend/reactivate (Licensing Phase B, spec §4/§5).
+#
+# Deliberately on THIS router, not orgs/router.py: mounting under /orgs would
+# both mangle the path to /orgs/admin/orgs/... AND vanish the moment
+# LICENSING_ENABLED is off — which is exactly when a platform admin may need
+# to suspend an abusive/non-paying org. These two endpoints are therefore
+# flag-INDEPENDENT (no licensing_enabled() gate) and gated only by the
+# PLATFORM require_admin already used by every other endpoint in this file.
+# `organizations.status='suspended'` confers nothing on its own — entitlement
+# resolution already requires status='active' (spec §5) — so suspending an
+# org is just flipping that column; there is no separate enforcement path to
+# wire up here.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/orgs/{org_id}/suspend")
+async def suspend_org(
+    org_id: str,
+    _admin: str = Depends(require_admin),
+) -> dict:
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    res = sb.table("organizations").select("id, status").eq("id", org_id).maybe_single().execute()
+    org = res.data if res else None
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if org.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Only an active org can be suspended")
+    updated = sb.table("organizations").update({"status": "suspended"}).eq("id", org_id).execute()
+    return updated.data[0] if updated.data else {"id": org_id, "status": "suspended"}
+
+
+@router.post("/orgs/{org_id}/reactivate")
+async def reactivate_org(
+    org_id: str,
+    _admin: str = Depends(require_admin),
+) -> dict:
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    res = sb.table("organizations").select("id, status").eq("id", org_id).maybe_single().execute()
+    org = res.data if res else None
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    status = org.get("status")
+    if status == "pending":
+        raise HTTPException(status_code=409, detail="Org has not been activated yet")
+    if status != "suspended":
+        raise HTTPException(status_code=409, detail="Only a suspended org can be reactivated")
+    updated = sb.table("organizations").update({"status": "active"}).eq("id", org_id).execute()
+    return updated.data[0] if updated.data else {"id": org_id, "status": "active"}
+
+
+# ---------------------------------------------------------------------------
+# Archived/live org pool disposition tooling (follow-ups plan 2026-07-22,
+# Task 2). Same placement rationale as suspend/reactivate directly above:
+# PLATFORM require_admin, flag-INDEPENDENT (no licensing_enabled() gate) —
+# support needs to dispose of a pool precisely in cases where licensing may
+# be off/broken, not only in the steady state. Deliberately NO analytics on
+# the clawback (admin support action, not user behavior — same stance as the
+# per-user clawback endpoint above).
+# ---------------------------------------------------------------------------
+
+
+@router.post("/orgs/{org_id}/pool/clawback")
+async def clawback_org_pool(
+    org_id: str,
+    body: CreditAdjustPayload,
+    admin_email: str = Depends(require_admin),
+):
+    """Admin clawback on an org's pool wallet — see
+    admin_service.adjust_org_pool for the full runbook (refund pair /
+    goodwill-migration pair) and the reserve-only completeness invariant.
+    The ONLY sanctioned way to remove credits from an org pool; never a
+    hand-written UPDATE against wallet tables.
+    """
+    from main import get_supabase_client
+    from subscriptions.admin_service import adjust_org_pool
+
+    try:
+        result = adjust_org_pool(
+            get_supabase_client(),
+            org_id,
+            body.amount,
+            body.reason,
+            admin_email,
+            request_id=body.idempotency_key,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    # Verbatim relay: {removed, shortfall, balance_after} on a fresh
+    # clawback, or {duplicate, balance_after} on a replayed idempotency key —
+    # whatever the RPC reports, not a massaged shape.
+    return result
+
+
+@router.get("/orgs/{org_id}/pool")
+async def get_org_pool(
+    org_id: str,
+    _admin: str = Depends(require_admin),
+):
+    """Support visibility into an org's pool BEFORE disposing of it — see
+    admin_service.get_org_pool for the full shape/rationale.
+    """
+    from main import get_supabase_client
+    from subscriptions.admin_service import get_org_pool as _get_org_pool
+
+    try:
+        return _get_org_pool(get_supabase_client(), org_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

@@ -18,7 +18,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 import subscriptions.stripe_client as stripe_client_module
 from subscriptions.overage_billing import bill_pending_overage, invoice_unswept_items
-from subscriptions.service import _parse_iso, credits_enabled
+from subscriptions.service import _parse_iso, credits_enabled, licensing_enabled
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["internal"])
@@ -71,6 +71,7 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     sb = get_supabase_client()
     now = datetime.now(UTC)
     rolled = storage_billed = overage_billed = annual_invoiced = 0
+    storage_grandfathered = seats_topped_up = pool_low = 0
 
     tier_data = _capped(
         sb.table("tier_entitlements").select("tier, monthly_credits, included_storage_bytes"),
@@ -105,6 +106,41 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
             continue
         override_grants[r["user_id"]] = r["monthly_credits"]
 
+    # Licensing rule 13 (storage-billing grandfather): storage is a single
+    # per-user counter that follows a member out of an org seat — an
+    # ex-seat member who accrued hundreds of GB under org context must never
+    # be auto-billed for it in personal context (block-don't-bill; the wall
+    # copy points at support, never "ask your admin"). Any org_members row —
+    # ANY status, including 'removed' — exempts the user, because removal is
+    # a SOFT-remove and the surviving row is exactly the durability marker
+    # rule 13 relies on. Unconditional (not gated on licensing_enabled()):
+    # once the org tables exist, historical org-accrued storage must stay
+    # exempt even if the flag is later toggled off.
+    try:
+        org_member_rows = _capped(
+            sb.table("org_members").select("user_id"),
+            "org_members(storage-grandfather)",
+        )
+        org_member_user_ids = {r["user_id"] for r in org_member_rows if r.get("user_id")}
+    except Exception as exc:
+        # Expected pre-migration state (Phase B review finding 2): deploys are
+        # automatic but the org_members migration
+        # (20260721000001_licensing_core.sql) is applied manually, so a
+        # backend deploy can land before the table exists. This scan is
+        # unconditional (not gated on licensing_enabled()/CREDITS_ENABLED
+        # beyond the early-return above) and was the ONLY step-level DB
+        # access in this sweep with no try/except — an unguarded failure
+        # here aborted the ENTIRE sweep (rollover, storage billing, overage
+        # billing all silently stopped). Fail OPEN on an EMPTY grandfather
+        # set: correct pre-migration, since nobody can have org history yet.
+        # logger.warning (not .exception) — this is anticipated, not a bug.
+        logger.warning(
+            "sweep: org_members scan failed (expected if the licensing migration "
+            "hasn't run yet) — proceeding with an empty storage-grandfather set: %s",
+            exc,
+        )
+        org_member_user_ids: set[str] = set()
+
     # --- 1. Storage overage snapshot — BEFORE rollover, so it's keyed on the
     # period that is about to close. Semantics (spec §5 refined): a monthly
     # charge for current bytes above included, billed once per wallet period.
@@ -112,6 +148,13 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     for sub in paid_subs:
         try:
             if not sub.get("storage_overage_enabled") or not sub.get("stripe_customer_id"):
+                continue
+            if sub["user_id"] in org_member_user_ids:
+                storage_grandfathered += 1
+                logger.info(
+                    "sweep storage billing: user %s grandfathered (holds an org_members row) — never auto-billed",
+                    sub["user_id"],
+                )
                 continue
             usage = sb.table("usage_counters").select("total_storage_bytes").eq("user_id", sub["user_id"]).execute()
             used = usage.data[0]["total_storage_bytes"] if usage.data else 0
@@ -274,9 +317,118 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         except Exception:
             logger.exception("sweep annual invoicing failed user=%s", sub.get("user_id"))
 
+    # --- 5. Default seat allowance (licensing Phase B, spec §4 flow, rule 6):
+    # for every ACTIVE, non-archived org with default_seat_allowance > 0, top
+    # each ACTIVE seat up to the allowance — FULL amount or SKIP. LICENSING_
+    # ENABLED only; the credits-disabled early-return above already covers
+    # the credits gate, so this step only needs its own flag check.
+    if licensing_enabled():
+        month_key = now.strftime("%Y-%m")
+        orgs = _capped(
+            sb.table("organizations")
+            .select("id, default_seat_allowance")
+            .eq("status", "active")
+            .is_("archived_at", "null")
+            .gt("default_seat_allowance", 0),
+            "organizations(allowance)",
+        )
+        for org in orgs:
+            org_id = org["id"]
+            allowance = org.get("default_seat_allowance") or 0
+            if allowance <= 0:
+                continue  # manual-only org (NULL/0) — defensive, query already filters this
+
+            try:
+                pool_rows = (
+                    sb.table("credit_wallets")
+                    .select("id, reserve_balance")
+                    .eq("owner_type", "org")
+                    .eq("owner_id", org_id)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception:
+                logger.exception("sweep allowance: pool wallet read failed org=%s", org_id)
+                continue
+            if not pool_rows:
+                # No purchases yet -> no pool wallet. Not an error; there is
+                # nothing to allocate from.
+                logger.info("sweep allowance: org %s has no pool wallet yet — skipping", org_id)
+                continue
+            pool_wallet_id = pool_rows[0]["id"]
+            # Tracked LOCALLY and decremented after each successful transfer so
+            # one sweep run can't overdraw the pool off a stale read across
+            # several seats (rule: track in-loop pool balance locally).
+            pool_reserve = pool_rows[0].get("reserve_balance") or 0
+
+            members = _capped(
+                sb.table("org_members").select("id").eq("org_id", org_id).eq("status", "active"),
+                "org_members(allowance)",
+            )
+            for member in members:
+                member_id = member["id"]
+                try:
+                    seat_rows = (
+                        sb.table("credit_wallets")
+                        .select("id, bundle_balance, reserve_balance")
+                        .eq("owner_type", "seat")
+                        .eq("owner_id", member_id)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    if not seat_rows:
+                        # Wallet creation is the app layer's job (lazy on first
+                        # org-context read/allocation), not the sweep's — the
+                        # next org-context read creates it and next month's
+                        # sweep tops it up.
+                        logger.info(
+                            "sweep allowance: seat wallet missing for member %s — skipping this month", member_id
+                        )
+                        continue
+                    seat_wallet = seat_rows[0]
+                    seat_balance = (seat_wallet.get("bundle_balance") or 0) + (seat_wallet.get("reserve_balance") or 0)
+                    top_up = allowance - seat_balance
+                    if top_up <= 0:
+                        continue  # already at/above allowance — no RPC call (money RPCs raise on non-positive)
+
+                    if pool_reserve < top_up:
+                        pool_low += 1
+                        logger.info(
+                            "sweep allowance: pool for org %s can't cover top-up for member %s (have %d, need %d)",
+                            org_id,
+                            member_id,
+                            pool_reserve,
+                            top_up,
+                        )
+                        continue  # skip WITHOUT consuming the month key (rule 6)
+
+                    request_id = f"allowance:{member_id}:{month_key}"
+                    res = sb.rpc(
+                        "transfer_credits",
+                        {
+                            "p_from_wallet": pool_wallet_id,
+                            "p_to_wallet": seat_wallet["id"],
+                            "p_amount": top_up,
+                            "p_kind": "allocation",
+                            "p_request_id": request_id,
+                            "p_metadata": {"org_id": org_id, "source": "allowance"},
+                        },
+                    ).execute()
+                    if (res.data or {}).get("duplicate"):
+                        continue  # already topped up this month — no-op
+                    seats_topped_up += 1
+                    pool_reserve -= top_up
+                except Exception:
+                    logger.exception("sweep allowance failed org=%s member=%s", org_id, member_id)
+
     return {
         "walletsRolled": rolled,
         "storageBilled": storage_billed,
+        "storageGrandfathered": storage_grandfathered,
         "overageBilled": overage_billed,
         "annualInvoiced": annual_invoiced,
+        "seatsToppedUp": seats_topped_up,
+        "poolLow": pool_low,
     }

@@ -128,7 +128,13 @@ async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_
     if credits_enabled():
         # SP3/credits: per-tier max_works cap — 402 when the user is at the limit.
         count_res = _get_supabase().table("works_registry").select("id", count="exact").eq("user_id", user_id).execute()
-        gated_create(user_id, "work", count_res.count or 0)
+        # Licensing Phase C (rule 9): pass the target project so a work created in
+        # an org-linked project where the caller holds a seat gets the org's
+        # unlimited count cap. body.project_id is already in scope (required on
+        # WorkCreate); no new query. Ownership is validated downstream in
+        # service.create_work — derivation can only ever UPGRADE the cap, so it is
+        # safe even before that check (a miss falls through to today's behavior).
+        gated_create(user_id, "work", count_res.count or 0, resource_project_id=body.project_id)
     data = body.model_dump(exclude_none=True)
     if "release_date" in data and data["release_date"]:
         data["release_date"] = data["release_date"].isoformat()
@@ -1192,7 +1198,18 @@ async def parse_contract_splits(
         parse_grant = free_credit_grant(CreditAction.REGISTRY_PARSE)
     else:
         # SP3/credits: gate the contract parse; 402 without access or credits.
-        parse_grant = gated_credits(user_id, CreditAction.REGISTRY_PARSE)
+        # Resource-derived billing (Licensing Phase C, rule 5): a PICKED existing
+        # contract (contract_file_id) derives its project's linked-org billing —
+        # passed as a one-element list; an UPLOAD has no resource → ambient.
+        # Derivation-vs-access ordering (rule 4, Phase A access-first):
+        # verify_user_owns_contract on the picked file ran above BEFORE this gate,
+        # so derivation can never bill an org for a contract the caller can't
+        # access; charge-on-success is the backstop.
+        parse_grant = gated_credits(
+            user_id,
+            CreditAction.REGISTRY_PARSE,
+            resource_contract_ids=[contract_file_id] if has_picked else None,
+        )
 
     try:
         with set_llm_context(user_id, "registry"):

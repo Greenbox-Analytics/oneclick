@@ -52,6 +52,7 @@ from oneclick.royalties.analytics_router import router as royalties_analytics_ro
 from oneclick.royalties.router import router as royalties_router
 from oneclick.royalty_calculator import CalculationError, RoyaltyCalculator
 from oneclick.share import router as oneclick_share_router
+from orgs.router import router as orgs_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
 from registry.router import router as registry_router
@@ -91,6 +92,7 @@ app.include_router(billing_router)
 app.include_router(sweep_router)
 app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
 app.include_router(teams_router, prefix="/teams", tags=["Teams"])
+app.include_router(orgs_router, prefix="/orgs", tags=["Organizations"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -613,7 +615,7 @@ def health_check():
 class AnalyticsContext(BaseModel):
     is_tester: bool
     is_admin: bool
-    plan: Literal["free", "pro"]
+    plan: Literal["free", "pro", "pro_max"]
     role: str | None
     email: str | None
     signed_up_at: str | None
@@ -1033,7 +1035,11 @@ async def upload_file(
         file_content = await file.read()
 
         # ---- SP3: gate BEFORE Storage write ----
-        gated_upload(user_id, size=len(file_content), host_user_id=user_id)
+        # Licensing Phase C (rule 9): the caller owns this artist/project (verified
+        # above) so host_user_id == user_id — the caller IS the storage-counter
+        # owner, so passing resource_project_id lets an org-linked project raise
+        # storage to the org's seat allowance. project_id is already resolved here.
+        gated_upload(user_id, size=len(file_content), host_user_id=user_id, resource_project_id=project_id)
 
         # Clean filename
         import re
@@ -1475,7 +1481,10 @@ async def upload_contract(
         Upload statistics and confirmation
     """
     file_content = await file.read()
-    gated_upload(user_id, size=len(file_content), host_user_id=user_id)
+    # Licensing Phase C (rule 9): caller uploads to their own project (host==user,
+    # ownership verified in _upload_contract_impl), so resource_project_id lets an
+    # org-linked project raise storage to the org's seat allowance. project_id in scope.
+    gated_upload(user_id, size=len(file_content), host_user_id=user_id, resource_project_id=project_id)
     return await _upload_contract_impl(background_tasks, file, file_content, project_id, user_id)
 
 
@@ -1504,7 +1513,10 @@ async def upload_multiple_contracts(
         file_contents.append((file, contents))
 
     total_size = sum(len(c) for _, c in file_contents)
-    gated_upload(user_id, size=total_size, host_user_id=user_id)
+    # Licensing Phase C (rule 9): caller uploads to their own project (host==user,
+    # ownership verified per-file in _upload_contract_impl), so resource_project_id
+    # lets an org-linked project raise storage to the org's seat allowance.
+    gated_upload(user_id, size=total_size, host_user_id=user_id, resource_project_id=project_id)
 
     # ---- Process each file individually using the shared helper ----
     results = []
@@ -1746,7 +1758,20 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
     if credits_enabled() and is_zero_cost_query(request.query or ""):
         zoe_grant = free_credit_grant(CreditAction.ZOE_MESSAGE)
     else:
-        zoe_grant = gated_credits(user_id, CreditAction.ZOE_MESSAGE, host_user_id=request.host_user_id)
+        # Resource-derived billing (Licensing Phase C, rule 5): pass the FULL
+        # contract_ids list — the resolver's UNANIMITY rule decides (all contracts
+        # in ONE org-linked project bill that org; a mixed-project set falls to
+        # ambient). NEVER contract_ids[0]: non-deterministic "first contract wins"
+        # money attribution is forbidden (rule 5). Derivation-vs-access ordering
+        # (rule 4, Phase A access-first): the user_can_access_file loop above (per
+        # contract) runs BEFORE this gate, so derivation can never bill an org for
+        # a contract the caller can't access; charge-on-success is the backstop.
+        zoe_grant = gated_credits(
+            user_id,
+            CreditAction.ZOE_MESSAGE,
+            host_user_id=request.host_user_id,
+            resource_contract_ids=request.contract_ids or None,
+        )
 
     # Step event: fire BEFORE any work begins so we capture even early failures.
     import time as _time
@@ -2372,7 +2397,15 @@ async def oneclick_calculate_royalties_stream(
         oneclick_grant = free_credit_grant(CreditAction.ONECLICK_RUN)
     else:
         # SP3/credits: gate OneClick; 402 for users without access or credits.
-        oneclick_grant = gated_credits(user_id, CreditAction.ONECLICK_RUN, host_user_id=host_user_id)
+        # Resource-derived billing (Licensing Phase C, rule 5): pass project_id so
+        # a run inside an org-linked project bills the linked org's seat.
+        # Derivation-vs-access ordering (rule 4, Phase A access-first):
+        # _assert_can_access_oneclick_inputs above runs BEFORE this gate, so
+        # derivation can never bill an org for a project the caller can't access;
+        # charge-on-success is the backstop.
+        oneclick_grant = gated_credits(
+            user_id, CreditAction.ONECLICK_RUN, host_user_id=host_user_id, resource_project_id=project_id
+        )
     # SP2: track per-period OneClick usage; best-effort, never blocks.
     _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
     analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
@@ -2802,7 +2835,18 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
     try:
         with set_llm_context(user_id, "oneclick"):
             # SP3/credits: gate OneClick; 402 for users without access or credits.
-            oneclick_grant = gated_credits(user_id, CreditAction.ONECLICK_RUN, host_user_id=request.host_user_id)
+            # Resource-derived billing (Licensing Phase C, rule 5): pass project_id
+            # so a run inside an org-linked project bills the linked org's seat.
+            # Derivation-vs-access ordering (rule 4, Phase A access-first):
+            # _assert_can_access_oneclick_inputs above runs BEFORE this gate, so
+            # derivation can never bill an org for a project the caller can't
+            # access; charge-on-success is the backstop.
+            oneclick_grant = gated_credits(
+                user_id,
+                CreditAction.ONECLICK_RUN,
+                host_user_id=request.host_user_id,
+                resource_project_id=request.project_id,
+            )
             # SP2: track per-period OneClick usage; best-effort, never blocks.
             _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
             analytics_capture(

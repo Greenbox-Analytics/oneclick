@@ -20,7 +20,6 @@ export interface CreditUsage {
   monthlyGrant?: number;
   bundleBalance?: number;
   reserveBalance?: number;
-  balance?: number;
   overageThisPeriod?: number;
   tools?: CreditToolUsage[];
 }

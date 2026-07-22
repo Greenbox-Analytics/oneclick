@@ -1,22 +1,11 @@
 // src/components/billing/ResourceLimitsCard.tsx
-import { Database } from "lucide-react";
+import { Database, FileText, Sparkles, Zap } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useArtistsList } from "@/hooks/useArtistsList";
 import { useProjectsList } from "@/hooks/useProjectsList";
 import { useBoards } from "@/hooks/useBoards";
-
-const fmtBytes = (bytes: number): string => {
-  if (!bytes || bytes < 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = bytes;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
-};
+import { formatBytes } from "@/lib/utils";
 
 const capLabel = (cap: number | undefined): string =>
   cap === -1 ? "Unlimited" : cap == null ? "—" : cap.toLocaleString();
@@ -62,9 +51,34 @@ export function ResourceLimitsCard() {
         <Tile k="Tasks" v={(tasks?.length ?? 0).toLocaleString()} cap={capLabel(caps?.maxTasks)} />
         <Tile
           k="Storage"
-          v={fmtBytes(storageUsed)}
-          cap={storageCap === -1 ? "Unlimited" : `of ${fmtBytes(storageCap ?? 0)}`}
+          v={formatBytes(storageUsed)}
+          cap={storageCap === -1 ? "Unlimited" : `of ${formatBytes(storageCap ?? 0)}`}
           icon={<Database className="w-[15px] h-[15px]" />}
+        />
+      </div>
+
+      {/* Per-period tool usage (previously on /subscription). Kept alongside
+          the hard limits so the flag-off state still shows tool activity —
+          CreditsUsageCard renders nothing until CREDITS_ENABLED. */}
+      <div className="text-[13.5px] text-muted-foreground mt-5">This period</div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-2.5">
+        <Tile
+          k="Split sheets"
+          v={(ent?.usage?.splitSheetsThisPeriod ?? 0).toLocaleString()}
+          cap={capLabel(caps?.maxSplitSheetsPerMonth)}
+          icon={<FileText className="w-[15px] h-[15px]" />}
+        />
+        <Tile
+          k="Zoe queries"
+          v={(ent?.usage?.zoeQueriesThisPeriod ?? 0).toLocaleString()}
+          cap="This period"
+          icon={<Sparkles className="w-[15px] h-[15px]" />}
+        />
+        <Tile
+          k="OneClick runs"
+          v={(ent?.usage?.oneclickRunsThisPeriod ?? 0).toLocaleString()}
+          cap={capLabel(caps?.maxOneclickRunsPerMonth)}
+          icon={<Zap className="w-[15px] h-[15px]" />}
         />
       </div>
     </Card>

@@ -16,6 +16,7 @@ from subscriptions.models import (
     Caps,
     Entitlements,
     Features,
+    ManagedByOrg,
     Usage,
 )
 
@@ -40,6 +41,65 @@ def credits_enabled() -> bool:
     mutated so flipping this off restores legacy gating exactly.
     """
     return os.getenv("CREDITS_ENABLED", "").strip().lower() == "true"
+
+
+def licensing_enabled() -> bool:
+    """True when org/seat licensing (Phase B) is live (LICENSING_ENABLED env var).
+
+    Flag retirement is CODE-LEVEL, same true-rollback discipline as
+    credits_enabled: the entire /orgs surface 404s (router-level dependency),
+    and entitlements resolution short-circuits to personal billing, when
+    this is off. No stored row is ever mutated by toggling it, so flipping
+    it back off restores pre-licensing behavior exactly.
+    """
+    return os.getenv("LICENSING_ENABLED", "").strip().lower() == "true"
+
+
+# ---------------------------------------------------------------------------
+# ENTERPRISE_SHAPE — the entitlements an ACTIVE org seat synthesizes at
+# resolution time (Licensing Phase B, spec §5, rules 11/12). NO tier_entitlements
+# row, NO subscriptions.tier mutation: this is a code constant, same pattern as
+# the admin implicit-Pro. Counts are UNLIMITED (-1: zero marginal cost), all
+# features on, integrations both allowed — but STORAGE IS FINITE (rule 12): a
+# one-time minimum pool purchase must never confer unlimited un-billed storage
+# forever, and the storage-overage sweep cannot bill a -1 cap. Storage reads from
+# ENTERPRISE_SEAT_STORAGE_BYTES (CALIBRATE 500 GB) at call time so operators can
+# retune it without a redeploy of this constant.
+# ---------------------------------------------------------------------------
+
+ENTERPRISE_SHAPE_INTEGRATIONS = ["google_drive", "slack"]
+
+
+def _enterprise_seat_storage_bytes() -> int:
+    """Finite per-seat storage ceiling (rule 12). Never -1."""
+    return int(os.getenv("ENTERPRISE_SEAT_STORAGE_BYTES", str(500 * 1024**3)))
+
+
+def _enterprise_caps() -> Caps:
+    storage = _enterprise_seat_storage_bytes()
+    return Caps(
+        max_artists=-1,
+        max_projects=-1,
+        max_tasks=-1,
+        # FINITE storage (rule 12) — max == included, hard block, no seat overage.
+        max_storage_bytes=storage,
+        max_split_sheets_per_month=-1,
+        max_oneclick_runs_per_month=-1,
+        # Seats draw org allocations, not a personal monthly grant — 0, and it must
+        # NEVER reach _maybe_rollover_wallet for the personal wallet (rule 11).
+        monthly_credits=0,
+        max_works=-1,
+        included_storage_bytes=storage,
+    )
+
+
+def _enterprise_features() -> Features:
+    return Features(
+        zoe_enabled=True,
+        oneclick_enabled=True,
+        registry_enabled=True,
+        integrations_allowed=list(ENTERPRISE_SHAPE_INTEGRATIONS),
+    )
 
 
 def _patch_for_max_pro(ent: Entitlements) -> Entitlements:
@@ -89,32 +149,127 @@ class EntitlementsService:
         If BYPASS_PAYWALLS env var is 'true' OR *is_admin* is True, all caps are
         patched to -1 (unlimited) and all features are enabled — effectively giving
         every affected user Pro-shaped entitlements without touching the DB.
+
+        CONTEXT-AWARE (Licensing Phase B, spec §5): when the caller is in an ACTIVE
+        org billing context (`_resolve_context` confers it), caps/features come from
+        ENTERPRISE_SHAPE and the credits block reflects the SEAT wallet — the PERSONAL
+        WALLET IS NEVER READ AND NEVER ROLLED (rule 11: monthly_credits=0 through the
+        personal rollover call site would expire a subscriber's whole bundle). Personal
+        context (or licensing off) is byte-identical to pre-licensing.
+
+        KNOWN DIVERGENCE (spec §5): this is context-aware, but `bulk_get_for_users` is
+        personal-only BY DESIGN — a cap checked through the bulk (host-wins) path in
+        org context gets the PERSONAL answer, not the enterprise one. Accepted for v1;
+        folded into the resource-derivation follow-up. Do not "fix" bulk to read context.
         """
+        # Resolve billing context FIRST (spec §5). None = personal (licensing off, no
+        # preference, or a dead/pending reference — pending returns non-None with
+        # pending=True but does NOT confer enterprise). Only an ACTIVE org confers.
+        ctx = self._resolve_context(user_id)
+        in_org = ctx is not None and not ctx.get("pending")
+
+        # Personal subscription is read in BOTH contexts — its tier/status/stripe
+        # fields still surface (the org-context profile shows "you can keep or cancel
+        # your personal plan"), but in org context its TIER never drives caps and its
+        # WALLET is never touched.
         sub = self._read_or_create_subscription(user_id)
-        tier_row = self._read_tier_entitlements(sub["tier"])
-        if tier_row is None:
-            raise RuntimeError(
-                f"Missing tier_entitlements row for tier='{sub['tier']}' "
-                "— operator misconfiguration. Run the seed migration."
-            )
-        override = self._read_override(user_id)
+
+        # Storage/usage is a single per-user counter that follows the user across
+        # contexts (spec §5 seat-storage aftermath) — read/rolled the same either way.
         usage_row = self._read_or_create_usage_counter(user_id)
         usage_row = self._maybe_rollover_period(user_id, usage_row)
+        usage = Usage(
+            total_storage_bytes=usage_row.get("total_storage_bytes", 0),
+            split_sheets_this_period=usage_row.get("split_sheets_this_period", 0),
+            zoe_queries_this_period=usage_row.get("zoe_queries_this_period", 0),
+            oneclick_runs_this_period=usage_row.get("oneclick_runs_this_period", 0),
+            period_end=_parse_iso(usage_row["period_end"]),
+        )
 
-        caps, features, has_overrides = self._merge(tier_row, override)
+        managed_by_org: ManagedByOrg | None = None
+        credits_info = None
 
-        # Code-level flag retirement (spec §9): under CREDITS_ENABLED the credit
-        # balance IS the AI gate; stored flags are preserved untouched as the
-        # rollback path.
-        if credits_enabled():
-            features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
+        if in_org:
+            # ---- ORG CONTEXT (rule 11) ----------------------------------------
+            # Enterprise shape from the code constant; NO tier row, NO merge, NO
+            # personal wallet read/rollover. `managed_by_org` is set UNCONDITIONALLY
+            # (independent of credits_enabled()) — the storage-wall support-copy
+            # detection in can() (UPLOAD_BYTES, rule 13) and the top-level
+            # billingContext payload field (Task 3 follow-up) both key off its mere
+            # presence, not off the credits flag.
+            caps = _enterprise_caps()
+            features = _enterprise_features()
+            has_overrides = False
+            managed_by_org = ManagedByOrg(org_id=ctx["org_id"], org_name=ctx["org_name"], role=ctx["role"])
 
-        # captured BEFORE any admin/bypass caps patch — the wallet grant must
-        # always be the tier's real grant, never a patched sentinel.
-        merged_monthly_grant = caps.monthly_credits
+            # The credits block is the SEAT wallet (NULL-period, reserve-only,
+            # NEVER rolled — no _maybe_rollover_wallet), built ONLY when
+            # credits_enabled() — mirrors the personal branch below. Gating the
+            # seat-wallet READ+CREATE together with the CreditsInfo construction
+            # (Task 3 follow-up) means a credits-off org read never lazily creates
+            # a seat wallet row nobody will use — check_credits creates it on
+            # demand when credits actually gate an action.
+            if credits_enabled():
+                from orgs.wallets import read_or_create_seat_wallet
+                from subscriptions.models import CreditsInfo
+
+                seat_wallet = read_or_create_seat_wallet(self.supabase, ctx["org_member_id"])
+                credits_info = CreditsInfo(
+                    bundle_balance=seat_wallet.get("bundle_balance", 0),
+                    reserve_balance=seat_wallet.get("reserve_balance", 0),
+                    # Seats draw org ALLOCATIONS, not a personal grant — 0, and it
+                    # never reaches _maybe_rollover_wallet against the personal
+                    # wallet (rule 11).
+                    monthly_grant=0,
+                    overage_this_period=seat_wallet.get("overage_this_period", 0),
+                    # NO seat overage (spec §5) — the request/approve loop replaces it.
+                    overage_enabled=False,
+                    overage_cap_credits=None,
+                    storage_overage_enabled=False,
+                    period_end=None,  # seat wallets are NULL-period by construction.
+                    prices=self._get_credit_prices(),
+                )
+        else:
+            # ---- PERSONAL CONTEXT (byte-identical to pre-licensing) ------------
+            tier_row = self._read_tier_entitlements(sub["tier"])
+            if tier_row is None:
+                raise RuntimeError(
+                    f"Missing tier_entitlements row for tier='{sub['tier']}' "
+                    "— operator misconfiguration. Run the seed migration."
+                )
+            override = self._read_override(user_id)
+            caps, features, has_overrides = self._merge(tier_row, override)
+
+            # Code-level flag retirement (spec §9): under CREDITS_ENABLED the credit
+            # balance IS the AI gate; stored flags are preserved untouched as the
+            # rollback path.
+            if credits_enabled():
+                features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
+
+            # captured BEFORE any admin/bypass caps patch — the wallet grant must
+            # always be the tier's real grant, never a patched sentinel.
+            merged_monthly_grant = caps.monthly_credits
+
+            if credits_enabled():
+                from subscriptions.models import CreditsInfo
+
+                wallet = self._read_or_create_wallet(user_id)
+                wallet = self._maybe_rollover_wallet(wallet, merged_monthly_grant)
+                credits_info = CreditsInfo(
+                    bundle_balance=wallet.get("bundle_balance", 0),
+                    reserve_balance=wallet.get("reserve_balance", 0),
+                    monthly_grant=merged_monthly_grant,
+                    overage_this_period=wallet.get("overage_this_period", 0),
+                    overage_enabled=bool(sub.get("overage_enabled", False)),
+                    overage_cap_credits=sub.get("overage_cap_credits"),
+                    storage_overage_enabled=bool(sub.get("storage_overage_enabled", False)),
+                    period_end=_parse_iso(wallet.get("period_end")),
+                    prices=self._get_credit_prices(),
+                )
 
         # Admin = implicit Pro. Admins (profiles.is_admin=True) get unlimited
-        # caps + all features regardless of subscription tier or override state.
+        # caps + all features regardless of subscription tier, override, OR org
+        # context. Applied AFTER the branch so it keeps today's precedence.
         # Cleaner than maintaining a synthetic 'admin' tier_overrides row that
         # would drift if admin status is later revoked.
         #
@@ -145,31 +300,10 @@ class EntitlementsService:
                 integrations_allowed=["google_drive", "slack"],
             )
 
-        usage = Usage(
-            total_storage_bytes=usage_row.get("total_storage_bytes", 0),
-            split_sheets_this_period=usage_row.get("split_sheets_this_period", 0),
-            zoe_queries_this_period=usage_row.get("zoe_queries_this_period", 0),
-            oneclick_runs_this_period=usage_row.get("oneclick_runs_this_period", 0),
-            period_end=_parse_iso(usage_row["period_end"]),
-        )
-
-        credits_info = None
-        if credits_enabled():
-            from subscriptions.models import CreditsInfo
-
-            wallet = self._read_or_create_wallet(user_id)
-            wallet = self._maybe_rollover_wallet(wallet, merged_monthly_grant)
-            credits_info = CreditsInfo(
-                bundle_balance=wallet.get("bundle_balance", 0),
-                reserve_balance=wallet.get("reserve_balance", 0),
-                monthly_grant=merged_monthly_grant,
-                overage_this_period=wallet.get("overage_this_period", 0),
-                overage_enabled=bool(sub.get("overage_enabled", False)),
-                overage_cap_credits=sub.get("overage_cap_credits"),
-                storage_overage_enabled=bool(sub.get("storage_overage_enabled", False)),
-                period_end=_parse_iso(wallet.get("period_end")),
-                prices=self._get_credit_prices(),
-            )
+        # availableContexts is included for ALL users when licensing is on (personal
+        # users with no seats get just the personal entry). None when off → the
+        # to_dict key is omitted entirely so the pre-licensing payload is identical.
+        available_contexts = self._list_available_contexts(user_id) if licensing_enabled() else None
 
         ent = Entitlements(
             user_id=user_id,
@@ -184,12 +318,308 @@ class EntitlementsService:
             stripe_price_id=sub.get("stripe_price_id"),
             current_period_end=_parse_iso(sub.get("current_period_end")),
             cancel_at_period_end=bool(sub.get("cancel_at_period_end", False)),
+            managed_by_org=managed_by_org,
+            available_contexts=available_contexts,
         )
 
         if _bypass_paywalls_enabled() or is_admin:
             ent = _patch_for_max_pro(ent)
 
         return ent
+
+    # -----------------------------------------------------------------------
+    # Billing context resolution (Licensing Phase B, spec §5)
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _first_row(res) -> dict | None:
+        """Normalize a Supabase result's `.data` (list from a plain execute, dict
+        from maybe_single, None, or []) to a single row dict or None."""
+        data = getattr(res, "data", None)
+        if isinstance(data, list):
+            return data[0] if data else None
+        return data or None
+
+    def _resolve_context(self, user_id: str) -> dict | None:
+        """Resolve the caller's BILLING CONTEXT (spec §5, rules 7 + 11).
+
+        Returns None for PERSONAL context — licensing off, no stored preference, or a
+        genuinely DEAD reference (in which case the stale preference is lazily
+        cleared). Returns a dict {org_id, org_name, org_member_id, role, pending}
+        when `profiles.billing_context_org_id` points at an org where the caller
+        holds an ACTIVE seat AND the org is non-archived with status in
+        ('active','pending'):
+          - org 'active'  -> pending=False — CONFERS the enterprise shape.
+          - org 'pending' -> pending=True  — confers NOTHING yet (caller treats it as
+                             personal), but the preference is DELIBERATELY KEPT
+                             (rule 7: "not yet active" ≠ "stale"; the moment the org
+                             activates, billing context just starts working — the
+                             create-org → invite → buy onboarding order must not wipe
+                             every member's preference before activation).
+
+        `billing_context_org_id` is ATTACKER-CONTROLLED (users can PATCH their own
+        profiles row): this validation is the load-bearing security gate. Anything
+        that is not the caller's own active seat in a live org falls closed to
+        personal, and lazy-clear fires for dead references (no seat, revoked/
+        suspended/removed seat, archived/suspended/nonexistent org) — NEVER for a
+        pending org. The whole function short-circuits to None when licensing is off.
+        """
+        if not licensing_enabled():
+            return None
+
+        prof = self.supabase.table("profiles").select("billing_context_org_id").eq("id", user_id).execute()
+        prof_row = self._first_row(prof)
+        org_id = prof_row.get("billing_context_org_id") if prof_row else None
+        if not org_id:
+            return None
+
+        seat = self._first_row(
+            self.supabase.table("org_members")
+            .select("id, role, status")
+            .eq("org_id", org_id)
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .execute()
+        )
+        if not seat:
+            self._clear_billing_context(user_id)
+            return None
+
+        org = self._first_row(
+            self.supabase.table("organizations").select("id, name, status, archived_at").eq("id", org_id).execute()
+        )
+        if not org or org.get("archived_at") is not None or org.get("status") not in ("active", "pending"):
+            self._clear_billing_context(user_id)
+            return None
+
+        return {
+            "org_id": org_id,
+            "org_name": org.get("name"),
+            "org_member_id": seat.get("id"),
+            "role": seat.get("role"),
+            "pending": org.get("status") == "pending",
+        }
+
+    def _clear_billing_context(self, user_id: str) -> None:
+        """Best-effort lazy-clear of a dead billing-context preference (spec §5).
+
+        NEVER raises — a failed clear must not break an entitlements read; the next
+        read simply re-attempts. Fires only for genuinely dead references (see
+        _resolve_context), never for a pending org (rule 7)."""
+        try:
+            self.supabase.table("profiles").update({"billing_context_org_id": None}).eq("id", user_id).execute()
+        except Exception:
+            import logging
+
+            logging.warning("failed to lazy-clear billing_context_org_id for %s", user_id)
+
+    def _list_available_contexts(self, user_id: str) -> list[dict]:
+        """The `availableContexts` payload (spec §5): personal + every ACTIVE seat
+        whose org is non-archived and status in ('active','pending').
+
+        INDEPENDENT of the stored preference — it lists what the caller COULD switch
+        to (the switcher renders from it). Pending-org seats ARE included, marked
+        {pending: True}. Best-effort: a broken org read must never degrade the whole
+        entitlements payload, so it falls back to personal-only."""
+        contexts: list[dict] = [{"type": "personal"}]
+        try:
+            members = (
+                self.supabase.table("org_members")
+                .select("org_id, role, status")
+                .eq("user_id", user_id)
+                .eq("status", "active")
+                .execute()
+            )
+            rows = members.data or []
+            if not rows:
+                return contexts
+            org_ids = [r["org_id"] for r in rows]
+            orgs = (
+                self.supabase.table("organizations")
+                .select("id, name, status, archived_at")
+                .in_("id", org_ids)
+                .execute()
+            )
+            org_by_id = {o["id"]: o for o in (orgs.data or [])}
+            for r in rows:
+                org = org_by_id.get(r.get("org_id"))
+                if not org or org.get("archived_at") is not None:
+                    continue
+                if org.get("status") not in ("active", "pending"):
+                    continue
+                contexts.append(
+                    {
+                        "type": "org",
+                        "orgId": org["id"],
+                        "orgName": org.get("name"),
+                        "role": r.get("role"),
+                        "pending": org.get("status") == "pending",
+                    }
+                )
+        except Exception:
+            import logging
+
+            logging.warning("failed to build availableContexts for %s", user_id)
+            return [{"type": "personal"}]
+        return contexts
+
+    # -----------------------------------------------------------------------
+    # Resource -> billing-org resolution (Licensing Phase C, spec Sections 6/11)
+    #
+    # These two resolvers answer "does this RESOURCE live in a project linked
+    # to an org where the CALLER holds an active seat?" — independent of the
+    # caller's ambient `_resolve_context` preference. Task 6 (check_credits)
+    # and Task 7 (can()) are the only callers; this file's chokepoints
+    # themselves are untouched here (pure additions).
+    # -----------------------------------------------------------------------
+
+    def resolve_billing_org_for_project(self, user_id: str, project_id: str) -> dict | None:
+        """Resolve the ACTIVE org billing context for a specific PROJECT.
+
+        Reads `org_project_links` by `project_id` — rule 8's `UNIQUE(project_id)`
+        guarantees at most one row, so there is no multi-org branch to resolve;
+        a single read settles it. Returns the `_resolve_context` ctx shape
+        (`org_id`, `org_name`, `org_member_id`, `role`) **plus `project_id`**
+        (round-4 pin: Task 6's deny branch needs it for the lazy owner-check,
+        and neither the ctx's org fields nor the contract-derived call path in
+        `resolve_billing_org_for_resource` can otherwise recover it) when:
+
+          - the project is linked to an org,
+          - that org is ACTIVE (not pending/suspended) and not archived, and
+          - the caller holds an ACTIVE seat in it.
+
+        Else None — including when licensing is off (short-circuits before any
+        query — no existence oracle, no cost), the project is unlinked, the
+        org is pending/suspended/archived, or the caller has no active seat in
+        it (rule 4: derivation only ever UPGRADES, never restricts — anything
+        short of a live seat in a live org falls through to today's ambient
+        behavior, byte-identical).
+
+        Rule 10 (deliberate, stated here so no admin discovers it as a
+        surprise): this keys on (project linked to org) AND (caller holds a
+        seat in that org) — NOT on (an admin granted THIS member THIS
+        project). A seat-holder with ORGANIC access to a linked project spends
+        the org's credits on it even though no admin ever assigned them to
+        it. That is the owner's consent-by-linking working as designed —
+        billing population is a superset of the access-granted population.
+
+        Deliberately NOT computed here: `is_project_owner`. That would tax
+        every derivation, including every ALLOW, with an extra read; ownership
+        only matters on the DENY branch (Task 6's owner-aware dry-seat wall),
+        where a wall is already being built and one more indexed read is off
+        the happy path.
+
+        Any exception (a broken read on any of the three tables) returns None
+        and logs rather than raising — derivation must NEVER break a request
+        (rule 4's fall-through discipline).
+        """
+        if not licensing_enabled():
+            return None
+        try:
+            link = self._first_row(
+                self.supabase.table("org_project_links").select("org_id").eq("project_id", project_id).execute()
+            )
+            org_id = link.get("org_id") if link else None
+            if not org_id:
+                return None
+
+            org = self._first_row(
+                self.supabase.table("organizations").select("id, name, status, archived_at").eq("id", org_id).execute()
+            )
+            if not org or org.get("archived_at") is not None or org.get("status") != "active":
+                return None
+
+            seat = self._first_row(
+                self.supabase.table("org_members")
+                .select("id, role, status")
+                .eq("org_id", org_id)
+                .eq("user_id", user_id)
+                .eq("status", "active")
+                .execute()
+            )
+            if not seat:
+                return None
+
+            return {
+                "org_id": org_id,
+                "org_name": org.get("name"),
+                "org_member_id": seat.get("id"),
+                "role": seat.get("role"),
+                "project_id": project_id,
+            }
+        except Exception:
+            import logging
+
+            logging.exception("resolve_billing_org_for_project failed user_id=%s project_id=%s", user_id, project_id)
+            return None
+
+    def resolve_billing_org_for_resource(
+        self,
+        user_id: str,
+        *,
+        project_id: str | None = None,
+        contract_file_ids: list[str] | None = None,
+    ) -> dict | None:
+        """Resolve the ACTIVE org billing context for a RESOURCE.
+
+        `project_id` (direct — e.g. OneClick, registry) delegates straight to
+        `resolve_billing_org_for_project`.
+
+        `contract_file_ids` (a LIST — e.g. Zoe's `contract_ids`) resolves on
+        **unanimity** (rule 5, round 2): ONE batched read
+        (`project_files.select("id, project_id").in_("id", ids)`) — derivation
+        fires only when EVERY id resolves to a row AND all of them share
+        EXACTLY ONE project, which is then delegated to
+        `resolve_billing_org_for_project`. ANY spread across more than one
+        project, any id the batched read doesn't return (deleted / wrong id /
+        no access), or any row with a NULL `project_id` → None (ambient) — a
+        single mixed-project or unresolvable id must never let one contract's
+        project silently win ("first contract wins" is explicitly forbidden
+        by rule 5: non-deterministic money attribution).
+
+        No resource at all (`project_id` and `contract_file_ids` both falsy) ->
+        None (ambient context, unchanged) — e.g. Zoe's general mode.
+
+        Short-circuits None when licensing is off (no queries). Any exception
+        (in the batched read or in the delegated project resolution) returns
+        None and logs, never raises — derivation must NEVER break a request
+        (rule 4's fall-through discipline). No org identity is ever returned
+        for a non-seat-holder (rule 4's no-oracle clause) — this resolver's
+        output is internal only, never reflected in a response payload.
+        """
+        if not licensing_enabled():
+            return None
+        if project_id is not None:
+            return self.resolve_billing_org_for_project(user_id, project_id)
+        if not contract_file_ids:
+            return None
+        try:
+            ids = list(contract_file_ids)
+            rows = self.supabase.table("project_files").select("id, project_id").in_("id", ids).execute()
+            by_id = {row.get("id"): row.get("project_id") for row in (rows.data or [])}
+
+            resolved_project_ids = set()
+            for contract_id in ids:
+                resolved = by_id.get(contract_id)
+                if not resolved:
+                    # Unresolvable id or NULL project_id — ambient (rule 5 unanimity).
+                    return None
+                resolved_project_ids.add(resolved)
+
+            if len(resolved_project_ids) != 1:
+                # Spread across >1 project — no deterministic attribution (rule 5).
+                return None
+
+            return self.resolve_billing_org_for_project(user_id, resolved_project_ids.pop())
+        except Exception:
+            import logging
+
+            logging.exception(
+                "resolve_billing_org_for_resource failed user_id=%s contract_file_ids=%s",
+                user_id,
+                contract_file_ids,
+            )
+            return None
 
     # -----------------------------------------------------------------------
     # DB reads (with auto-create-on-miss)
@@ -393,14 +823,13 @@ class EntitlementsService:
 
     @staticmethod
     def _merge(tier_row: dict, override: dict | None) -> tuple[Caps, Features, bool]:
-        def pick(field: str):
-            if override is not None and override.get(field) is not None:
-                return override[field]
-            return tier_row[field]
+        _REQUIRED = object()
 
-        def pick_default(field: str, default):
+        def pick(field: str, default=_REQUIRED):
             if override is not None and override.get(field) is not None:
                 return override[field]
+            if default is _REQUIRED:
+                return tier_row[field]
             return tier_row.get(field, default)
 
         caps = Caps(
@@ -410,9 +839,9 @@ class EntitlementsService:
             max_storage_bytes=pick("max_storage_bytes"),
             max_split_sheets_per_month=pick("max_split_sheets_per_month"),
             max_oneclick_runs_per_month=pick("max_oneclick_runs_per_month"),
-            monthly_credits=pick_default("monthly_credits", 0),
-            max_works=pick_default("max_works", -1),
-            included_storage_bytes=pick_default("included_storage_bytes", -1),
+            monthly_credits=pick("monthly_credits", 0),
+            max_works=pick("max_works", -1),
+            included_storage_bytes=pick("included_storage_bytes", -1),
         )
         features = Features(
             zoe_enabled=pick("zoe_enabled"),
@@ -426,7 +855,14 @@ class EntitlementsService:
     # can() — single chokepoint with host-wins resolution
     # -----------------------------------------------------------------------
 
-    def can(self, user_id: str, action, host_user_id: str | None = None, **ctx):
+    def can(
+        self,
+        user_id: str,
+        action,
+        host_user_id: str | None = None,
+        resource_project_id: str | None = None,
+        **ctx,
+    ):
         """Returns CheckResult(allowed, reason, upgrade_required) for the given action.
 
         host_user_id semantics:
@@ -436,6 +872,17 @@ class EntitlementsService:
             allow if either acting user OR host has the feature.
           - UPLOAD_BYTES: storage is owner-scoped; check the host's cap if provided,
             else acting user's cap.
+
+        resource_project_id (Licensing Phase C, spec §6/§11, rules 4/9): the
+        project the created/uploaded resource lives in. When that project is
+        linked to an ACTIVE org where the caller holds an ACTIVE seat, the org's
+        caps apply even from personal ambient context — UPGRADE-ONLY (rule 4):
+        a derived cap NEVER shrinks a more permissive personal answer. Default
+        None → no derivation → byte-identical to pre-Phase-C. Only CREATE_WORK
+        (counts) and UPLOAD_BYTES (storage) derive; CREATE_WORK derives its count
+        cap unconditionally (enterprise -1 is unlimited under ANY scoping),
+        UPLOAD_BYTES derives ONLY when the caller IS the storage-counter owner
+        (rule 9 — the collision fix, documented in that branch).
         """
         from subscriptions.models import Action, CheckResult
 
@@ -456,7 +903,23 @@ class EntitlementsService:
             return self._check_count_cap(ctx.get("current_count", 0), ent.caps.max_tasks, "tasks")
 
         if action == Action.CREATE_WORK:
-            return self._check_count_cap(ctx.get("current_count", 0), ent.caps.max_works, "registered works")
+            cap = ent.caps.max_works
+            # Caps derivation (Licensing Phase C, rule 9): a work created in a
+            # project linked to an org where the caller holds an ACTIVE seat uses
+            # the org's caps. COUNTS ARE EXEMPT from the storage owner-scoping
+            # precedence (rule 9) precisely because enterprise makes them -1
+            # (unlimited) — an unlimited cap is safe to substitute under ANY
+            # scoping, so no owner check is needed and no one else's counter is
+            # ever consulted; THAT is the load-bearing reason the messy
+            # owner-scoping interaction only matters for storage (UPLOAD_BYTES).
+            # Upgrade-only (rule 4): take the MORE PERMISSIVE of the personal and
+            # enterprise caps (enterprise -1 wins over any finite personal cap; a
+            # personal -1 is already unlimited). Derivation is skipped entirely
+            # when resource_project_id is None or licensing is off (the resolver
+            # short-circuits) → byte-identical to today.
+            if resource_project_id is not None and self.resolve_billing_org_for_project(user_id, resource_project_id):
+                cap = self._more_permissive_cap(cap, _enterprise_caps().max_works)
+            return self._check_count_cap(ctx.get("current_count", 0), cap, "registered works")
 
         if action == Action.GENERATE_SPLIT_SHEET:
             cap = ent.caps.max_split_sheets_per_month
@@ -474,15 +937,55 @@ class EntitlementsService:
                 owner_ent = self.get_for_user(host_user_id)
             cap = owner_ent.caps.max_storage_bytes
             projected = owner_ent.usage.total_storage_bytes + size
+
+            # Storage-caps derivation (Licensing Phase C, rule 9 — THE collision
+            # fix). Storage accrues to the OWNER's counter (recalc_user_storage),
+            # so this check is owner-scoped: the host's cap against the host's
+            # counter. Deriving an enterprise PER-SEAT cap and checking it against
+            # SOMEONE ELSE'S counter is incoherent — so caps derivation applies
+            # ONLY when the caller IS the storage-counter owner (host_user_id is
+            # None or equals the caller). A seat-holding COLLABORATOR uploading to
+            # another owner's linked project keeps today's host-scoped check
+            # UNTOUCHED — no derivation attempt, no org_project_links query at all.
+            # (Counts, CREATE_WORK, are exempt from this precedence because
+            # enterprise makes them -1, unlimited under any scoping; storage is
+            # finite, which is the whole reason the collision only bites here.)
+            derived_storage = False
+            if (host_user_id is None or host_user_id == user_id) and resource_project_id is not None:
+                if self.resolve_billing_org_for_project(user_id, resource_project_id) is not None:
+                    # Upgrade-only (rule 4): a Pro user's larger personal headroom
+                    # is never shrunk by a link — take max(personal, seat storage),
+                    # treating personal -1 (unlimited) as infinity so it stays -1.
+                    cap = self._more_permissive_cap(cap, _enterprise_seat_storage_bytes())
+                    derived_storage = True
+
             if cap != -1 and projected > cap:
+                # An org storage wall — whether from ambient org context (rule 13)
+                # or a DERIVED org seat (rule 9) — points at SUPPORT, never "ask
+                # your admin" / upgrade: the admin has no storage lever, and the
+                # finite seat cap is the enforcement here.
+                if derived_storage or getattr(owner_ent, "managed_by_org", None) is not None:
+                    return deny("Your organization seat's storage is full. Contact support to discuss options.")
                 return deny(
                     f"Upload would exceed the project owner's storage limit "
                     f"({owner_ent.usage.total_storage_bytes} + {size} > {cap} bytes)."
                 )
             # Credits model: paid tiers have unlimited hard cap (-1) but an
             # included allowance; past it, uploads need storage pay-per-use
-            # opt-in (spec §5). Existing files are never touched.
-            if credits_enabled() and owner_ent.tier in self.PAID_TIERS:
+            # opt-in (spec §5). Existing files are never touched. SKIP this
+            # personal pay-per-use gate when storage was DERIVED to an org seat
+            # (rule 9): a personal per-plan included-allowance prompt is
+            # incoherent for org-billed storage. What bounds the upload then
+            # depends on the caller's PERSONAL cap (rule 4, upgrade-only max):
+            # a finite personal cap (free tier) upgrades to the finite seat cap,
+            # which the hard-cap check above enforces; an unlimited personal cap
+            # (paid tiers) STAYS -1 — derivation never shrinks an entitlement —
+            # so NO byte ceiling fires for them here. Deliberate, and not a
+            # revenue leak: seat-holders are already exempt from personal
+            # storage billing (rule 13's sweep grandfather), and it mirrors
+            # ambient org context (where included == max == seat storage, so
+            # this gate never independently fires).
+            if not derived_storage and credits_enabled() and owner_ent.tier in self.PAID_TIERS:
                 included = owner_ent.caps.included_storage_bytes
                 storage_ok = owner_ent.credits.storage_overage_enabled if owner_ent.credits else False
                 if included != -1 and projected > included and not storage_ok:
@@ -553,6 +1056,17 @@ class EntitlementsService:
             upgrade_required=True,
         )
 
+    @staticmethod
+    def _more_permissive_cap(personal: int, derived: int) -> int:
+        """Return the MORE PERMISSIVE of two caps (Licensing Phase C, rule 4:
+        derivation only ever UPGRADES, never restricts). -1 means unlimited and
+        beats any finite cap; between two finite caps the larger wins. Used by
+        can()'s CREATE_WORK / UPLOAD_BYTES derivation so a link can never shrink a
+        user's existing personal headroom."""
+        if personal == -1 or derived == -1:
+            return -1
+        return max(personal, derived)
+
     # -----------------------------------------------------------------------
     # Atomic counter increments (called by Zoe / OneClick endpoints)
     # -----------------------------------------------------------------------
@@ -590,13 +1104,28 @@ class EntitlementsService:
 
     PAID_TIERS = ("pro", "pro_max")
 
-    def check_credits(self, user_id: str, action: str, *, is_admin: bool = False):
+    def check_credits(
+        self,
+        user_id: str,
+        action: str,
+        *,
+        is_admin: bool = False,
+        resource_project_id: str | None = None,
+        resource_contract_ids: list[str] | None = None,
+    ):
         """Can this user run `action` right now, and at what price?
 
-        Order: bypass/admin → price lookup → wallet balance → opt-in overage →
-        wall. Degraded policy (spec §12): paid fails open (uncharged), free
-        fails closed. NOTE: re-reads tables per call like the rest of this
-        service (no-cache philosophy) — optimization deferred deliberately.
+        Order: bypass/admin → resource-derived org (Phase C) → ambient org
+        (Phase B) → price lookup → wallet balance → opt-in overage → wall.
+        Degraded policy (spec §12): paid fails open (uncharged), free fails
+        closed. NOTE: re-reads tables per call like the rest of this service
+        (no-cache philosophy) — optimization deferred deliberately.
+
+        `resource_project_id` / `resource_contract_ids` (Licensing Phase C) are
+        the resource the action operates on; a resource in a project linked to an
+        ACTIVE org where the caller holds an ACTIVE seat bills that org's seat,
+        winning over ambient context (rule 5). Both default None → no resource →
+        the pre-Phase-C ambient/personal path, byte-identical.
         """
         import logging
 
@@ -608,6 +1137,44 @@ class EntitlementsService:
         if _bypass_paywalls_enabled() or is_admin or is_db_admin(self.supabase, user_id):
             # Short-circuit BEFORE wallet read/debit — no ledger rows for admins.
             return CreditCheckResult(allowed=True, price=0)
+
+        # Resource-derived org billing (Licensing Phase C, spec §6/§11, rules 4-6).
+        # RESOLUTION ORDER: derived-resource org → ambient context → personal. A
+        # resource (OneClick project, Zoe contract_ids, registry contract) living
+        # in a project linked to an ACTIVE org where the caller holds an ACTIVE
+        # seat WINS over ambient context (rule 5: "auto-bills that org regardless
+        # of ambient context") and routes to `_check_credits_org` VERBATIM — the
+        # same seat wallet, no overage, managedByOrg 402, and the seat wallet_id
+        # threaded into the grant so the debit follows the check (rule 6). The
+        # derived ctx additionally carries `project_id`, which the deny branch
+        # needs for the owner-aware dry-seat wall (rule 11). Any miss (no resource,
+        # unlinked project, no seat, pending/suspended/archived org, licensing off,
+        # or a mixed-project contract list) falls through to the ambient/personal
+        # flow below, byte-identical (rule 4). The resolver already swallows its
+        # own errors and returns None; this extra guard is defense-in-depth so a
+        # money chokepoint can NEVER break a request on a derivation fault.
+        try:
+            derived_ctx = self.resolve_billing_org_for_resource(
+                user_id,
+                project_id=resource_project_id,
+                contract_file_ids=resource_contract_ids,
+            )
+        except Exception:
+            logging.exception("check_credits: resource derivation failed user=%s action=%s", user_id, action)
+            derived_ctx = None
+        if derived_ctx is not None:
+            return self._check_credits_org(user_id, action, derived_ctx)
+
+        # Billing context (Licensing Phase B, spec §5, rules 8/9). An ACTIVE org
+        # seat pays from the SEAT wallet ONLY — no personal subscription read, no
+        # overage, no personal fallback. `_resolve_context` returns None when
+        # licensing is off / no preference / a dead reference (so the personal
+        # path below is byte-identical), and a pending-org marker (pending=True)
+        # which confers nothing yet and therefore also routes to the personal
+        # path. Only a live, ACTIVE org seat takes the seat branch.
+        ctx = self._resolve_context(user_id)
+        if ctx is not None and not ctx.get("pending"):
+            return self._check_credits_org(user_id, action, ctx)
 
         try:
             sub = self._read_or_create_subscription(user_id)
@@ -664,9 +1231,12 @@ class EntitlementsService:
             wallet = self._maybe_rollover_wallet(wallet, monthly_grant)
             balance = wallet.get("bundle_balance", 0) + wallet.get("reserve_balance", 0)
             reset_date = _parse_iso(wallet.get("period_end"))
+            # The wallet the check passes against — threaded into the grant so the
+            # debit targets THIS wallet (rule 9), never a re-resolved one.
+            wallet_id = wallet.get("id")
 
             if balance >= price:
-                return CreditCheckResult(allowed=True, price=price, reset_date=reset_date)
+                return CreditCheckResult(allowed=True, price=price, reset_date=reset_date, wallet_id=wallet_id)
 
             if tier in self.PAID_TIERS:
                 if sub.get("status") == "past_due":
@@ -700,7 +1270,9 @@ class EntitlementsService:
                                 "Raise it in Billing settings, or wait for your credits to reset."
                             ),
                         )
-                    return CreditCheckResult(allowed=True, price=price, use_overage=True, reset_date=reset_date)
+                    return CreditCheckResult(
+                        allowed=True, price=price, use_overage=True, reset_date=reset_date, wallet_id=wallet_id
+                    )
                 return CreditCheckResult(
                     allowed=False,
                     price=price,
@@ -728,6 +1300,125 @@ class EntitlementsService:
                 reason="Credits are temporarily unavailable — please try again in a moment.",
             )
 
+    def _check_credits_org(self, user_id: str, action: str, ctx: dict):
+        """check_credits for an ACTIVE org billing context (Licensing Phase B, rule 8).
+
+        Pays from the SEAT wallet ONLY: no personal subscription read, no overage,
+        no personal fallback, no upgrade path (the seat wall points the member at
+        their admin, wired in enforcement.gated_credits). Seat wallets are
+        NULL-period, so `reset_date` is always None.
+
+        Degraded policy mirrors the paid personal tier — a READ EXCEPTION (prices
+        or the seat wallet) fails OPEN uncharged (spec §12). A MISSING seat wallet
+        ROW is NOT an exception: the Task-4 helper lazy-creates it at zero, which
+        correctly walls (402) rather than failing open (rule 8's carve-out).
+        """
+        import logging
+
+        from orgs.wallets import read_or_create_seat_wallet
+        from subscriptions.models import CreditCheckResult
+
+        # Price lookup — IDENTICAL to the personal path (incl. the missing-action
+        # config error). A price READ failure (not a missing key) is an outage,
+        # routed into the degraded handler below.
+        try:
+            prices = self._get_credit_prices()
+        except Exception:
+            logging.exception("check_credits(org): price read failed user=%s", user_id)
+            prices = None
+        if prices is not None and action not in prices:
+            logging.error("check_credits(org): no credit price seeded for action %r", action)
+            return CreditCheckResult(
+                allowed=False,
+                price=0,
+                managed_by_org=True,
+                reason="This action isn't set up for credits yet. Please contact support.",
+            )
+
+        try:
+            if prices is None:
+                raise RuntimeError("credit price read failed")
+            price = prices[action]
+            if price <= 0:
+                # Retuned-to-0 (or drifted-negative) prices are free — never wall.
+                return CreditCheckResult(allowed=True, price=0, managed_by_org=True, reset_date=None)
+
+            # Lazy-create at zero (rule 8): a missing row is a legitimate 402, not
+            # an outage. Only a genuine READ EXCEPTION escapes into the except.
+            seat_wallet = read_or_create_seat_wallet(self.supabase, ctx["org_member_id"])
+            balance = seat_wallet.get("bundle_balance", 0) + seat_wallet.get("reserve_balance", 0)
+
+            if balance >= price:
+                return CreditCheckResult(
+                    allowed=True,
+                    price=price,
+                    wallet_id=seat_wallet.get("id"),
+                    managed_by_org=True,
+                )
+
+            # Insufficient seat balance — NO overage, NO personal fallback, NO
+            # upgrade (rule 8). The member requests more from their admin (Task 9).
+            reason = "You've used the credits your organization allocated. Ask your admin for more."
+            result = CreditCheckResult(
+                allowed=False,
+                price=price,
+                managed_by_org=True,
+                reason=reason,
+            )
+            # Owner-aware dry-seat wall (Licensing Phase C, spec §11, rule 11).
+            # ONLY on a DERIVED context — `ctx["project_id"]` is present only when
+            # the resource resolver (Task 5) built this ctx; the ambient org path
+            # (`_resolve_context`) never carries it, so an ambient seat wall never
+            # gains owner fields. The ownership read is LAZY and DENY-PATH ONLY:
+            # Task 5 deliberately does NOT compute owner status on every derivation
+            # (it would tax every ALLOW with an extra read); ownership only matters
+            # here, where a wall is already being built. An OWNER additionally sees
+            # a CTA to unlink their own project and fall back to their personal
+            # plan — this CO-OCCURS with the managedByOrg/requestUrl (buy/request)
+            # affordances in enforcement (an owner who is also an org admin is the
+            # COMMON persona; the two CTAs are never mutually exclusive).
+            project_id = ctx.get("project_id")
+            if project_id and self._is_project_owner(user_id, project_id):
+                result.owner_can_unlink = True
+                result.project_id = project_id
+                result.reason = reason + " Or unlink this project in its settings to use your own plan here."
+            return result
+        except Exception:
+            # Seat-path READ ERROR → fail open uncharged, like the paid personal
+            # tier (spec §12). price=0 → the grant is disabled, so the debit no-ops.
+            logging.exception("check_credits(org) degraded user=%s action=%s", user_id, action)
+            return CreditCheckResult(allowed=True, price=0, managed_by_org=True, degraded=True)
+
+    def _is_project_owner(self, user_id: str, project_id: str) -> bool:
+        """Lazy, DENY-PATH-ONLY project-ownership check for the owner-aware
+        dry-seat wall (Licensing Phase C, spec §11, rule 11).
+
+        Mirrors the projects service's owner predicate — the SAME one Task 2's
+        `orgs.projects._require_project_owner` reuses (`projects.service.
+        get_user_role`) — but SYNCHRONOUSLY: `check_credits`/`_check_credits_org`
+        are sync chokepoints while `get_user_role` is `async def`. That async
+        wrapper does only a synchronous Supabase read internally, so this is a
+        faithful mirror of the SAME `project_members` (project_id, user_id) →
+        role read, not a divergent reimplementation of the authorization logic.
+
+        One indexed read; NEVER raises (a failed read logs and returns False, so
+        the wall simply omits the owner CTA rather than breaking the 402).
+        """
+        try:
+            row = self._first_row(
+                self.supabase.table("project_members")
+                .select("role")
+                .eq("project_id", project_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            return bool(row) and row.get("role") == "owner"
+        except Exception:
+            import logging
+
+            logging.exception("owner-check failed user_id=%s project_id=%s", user_id, project_id)
+            return False
+
     def debit_for_action(self, user_id: str, grant) -> None:
         """Debit a CreditGrant after the action succeeded. Best-effort, never raises.
 
@@ -740,13 +1431,21 @@ class EntitlementsService:
         if grant is None or not grant.enabled or grant.price <= 0:
             return
         try:
-            wallet = self._read_or_create_wallet(user_id)
-            if wallet.get("id") is None:
+            wallet_id = getattr(grant, "wallet_id", None)
+            if wallet_id is None:
+                # Legacy / free grant (no targeted wallet): resolve the caller's
+                # PERSONAL wallet — today's behavior. A wallet_id-bearing grant
+                # (rule 9) SKIPS this: the debit targets the exact wallet the check
+                # passed against, resolving nothing, so a billing-context switch
+                # between check and debit can never relocate the charge.
+                wallet = self._read_or_create_wallet(user_id)
+                wallet_id = wallet.get("id")
+            if wallet_id is None:
                 return
             self.supabase.rpc(
                 "debit_credits",
                 {
-                    "p_wallet_id": wallet["id"],
+                    "p_wallet_id": wallet_id,
                     "p_amount": grant.price,
                     "p_action": grant.action,
                     "p_request_id": grant.request_id,
@@ -766,39 +1465,25 @@ class EntitlementsService:
     # Per-tool credit usage (Account & Billing usage view)
     # -----------------------------------------------------------------------
 
-    def get_credit_usage(self, user_id: str) -> dict:
-        """Per-tool credit spend for the current wallet period (Account & Billing usage view).
-
-        Returns {"enabled": False} when credits are off. Otherwise aggregates
-        credit_ledger debit/overage rows since period_start, grouped by action.
+    def _aggregate_tool_usage(
+        self, wallet_id: str | None, prices: dict[str, int], *, since: str | None = None
+    ) -> list[dict]:
+        """Shared per-action ledger aggregation for the usage view (personal AND
+        org-context paths, Task 7). `since=None` means ALL-TIME — the org-context
+        caller passes None because seat wallets are NULL-period by construction
+        (rule 1) and have no period_start to floor on.
         """
-        if not credits_enabled():
-            return {"enabled": False}
-
-        sub = self._read_or_create_subscription(user_id)
-        tier = sub.get("tier", "free")
-        tier_row = self._read_tier_entitlements(tier)
-        if tier_row is None:
-            raise RuntimeError(f"Missing tier_entitlements row for tier={tier!r}")
-        override = self._read_override(user_id)
-        caps, _, _ = self._merge(tier_row, override)
-        monthly_grant = caps.monthly_credits
-
-        wallet = self._read_or_create_wallet(user_id)
-        wallet = self._maybe_rollover_wallet(wallet, monthly_grant)
-        period_start = wallet.get("period_start")
-        prices = self._get_credit_prices()
-
         agg: dict[str, dict] = {}
-        if wallet.get("id") is not None and period_start is not None:
-            rows = (
+        if wallet_id is not None:
+            query = (
                 self.supabase.table("credit_ledger")
                 .select("action, delta, kind, metadata")
-                .eq("wallet_id", wallet["id"])
-                .gte("created_at", period_start)
+                .eq("wallet_id", wallet_id)
                 .in_("kind", ["debit", "overage_debit"])
-                .execute()
             )
+            if since is not None:
+                query = query.gte("created_at", since)
+            rows = query.execute()
             for r in rows.data or []:
                 action = r.get("action")
                 if not action:
@@ -815,6 +1500,42 @@ class EntitlementsService:
         for action in ("oneclick_run", "registry_parse", "zoe_message"):
             a = agg.get(action, {"count": 0, "spent": 0})
             tools.append({"action": action, "price": prices.get(action), "count": a["count"], "spent": a["spent"]})
+        return tools
+
+    def get_credit_usage(self, user_id: str) -> dict:
+        """Per-tool credit spend for the Account & Billing usage view.
+
+        Returns {"enabled": False} when credits are off. CONTEXT-AWARE (Licensing
+        Phase B, Task 7): an ACTIVE org billing context (not pending) reflects the
+        SEAT wallet's ledger, ALL-TIME — the personal wallet/subscription/tier rows
+        are NEVER read in that branch (mirrors get_for_user's rule 11). Pending-org,
+        personal, and licensing-off contexts all fall through to today's PERSONAL
+        path below, unmodified — byte-identical regression.
+        """
+        if not credits_enabled():
+            return {"enabled": False}
+
+        ctx = self._resolve_context(user_id)
+        if ctx is not None and not ctx.get("pending"):
+            return self._get_credit_usage_org(ctx)
+
+        sub = self._read_or_create_subscription(user_id)
+        tier = sub.get("tier", "free")
+        tier_row = self._read_tier_entitlements(tier)
+        if tier_row is None:
+            raise RuntimeError(f"Missing tier_entitlements row for tier={tier!r}")
+        override = self._read_override(user_id)
+        caps, _, _ = self._merge(tier_row, override)
+        monthly_grant = caps.monthly_credits
+
+        wallet = self._read_or_create_wallet(user_id)
+        wallet = self._maybe_rollover_wallet(wallet, monthly_grant)
+        period_start = wallet.get("period_start")
+        prices = self._get_credit_prices()
+
+        tools = self._aggregate_tool_usage(
+            wallet.get("id") if period_start is not None else None, prices, since=period_start
+        )
 
         bundle = wallet.get("bundle_balance", 0)
         reserve = wallet.get("reserve_balance", 0)
@@ -827,6 +1548,41 @@ class EntitlementsService:
             "reserveBalance": reserve,
             "balance": bundle + reserve,
             "overageThisPeriod": wallet.get("overage_this_period", 0),
+            "tools": tools,
+        }
+
+    def _get_credit_usage_org(self, ctx: dict) -> dict:
+        """Org-context credit usage (Task 7): the SEAT wallet's ledger, ALL-TIME.
+
+        Seat wallets are NULL-period by construction (rule 1), so there is no
+        period_start to floor the ledger scan on — this aggregates every debit
+        ever posted to the seat. A "since last allocation" window would be a
+        tighter, more useful view, but it's a NAMED FOLLOW-UP (plan Task 7),
+        not built here: v1 ships all-time.
+
+        The personal wallet/subscription/tier rows are NEVER read here (mirrors
+        get_for_user's rule 11) — only the seat wallet (lazy-created at zero via
+        Task 4's helper) and the shared credit_prices table are touched.
+        """
+        from orgs.wallets import read_or_create_seat_wallet
+
+        seat_wallet = read_or_create_seat_wallet(self.supabase, ctx["org_member_id"])
+        prices = self._get_credit_prices()
+        tools = self._aggregate_tool_usage(seat_wallet.get("id"), prices, since=None)
+
+        bundle = seat_wallet.get("bundle_balance", 0)
+        reserve = seat_wallet.get("reserve_balance", 0)
+        return {
+            "enabled": True,
+            "managedByOrg": {"orgId": ctx["org_id"], "orgName": ctx["org_name"], "role": ctx["role"]},
+            "periodStart": None,
+            "periodEnd": None,
+            # Seats draw org ALLOCATIONS, not a personal monthly grant (rule 11).
+            "monthlyGrant": 0,
+            "bundleBalance": bundle,
+            "reserveBalance": reserve,
+            "balance": bundle + reserve,
+            "overageThisPeriod": 0,
             "tools": tools,
         }
 
@@ -853,6 +1609,17 @@ class EntitlementsService:
 
         NOTE: skips lazy period rollover (per-user concern; expensive in batch).
         Single-user reads via get_for_user still trigger rollover correctly.
+
+        KNOWN DIVERGENCE — PERSONAL-ONLY BY DESIGN (Licensing Phase B, spec §5):
+        unlike `get_for_user`, this path is NOT billing-context-aware. It feeds
+        host-wins CAP checks across many owners, not a billing decision, so it
+        always resolves each user's PERSONAL tier — a cap checked through the bulk
+        path for a user who happens to be in ACTIVE org context gets the PERSONAL
+        answer, not the enterprise one. Accepted for v1 (the caps/context mismatch
+        the spec calls out); folded into the resource-derivation follow-up. Do NOT
+        teach this method to read billing context — it would add a per-user
+        profiles+org read to every list endpoint for a billing concern the caps
+        path doesn't own.
         """
         if not user_ids:
             return {}

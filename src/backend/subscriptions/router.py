@@ -9,7 +9,7 @@ No /refresh endpoint — frontend calls queryClient.invalidateQueries(['entitlem
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 # Ensure backend dir is in path (matches the pattern in boards/router.py)
@@ -21,6 +21,7 @@ from analytics import capture as analytics_capture
 from auth import get_current_user_email, get_current_user_id
 from subscriptions.admin_auth import is_user_admin
 from subscriptions.deps import _get_entitlements_service
+from subscriptions.service import EntitlementsService
 
 router = APIRouter()
 
@@ -51,6 +52,61 @@ async def get_my_credit_usage(user_id: str = Depends(get_current_user_id)):
     the credit surfaces in that case.
     """
     return _get_entitlements_service().get_credit_usage_safe(user_id)
+
+
+class BillingContextPayload(BaseModel):
+    """PUT /me/billing-context body. `orgId=null` means switch to personal."""
+
+    orgId: str | None = None
+
+
+@router.put("/me/billing-context")
+async def set_billing_context(
+    body: BillingContextPayload,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Set the caller's billing context (spec §5). `orgId=null` → personal (always
+    allowed, 200). An org id is accepted ONLY when the caller holds an ACTIVE seat
+    in a non-archived org whose status is 'active' or 'pending' — a PENDING org is
+    accepted (rule 7: confers nothing until activation, but the preference must
+    survive the onboarding order).
+
+    404 with an IDENTICAL body for a nonexistent org, no seat, an archived org, and
+    a suspended org — there is NO existence oracle (rule 7): setting the context to
+    an arbitrary org id must never reveal whether that org exists.
+    `billing_context_org_id` is validated again at every entitlements read
+    (_resolve_context), so this write confers nothing on its own.
+    """
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+
+    if body.orgId is None:
+        sb.table("profiles").update({"billing_context_org_id": None}).eq("id", user_id).execute()
+        return {"context": "personal"}
+
+    org_id = body.orgId
+    not_found = HTTPException(status_code=404, detail="Organization not found")
+
+    seat = EntitlementsService._first_row(
+        sb.table("org_members")
+        .select("id, status")
+        .eq("org_id", org_id)
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .execute()
+    )
+    if not seat:
+        raise not_found
+
+    org = EntitlementsService._first_row(
+        sb.table("organizations").select("id, status, archived_at").eq("id", org_id).execute()
+    )
+    if not org or org.get("archived_at") is not None or org.get("status") not in ("active", "pending"):
+        raise not_found
+
+    sb.table("profiles").update({"billing_context_org_id": org_id}).eq("id", user_id).execute()
+    return {"context": "org", "orgId": org_id}
 
 
 class BillingPrefsPayload(BaseModel):

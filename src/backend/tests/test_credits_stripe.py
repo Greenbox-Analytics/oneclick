@@ -269,6 +269,276 @@ class TestHandleCheckoutSessionCompletedCredits:
 
 
 # ---------------------------------------------------------------------------
+# handle_checkout_session_completed (mode="payment") — one-time credit packs
+# ---------------------------------------------------------------------------
+
+
+def _topup_event(
+    session_id="cs_top_1", user_id=TEST_USER_ID, pack_key="pack_500", payment_status="paid", event_id="evt_top_1"
+):
+    session = MagicMock()
+    session.mode = "payment"
+    session.id = session_id
+    session.metadata = {"user_id": user_id, "pack_key": pack_key, "target": "user"}
+    session.payment_status = payment_status
+    event = MagicMock()
+    event.id = event_id
+    event.data.object = session
+    return event
+
+
+class TestTopupCompleted:
+    def _sb(self):
+        return _mock_supabase(
+            {
+                "credit_packs": [{"key": "pack_500", "credits": 500, "price_cents": 1000}],
+                "credit_wallets": [{"id": "w-top", "owner_type": "user", "owner_id": TEST_USER_ID}],
+            }
+        )
+
+    def test_grants_purchase_on_paid_session(self, monkeypatch):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_topup_event(), sb)
+        name, params = sb.rpc.call_args[0]
+        assert name == "grant_credits"
+        assert params["p_amount"] == 500
+        assert params["p_kind"] == "purchase"
+        assert params["p_bucket"] == "reserve"
+        assert params["p_request_id"] == "topup:cs_top_1"
+
+    def test_async_redelivery_same_session_same_key(self, monkeypatch):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_topup_event(event_id="evt_DIFFERENT"), sb)
+        assert sb.rpc.call_args[0][1]["p_request_id"] == "topup:cs_top_1"
+
+    def test_unpaid_session_skips_grant(self, monkeypatch):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_topup_event(payment_status="unpaid"), sb)
+        sb.rpc.assert_not_called()
+
+    def test_unknown_pack_logs_and_returns(self, monkeypatch):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = _mock_supabase({"credit_packs": []})
+        stripe_events.handle_checkout_session_completed(_topup_event(pack_key="nope"), sb)
+        sb.rpc.assert_not_called()
+
+    def test_duplicate_grant_skips_analytics(self, monkeypatch):
+        """Redelivery under a different event id: grant_credits reports
+        duplicate=True — topup_purchased must NOT fire again (would
+        double-count pack revenue in PostHog)."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        sb.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True, "balance_after": 500})
+        with patch("subscriptions.stripe_events.analytics_capture") as mock_capture:
+            stripe_events.handle_checkout_session_completed(_topup_event(event_id="evt_DIFFERENT"), sb)
+
+        assert not any(c.args[1] == "topup_purchased" for c in mock_capture.call_args_list)
+
+    # No test_subscription_mode_untouched stub here: the existing
+    # TestHandleCheckoutSessionCompletedCredits suite above IS the regression
+    # guard for the mode dispatch — those events use plain MagicMock sessions
+    # where `.mode` is an auto-attribute (not the string "payment"), so
+    # `getattr(session, "mode", None) == "payment"` is False and they never
+    # enter the topup branch. Covered by running that suite (see report).
+
+
+# ---------------------------------------------------------------------------
+# _handle_topup_completed — org-pool branch (Licensing Phase B, Task 8)
+# ---------------------------------------------------------------------------
+
+
+def _org_topup_event(
+    session_id="cs_org_top_1",
+    user_id=TEST_USER_ID,
+    org_id="org-1",
+    pack_key="pack_500",
+    payment_status="paid",
+    event_id="evt_org_top_1",
+):
+    """Same shape as _topup_event, but metadata['target'] is an org id
+    (billing_router.create_topup_session sets this after admin-gating)."""
+    session = MagicMock()
+    session.mode = "payment"
+    session.id = session_id
+    session.metadata = {"user_id": user_id, "pack_key": pack_key, "target": org_id}
+    session.payment_status = payment_status
+    event = MagicMock()
+    event.id = event_id
+    event.data.object = session
+    return event
+
+
+class TestOrgTopupCompleted:
+    """metadata['target'] is an org id -> credits land in the org's POOL
+    wallet (never the personal wallet), and crossing the cumulative
+    activation floor flips a 'pending' org to 'active' (spec rule 3)."""
+
+    ORG_ID = "org-1"
+    WALLET_ID = "w-org-pool"
+
+    def _sb(self, org_status="pending", min_initial=None, ledger_rows=None):
+        return _mock_supabase(
+            {
+                "credit_packs": [{"key": "pack_500", "credits": 500, "price_cents": 1000}],
+                "credit_wallets": [{"id": self.WALLET_ID, "owner_type": "org", "owner_id": self.ORG_ID}],
+                "organizations": [
+                    {"id": self.ORG_ID, "status": org_status, "min_initial_purchase_credits": min_initial}
+                ],
+                "credit_ledger": ledger_rows or [],
+            }
+        )
+
+    def test_grant_call_shape_targets_org_pool_wallet(self, monkeypatch):
+        """Wallet id in the grant call is the ORG pool wallet (Task 4's
+        read_or_create_org_wallet), never a personal wallet — and the
+        idempotency key/kind/bucket match the personal path exactly."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = self._sb()
+        stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        grant_calls = [c for c in sb.rpc.call_args_list if c.args[0] == "grant_credits"]
+        assert len(grant_calls) == 1
+        params = grant_calls[0].args[1]
+        assert params["p_wallet_id"] == self.WALLET_ID
+        assert params["p_amount"] == 500
+        assert params["p_kind"] == "purchase"
+        assert params["p_bucket"] == "reserve"
+        assert params["p_request_id"] == "topup:cs_org_top_1"
+        assert params["p_metadata"]["org_id"] == self.ORG_ID
+        assert params["p_metadata"]["pack_key"] == "pack_500"
+        # Never touches the user-wallet seeding path (no create-on-miss
+        # insert -- the pool wallet already exists in this fixture).
+        builders["credit_wallets"].insert.assert_not_called()
+
+    def test_analytics_fires_with_org_target_and_org_id(self, monkeypatch):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        with patch("subscriptions.stripe_events.analytics_capture") as mock_capture:
+            stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        capture_calls = [c for c in mock_capture.call_args_list if c.args[1] == "topup_purchased"]
+        assert len(capture_calls) == 1
+        actor, name, props = capture_calls[0].args
+        assert actor == TEST_USER_ID  # the buying admin, not the org
+        assert props["target"] == "org"
+        assert props["org_id"] == self.ORG_ID
+        assert props["credits"] == 500
+
+    def test_below_floor_purchase_grants_but_stays_pending(self, monkeypatch):
+        """Cumulative purchases (3000) are under the default 10000 floor:
+        the grant lands, but the org's status is never written."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = self._sb(org_status="pending", ledger_rows=[{"delta": 3000}])
+        stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        assert any(c.args[0] == "grant_credits" for c in sb.rpc.call_args_list)
+        builders["organizations"].update.assert_not_called()
+
+    def test_crossing_floor_flips_status_to_active(self, monkeypatch):
+        """Cumulative purchases (12000) cross the default 10000 floor ->
+        UPDATE status='active' (activation is CUMULATIVE, not last-purchase)."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = self._sb(org_status="pending", ledger_rows=[{"delta": 12000}])
+        stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        builders["organizations"].update.assert_called_once_with({"status": "active"})
+
+    def test_already_active_org_never_updated(self, monkeypatch):
+        """Already-active org: no status write, even when cumulative
+        purchases are far past the floor (activation only moves
+        pending -> active, never re-asserted)."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = self._sb(org_status="active", ledger_rows=[{"delta": 999_999}])
+        stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        builders["organizations"].update.assert_not_called()
+
+    def test_suspended_org_never_updated(self, monkeypatch):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = self._sb(org_status="suspended", ledger_rows=[{"delta": 999_999}])
+        stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        builders["organizations"].update.assert_not_called()
+
+    def test_duplicate_replay_skips_analytics_but_activation_still_runs(self, monkeypatch):
+        """Duplicate grant (async redelivery): topup_purchased must NOT fire
+        again, but the activation re-check still runs (harmless — the sum is
+        unchanged either way) and still flips a crossing org to active."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = self._sb(org_status="pending", ledger_rows=[{"delta": 12000}])
+        sb.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True, "balance_after": 500})
+
+        with patch("subscriptions.stripe_events.analytics_capture") as mock_capture:
+            stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        assert not any(c.args[1] == "topup_purchased" for c in mock_capture.call_args_list)
+        builders["organizations"].update.assert_called_once_with({"status": "active"})
+
+    def test_org_specific_min_initial_purchase_credits_overrides_env_default(self, monkeypatch):
+        """The org's own min_initial_purchase_credits (500) wins over the
+        ENTERPRISE_MIN_INITIAL_CREDITS env default (10000)."""
+        import subscriptions.stripe_events as stripe_events
+
+        monkeypatch.setenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000")
+        sb, builders = self._sb(org_status="pending", min_initial=500, ledger_rows=[{"delta": 600}])
+        stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        builders["organizations"].update.assert_called_once_with({"status": "active"})
+
+    def test_falls_back_to_env_default_when_org_min_is_null(self, monkeypatch):
+        import subscriptions.stripe_events as stripe_events
+
+        monkeypatch.setenv("ENTERPRISE_MIN_INITIAL_CREDITS", "200")
+        sb, builders = self._sb(org_status="pending", min_initial=None, ledger_rows=[{"delta": 250}])
+        stripe_events.handle_checkout_session_completed(_org_topup_event(org_id=self.ORG_ID), sb)
+
+        builders["organizations"].update.assert_called_once_with({"status": "active"})
+
+    def test_unpaid_session_skips_grant(self, monkeypatch):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(
+            _org_topup_event(org_id=self.ORG_ID, payment_status="unpaid"), sb
+        )
+        sb.rpc.assert_not_called()
+
+    def test_user_target_tests_unaffected(self, monkeypatch):
+        """Sanity check that org branch dispatch is keyed strictly off
+        target != 'user' — a personal-target session run through the same
+        handler still hits the pre-Phase-B personal-wallet path."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = _mock_supabase(
+            {
+                "credit_packs": [{"key": "pack_500", "credits": 500, "price_cents": 1000}],
+                "credit_wallets": [{"id": "w-personal", "owner_type": "user", "owner_id": TEST_USER_ID}],
+            }
+        )
+        stripe_events.handle_checkout_session_completed(_topup_event(), sb)
+
+        grant_calls = [c for c in sb.rpc.call_args_list if c.args[0] == "grant_credits"]
+        assert len(grant_calls) == 1
+        assert grant_calls[0].args[1]["p_wallet_id"] == "w-personal"
+        assert "organizations" not in builders  # activation check never runs for the personal path
+
+
+# ---------------------------------------------------------------------------
 # handle_subscription_updated — tier sync + upgrade top-up
 # ---------------------------------------------------------------------------
 

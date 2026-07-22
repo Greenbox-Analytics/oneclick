@@ -48,6 +48,22 @@ class Usage:
 
 
 @dataclass
+class ManagedByOrg:
+    """Marker on an Entitlements resolved in ORG billing context (Licensing
+    Phase B, spec §5). Its mere presence means this entitlements object came
+    from an active org seat — used by can()'s UPLOAD_BYTES branch to pick the
+    support-pointing storage-wall copy (rule 13), and surfaced in to_dict()
+    under credits.managedByOrg (when the credits block exists) AND under the
+    top-level billingContext field (Task 3 follow-up — present regardless of
+    CREDITS_ENABLED, so the frontend can identify org context even when there
+    is no credits block to read managedByOrg off of)."""
+
+    org_id: str
+    org_name: str
+    role: str
+
+
+@dataclass
 class Entitlements:
     user_id: str
     tier: Literal["free", "pro", "pro_max"]
@@ -63,6 +79,16 @@ class Entitlements:
     stripe_price_id: str | None = None
     current_period_end: datetime | None = None
     cancel_at_period_end: bool = False
+    # Licensing Phase B (spec §5) — both default None so the personal / licensing-off
+    # to_dict() payload is byte-identical to pre-licensing. `managed_by_org` is set
+    # ONLY in active-org context — surfaced as credits.managedByOrg (when the
+    # credits block exists) AND as the top-level billingContext.type=="org" field
+    # (Task 3 follow-up, present regardless of CREDITS_ENABLED); `available_contexts`
+    # is a list ONLY when LICENSING_ENABLED is on (surfaced as the top-level
+    # availableContexts key, and gates billingContext's presence too — same flag),
+    # None otherwise so both keys are omitted entirely.
+    managed_by_org: "ManagedByOrg | None" = None
+    available_contexts: list[dict] | None = None
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-friendly dict using camelCase keys for the frontend."""
@@ -71,7 +97,34 @@ class Entitlements:
         if self.stripe_price_id:
             plan_period = "annual" if "annual" in self.stripe_price_id else "monthly"
 
-        return {
+        credits_dict = None
+        if self.credits:
+            credits_dict = {
+                "balance": self.credits.balance,
+                "bundleBalance": self.credits.bundle_balance,
+                "reserveBalance": self.credits.reserve_balance,
+                "monthlyGrant": self.credits.monthly_grant,
+                "overageThisPeriod": self.credits.overage_this_period,
+                "overageEnabled": self.credits.overage_enabled,
+                "overageCapCredits": self.credits.overage_cap_credits,
+                "storageOverageEnabled": self.credits.storage_overage_enabled,
+                "periodEnd": self.credits.period_end.isoformat() if self.credits.period_end else None,
+                "prices": {
+                    "zoeMessage": self.credits.prices.get("zoe_message", 0),
+                    "oneclickRun": self.credits.prices.get("oneclick_run", 0),
+                    "registryParse": self.credits.prices.get("registry_parse", 0),
+                },
+            }
+            # Org context only — the KEY itself is absent in personal context, so
+            # the personal payload stays byte-identical to pre-licensing.
+            if self.managed_by_org is not None:
+                credits_dict["managedByOrg"] = {
+                    "orgId": self.managed_by_org.org_id,
+                    "orgName": self.managed_by_org.org_name,
+                    "role": self.managed_by_org.role,
+                }
+
+        result = {
             "tier": self.tier,
             "status": self.status,
             "caps": {
@@ -98,26 +151,7 @@ class Entitlements:
                 "oneclickRunsThisPeriod": self.usage.oneclick_runs_this_period,
                 "periodEnd": self.usage.period_end.isoformat(),
             },
-            "credits": (
-                {
-                    "balance": self.credits.balance,
-                    "bundleBalance": self.credits.bundle_balance,
-                    "reserveBalance": self.credits.reserve_balance,
-                    "monthlyGrant": self.credits.monthly_grant,
-                    "overageThisPeriod": self.credits.overage_this_period,
-                    "overageEnabled": self.credits.overage_enabled,
-                    "overageCapCredits": self.credits.overage_cap_credits,
-                    "storageOverageEnabled": self.credits.storage_overage_enabled,
-                    "periodEnd": self.credits.period_end.isoformat() if self.credits.period_end else None,
-                    "prices": {
-                        "zoeMessage": self.credits.prices.get("zoe_message", 0),
-                        "oneclickRun": self.credits.prices.get("oneclick_run", 0),
-                        "registryParse": self.credits.prices.get("registry_parse", 0),
-                    },
-                }
-                if self.credits
-                else None
-            ),
+            "credits": credits_dict,
             "hasOverrides": self.has_overrides,
             "degraded": self.degraded,
             "subscription": {
@@ -128,6 +162,28 @@ class Entitlements:
                 "planPeriod": plan_period,
             },
         }
+        # LICENSING_ENABLED gate lives in the service (get_for_user sets
+        # available_contexts to a list only when licensing is on); here we simply
+        # omit the key entirely when it's None so the pre-licensing payload is
+        # byte-identical.
+        if self.available_contexts is not None:
+            result["availableContexts"] = self.available_contexts
+            # billingContext (Task 3 follow-up): a stable identity signal that is
+            # present whenever licensing is on, REGARDLESS of CREDITS_ENABLED —
+            # unlike credits.managedByOrg, which only exists when the credits
+            # block itself is built. Frontend org/personal rendering should key
+            # off this field (falling back to credits.managedByOrg for callers
+            # written before this field existed).
+            if self.managed_by_org is not None:
+                result["billingContext"] = {
+                    "type": "org",
+                    "orgId": self.managed_by_org.org_id,
+                    "orgName": self.managed_by_org.org_name,
+                    "role": self.managed_by_org.role,
+                }
+            else:
+                result["billingContext"] = {"type": "personal"}
+        return result
 
 
 class Action(StrEnum):
@@ -211,6 +267,28 @@ class CreditCheckResult:
     upgrade_required: bool = False  # free tier: upgrade is the unlock
     reset_date: datetime | None = None
     degraded: bool = False
+    # Licensing Phase B (spec §5, rules 8/9). `wallet_id` is the id of the wallet
+    # the check passed against (personal wallet id in personal context, SEAT wallet
+    # id in org context); gated_credits copies it into the CreditGrant so the debit
+    # targets the SAME wallet the check cleared — a context switch mid-action can
+    # never move the charge. None on a zero-price or degraded (uncharged) result.
+    # `managed_by_org` marks an org-context (seat-wallet) outcome: on denial the
+    # enforcement 402 gains managedByOrg/requestUrl and the seat wall carries NO
+    # overage/upgrade path (the member asks their admin instead).
+    wallet_id: str | None = None
+    managed_by_org: bool = False
+    # Licensing Phase C (spec §6/§11, rule 11) — owner-aware dry-seat wall. Set
+    # ONLY on a DERIVED-resource org DENY where the caller OWNS the linked
+    # project (a lazy, deny-path-only ownership check in `_check_credits_org`).
+    # `owner_can_unlink` tells the enforcement 402 to render a second CTA —
+    # unlink this project to fall back to the owner's personal plan — which
+    # CO-OCCURS with managedByOrg/requestUrl (the owner-who-is-also-admin persona
+    # is the common one; the two are never mutually exclusive). `project_id` is
+    # the linked project to unlink, REQUIRED alongside the flag (contract-derived
+    # surfaces like Zoe hold no project locally, so the hint would be dead text
+    # without it).
+    owner_can_unlink: bool = False
+    project_id: str | None = None
 
 
 @dataclass
@@ -225,6 +303,13 @@ class CreditGrant:
     price: int
     kind: Literal["debit", "overage_debit"]
     enabled: bool
+    # Licensing Phase B (rule 9): the wallet the debit MUST target — the exact
+    # wallet the credit check passed against (seat wallet in org context, personal
+    # wallet otherwise). When set, debit_for_action charges it DIRECTLY, resolving
+    # nothing, so a billing-context switch between check and debit cannot relocate
+    # the charge. None for legacy / free / zero-price grants → debit_for_action
+    # falls back to today's personal-wallet resolve (a no-op when disabled anyway).
+    wallet_id: str | None = None
 
 
 class OverridePayload(BaseModel):

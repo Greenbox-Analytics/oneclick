@@ -17,7 +17,14 @@ import pytest
 import main
 import subscriptions.enforcement as enforcement
 from subscriptions.models import Action, CheckResult, CreditCheckResult
-from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_effect
+from subscriptions.service import EntitlementsService
+from tests.conftest import (
+    _DEFAULT_CREDIT_PRICES,
+    _DEFAULT_WALLET_ROW,
+    TEST_USER_ID,
+    MockQueryBuilder,
+    _default_table_side_effect,
+)
 
 PROJECT_ID = "proj-0000-0000-0000-0000-000000000001"
 CONTRACT_ID = "cont-0000-0000-0000-0000-000000000001"
@@ -128,6 +135,89 @@ def test_is_zero_cost_query(query, expected):
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture()
+def seat_dry_service(monkeypatch):
+    """Org (seat) billing context, empty seat wallet: check denies with the
+    managed-by-org seat wall (no overage / upgrade path)."""
+    svc = MagicMock()
+    svc.check_credits.return_value = CreditCheckResult(
+        allowed=False,
+        price=3,
+        managed_by_org=True,
+        reason="You've used the credits your organization allocated. Ask your admin for more.",
+    )
+    svc.can.return_value = CheckResult(allowed=True, reason=None, upgrade_required=False)
+    monkeypatch.setattr(enforcement, "_service", lambda: svc)
+    monkeypatch.setenv("CREDITS_ENABLED", "true")
+    return svc
+
+
+class TestSeatCreditWall:
+    def test_zoe_seat_wall_402_carries_managed_by_org(self, client, seat_dry_service):
+        resp = client.post("/zoe/ask-stream", json={"query": "what is my split?", "contract_ids": []})
+        assert resp.status_code == 402
+        detail = resp.json()["detail"]
+        assert detail["managedByOrg"] is True
+        assert detail["requestUrl"] == "/organization"
+        assert detail["upgradeRequired"] is False
+        assert detail["overageAvailable"] is False
+        assert detail["resetDate"] is None
+        assert "organization" in detail["reason"].lower()
+
+
+@pytest.fixture()
+def owner_seat_dry_service(monkeypatch):
+    """Org (seat) billing context on a project the caller OWNS: dry seat →
+    owner-aware wall (ownerCanUnlink + projectId co-occurring with managedByOrg)."""
+    svc = MagicMock()
+    svc.check_credits.return_value = CreditCheckResult(
+        allowed=False,
+        price=3,
+        managed_by_org=True,
+        owner_can_unlink=True,
+        project_id=PROJECT_ID,
+        reason=(
+            "You've used the credits your organization allocated. Ask your admin for more. "
+            "Or unlink this project in its settings to use your own plan here."
+        ),
+    )
+    svc.can.return_value = CheckResult(allowed=True, reason=None, upgrade_required=False)
+    monkeypatch.setattr(enforcement, "_service", lambda: svc)
+    monkeypatch.setenv("CREDITS_ENABLED", "true")
+    return svc
+
+
+class TestResourceDerivationWiring:
+    """Each metered endpoint threads the resource ctx it already holds into
+    check_credits (Phase C, rule 5) — NO new queries at the call site."""
+
+    def test_zoe_threads_full_contract_ids_list(self, client, broke_free_service):
+        # Access is checked per-contract BEFORE the gate — mock it to pass so the
+        # credit wall (not a 403) is what fires.
+        with patch("main.user_can_access_file", new=AsyncMock(return_value=True)):
+            resp = client.post("/zoe/ask-stream", json={"query": "what is my split?", "contract_ids": ["c1", "c2"]})
+        assert resp.status_code == 402
+        # FULL list threaded — the resolver's unanimity rule decides, never [0].
+        broke_free_service.check_credits.assert_called_once_with(
+            TEST_USER_ID,
+            "zoe_message",
+            is_admin=False,
+            resource_project_id=None,
+            resource_contract_ids=["c1", "c2"],
+        )
+
+    def test_owner_dry_seat_wall_surfaces_unlink_through_zoe(self, client, owner_seat_dry_service):
+        with patch("main.user_can_access_file", new=AsyncMock(return_value=True)):
+            resp = client.post("/zoe/ask-stream", json={"query": "what is my split?", "contract_ids": ["c1"]})
+        assert resp.status_code == 402
+        detail = resp.json()["detail"]
+        assert detail["ownerCanUnlink"] is True
+        assert detail["projectId"] == PROJECT_ID
+        # Co-occurs with the managed-by-org buy/request affordance.
+        assert detail["managedByOrg"] is True
+        assert detail["requestUrl"] == "/organization"
+
+
 class TestCreditWalls:
     def test_zoe_402_when_broke(self, client, broke_free_service):
         resp = client.post("/zoe/ask-stream", json={"query": "what is my split?", "contract_ids": []})
@@ -135,7 +225,10 @@ class TestCreditWalls:
         detail = resp.json()["detail"]
         assert detail["upgradeRequired"] is True
         assert detail["reason"] == "You've used this month's credits."
-        broke_free_service.check_credits.assert_called_once_with(TEST_USER_ID, "zoe_message", is_admin=False)
+        # Phase C: contract_ids=[] → resource_contract_ids=None (no resource → ambient).
+        broke_free_service.check_credits.assert_called_once_with(
+            TEST_USER_ID, "zoe_message", is_admin=False, resource_project_id=None, resource_contract_ids=None
+        )
 
     def test_zoe_conversational_bypasses_wall_when_broke(self, client, broke_free_service, debit_spy):
         events = ['data: {"type": "complete", "confidence": "conversational", "answer": "Hey!"}\n\n']
@@ -157,7 +250,10 @@ class TestCreditWalls:
         )
         assert resp.status_code == 402
         assert resp.json()["detail"]["upgradeRequired"] is True
-        broke_free_service.check_credits.assert_called_once_with(TEST_USER_ID, "oneclick_run", is_admin=False)
+        # Phase C: OneClick threads the project_id it already holds (rule 5).
+        broke_free_service.check_credits.assert_called_once_with(
+            TEST_USER_ID, "oneclick_run", is_admin=False, resource_project_id=PROJECT_ID, resource_contract_ids=None
+        )
 
     def test_oneclick_stream_402_when_broke(self, client, broke_free_service):
         resp = client.get(
@@ -205,7 +301,14 @@ class TestCreditWalls:
         resp = client.post("/registry/parse-contract-splits", data={"contract_file_id": CONTRACT_ID})
         assert resp.status_code == 402
         assert resp.json()["detail"]["upgradeRequired"] is True
-        broke_free_service.check_credits.assert_called_once_with(TEST_USER_ID, "registry_parse", is_admin=False)
+        # Phase C: a PICKED contract threads its id as a one-element list (rule 5).
+        broke_free_service.check_credits.assert_called_once_with(
+            TEST_USER_ID,
+            "registry_parse",
+            is_admin=False,
+            resource_project_id=None,
+            resource_contract_ids=[CONTRACT_ID],
+        )
 
     def test_registry_cached_parse_bypasses_wall_when_broke(
         self, client, mock_supabase, broke_free_service, monkeypatch
@@ -707,3 +810,163 @@ class TestGetOrParseOnMiss:
 
         out = get_or_parse(None, lambda: "contract text", parser=parser, on_miss=_explodes)
         assert out is sentinel
+
+
+# ---------------------------------------------------------------------------
+# Task 7 (Licensing Phase B) — context-aware EntitlementsService.get_credit_usage.
+#
+# `_resolve_context` itself is exhaustively covered in test_billing_context.py
+# (Task 5) — these tests monkeypatch it directly rather than re-driving the
+# profiles/org_members/organizations reads, so they stay focused on
+# get_credit_usage's OWN branching + aggregation logic.
+# ---------------------------------------------------------------------------
+
+
+class _NoGteMockQueryBuilder(MockQueryBuilder):
+    """Same chainable mock as MockQueryBuilder, but `.gte()` raises — proves
+    the org-context aggregation never floors the ledger scan by created_at
+    (seat wallets are NULL-period by construction; the plan calls out an
+    all-time v1 with `sinceLastAllocation` windowing as a named follow-up)."""
+
+    def gte(self, *args, **kwargs):
+        raise AssertionError("org-context get_credit_usage must not filter credit_ledger by created_at")
+
+
+class TestGetCreditUsageOrgContext:
+    ORG_CTX = {
+        "org_id": "org-usage-0001",
+        "org_name": "Acme Records",
+        "org_member_id": "member-usage-0001",
+        "role": "member",
+        "pending": False,
+    }
+
+    SEAT_WALLET_ROW = {
+        "id": "wallet-seat-usage",
+        "owner_type": "seat",
+        "owner_id": "member-usage-0001",
+        "bundle_balance": 0,
+        "reserve_balance": 777,
+        "overage_this_period": 0,
+        "period_start": None,
+        "period_end": None,
+    }
+
+    LEDGER_ROWS = [
+        {"action": "zoe_message", "delta": -3, "kind": "debit", "metadata": {}},
+        {"action": "zoe_message", "delta": -3, "kind": "debit", "metadata": {}},
+        {"action": "oneclick_run", "delta": -21, "kind": "debit", "metadata": {}},
+    ]
+
+    def _org_supabase(self, *, seat_wallet=None, ledger_rows=None):
+        seat_wallet = self.SEAT_WALLET_ROW if seat_wallet is None else seat_wallet
+        ledger_rows = self.LEDGER_ROWS if ledger_rows is None else ledger_rows
+        touched: list[str] = []
+
+        def side_effect(name):
+            touched.append(name)
+            b = MockQueryBuilder()
+            if name == "credit_wallets":
+                b.execute.return_value = MagicMock(data=[seat_wallet], count=1)
+            elif name == "credit_prices":
+                b.execute.return_value = MagicMock(data=list(_DEFAULT_CREDIT_PRICES), count=3)
+            elif name == "credit_ledger":
+                # `.gte` must never be called in this branch — see the class docstring.
+                b = _NoGteMockQueryBuilder()
+                b.execute.return_value = MagicMock(data=ledger_rows, count=len(ledger_rows))
+            return b
+
+        sb = MagicMock()
+        sb.table.side_effect = side_effect
+        sb._touched = touched
+        return sb
+
+    def test_active_org_context_returns_seat_aggregation(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ctx = dict(self.ORG_CTX)
+        monkeypatch.setattr(EntitlementsService, "_resolve_context", lambda _self, _uid: dict(ctx))
+        sb = self._org_supabase()
+
+        result = EntitlementsService(sb).get_credit_usage(TEST_USER_ID)
+
+        assert result["enabled"] is True
+        assert result["managedByOrg"] == {"orgId": ctx["org_id"], "orgName": ctx["org_name"], "role": ctx["role"]}
+        assert result["periodStart"] is None
+        assert result["periodEnd"] is None
+        assert result["monthlyGrant"] == 0
+        assert result["overageThisPeriod"] == 0
+        assert result["bundleBalance"] == 0
+        assert result["reserveBalance"] == 777
+        assert result["balance"] == 777
+
+        tools = {t["action"]: t for t in result["tools"]}
+        assert tools["zoe_message"]["count"] == 2
+        assert tools["zoe_message"]["spent"] == 6
+        assert tools["oneclick_run"]["count"] == 1
+        assert tools["oneclick_run"]["spent"] == 21
+        assert tools["registry_parse"]["count"] == 0
+
+        # NEVER queries the personal wallet / subscription / tier rows (rule
+        # 11's usage-view analogue) — only the seat wallet + shared prices +
+        # seat ledger are touched.
+        assert "subscriptions" not in sb._touched
+        assert "tier_entitlements" not in sb._touched
+        assert "tier_overrides" not in sb._touched
+        assert "usage_counters" not in sb._touched
+
+    def test_pending_org_context_returns_personal_payload(self, monkeypatch):
+        """A pending-org preference confers nothing yet (rule 7) — must take
+        the ordinary PERSONAL path, same as no org preference at all."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        pending_ctx = dict(self.ORG_CTX, pending=True)
+        monkeypatch.setattr(EntitlementsService, "_resolve_context", lambda _self, _uid: dict(pending_ctx))
+
+        ledger_rows = [{"action": "oneclick_run", "delta": -21, "kind": "debit", "metadata": {}}]
+
+        def side_effect(name):
+            b = _default_table_side_effect(name)
+            if name == "credit_ledger":
+                b.execute.return_value = MagicMock(data=ledger_rows, count=len(ledger_rows))
+            return b
+
+        sb = MagicMock()
+        sb.table.side_effect = side_effect
+
+        result = EntitlementsService(sb).get_credit_usage(TEST_USER_ID)
+
+        assert result["enabled"] is True
+        assert "managedByOrg" not in result
+        assert result["bundleBalance"] == _DEFAULT_WALLET_ROW["bundle_balance"]
+        assert result["periodStart"] == _DEFAULT_WALLET_ROW["period_start"]
+        tools = {t["action"]: t for t in result["tools"]}
+        assert tools["oneclick_run"]["count"] == 1
+        assert tools["oneclick_run"]["spent"] == 21
+
+    def test_licensing_off_returns_personal_payload_unchanged(self, monkeypatch):
+        """LICENSING_ENABLED unset → the REAL `_resolve_context` (not mocked
+        here) short-circuits to None on its own, so this proves the actual
+        flag gate — not a stubbed one — produces the byte-identical personal
+        payload (regression)."""
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+
+        ledger_rows = [{"action": "zoe_message", "delta": -3, "kind": "debit", "metadata": {}}]
+
+        def side_effect(name):
+            b = _default_table_side_effect(name)
+            if name == "credit_ledger":
+                b.execute.return_value = MagicMock(data=ledger_rows, count=len(ledger_rows))
+            return b
+
+        sb = MagicMock()
+        sb.table.side_effect = side_effect
+
+        result = EntitlementsService(sb).get_credit_usage(TEST_USER_ID)
+
+        assert result["enabled"] is True
+        assert "managedByOrg" not in result
+        assert result["periodStart"] == _DEFAULT_WALLET_ROW["period_start"]
+        assert result["periodEnd"] == _DEFAULT_WALLET_ROW["period_end"]
+        tools = {t["action"]: t for t in result["tools"]}
+        assert tools["zoe_message"]["count"] == 1
+        assert tools["zoe_message"]["spent"] == 3

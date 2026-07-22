@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { API_URL, getAuthHeaders, ApiError } from "@/lib/apiFetch";
+import { API_URL, getAuthHeaders, apiErrorFromBody } from "@/lib/apiFetch";
 
 export interface ParsedParty {
   name: string;
@@ -48,15 +48,7 @@ export function useParseContractSplits() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        // detail is a string for legacy errors; structured 402s carry an
-        // object with a human-readable `reason`.
-        const message =
-          typeof body.detail === "string"
-            ? body.detail
-            : body.detail?.reason ?? `Request failed: ${res.status}`;
-        const err = new ApiError(message, res.status);
-        err.detail = body.detail;
-        throw err;
+        throw apiErrorFromBody(body, res.status);
       }
       return res.json();
     },

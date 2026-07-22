@@ -165,7 +165,7 @@ class AdminService:
 
         return {"user": user, "entitlements": ent.to_dict(), "override": override}
 
-    def set_tier(self, user_id: str, tier: Literal["free", "pro"]) -> None:
+    def set_tier(self, user_id: str, tier: Literal["free", "pro", "pro_max"]) -> None:
         self.supabase.table("subscriptions").upsert(
             {
                 "user_id": user_id,
@@ -491,6 +491,198 @@ def grant_user_credits(
         },
     ).execute()
     return res.data if isinstance(res.data, dict) else {"granted": amount}
+
+
+# Per-owner-type clawback config — the ONLY things that differ between the
+# user-wallet and org-pool clawback paths: the idempotency-namespace prefix, the
+# no-wallet ValueError text, and the bad-RPC-shape RuntimeError text. `{id}` is
+# filled with the owner id (the user no-wallet message has no placeholder, which
+# .format harmlessly ignores). Everything else is the shared debit_credits invariant.
+_CLAWBACK_CONF = {
+    "user": {
+        "prefix": "admin-adjust",
+        "no_wallet": "User has no credit wallet",
+        "bad_shape": "clawback: debit_credits returned unexpected shape for user {id}",
+    },
+    "org": {
+        "prefix": "admin-org-adjust",
+        "no_wallet": "Organization has no pool wallet: {id}",
+        "bad_shape": "org clawback: debit_credits returned unexpected shape for org {id}",
+    },
+}
+
+
+def _admin_clawback(supabase, owner_type: str, owner_id: str, amount: int, metadata: dict, request_id: str) -> dict:
+    """Shared clawback core for adjust_user_credits / adjust_org_pool. Per-path
+    strings come from _CLAWBACK_CONF; the wallet lookup, the debit_credits RPC
+    shape, and the never-fabricate-a-removal shape guard are IDENTICAL and live
+    here once. Callers own the `metadata` dict (the only structural difference)."""
+    conf = _CLAWBACK_CONF[owner_type]
+    wallet_res = (
+        supabase.table("credit_wallets").select("id").eq("owner_type", owner_type).eq("owner_id", owner_id).execute()
+    )
+    if not wallet_res.data:
+        raise ValueError(conf["no_wallet"].format(id=owner_id))
+    res = supabase.rpc(
+        "debit_credits",
+        {
+            "p_wallet_id": wallet_res.data[0]["id"],
+            "p_amount": amount,
+            "p_action": "admin_adjust",
+            "p_request_id": f"{conf['prefix']}:{request_id}",
+            "p_kind": "clawback",
+            "p_metadata": metadata,
+        },
+    ).execute()
+    if not isinstance(res.data, dict):
+        # Never claim a removal we can't confirm — an unexpected RPC shape is
+        # an error to surface, not a success to fabricate.
+        raise RuntimeError(conf["bad_shape"].format(id=owner_id))
+    return res.data
+
+
+def adjust_user_credits(supabase, user_id: str, amount: int, reason: str, adjusted_by: str, request_id: str) -> dict:
+    """Admin clawback (pack refunds / chargebacks — spec 2026-07-19 §3).
+
+    This is the ONLY sanctioned way to remove credits; a hand-written UPDATE
+    against wallet tables would break the sum(delta) == bundle + reserve
+    reconciliation invariant that the ledger exists to guarantee.
+
+    Removes up to `amount` credits with a ledger row of kind 'clawback'.
+    RESERVE-ONLY and CLAMPED in the RPC — purchased credits live in reserve,
+    and touching the bundle would be undone by the next rollover. Never
+    creates a negative balance; the RPC returns {removed, shortfall,
+    balance_after} on a fresh clawback, and a shortfall is a written-off cost
+    (spec §3) — the refund exceeded what was recoverable from the wallet.
+
+    Reserve is FUNGIBLE: admin/tester goodwill grants share the same bucket
+    as purchased credits, so a clawback may end up consuming goodwill credits
+    once the purchase remnant is spent. That's accepted — it's how prepaid
+    balances work — and the ledger `reason` records why, so support isn't
+    surprised when a clawback removes more than "just the purchase".
+
+    The clamp/bucket semantics themselves live in the RPC and can't be
+    verified against a mocked Supabase client — see the spec's real-DB
+    launch-gate list (spec §10) for the concrete scenarios to check there.
+
+    `request_id` is REQUIRED (unlike grant_user_credits' optional key): a
+    double-submitted clawback removes a real customer's credits twice, not
+    merely double-grants goodwill. Support has the Stripe refund/dispute id
+    in hand at exactly this moment — use it.
+
+    Deliberately NO analytics event: this is an admin support action, not
+    user behavior, and PostHog is not the billing record (Stripe + the
+    ledger are).
+    """
+    return _admin_clawback(
+        supabase, "user", user_id, amount, {"reason": reason, "adjusted_by": adjusted_by}, request_id
+    )
+
+
+def adjust_org_pool(supabase, org_id: str, amount: int, reason: str, adjusted_by: str, request_id: str) -> dict:
+    """Admin clawback on an org's POOL wallet — archived/live org pool
+    disposition tooling (follow-ups plan 2026-07-22, Task 2).
+
+    RUNBOOK — support executes ONE of two pairs, both halves idempotent and
+    ledger-audited (neither half alone is "done"):
+      - REFUND: this clawback (removes the pool balance being refunded) +
+        a manual Stripe refund issued separately by support, using the same
+        refund/dispute id as this call's `idempotency_key`/`reason`.
+      - GOODWILL MIGRATION: this clawback on the org pool + the EXISTING
+        per-user admin grant (`grant_user_credits`) re-issuing the same (or a
+        partial) amount into a destination user's PERSONAL wallet.
+    This is the ONLY sanctioned way to remove credits from an org pool; a
+    hand-written UPDATE against credit_wallets/credit_ledger would break the
+    sum(delta) == bundle_balance + reserve_balance reconciliation invariant
+    the ledger exists to guarantee — see adjust_user_credits above, which
+    this mirrors for the org-wallet case.
+
+    TRIPWIRE — org pool balance == reserve, so the reserve-only clawback
+    branch below is TOTAL for org wallets, not merely "compatible with them":
+    org wallets are NULL-period, reserve-only BY CONSTRUCTION
+    (orgs/wallets.py module docstring, rule 1) and are never action-debited —
+    `check_credits`/`debit_for_action` only ever spend a per-member 'seat'
+    wallet, never the org 'pool' wallet directly. The pool wallet is only
+    ever GRANTED into (Stripe topups, via `stripe_events._handle_org_topup_grant`)
+    or TRANSFERRED reserve-to-reserve (seat funding/reclaim, via
+    `transfer_credits`). So `bundle_balance` is always 0 on an org wallet, and
+    `debit_credits`'s reserve-only/clamped clawback branch removes the WHOLE
+    story, not just part of it. If a future change ever debits an org pool's
+    bundle bucket directly (some new pool-level action-spend), this
+    reserve-only assumption breaks and a clawback here would silently leave
+    bundle money behind — audit every `debit_credits` call site against org
+    wallets before adding one, and revisit this docstring.
+
+    Raises ValueError (-> 404 at the router) when the org has no pool
+    wallet yet — there is nothing to claw back. Raises RuntimeError on a
+    non-dict RPC result — never fabricate a removal we can't confirm (mirrors
+    adjust_user_credits).
+
+    Deliberately NO analytics event: this is an admin support action, not
+    user behavior, and PostHog is not the billing record (Stripe + the
+    ledger are) — same stance as the per-user clawback.
+    """
+    return _admin_clawback(
+        supabase, "org", org_id, amount, {"reason": reason, "adjusted_by": adjusted_by, "org_id": org_id}, request_id
+    )
+
+
+def get_org_pool(supabase, org_id: str) -> dict:
+    """Support-visibility snapshot of an org's pool, read BEFORE deciding how
+    to dispose of it via `adjust_org_pool` (see that function's runbook).
+
+    Returns {orgId, status, archivedAt, poolBalance, cumulativePurchased,
+    ledger}. `cumulativePurchased` is computed via the SAME
+    `orgs.wallets.cumulative_purchased` helper the Phase B activation check
+    (`stripe_events._handle_org_topup_grant`) uses — support's "did this org
+    cross the minimum" must be definitionally identical to what activation
+    summed, not a second reimplementation that can drift.
+
+    Raises ValueError (-> 404 at the router) when the org itself doesn't
+    exist. An org that exists but has no pool wallet yet (never topped up —
+    a normal state for a fresh 'pending' org) is NOT an error: it reports
+    zero balance/cumulative and an empty ledger.
+    """
+    from orgs.wallets import cumulative_purchased
+
+    org_res = supabase.table("organizations").select("id, status, archived_at").eq("id", org_id).execute()
+    org_rows = org_res.data or []
+    if not org_rows:
+        raise ValueError(f"Organization not found: {org_id}")
+    org = org_rows[0]
+
+    wallet_res = supabase.table("credit_wallets").select("*").eq("owner_type", "org").eq("owner_id", org_id).execute()
+    wallet_rows = wallet_res.data or []
+    if not wallet_rows:
+        return {
+            "orgId": org_id,
+            "status": org.get("status"),
+            "archivedAt": org.get("archived_at"),
+            "poolBalance": 0,
+            "cumulativePurchased": 0,
+            "ledger": [],
+        }
+    wallet = wallet_rows[0]
+    wallet_id = wallet["id"]
+    pool_balance = (wallet.get("bundle_balance") or 0) + (wallet.get("reserve_balance") or 0)
+
+    ledger_res = (
+        supabase.table("credit_ledger")
+        .select("*")
+        .eq("wallet_id", wallet_id)
+        .order("created_at", desc=True)
+        .limit(50)
+        .execute()
+    )
+
+    return {
+        "orgId": org_id,
+        "status": org.get("status"),
+        "archivedAt": org.get("archived_at"),
+        "poolBalance": pool_balance,
+        "cumulativePurchased": cumulative_purchased(supabase, wallet_id),
+        "ledger": ledger_res.data or [],
+    }
 
 
 def get_user_credit_ledger(supabase, user_id: str, limit: int = 100) -> list[dict]:

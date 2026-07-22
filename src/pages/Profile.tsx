@@ -1,12 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Sun, Moon, HelpCircle, BookOpen } from "lucide-react";
+import { Loader2, Sun, Moon, HelpCircle, Sparkles } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -23,6 +25,18 @@ import { PlanCard } from "@/components/billing/PlanCard";
 import { CreditsUsageCard } from "@/components/billing/CreditsUsageCard";
 import { ResourceLimitsCard } from "@/components/billing/ResourceLimitsCard";
 import { IntegrationsCard } from "@/components/billing/IntegrationsCard";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useEntitlements, type BillingContextOption } from "@/hooks/useEntitlements";
+import { useSetBillingContext } from "@/hooks/useBillingContext";
+import { useAnalytics, type Plan } from "@/hooks/useAnalytics";
+import { peekCachedAnalyticsContext, refreshAnalyticsContext } from "@/hooks/useAnalyticsContext";
+import { useArtistsList } from "@/hooks/useArtistsList";
+import { useProjectsList } from "@/hooks/useProjectsList";
+import { useBoards } from "@/hooks/useBoards";
+import { isPaidTier, tierLabel } from "@/lib/tiers";
+
+const formatPeriodEnd = (iso: string): string =>
+  new Date(iso).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 
 const Profile = () => {
   const navigate = useNavigate();
@@ -132,22 +146,145 @@ const Profile = () => {
 
   const displayName = formData.given_name || formData.first_name || user?.email?.split("@")[0] || "";
 
+  // Billing context switcher (Licensing Phase B, spec §5) — "Working as:
+  // Personal / ⟨Org⟩". Only rendered when the caller has more than one
+  // context to choose from (availableContexts is absent/personal-only for
+  // everyone else, including licensing-off).
+  const { data: ent } = useEntitlements();
+  const setBillingContext = useSetBillingContext();
+  const availableContexts = ent?.availableContexts ?? [];
+  const orgContexts = availableContexts.filter(
+    (c): c is Extract<BillingContextOption, { type: "org" }> => c.type === "org",
+  );
+  const showContextSwitcher = availableContexts.length > 1;
+  // Key the switcher's current value off billingContext (present regardless
+  // of CREDITS_ENABLED — Licensing follow-ups Task 3), falling back to
+  // credits.managedByOrg for safety.
+  const billingContextValue =
+    (ent?.billingContext?.type === "org" ? ent.billingContext.orgId : undefined) ??
+    ent?.credits?.managedByOrg?.orgId ??
+    "personal";
+
+  // ---- Ported from the retired /subscription page (merged into Profile) ----
+
+  // Post-Checkout landing: Stripe's success URL returns here with
+  // ?welcome=true&stripe_session_id=... — poll entitlements until the webhook
+  // lands, fire checkout_completed once, then clean the URL.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const stripeSessionId = searchParams.get("stripe_session_id");
+  const welcome = searchParams.get("welcome") === "true";
+  const [isPolling, setIsPolling] = useState(false);
+  const queryClient = useQueryClient();
+  const { captureCheckoutCompleted } = useAnalytics();
+  const checkoutCompletedFiredRef = useRef(false);
+
+  const isPaid = isPaidTier(ent?.tier);
+  const analyticsCtx = user?.id ? peekCachedAnalyticsContext(user.id) : null;
+  const isTester = analyticsCtx?.is_tester === true;
+  const testerExpiresAt = analyticsCtx?.tester_expires_at ?? null;
+
+  // Over-cap detection (Free users above their limits). These list hooks are
+  // also mounted by ResourceLimitsCard below — React Query dedupes them.
+  const { artists } = useArtistsList();
+  const { projects } = useProjectsList();
+  const { tasks } = useBoards();
+  const isOverCap = useMemo(() => {
+    if (!ent) return false;
+    return (
+      (ent.caps.maxArtists !== -1 && (artists?.length ?? 0) > ent.caps.maxArtists) ||
+      (ent.caps.maxProjects !== -1 && (projects?.length ?? 0) > ent.caps.maxProjects) ||
+      (ent.caps.maxTasks !== -1 && (tasks?.length ?? 0) > ent.caps.maxTasks) ||
+      (ent.caps.maxStorageBytes !== -1 && ent.usage.totalStorageBytes > ent.caps.maxStorageBytes) ||
+      (ent.caps.maxSplitSheetsPerMonth !== -1 &&
+        ent.usage.splitSheetsThisPeriod > ent.caps.maxSplitSheetsPerMonth)
+    );
+  }, [ent, artists, projects, tasks]);
+
+  useEffect(() => {
+    if (!welcome || !stripeSessionId) return;
+    if (isPaid) {
+      if (!checkoutCompletedFiredRef.current) {
+        checkoutCompletedFiredRef.current = true;
+        const completedPlan = (ent?.subscription?.planPeriod as Plan | undefined) ?? "monthly";
+        captureCheckoutCompleted(completedPlan);
+      }
+      // Refresh the analytics-context cache so banners reading the 5-min
+      // localStorage cache don't keep showing "you're on Free" post-upgrade.
+      if (user?.id) {
+        void refreshAnalyticsContext(user.id, user.email);
+      }
+      setSearchParams({});
+      toast({ title: `Welcome to ${tierLabel(ent?.tier)}!`, description: "Your subscription is active." });
+      return;
+    }
+    setIsPolling(true);
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["entitlements"] });
+    }, 1000);
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+      setIsPolling(false);
+      toast({
+        title: "Subscription is processing",
+        description: "Refresh in a moment if it doesn't show up.",
+      });
+    }, 10_000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [welcome, stripeSessionId, isPaid]);
+
+  const handleBillingContextChange = (value: string) => {
+    const orgId = value === "personal" ? null : value;
+    const target = orgId ? orgContexts.find((o) => o.orgId === orgId) : null;
+    setBillingContext.mutate(
+      { orgId },
+      {
+        onSuccess: () => {
+          if (!orgId) {
+            toast({ title: "Switched to Personal", description: "Your personal plan and credits apply again." });
+          } else if (target?.pending) {
+            toast({
+              title: "Saved",
+              description: `${target.orgName} is still activating — billing switches over once it's active.`,
+            });
+          } else {
+            toast({ title: "Switched", description: `Now working as ${target?.orgName ?? "your organization"}.` });
+          }
+        },
+        onError: () => {
+          toast({
+            title: "Couldn't switch",
+            description: "We couldn't update your billing context. Please try again.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
   return (
     <div className="min-h-screen bg-background">
+      {/* Post-Checkout polling overlay (returning from Stripe) */}
+      {isPolling && (
+        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur flex items-center justify-center">
+          <div className="text-center">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            {/* Tier isn't known yet (webhook hasn't landed), so this can't
+                name the plan without guessing. */}
+            <div className="text-sm">Activating your subscription…</div>
+          </div>
+        </div>
+      )}
+
       <PageHeader
         backTo="/dashboard"
         actions={
           <>
             <ToolHelpButton onClick={() => walkthrough.replay()} />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
+            <HeaderDocsButton />
           </>
         }
       />
@@ -159,6 +296,50 @@ const Profile = () => {
             Your profile, plan, and credit usage — all in one place.
           </p>
         </div>
+
+        {/* Over-cap banner (Free users above their limits) */}
+        {isOverCap && (
+          <div className="mb-6 rounded-lg border border-destructive/20 bg-destructive/5 p-4 flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <div className="font-medium text-sm">You&apos;re over your Free tier limits</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Some create actions are blocked until you reduce your usage or upgrade.
+              </div>
+            </div>
+            <Button onClick={() => navigate("/pricing")}>Upgrade</Button>
+          </div>
+        )}
+
+        {/* Cancel-scheduled banner */}
+        {ent?.subscription?.cancelAtPeriodEnd && ent.subscription.currentPeriodEnd && (
+          <div className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+            <div className="font-medium text-sm">Subscription scheduled to end</div>
+            <div className="text-sm text-muted-foreground mt-1">
+              Your {tierLabel(ent?.tier)} access ends on{" "}
+              {new Date(ent.subscription.currentPeriodEnd).toLocaleDateString()}. Reactivate via Manage
+              subscription if you change your mind.
+            </div>
+          </div>
+        )}
+
+        {/* Beta tester banner */}
+        {isTester && (
+          <div className="mb-6 rounded-lg border border-primary/30 bg-primary/5 p-4">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-primary" />
+              <div className="font-medium text-sm">Beta tester access</div>
+            </div>
+            <div className="text-sm text-muted-foreground mt-1">
+              You have full access to every paid feature as a beta tester
+              {testerExpiresAt ? ` until ${formatPeriodEnd(testerExpiresAt)}` : " (no expiration set)"}.
+              Thanks for helping us shape Msanii! For questions or feedback,{" "}
+              <a href="mailto:tech@greenboxanalytics.ca" className="underline">
+                contact us
+              </a>
+              .
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-col gap-[22px]">
           {/* Account information */}
@@ -278,6 +459,38 @@ const Profile = () => {
               </div>
             </Card>
           </div>
+
+          {/* Working as — billing context switcher (Licensing Phase B, spec §5) */}
+          {showContextSwitcher && (
+            <Card className="p-5">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <div className="text-sm font-semibold">Working as</div>
+                  <div className="text-[12.5px] text-muted-foreground mt-0.5">
+                    Whose credits and billing apply to your account right now
+                  </div>
+                </div>
+                <Select
+                  value={billingContextValue}
+                  onValueChange={handleBillingContextChange}
+                  disabled={setBillingContext.isPending}
+                >
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="personal">Personal</SelectItem>
+                    {orgContexts.map((o) => (
+                      <SelectItem key={o.orgId} value={o.orgId}>
+                        {o.orgName}
+                        {o.pending ? " (activating soon)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </Card>
+          )}
 
           {/* Plan */}
           <PlanCard />

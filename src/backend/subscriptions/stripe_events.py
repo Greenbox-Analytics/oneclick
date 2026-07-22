@@ -41,6 +41,32 @@ def _tier_for_price(price_id: str | None) -> str:
     return "pro_max" if price_id and price_id in pro_max_prices else "pro"
 
 
+def _capped_topup(supabase, wallet: dict, grant: int) -> int:
+    """Anti-farming bundle top-up amount: cap by BOTH the unspent bundle AND what's
+    already been granted this period (summed from the ledger since period_start) so
+    a spend→downgrade→re-upgrade loop can't refill — never additive. (The spec
+    assumes portal downgrades apply at period end; this guard holds even if that
+    configuration drifts.)
+
+    TOCTOU residual (accepted): concurrent subscription.updated deliveries can both
+    read a stale bundle and over-grant; bounded by the period-sum cap on the next
+    event and clamped at next rollover.
+    """
+    granted_rows = (
+        supabase.table("credit_ledger")
+        .select("delta, created_at")
+        .eq("wallet_id", wallet["id"])
+        .eq("kind", "monthly_grant")
+        .gte("created_at", wallet.get("period_start") or "1970-01-01")
+        .execute()
+    )
+    granted_this_period = sum(r["delta"] for r in (granted_rows.data or []))
+    return min(
+        max(grant - max(wallet.get("bundle_balance", 0), 0), 0),
+        max(grant - granted_this_period, 0),
+    )
+
+
 def _align_wallet_to_checkout(supabase, user_id: str, tier: str, event_id: str) -> None:
     """Checkout: top the bundle up to the tier's grant + re-anchor the period.
 
@@ -72,23 +98,7 @@ def _align_wallet_to_checkout(supabase, user_id: str, tier: str, event_id: str) 
     if not wallet_res.data:
         return
     wallet = wallet_res.data[0]
-    # Anti-farming: cap by what's already been granted this period, not
-    # just the unspent bundle — a spend→downgrade→re-upgrade loop must not
-    # refill. (The spec assumes portal downgrades apply at period end; this
-    # guard holds even if that configuration drifts.)
-    granted_rows = (
-        supabase.table("credit_ledger")
-        .select("delta, created_at")
-        .eq("wallet_id", wallet["id"])
-        .eq("kind", "monthly_grant")
-        .gte("created_at", wallet.get("period_start") or "1970-01-01")
-        .execute()
-    )
-    granted_this_period = sum(r["delta"] for r in (granted_rows.data or []))
-    top_up = min(
-        max(grant - max(wallet.get("bundle_balance", 0), 0), 0),
-        max(grant - granted_this_period, 0),
-    )
+    top_up = _capped_topup(supabase, wallet, grant)
     if top_up > 0:
         supabase.rpc(
             "grant_credits",
@@ -114,6 +124,11 @@ def _align_wallet_to_checkout(supabase, user_id: str, tier: str, event_id: str) 
 def handle_checkout_session_completed(event, supabase) -> None:
     """User finished Checkout → upsert subscriptions row with tier resolved from price."""
     session = event.data.object
+    if getattr(session, "mode", None) == "payment":
+        # One-time credit pack — no subscription object exists on these
+        # sessions, so this MUST branch before the Subscription.retrieve below.
+        _handle_topup_completed(event, supabase)
+        return
     user_id = session.metadata.get("user_id") if session.metadata else None
     if not user_id:
         return  # Shouldn't happen; metadata is set at session creation
@@ -153,6 +168,166 @@ def handle_checkout_session_completed(event, supabase) -> None:
 
     if credits_enabled():
         _align_wallet_to_checkout(supabase, user_id, tier, event.id)
+
+
+def _handle_topup_completed(event, supabase) -> None:
+    """One-time credit pack purchase (spec 2026-07-19 §3).
+
+    Idempotent on topup:{session.id} — NOT the event id: delayed payment
+    methods redeliver the same session as checkout.session.async_payment_succeeded
+    under a DIFFERENT event id, which would double-grant on an event-keyed id.
+    Failures raise so the webhook 500s and Stripe retries (grant is idempotent).
+
+    Deliberately NOT gated on credits_enabled() (unlike the purchase endpoint):
+    a session someone already PAID for must always grant — gating here would
+    turn a flag flip into silent money-taken-no-credits.
+
+    Licensing Phase B: metadata["target"] is either "user" (Phase A, default —
+    legacy sessions with no "target" key at all fall through here too) or an
+    org id. A non-"user" target hands off to `_handle_org_topup_grant`, which
+    grants into the org's POOL wallet and re-checks cumulative activation
+    (spec rule 3) instead of the personal-wallet path below.
+    """
+    session = event.data.object
+    meta = session.metadata or {}
+    user_id = meta.get("user_id")
+    pack_key = meta.get("pack_key")
+    if not user_id or not pack_key:
+        logger.error("topup: session %s missing metadata", getattr(session, "id", "?"))
+        return
+    # FAIL-CLOSED: grant only on exactly "paid". A MISSING field (malformed
+    # object, future Stripe shape change) must not default to granting on a
+    # money path; async methods deliver async_payment_succeeded later.
+    if getattr(session, "payment_status", None) != "paid":
+        return
+
+    pack_res = supabase.table("credit_packs").select("credits, price_cents").eq("key", pack_key).execute()
+    if not pack_res.data:
+        logger.error("topup: unknown pack %r (session %s)", pack_key, session.id)
+        return
+    credits = pack_res.data[0]["credits"]
+    price_cents = pack_res.data[0]["price_cents"]
+
+    target = meta.get("target")
+    if target and target != "user":
+        _handle_org_topup_grant(supabase, user_id, target, session, pack_key, credits, price_cents)
+        return
+
+    wallet_res = (
+        supabase.table("credit_wallets").select("id").eq("owner_type", "user").eq("owner_id", user_id).execute()
+    )
+    if not wallet_res.data:
+        # Nearly unreachable (signup trigger + migration backfill create user
+        # wallets), but: INSERT-with-ignore, NOT upsert — an upsert's on-conflict
+        # UPDATE would reset period_start/period_end if two deliveries raced,
+        # and a fresh period_end=now() re-triggers a rollover grant. Standard
+        # user-wallet seeding is fine here (user wallets roll over); Phase B
+        # seat wallets must NOT use this path (spec §4).
+        now = datetime.now(UTC)
+        try:
+            supabase.table("credit_wallets").insert(
+                {
+                    "owner_type": "user",
+                    "owner_id": user_id,
+                    "period_start": (now - relativedelta(months=1)).isoformat(),
+                    "period_end": now.isoformat(),
+                }
+            ).execute()
+        except Exception:
+            pass  # duplicate insert lost a race — the re-read below wins either way
+        wallet_res = (
+            supabase.table("credit_wallets").select("id").eq("owner_type", "user").eq("owner_id", user_id).execute()
+        )
+        if not wallet_res.data:
+            raise RuntimeError(f"topup: wallet create failed for user {user_id}")
+
+    res = supabase.rpc(
+        "grant_credits",
+        {
+            "p_wallet_id": wallet_res.data[0]["id"],
+            "p_amount": credits,
+            "p_kind": "purchase",
+            "p_bucket": "reserve",
+            "p_metadata": {"pack_key": pack_key, "price_cents": price_cents},
+            "p_request_id": f"topup:{session.id}",
+        },
+    ).execute()
+    # grant_credits reports {duplicate: bool}. Gate analytics on it: the
+    # async_payment_succeeded redelivery replays this handler, and an
+    # unconditional capture would double-count revenue in PostHog —
+    # topup_purchased is the only pack-revenue signal.
+    if not (isinstance(res.data, dict) and res.data.get("duplicate")):
+        analytics_capture(
+            user_id,
+            "topup_purchased",
+            {"pack": pack_key, "credits": credits, "usd": price_cents / 100, "target": "user"},
+        )
+
+
+def _handle_org_topup_grant(
+    supabase, user_id: str, org_id: str, session, pack_key: str, credits: int, price_cents: int
+) -> None:
+    """Org-pool branch of `_handle_topup_completed` (Licensing Phase B, spec
+    §4 + rule 3). Called only when the checkout session's metadata["target"]
+    is an org id (billing_router.create_topup_session sets this after
+    admin-gating the purchase).
+
+    Grants into the org's POOL wallet — via `orgs.wallets.
+    read_or_create_org_wallet`, NEVER the user-wallet seeding helper above,
+    since pool wallets are NULL-period/reserve-only by construction (rule 1)
+    — under the SAME `topup:{session.id}` idempotency key as the personal
+    path, so an async-payment redelivery converges identically.
+
+    After the grant call (fresh OR duplicate — re-running this is harmless,
+    the sum is unchanged either way), re-evaluates cumulative activation: a
+    'pending' org whose lifetime SUM of 'purchase' ledger deltas on this
+    wallet reaches the effective minimum (the org's own
+    `min_initial_purchase_credits`, else `ENTERPRISE_MIN_INITIAL_CREDITS`)
+    flips to 'active'. Activation only ever moves pending -> active —
+    already-active/suspended/archived orgs are never touched here (that
+    would be a status regression, not an activation).
+
+    No try/except anywhere: a failure must 500 the webhook so Stripe
+    retries — every step here is idempotent (request-id'd grant, a re-run of
+    the SUM, and a status flip that's a no-op once already 'active').
+    """
+    from orgs.wallets import cumulative_purchased, read_or_create_org_wallet
+
+    wallet = read_or_create_org_wallet(supabase, org_id)
+    wallet_id = wallet["id"]
+
+    res = supabase.rpc(
+        "grant_credits",
+        {
+            "p_wallet_id": wallet_id,
+            "p_amount": credits,
+            "p_kind": "purchase",
+            "p_bucket": "reserve",
+            "p_metadata": {"pack_key": pack_key, "price_cents": price_cents, "org_id": org_id},
+            "p_request_id": f"topup:{session.id}",
+        },
+    ).execute()
+    if not (isinstance(res.data, dict) and res.data.get("duplicate")):
+        analytics_capture(
+            user_id,
+            "topup_purchased",
+            {"pack": pack_key, "credits": credits, "usd": price_cents / 100, "target": "org", "org_id": org_id},
+        )
+
+    org_res = supabase.table("organizations").select("status, min_initial_purchase_credits").eq("id", org_id).execute()
+    org_row = org_res.data[0] if org_res.data else None
+    if not org_row or org_row.get("status") != "pending":
+        return  # activation only ever moves pending -> active
+
+    # Shared with admin_service.get_org_pool (orgs/wallets.py) — "did this org
+    # cross the minimum" must be the SAME sum in both places (follow-ups plan
+    # Task 2, review round 2).
+    total_purchased = cumulative_purchased(supabase, wallet_id)
+    effective_min = org_row.get("min_initial_purchase_credits") or int(
+        os.getenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000")
+    )
+    if total_purchased >= effective_min:
+        supabase.table("organizations").update({"status": "active"}).eq("id", org_id).execute()
 
 
 def handle_subscription_updated(event, supabase) -> None:
@@ -214,27 +389,7 @@ def handle_subscription_updated(event, supabase) -> None:
         )
         if wallet_res.data:
             wallet = wallet_res.data[0]
-            # Anti-farming: cap by what's already been granted this period, not
-            # just the unspent bundle — a spend→downgrade→re-upgrade loop must not
-            # refill. (The spec assumes portal downgrades apply at period end; this
-            # guard holds even if that configuration drifts.)
-            granted_rows = (
-                supabase.table("credit_ledger")
-                .select("delta, created_at")
-                .eq("wallet_id", wallet["id"])
-                .eq("kind", "monthly_grant")
-                .gte("created_at", wallet.get("period_start") or "1970-01-01")
-                .execute()
-            )
-            granted_this_period = sum(r["delta"] for r in (granted_rows.data or []))
-            # TOCTOU residual (accepted): concurrent subscription.updated
-            # deliveries can both read a stale bundle and over-grant; bounded
-            # by the period-sum cap on the next event and clamped at next
-            # rollover.
-            top_up = min(
-                max(new_grant - max(wallet.get("bundle_balance", 0), 0), 0),
-                max(new_grant - granted_this_period, 0),
-            )
+            top_up = _capped_topup(supabase, wallet, new_grant)
             if top_up > 0:
                 supabase.rpc(
                     "grant_credits",
@@ -360,6 +515,7 @@ def handle_invoice_created(event, supabase) -> None:
 # Keys must match Stripe's exact event type strings.
 HANDLERS = {
     "checkout.session.completed": handle_checkout_session_completed,
+    "checkout.session.async_payment_succeeded": handle_checkout_session_completed,
     "customer.subscription.updated": handle_subscription_updated,
     "customer.subscription.deleted": handle_subscription_deleted,
     "invoice.payment_failed": handle_invoice_payment_failed,

@@ -1,8 +1,12 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import type { TierKey } from "@/lib/tiers";
 
-export type Tier = "free" | "pro" | "pro_max";
+/** Canonical tier keys live in @/lib/tiers (single source of truth — keys are
+ * permanent, display labels come from tierLabel()). Re-exported here so the
+ * many existing `import { Tier } from useEntitlements` sites keep working. */
+export type Tier = TierKey;
 export type SubscriptionStatus = "active" | "canceled" | "past_due" | "trialing";
 
 export interface EntitlementCaps {
@@ -26,6 +30,34 @@ export interface CreditPrices {
 }
 
 /**
+ * The org whose seat is paying, when the caller is in ORG billing context
+ * (Licensing Phase B, spec §5). Mirrors backend `ManagedByOrg.to_dict()`.
+ */
+export interface OrgBillingContext {
+  orgId: string;
+  orgName: string;
+  role: string;
+}
+
+/**
+ * One entry in `availableContexts` — every billing context the caller could
+ * switch to via `useSetBillingContext` (Licensing Phase B, spec §5). Present
+ * only when `LICENSING_ENABLED` is on.
+ */
+export type BillingContextOption =
+  | { type: "personal" }
+  | (OrgBillingContext & { type: "org"; pending: boolean });
+
+/**
+ * The caller's CURRENT billing-context identity (Licensing follow-ups Task 3).
+ * Present whenever `LICENSING_ENABLED` is on, REGARDLESS of `CREDITS_ENABLED` —
+ * unlike `credits.managedByOrg`, which only exists when the credits block
+ * itself is built. Prefer this field for org/personal rendering; components
+ * written before this field existed fall back to `credits?.managedByOrg`.
+ */
+export type BillingContext = { type: "personal" } | (OrgBillingContext & { type: "org" });
+
+/**
  * Wallet state — present only when CREDITS_ENABLED is on (else `credits` is null).
  * Shape mirrors the backend Entitlements.to_dict()["credits"] block.
  */
@@ -45,6 +77,8 @@ export interface EntitlementCredits {
   /** ISO timestamp when the credit period resets. */
   periodEnd: string | null;
   prices: CreditPrices;
+  /** Present only in ORG billing context — the seat's org (Licensing Phase B, spec §5). */
+  managedByOrg?: OrgBillingContext | null;
 }
 
 export interface EntitlementFeatures {
@@ -89,6 +123,18 @@ export interface Entitlements {
   subscription: EntitlementSubscription;
   /** Credit wallet — null unless CREDITS_ENABLED is on. */
   credits?: EntitlementCredits | null;
+  /**
+   * Every context the caller could switch billing to — personal + active
+   * seats (Licensing Phase B, spec §5). Present only when `LICENSING_ENABLED`
+   * is on; `undefined`/`null` otherwise so pre-licensing payloads are unaffected.
+   */
+  availableContexts?: BillingContextOption[] | null;
+  /**
+   * The caller's current billing-context identity (Licensing follow-ups
+   * Task 3). Present whenever `LICENSING_ENABLED` is on, independent of
+   * `CREDITS_ENABLED` — `undefined`/`null` when licensing is off.
+   */
+  billingContext?: BillingContext | null;
 }
 
 /**

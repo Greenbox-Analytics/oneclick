@@ -158,25 +158,13 @@ class _UsageCapturingStream:
         self._recorded = True
         _record_with_ctx(self._get_supabase, ctx=self._ctx, model=self._model, usage=self._usage, success=success)
 
-    # Dunders resolve on the TYPE, not through __getattr__. Both iteration
-    # idioms (`for chunk in s` and bare `next(s)`) route through ONE capturing
-    # generator so usage is never silently skipped.
+    # __iter__ resolves on the TYPE, not through __getattr__. The sole consumer
+    # iterates (`for chunk in response`), routing through ONE capturing generator
+    # so usage is never silently skipped.
     def __iter__(self):
         if self._gen is None:
             self._gen = self._iterate()
         return self._gen
-
-    def __next__(self):
-        return next(iter(self))
-
-    def __enter__(self):
-        self._inner.__enter__()
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        result = self._inner.__exit__(exc_type, exc, tb)
-        self._finish(success=exc_type is None)
-        return result
 
     def __getattr__(self, name):
         return getattr(self._inner, name)

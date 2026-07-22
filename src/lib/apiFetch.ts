@@ -21,6 +21,29 @@ export class ApiError extends Error {
 }
 
 /**
+ * Build an ApiError from a parsed error body and HTTP status. `detail` is a
+ * plain string for legacy errors; structured 402s carry an object with a
+ * human-readable `reason` (and, for org-seat walls, managedByOrg/requestUrl/…).
+ * The raw `detail` is attached to the returned error so callers can branch on
+ * the structured shape — never render the raw object. Message precedence:
+ * string detail → detail.reason → `fallback`.
+ */
+export function apiErrorFromBody(
+  body: { detail?: unknown } | null | undefined,
+  status: number,
+  fallback = `Request failed: ${status}`
+): ApiError {
+  const detail = body?.detail;
+  const message =
+    typeof detail === "string"
+      ? detail
+      : (detail as { reason?: string } | undefined)?.reason ?? fallback;
+  const err = new ApiError(message, status);
+  err.detail = detail;
+  return err;
+}
+
+/**
  * Get Authorization headers from the current Supabase session.
  * Use this for streaming/direct fetch calls that can't use apiFetch.
  */
@@ -57,15 +80,7 @@ export async function apiFetch<T>(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    // detail is a string for legacy errors; structured 402s carry an object
-    // with a human-readable `reason` — never render the raw object.
-    const message =
-      typeof body.detail === "string"
-        ? body.detail
-        : body.detail?.reason ?? `Request failed: ${res.status}`;
-    const err = new ApiError(message, res.status);
-    err.detail = body.detail;
-    throw err;
+    throw apiErrorFromBody(body, res.status);
   }
   // 204 No Content (and 205 Reset Content) MUST NOT have a body — calling
   // res.json() on these throws SyntaxError, which surfaces as a false-failure
