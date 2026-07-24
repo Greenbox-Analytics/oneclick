@@ -1,8 +1,14 @@
 import { RefObject, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Lock } from "lucide-react";
 import type { Message, AssistantQuickAction } from "@/hooks/useStreamingChat";
 import { ContractSlideOver } from "@/components/zoe/ContractSlideOver";
+import { PaywallCard } from "@/components/paywall/PaywallCard";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { useEntitlements } from "@/hooks/useEntitlements";
 
 // File icon SVG (inline, matches mockup)
 const FileIcon = () => (
@@ -110,6 +116,13 @@ export function ZoeChatMessages({
   const [slideOverName, setSlideOverName] = useState<string | null>(null);
   const [slideOverPage, setSlideOverPage] = useState<number | null>(null);
 
+  // Credit-wall org identity is two-source (licensing follow-ups Task 1): a
+  // 402's own `detail.managedByOrg` covers the enriched shape, and this
+  // billingContext fallback covers any 402 that arrives without it (legacy /
+  // degraded shapes) — see CreditWallCard below.
+  const { data: entitlements } = useEntitlements();
+  const billingContextIsOrg = entitlements?.billingContext?.type === "org";
+
   const openSlideOver = (id: string, name: string, page?: number | null) => {
     setSlideOverId(id);
     setSlideOverName(name);
@@ -161,6 +174,7 @@ export function ZoeChatMessages({
               // assistant
               const isLast = idx === messages.length - 1;
               const isThinking = message.isStreaming && !message.content;
+              const isCreditWall = message.confidence === "credit_wall";
 
               // Which contracts to show as sources for THIS message.
               // Prefer backend-cited sources (with page jumps); otherwise fall back to the
@@ -188,7 +202,13 @@ export function ZoeChatMessages({
                 <div key={message.id} className="turn-zoe">
                   <div className="zoe-label">Zoe</div>
                   <div className="answer">
-                    {isThinking ? (
+                    {isCreditWall ? (
+                      <CreditWallCard
+                        reason={message.content}
+                        detail={message.detail}
+                        billingContextIsOrg={billingContextIsOrg}
+                      />
+                    ) : isThinking ? (
                       <div className="thinking">
                         <div className="thinking-dots">
                           <span />
@@ -207,7 +227,8 @@ export function ZoeChatMessages({
                     )}
 
                     {/* Quick actions embedded in the answer */}
-                    {!message.isStreaming &&
+                    {!isCreditWall &&
+                      !message.isStreaming &&
                       message.quickActions &&
                       message.quickActions.length > 0 && (
                         <div className="quick-actions" style={{ marginTop: 12 }}>
@@ -224,7 +245,8 @@ export function ZoeChatMessages({
                         </div>
                       )}
 
-                    {!message.isStreaming &&
+                    {!isCreditWall &&
+                      !message.isStreaming &&
                       message.showQuickActions &&
                       (!message.quickActions || message.quickActions.length === 0) && (
                         <div className="quick-actions" style={{ marginTop: 12 }}>
@@ -259,7 +281,7 @@ export function ZoeChatMessages({
                       )}
 
                     {/* Sources */}
-                    {!message.isStreaming && sourcesToShow.length > 0 && (
+                    {!isCreditWall && !message.isStreaming && sourcesToShow.length > 0 && (
                       <div className="sources">
                         <div className="sources-label">Sources</div>
                         <div className="source-chips">
@@ -279,8 +301,10 @@ export function ZoeChatMessages({
                     )}
                   </div>
 
-                  {/* Answer actions — hover-revealed */}
-                  {!message.isStreaming && message.content && (
+                  {/* Answer actions — hover-revealed. Not shown on a credit-wall
+                      card: there's nothing to copy, and regenerating just re-hits
+                      the same wall. */}
+                  {!isCreditWall && !message.isStreaming && message.content && (
                     <div className="answer-actions">
                       <button
                         className="act"
@@ -314,6 +338,85 @@ export function ZoeChatMessages({
         page={slideOverPage}
       />
     </>
+  );
+}
+
+// ── Credit wall card ──────────────────────────────────────────────────────
+// Renders in place of the answer when a Zoe turn was denied by a credit-402
+// (licensing follow-ups Task 1). Reuses PaywallCard for the two branches its
+// props already fit (managedByOrg's "Request credits" branch, and the
+// default upgrade branch) rather than duplicating that CTA/analytics logic;
+// the pay-per-use and plain-reason branches have no PaywallCard equivalent,
+// so they're small local cards in the same visual language (Lock badge,
+// centered copy, Card shell).
+
+function formatResetDate(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+}
+
+function CreditWallCard({
+  reason,
+  detail,
+  billingContextIsOrg,
+}: {
+  /** Always a non-empty human-readable reason — the hook guarantees a
+   * fallback string even for legacy plain-string 402s where `detail` is
+   * undefined, so this card is never blank. */
+  reason: string;
+  detail?: Message["detail"];
+  billingContextIsOrg: boolean;
+}) {
+  const navigate = useNavigate();
+
+  // Two-source org identity (review round 2, finding 2): the enriched detail
+  // flag covers the primary path; the billingContext fallback covers any 402
+  // that arrives without it (legacy / degraded shapes).
+  const managedByOrg = detail?.managedByOrg === true || billingContextIsOrg;
+  const upgradeRequired = !managedByOrg && detail?.upgradeRequired === true;
+  const overageAvailable = !managedByOrg && !upgradeRequired && detail?.overageAvailable === true;
+  const resetDate = formatResetDate(detail?.resetDate);
+  const resetNote = resetDate ? (
+    <p className="text-xs text-muted-foreground mt-2">Your credits reset on {resetDate}.</p>
+  ) : null;
+
+  if (managedByOrg || upgradeRequired) {
+    return (
+      <div>
+        <PaywallCard
+          variant="inline"
+          reason={reason}
+          managedByOrg={managedByOrg}
+          requestUrl={detail?.requestUrl}
+          ownerCanUnlink={detail?.ownerCanUnlink}
+          projectId={detail?.projectId}
+          projectName={detail?.projectName}
+        />
+        {resetNote}
+      </div>
+    );
+  }
+
+  return (
+    <Card className="p-6 border-0 shadow-none">
+      <div className="flex flex-col items-center text-center gap-3">
+        <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+          <Lock className="w-5 h-5 text-muted-foreground" />
+        </div>
+        <h2 className="text-xl font-semibold">
+          {overageAvailable ? "You're out of included credits" : "Out of credits"}
+        </h2>
+        <p className="text-muted-foreground text-sm max-w-sm">{reason}</p>
+        {overageAvailable && (
+          <Button onClick={() => navigate("/profile")} className="mt-2">
+            Enable pay-per-use
+          </Button>
+        )}
+      </div>
+      {resetNote}
+    </Card>
   );
 }
 

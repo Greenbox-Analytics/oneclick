@@ -426,6 +426,7 @@ def test_parse_contract_splits_endpoint_routes_through_cache(monkeypatch):
     ) = MagicMock(data={"file_path": "c/a.pdf", "file_name": "a.pdf", "contract_markdown": "stored canonical text"})
 
     monkeypatch.setattr(registry_router, "gated_feature", lambda *a, **k: None)
+    monkeypatch.setattr(registry_router, "gated_credits", lambda *a, **k: None)
     monkeypatch.setattr(registry_router, "_get_supabase", lambda: fake_db)
     monkeypatch.setattr(registry_router, "analytics_capture", lambda *a, **k: None)
     monkeypatch.setattr(main, "verify_user_owns_contract", lambda *a, **k: True)

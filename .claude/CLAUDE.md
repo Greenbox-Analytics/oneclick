@@ -215,6 +215,9 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 - **Zoe** analyzes contracts tied to works (including shared works where user is a collaborator)
 - Both tools are standalone but read from the shared data model
 
+### Credits (behind `CREDITS_ENABLED`)
+Metered AI actions (Zoe message, OneClick run, Registry contract parse) draw from a per-user **credit wallet** (`credit_wallets` two buckets: `bundle_balance` expires monthly, `reserve_balance` — admin grants — never expires) backed by an append-only `credit_ledger` and transactional RPCs (`debit_credits`/`grant_credits`/`rollover_wallet`, all `SECURITY DEFINER`, service-role only). Prices live in `credit_prices` (DB, public read). Cache hits and Zoe conversational replies are free. Decision chokepoint: `EntitlementsService.check_credits()`; charge-on-success via `gated_credits()` → `debit_for_action()` at the tool endpoints. Overage is opt-in (`/me/billing-prefs`), billed off the request path via Stripe InvoiceItems (daily `POST /internal/billing-sweep` + `invoice.created` webhook). Tiers are Free / Pro / Pro Max (`tier_entitlements.monthly_credits`). **Flag off = legacy tier gating; the stored feature flags are bypassed in code, never mutated, so it's a true rollback.** Real LLM cost is logged to `ai_usage_log` (via the `TrackedOpenAI` proxy) to calibrate prices. Spec: `docs/superpowers/specs/2026-07-12-credits-billing-design.md`; plan: `docs/superpowers/plans/2026-07-13-credits-backend.md`.
+
 ### Admin Roles
 
 Admin access is granted two ways:

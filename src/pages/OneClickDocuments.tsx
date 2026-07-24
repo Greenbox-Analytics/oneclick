@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
+import { ArrowLeft, Loader2, AlertCircle } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { toast } from "sonner";
@@ -17,7 +18,8 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
-import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders, ApiError, apiErrorFromBody } from "@/lib/apiFetch";
+import { parseCreditWallDetail, UnlinkProjectHint } from "@/components/paywall/creditWall";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
 import CalculationResults from "@/components/oneclick/CalculationResults";
@@ -63,6 +65,19 @@ interface CalculationErrorState {
     looking_for?: string[];
     excluded_payor_count?: number;
   };
+  /** Licensing Phase B (plan Task 13) — set when the calculation was denied by
+   * a credit-402 whose seat wallet is managed by an organization: there's no
+   * upgrade/pay-per-use path on a seat, so the alert offers a "Request
+   * credits" link (to `requestUrl`, or /organization) instead. */
+  managedByOrg?: boolean;
+  requestUrl?: string;
+  /** Licensing Phase C (spec §6/§11 rule 11c, plan Task 8) — set when the
+   * dry-seat wall is on a project the caller OWNS and can unlink. Lands on
+   * the 402 in Task 6 (running separately); rendered behind a presence-check
+   * until then, alongside (never instead of) the "Request credits" link. */
+  ownerCanUnlink?: boolean;
+  projectId?: string;
+  projectName?: string;
 }
 interface Project { id: string; name: string; }
 interface ArtistFile { id: string; file_name: string; created_at: string; folder_category: string; file_path: string; project_id: string; }
@@ -429,7 +444,10 @@ const OneClickDocuments = () => {
 
         if (!response.ok) {
             const body = await response.json().catch(() => ({}));
-            throw new Error(body.detail || `Calculation request failed: ${response.status}`);
+            // Structured 402s carry `detail` (reason + org-seat managedByOrg/
+            // requestUrl/…), preserved on the ApiError so the catch block can
+            // offer the "Request credits" CTA instead of a dead-end message.
+            throw apiErrorFromBody(body, response.status, `Calculation request failed: ${response.status}`);
         }
 
         const reader = response.body?.getReader();
@@ -512,7 +530,8 @@ const OneClickDocuments = () => {
     } catch (error: unknown) {
         console.error("Error:", error);
         const errorMessage = error instanceof Error ? error.message : "An error occurred.";
-        setError({ message: errorMessage });
+        const cw = parseCreditWallDetail(error instanceof ApiError ? error.detail : undefined);
+        setError({ message: errorMessage, ...cw });
         if (!String(errorMessage).toLowerCase().includes("duplicate file")) toast.error(errorMessage || "An error occurred during processing.");
         setShowProgressModal(false); setIsUploading(false);
     }
@@ -669,15 +688,7 @@ const OneClickDocuments = () => {
         showBack={false}
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
+            <HeaderDocsButton />
             <ToolHelpButton onClick={walkthrough.replay} />
             <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
               <ArrowLeft className="w-4 h-4 mr-2" />
@@ -772,6 +783,23 @@ const OneClickDocuments = () => {
                 <AlertTitle>{error.message}</AlertTitle>
                 <AlertDescription>
                     {error.suggestion && <p className="mt-2">{error.suggestion}</p>}
+                    {error.managedByOrg && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-3"
+                            onClick={() => navigate(error.requestUrl || "/organization")}
+                        >
+                            Request credits
+                        </Button>
+                    )}
+                    {error.managedByOrg && error.ownerCanUnlink && (
+                        <UnlinkProjectHint
+                            projectId={error.projectId}
+                            projectName={error.projectName}
+                            className="mt-2"
+                        />
+                    )}
                     {error.code === 'NO_SONG_MATCHES' && error.details?.contract_works && error.details?.statement_songs && (
                         <SongMismatchComparison
                             contractWorks={error.details.contract_works}

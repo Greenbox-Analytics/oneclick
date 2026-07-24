@@ -332,6 +332,8 @@
 
 <script>
 (function(){
+  // NOTE: planning-tool copy. The authoritative rates for real cost logging live in
+  // src/backend/subscriptions/ai_pricing.py — update both when OpenAI pricing changes.
   var MODELS = {
     'gpt-5.2':     {in:1.75, out:14,  cached:0.175, label:'gpt-5.2',   name:'gpt-5.2',              use:'Contract extraction · basis · split-verify'},
     'gpt-5':       {in:1.25, out:10,  cached:0.125, label:'gpt-5',     name:'gpt-5',                use:'Zoe answer (2+ contracts)'},

@@ -1,6 +1,6 @@
 """Tests for POST /me/bootstrap-tester — auto-grants tester from TESTER_EMAILS env."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -100,6 +100,38 @@ class TestBootstrapTester:
         resp = client.post("/me/bootstrap-tester")
         assert resp.status_code == 200
         assert resp.json() == {"granted": False, "reason": "not_in_allowlist"}
+
+    def test_fresh_grant_also_grants_initial_credits(self, client, monkeypatch):
+        """The fresh-grant path should also trigger the one-time initial
+        tester credit allocation (best-effort — see main.py bootstrap_tester)."""
+        import main
+
+        monkeypatch.setenv("TESTER_EMAILS", "tester@example.com")
+        sb, upserted = _wire_sb(existing_tester_rows=[])
+        monkeypatch.setattr(main, "get_supabase_client", lambda: sb)
+
+        with patch("subscriptions.admin_service.grant_initial_tester_credits") as gitc:
+            resp = client.post("/me/bootstrap-tester")
+
+        assert resp.status_code == 200
+        assert resp.json()["granted"] is True
+        gitc.assert_called_once()
+
+    def test_already_tester_does_not_regrant_credits(self, client, monkeypatch):
+        """When bootstrap short-circuits because the user is already a
+        tester, the initial-credits helper must NOT be invoked again."""
+        import main
+
+        monkeypatch.setenv("TESTER_EMAILS", "tester@example.com")
+        existing = [{"reason": "tester", "expires_at": None, "granted_at": "2026-04-01T00:00:00Z"}]
+        sb, upserted = _wire_sb(existing_tester_rows=existing)
+        monkeypatch.setattr(main, "get_supabase_client", lambda: sb)
+
+        with patch("subscriptions.admin_service.grant_initial_tester_credits") as gitc:
+            resp = client.post("/me/bootstrap-tester")
+
+        assert resp.json()["granted"] is False
+        gitc.assert_not_called()
 
     def test_bootstrap_respects_revoked_marker(self, client, monkeypatch):
         """When user has a tester_revoked row, bootstrap should not re-grant

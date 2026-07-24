@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Bell, CheckCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AutoHideTooltip } from "@/components/layout/AutoHideTooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { NotificationRow } from "@/components/workspace/NotificationRow";
 import { useRegistryNotifications, useMarkAllRead } from "@/hooks/useRegistryNotifications";
@@ -19,19 +20,25 @@ export function NotificationBell() {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground"
-                aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
-                title={unread > 0 ? `Notifications (${unread} unread)` : "Notifications"}>
-          <Bell className="w-4 h-4" />
-          {unread > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-destructive
-                             text-destructive-foreground text-[10px] font-bold flex items-center justify-center">
-              {unread > 9 ? "9+" : unread}
-            </span>
-          )}
-        </Button>
-      </PopoverTrigger>
+      {/* Auto-fading hover tooltip replaces the native `title` attr (the two
+          would double up). Suppressed while the panel itself is open. */}
+      <AutoHideTooltip
+        label={unread > 0 ? `Notifications (${unread} unread)` : "Notifications"}
+        disabled={open}
+      >
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground"
+                  aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}>
+            <Bell className="w-4 h-4" />
+            {unread > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-destructive
+                               text-destructive-foreground text-[10px] font-bold flex items-center justify-center">
+                {unread > 9 ? "9+" : unread}
+              </span>
+            )}
+          </Button>
+        </PopoverTrigger>
+      </AutoHideTooltip>
       <PopoverContent align="end" className="w-80 p-0">
         <div className="flex items-center justify-between px-3 py-2 border-b">
           <span className="text-sm font-semibold">Notifications</span>

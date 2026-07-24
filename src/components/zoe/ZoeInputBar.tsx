@@ -46,6 +46,9 @@ const StopIcon = () => (
 interface ZoeInputBarProps {
   inputMessage: string;
   onInputChange: (value: string) => void;
+  // Currently unrendered. If this ever becomes a visible banner, it MUST NOT
+  // render for credit-wall errors (hook sets `error` on 402s too) — the wall
+  // already renders inline in the transcript, and a banner would double-show it.
   error: string;
   isStreaming: boolean;
   isAtLimit: boolean;
