@@ -8,7 +8,9 @@ Covers:
 - DELETE /contracts/{contract_id}                    contract deletion
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from tests.conftest import MockQueryBuilder
 
@@ -389,6 +391,15 @@ class TestGetProjectDocuments:
 
 class TestDeleteContract:
     """DELETE /contracts/{contract_id} deletes a contract and cleans up storage."""
+
+    @pytest.fixture(autouse=True)
+    def _bypass_ledger_cleanup(self):
+        """These tests verify storage/db deletion, not the ledger guardrail —
+        which has its own endpoint-level tests in test_royalties_delete.py.
+        Unstubbed, the guardrail would iterate MagicMock query results and its
+        failure-aborts-delete behavior would stop the endpoint before storage."""
+        with patch("oneclick.royalties.ledger_sync.remove_contract_from_ledger"):
+            yield
 
     def _make_delete_router(
         self,

@@ -1,6 +1,6 @@
 // src/components/oneclick/payments/shared.tsx
 import { useState, useRef, useEffect } from "react";
-import { Check, ChevronDown, Globe, Hourglass, Clock, CheckCheck } from "lucide-react";
+import { Check, ChevronDown, Globe, Hourglass, Clock, CheckCheck, Coins } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getAuthHeaders } from "@/lib/apiFetch";
 
@@ -177,16 +177,20 @@ export function Amt(props: {
 // StatusBadge
 // ---------------------------------------------------------------------------
 
-export function StatusBadge({ kind, children }: { kind: "paid" | "sched" | "out" | "settled" | "partial" | "owed" | "scheduled"; children: React.ReactNode }) {
+export function StatusBadge({ kind, children }: { kind: "paid" | "sched" | "out" | "settled" | "partial" | "owed" | "scheduled" | "overpaid"; children: React.ReactNode }) {
   // normalise server status strings to badge kind
   const normalised: Record<string, string> = { owed: "out", scheduled: "sched", settled: "settled" };
   const k = normalised[kind] ?? kind;
   const tone: Record<string, string> = {
-    paid:    "bg-[hsl(var(--pay-paid-bg))] text-[hsl(var(--pay-paid-fg))]",
-    sched:   "bg-[hsl(var(--pay-sched-bg))] text-[hsl(var(--pay-sched-fg))]",
-    out:     "bg-[hsl(var(--pay-out-bg))] text-[hsl(var(--pay-out-fg))]",
-    partial: "bg-[hsl(var(--pay-partial-bg))] text-[hsl(var(--pay-partial-fg))]",
-    settled: "bg-muted text-muted-foreground",
+    paid:     "bg-[hsl(var(--pay-paid-bg))] text-[hsl(var(--pay-paid-fg))]",
+    sched:    "bg-[hsl(var(--pay-sched-bg))] text-[hsl(var(--pay-sched-fg))]",
+    out:      "bg-[hsl(var(--pay-out-bg))] text-[hsl(var(--pay-out-fg))]",
+    partial:  "bg-[hsl(var(--pay-partial-bg))] text-[hsl(var(--pay-partial-fg))]",
+    // Amber, same warning tone as `partial` — visually distinct from red
+    // (owed/unpaid) and green (settled); "you owe them money back" reads as
+    // a caution, not a failure.
+    overpaid: "bg-[hsl(var(--pay-partial-bg))] text-[hsl(var(--pay-partial-fg))]",
+    settled:  "bg-muted text-muted-foreground",
   };
   return (
     <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold whitespace-nowrap", tone[k] ?? tone.settled)}>
@@ -252,18 +256,21 @@ export function CurrencySelect({ value, onChange }: { value: string; onChange: (
 // Maps server `status` strings ("owed"|"scheduled"|"settled") to badge kinds.
 // ---------------------------------------------------------------------------
 
-export function partyStatusKind(status: string): "out" | "sched" | "settled" {
+export function partyStatusKind(status: string): "out" | "sched" | "settled" | "overpaid" {
   if (status === "owed") return "out";
   if (status === "scheduled") return "sched";
+  if (status === "overpaid") return "overpaid";
   return "settled";
 }
 
 // User-facing label for a party's derived status. Server strings stay
-// "owed"/"scheduled"/"settled"; the UI shows "Unpaid" (money owed, nothing
-// drafted), "Draft" (a draft payout exists), "Settled" (fully paid).
+// "owed"/"scheduled"/"settled"/"overpaid"; the UI shows "Unpaid" (money owed,
+// nothing drafted), "Draft" (a draft payout exists), "Settled" (fully paid),
+// "Overpaid" (paid more than earned — the difference is a credit).
 export function partyStatusLabel(status: string): string {
   if (status === "owed") return "Unpaid";
   if (status === "scheduled") return "Draft";
+  if (status === "overpaid") return "Overpaid";
   return "Settled";
 }
 
@@ -285,4 +292,4 @@ export function SelectBox({ on, disabled, onClick }: { on: boolean; disabled?: b
   );
 }
 
-export const STATUS_ICON = { out: Hourglass, sched: Clock, settled: CheckCheck } as const;
+export const STATUS_ICON = { out: Hourglass, sched: Clock, settled: CheckCheck, overpaid: Coins } as const;

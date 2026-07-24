@@ -23,6 +23,18 @@ import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSele
 import CalculationResults from "@/components/oneclick/CalculationResults";
 import ExpenseReviewDialog from "@/components/oneclick/ExpenseReviewDialog";
 import SongMismatchComparison from "@/components/oneclick/SongMismatchComparison";
+import {
+  ConflictResolutionDialog,
+  normalizeConflictPayload,
+  type Conflict,
+  type ConflictGatePayload,
+  type ConflictResolution,
+} from "@/components/oneclick/ConflictResolutionDialog";
+import {
+  RevisionPromptDialog,
+  type RevisionCandidate,
+  type RevisionDecision,
+} from "@/components/oneclick/RevisionPromptDialog";
 
 interface RoyaltyPayment { song_title: string; party_name: string; role: string; royalty_type: string; percentage: number; total_royalty: number; amount_to_pay: number; terms?: string; basis?: string; gross_amount?: number; expenses_applied?: number; net_amount?: number; }
 interface ReviewExpense { id: string; description?: string; amount: number; category?: string | null; incurred_on?: string | null; work_ids?: string[]; work_titles?: string[]; }
@@ -55,6 +67,45 @@ interface CalculationErrorState {
 interface Project { id: string; name: string; }
 interface ArtistFile { id: string; file_name: string; created_at: string; folder_category: string; file_path: string; project_id: string; }
 interface Artist { id: string; name: string; }
+
+type ConfirmGate = "conflict" | "revision" | "superseded";
+
+/**
+ * Thrown by postConfirm() when /oneclick/confirm responds 409 with a
+ * `{gate, payload}` body — a contract conflict or a possible statement
+ * revision the user needs to resolve before the calculation can be saved.
+ */
+class ConfirmGateError extends Error {
+  gate: ConfirmGate;
+  payload: unknown;
+  constructor(gate: ConfirmGate, payload: unknown) {
+    super(`oneclick/confirm needs resolution: ${gate}`);
+    this.gate = gate;
+    this.payload = payload;
+  }
+}
+
+/**
+ * POSTs to /oneclick/confirm with a raw fetch (rather than apiFetch) so a 409
+ * gate response's structured `{gate, payload}` body can be inspected directly
+ * instead of being collapsed into a plain error message.
+ */
+const postConfirm = async (body: Record<string, unknown>): Promise<{ id?: string }> => {
+  const authHeaders = await getAuthHeaders();
+  const res = await fetch(`${API_URL}/oneclick/confirm`, {
+    method: "POST",
+    headers: { ...authHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (res.status === 409 && json?.detail?.gate) {
+    throw new ConfirmGateError(json.detail.gate, json.detail.payload);
+  }
+  if (!res.ok) {
+    throw new Error(typeof json?.detail === "string" ? json.detail : `Request failed: ${res.status}`);
+  }
+  return json;
+};
 
 const OneClickDocuments = () => {
   const navigate = useNavigate();
@@ -120,6 +171,11 @@ const OneClickDocuments = () => {
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
   const [pendingForceRecalculate, setPendingForceRecalculate] = useState(false);
+  // The exact confirm request body last sent — a gate retry re-sends this
+  // plus conflict_resolutions / revision_decision, per the backend contract.
+  const [pendingConfirmBody, setPendingConfirmBody] = useState<Record<string, unknown> | null>(null);
+  const [conflictGateItems, setConflictGateItems] = useState<Conflict[] | null>(null);
+  const [revisionGateCandidates, setRevisionGateCandidates] = useState<RevisionCandidate[] | null>(null);
   const autoSaveTriggeredRef = useRef<string | null>(null);
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
   const walkthrough = useToolWalkthrough(TOOL_CONFIGS.oneclick, {
@@ -386,6 +442,10 @@ const OneClickDocuments = () => {
         }, 120000);
 
         let buffer = "";
+        // Populated by the 'complete' branch below; the 'needs_confirmation'
+        // event (if it follows) carries no results of its own, so this is
+        // what's used to build the confirm retry body for it.
+        let streamResult: CalculationResult | null = null;
         const processLine = (line: string) => {
             if (!line.startsWith("data: ")) return;
             try {
@@ -395,7 +455,9 @@ const OneClickDocuments = () => {
                 } else if (data.type === 'complete' || (data.status === 'success' && data.payments)) {
                     clearTimeout(timeout);
                     const needsReview = !!data.expense_review_required && !data.is_cached;
-                    setCalculationResult({ status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached, calculation_id: data.calculation_id, expense_review_required: needsReview, expenses: data.expenses || [], review: data.review ?? null });
+                    const result: CalculationResult = { status: data.status, total_payments: data.total_payments, payments: data.payments, message: data.message, is_cached: data.is_cached, calculation_id: data.calculation_id, expense_review_required: needsReview, expenses: data.expenses || [], review: data.review ?? null };
+                    streamResult = result;
+                    setCalculationResult(result);
                     setShowProgressModal(false);
                     if (needsReview) {
                         setExpenseReview(data.expenses || []);
@@ -404,6 +466,20 @@ const OneClickDocuments = () => {
                         toast.success(data.is_cached ? "Royalties loaded successfully!" : "Royalties calculated successfully!");
                     }
                     setContractFiles([]); setRoyaltyStatementFile(null); setIsUploading(false);
+                } else if (data.type === 'needs_confirmation') {
+                    clearTimeout(timeout);
+                    setShowProgressModal(false); setIsUploading(false);
+                    if (!streamResult) {
+                        console.error("needs_confirmation event arrived without a prior result to attach it to");
+                        toast.error("Couldn't finish this calculation. Please try again.");
+                        return;
+                    }
+                    routeConfirmGate(data.gate, data.payload, {
+                        contract_ids: finalContractIds,
+                        royalty_statement_id: finalStatementId,
+                        project_id: finalProjectId,
+                        results: streamResult,
+                    });
                 } else if (data.type === 'error') {
                     clearTimeout(timeout); setShowProgressModal(false);
                     setError({
@@ -446,25 +522,73 @@ const OneClickDocuments = () => {
       contractIds: string[], statementId: string, projectId: string
   } | null>(null);
 
-  const handleConfirmResultsWithContext = async () => {
-      if (!lastCalculationContext || !calculationResult || !user) return;
+  // Sends a confirm body to the backend; on success stores the calculation id
+  // and clears any open gate dialogs, on a gate response opens the matching
+  // dialog instead of failing, on any other error shows the generic toast.
+  const submitConfirm = async (body: Record<string, unknown>) => {
       setIsSaving(true);
       try {
-          const saved = await apiFetch<{ id?: string }>(`${API_URL}/oneclick/confirm`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                  contract_ids: lastCalculationContext.contractIds,
-                  royalty_statement_id: lastCalculationContext.statementId,
-                  project_id: lastCalculationContext.projectId,
-                  results: calculationResult
-              })
-          });
+          const saved = await postConfirm(body);
           if (saved?.id) setSavedCalculationId(saved.id);
           setSaveSuccess(true);
+          setConflictGateItems(null);
+          setRevisionGateCandidates(null);
+          setPendingConfirmBody(null);
           invalidateRoyalties();
-      } catch (err) { console.error("Error saving results:", err); toast.error("Failed to save results"); }
+      } catch (err) {
+          if (err instanceof ConfirmGateError) {
+              routeConfirmGate(err.gate, err.payload, body);
+              return;
+          }
+          console.error("Error saving results:", err);
+          toast.error("Failed to save results");
+      }
       finally { setIsSaving(false); }
+  };
+
+  // Opens the dialog matching a gate (or, for 'superseded', just toasts) and
+  // remembers the body that produced it so a resolved retry can re-send it.
+  const routeConfirmGate = (gate: ConfirmGate, payload: unknown, body: Record<string, unknown>) => {
+      setPendingConfirmBody(body);
+      if (gate === "conflict") {
+          setConflictGateItems(normalizeConflictPayload(payload as ConflictGatePayload));
+          setRevisionGateCandidates(null);
+      } else if (gate === "revision") {
+          setRevisionGateCandidates((payload as { candidates: RevisionCandidate[] }).candidates);
+          setConflictGateItems(null);
+      } else {
+          setConflictGateItems(null);
+          setRevisionGateCandidates(null);
+          toast.error("This statement was replaced by a newer file — run that one instead.");
+      }
+  };
+
+  const handleResolveConflicts = (resolutions: ConflictResolution[]) => {
+      if (!pendingConfirmBody) return;
+      setConflictGateItems(null);
+      submitConfirm({ ...pendingConfirmBody, conflict_resolutions: resolutions });
+  };
+
+  const handleDecideRevision = (decision: RevisionDecision) => {
+      if (!pendingConfirmBody) return;
+      setRevisionGateCandidates(null);
+      submitConfirm({ ...pendingConfirmBody, revision_decision: decision });
+  };
+
+  const handleCancelConfirmGate = () => {
+      setConflictGateItems(null);
+      setRevisionGateCandidates(null);
+      setPendingConfirmBody(null);
+  };
+
+  const handleConfirmResultsWithContext = async () => {
+      if (!lastCalculationContext || !calculationResult || !user) return;
+      await submitConfirm({
+          contract_ids: lastCalculationContext.contractIds,
+          royalty_statement_id: lastCalculationContext.statementId,
+          project_id: lastCalculationContext.projectId,
+          results: calculationResult,
+      });
   };
 
   useEffect(() => {
@@ -683,6 +807,22 @@ const OneClickDocuments = () => {
           projectId={lastCalculationContext?.projectId}
           onConfirm={handleConfirmExpenses}
           onCancel={() => setExpenseReview(null)}
+        />
+
+        <ConflictResolutionDialog
+          open={conflictGateItems !== null}
+          conflicts={conflictGateItems ?? []}
+          isSubmitting={isSaving}
+          onResolve={handleResolveConflicts}
+          onCancel={handleCancelConfirmGate}
+        />
+
+        <RevisionPromptDialog
+          open={revisionGateCandidates !== null}
+          candidates={revisionGateCandidates ?? []}
+          isSubmitting={isSaving}
+          onDecide={handleDecideRevision}
+          onCancel={handleCancelConfirmGate}
         />
 
         {/* Review Selection Dialog */}

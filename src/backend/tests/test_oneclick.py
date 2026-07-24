@@ -469,6 +469,18 @@ class TestOneclickConfirm:
         "message": "2 royalty payments",
     }
 
+    @pytest.fixture(autouse=True)
+    def _bypass_ledger_sync(self, monkeypatch):
+        """These tests exercise the calculation-cache CRUD path, not the gated
+        ledger sync (now called twice per confirm: check_only, then the full
+        sync — covered by test_oneclick_confirm_gates.py). Stub out the sync
+        call plus its two gate-time helper reads (statement parse + currency
+        lookup) so a generic/positional supabase mock keeps the same
+        `db.table()` call order these tests were written against."""
+        monkeypatch.setattr("main.sync_calc_royalties", MagicMock(return_value=STATEMENT_FILE_ID))
+        monkeypatch.setattr("main._parse_statement_rows", MagicMock(return_value=[]))
+        monkeypatch.setattr("main._statement_currency", MagicMock(return_value="USD"))
+
     def _post_confirm(self, client, mock_supabase, contract_ids=None, **overrides):
         """POST /oneclick/confirm and return response."""
         payload = {

@@ -214,8 +214,12 @@ function RunCard({
                       disabled={revert.isPending}
                       onClick={() =>
                         revert.mutate(payout.id, {
-                          onError: () =>
-                            toast({ variant: "destructive", title: "Failed to revert payout" }),
+                          onError: (err) =>
+                            toast({
+                              variant: "destructive",
+                              title: "Failed to revert payout",
+                              description: err instanceof Error ? err.message : undefined,
+                            }),
                         })
                       }
                     >

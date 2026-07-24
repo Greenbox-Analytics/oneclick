@@ -81,6 +81,17 @@ export function PartiesTable({
                   <span className="rounded-[5px] bg-muted px-1.5 py-px text-[10px] font-bold text-muted-foreground">
                     {payee.payout_currency}
                   </span>
+                  {Object.entries(payee.credit_by_ccy ?? {})
+                    .filter(([, amount]) => amount > 0)
+                    .map(([ccy, amount]) => (
+                      <span
+                        key={ccy}
+                        className="rounded-[5px] bg-[hsl(var(--pay-partial-bg))] px-1.5 py-px text-[10px] font-bold text-[hsl(var(--pay-partial-fg))]"
+                        title="Credit from an earlier overpayment — applied automatically to their next payout"
+                      >
+                        Overpaid {fmtMoney(amount, ccy)} {ccy}
+                      </span>
+                    ))}
                   {payee.project_count > 0 && (
                     <span className="shrink-0 text-[11px]">
                       {payee.project_count} project{payee.project_count !== 1 ? "s" : ""}
@@ -98,25 +109,25 @@ export function PartiesTable({
             {/* Earned (base) */}
             <span className="hidden text-right md:block">
               <span className="font-mono text-[13.5px] tabular-nums text-muted-foreground">
-                {fmtMoney(payee.earned, base, { dp: 0 })}
+                {fmtMoney(payee.earned, base)}
               </span>
             </span>
 
             {/* Paid (base) */}
             <span className="hidden text-right md:block">
               <span className="font-mono text-[13.5px] tabular-nums text-muted-foreground">
-                {fmtMoney(payee.paid, base, { dp: 0 })}
+                {fmtMoney(payee.paid, base)}
               </span>
             </span>
 
             {/* Outstanding (base) = earned − paid — with optional native sub-line */}
             <span className="text-right">
               <span className="font-mono text-[14px] font-bold tabular-nums">
-                {fmtMoney(payee.unpaid, base, { dp: 0 })}
+                {fmtMoney(payee.unpaid, base)}
               </span>
               {payee.payout_currency !== base && payee.unpaid_native > 0 && (
                 <div className="mt-px font-mono text-[11px] text-muted-foreground">
-                  {fmtMoney(payee.unpaid_native, payee.payout_currency, { dp: 0 })}
+                  {fmtMoney(payee.unpaid_native, payee.payout_currency)}
                 </div>
               )}
             </span>
@@ -141,7 +152,7 @@ export function PartiesTable({
           <span className="text-[13px] font-semibold">{selection.length} selected</span>
           <span className="text-[13px] text-muted-foreground">·</span>
           <span className="font-mono text-[13px] font-bold tabular-nums">
-            {fmtMoney(owedSum, base, { dp: 0 })} owed
+            {fmtMoney(owedSum, base)} owed
           </span>
           <span className="flex-1" />
           <Button variant="outline" size="sm" onClick={onClear}>Clear</Button>

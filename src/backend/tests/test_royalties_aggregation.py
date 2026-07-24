@@ -811,3 +811,103 @@ class TestPeriodsLedgerUnconvertible:
         # GBP→USD identity = ×1.27, USD→USD = ×1.0 → total = 100 + 127 = 227
         assert row["total"] == pytest.approx(100.0 + 100.0 * 1.27)
         assert row["unconvertible_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Test: derived overpayment credit (Task 9 — ledger reconciliation)
+# ---------------------------------------------------------------------------
+
+
+class TestOverpaymentCredit:
+    """Overpayment credit is derived from PAID coverage only, per statement
+    currency, and never bleeds into (or clamps) owed/unpaid totals for other
+    buckets."""
+
+    def test_overpaid_bucket_yields_credit_not_negative_owed(self):
+        """earned 1.50, paid coverage 2.00 → credit_by_ccy == {"USD": 0.5},
+        owed stays clamped at 0, and status is 'overpaid'."""
+        payee = _make_payee(payout_ccy="USD")
+        line = _make_line(stmt_id="stmt-1", amount=1.50, ccy="USD")
+        payout = _make_payout("payout-1", status="paid", ccy="USD", amount=2.00)
+        coverage = _make_coverage("payout-1", stmt_id="stmt-1", covered_amount=2.00)
+        db = _build_db(
+            payees=[payee],
+            lines=[line],
+            payouts=[payout],
+            coverage_by_payee={PAYEE_ID: [coverage]},
+        )
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_identity_fx):
+            summaries = service.payee_summary(db, USER_ID, base="USD")
+
+        s = summaries[0]
+        assert s["credit_by_ccy"] == pytest.approx({"USD": 0.5})
+        assert s["owed"] == pytest.approx(0.0)
+        assert s["status"] == "overpaid"
+
+    def test_draft_coverage_never_creates_credit(self):
+        """earned 1.50, drafted coverage 2.00 (status 'draft') → credit_by_ccy
+        stays empty — a draft can be canceled, so credit backed by it would be
+        phantom."""
+        payee = _make_payee(payout_ccy="USD")
+        line = _make_line(stmt_id="stmt-1", amount=1.50, ccy="USD")
+        payout = _make_payout("payout-1", status="draft", ccy="USD", amount=2.00)
+        coverage = _make_coverage("payout-1", stmt_id="stmt-1", covered_amount=2.00)
+        db = _build_db(
+            payees=[payee],
+            lines=[line],
+            payouts=[payout],
+            coverage_by_payee={PAYEE_ID: [coverage]},
+        )
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_identity_fx):
+            summaries = service.payee_summary(db, USER_ID, base="USD")
+
+        s = summaries[0]
+        assert s["credit_by_ccy"] == {}
+        assert s["owed"] == pytest.approx(0.0)
+        assert s["status"] == "scheduled"
+
+    def test_state_overpaid_when_credit_and_no_owed(self):
+        """A payee whose only bucket is overpaid (no owed elsewhere) reports
+        status == 'overpaid'."""
+        payee = _make_payee(payout_ccy="USD")
+        line = _make_line(stmt_id="stmt-1", amount=100.0, ccy="USD")
+        payout = _make_payout("payout-1", status="paid", ccy="USD", amount=140.0)
+        coverage = _make_coverage("payout-1", stmt_id="stmt-1", covered_amount=140.0)
+        db = _build_db(
+            payees=[payee],
+            lines=[line],
+            payouts=[payout],
+            coverage_by_payee={PAYEE_ID: [coverage]},
+        )
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_identity_fx):
+            summaries = service.payee_summary(db, USER_ID, base="USD")
+
+        assert summaries[0]["status"] == "overpaid"
+
+    def test_credit_tracked_per_currency(self):
+        """One EUR overpaid bucket + one USD owed bucket → credit_by_ccy only
+        contains EUR, and the USD owed total is unaffected (no cross-currency
+        netting)."""
+        payee = _make_payee(payout_ccy="USD")
+        line_eur = _make_line(stmt_id="stmt-eur", amount=50.0, ccy="EUR", project_id="proj-1", line_id="l-eur")
+        line_usd = _make_line(stmt_id="stmt-usd", amount=100.0, ccy="USD", project_id="proj-1", line_id="l-usd")
+        payout_eur = _make_payout("payout-eur", status="paid", ccy="EUR", amount=80.0)
+        coverage_eur = _make_coverage("payout-eur", stmt_id="stmt-eur", covered_amount=80.0)
+        db = _build_db(
+            payees=[payee],
+            lines=[line_eur, line_usd],
+            payouts=[payout_eur],
+            coverage_by_payee={PAYEE_ID: [coverage_eur]},
+        )
+
+        with patch("oneclick.royalties.service.fx.convert", side_effect=_identity_fx):
+            summaries = service.payee_summary(db, USER_ID, base="USD")
+
+        s = summaries[0]
+        # EUR bucket: paid 80 - earned 50 = 30 credit
+        assert s["credit_by_ccy"] == pytest.approx({"EUR": 30.0})
+        # USD bucket: earned 100, no coverage → owed 100, unaffected by the EUR credit
+        assert s["owed"] == pytest.approx(100.0)

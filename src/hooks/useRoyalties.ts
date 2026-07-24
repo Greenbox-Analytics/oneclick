@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 // ---------------------------------------------------------------------------
 // TypeScript interfaces (mirroring src/backend/oneclick/royalties/models.py)
@@ -14,7 +14,7 @@ export interface PayeeSummary {
   email?: string;
   collision: boolean;
   project_count: number;
-  status: string; // "owed" | "scheduled" | "settled"
+  status: string; // "owed" | "scheduled" | "settled" | "overpaid"
   // reporting-currency totals
   earned: number;
   paid: number;
@@ -27,6 +27,8 @@ export interface PayeeSummary {
   drafted_native: number;
   owed_native: number;
   unpaid_native: number;
+  /** Overpayment credit available toward future payouts, keyed by currency. Empty object when none. */
+  credit_by_ccy: Record<string, number>;
 }
 
 export interface PayeeLine {
@@ -50,7 +52,7 @@ export interface PayeeStatement {
   drafted: number;
   owed: number;
   unpaid: number; // earned − paid (outstanding until actually paid)
-  state: string; // "owed" | "scheduled" | "settled"
+  state: string; // "owed" | "scheduled" | "settled" | "overpaid"
   lines: PayeeLine[];
 }
 
@@ -110,6 +112,28 @@ export interface CreatePayoutPayload {
   payee_ids: string[];
   idempotency_key?: string;
   note?: string;
+  /** Re-submit after a stale-lines warning to proceed anyway. */
+  force?: boolean;
+}
+
+/** One line flagged as computed from a contract file that's since been deleted. */
+export interface StaleLine {
+  song: string;
+  line_id: string;
+}
+
+/**
+ * Thrown by useCreatePayout's mutationFn on a 409 `{detail: {stale_lines}}`
+ * response — mirrors the ConfirmGateError pattern in OneClickDocuments.tsx
+ * for surfacing a structured gate body instead of a flattened message.
+ */
+export class PayoutStaleError extends Error {
+  stale_lines: StaleLine[];
+  constructor(stale_lines: StaleLine[]) {
+    super("Some amounts were computed from contracts that have since been deleted.");
+    this.name = "PayoutStaleError";
+    this.stale_lines = stale_lines;
+  }
 }
 
 export interface PatchPayeePayload {
@@ -209,12 +233,28 @@ export function useCreatePayout() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: CreatePayoutPayload) => {
+    mutationFn: async ({ force, ...body }: CreatePayoutPayload) => {
       if (!user?.id) throw new Error("Not authenticated");
-      return apiFetch<PayoutOut[]>(`${API_URL}/oneclick/royalties/payouts`, {
+      // Raw fetch (not apiFetch) so a 409 stale-lines body can be inspected
+      // directly instead of being collapsed into a stringified message —
+      // same reasoning as postConfirm() in OneClickDocuments.tsx.
+      // `force` is a query param on the backend (POST /payouts?force=true),
+      // not a body field — see create_payouts() in royalties/router.py.
+      const authHeaders = await getAuthHeaders();
+      const qs = force ? "?force=true" : "";
+      const res = await fetch(`${API_URL}/oneclick/royalties/payouts${qs}`, {
         method: "POST",
-        body: JSON.stringify(payload),
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
+      const json = await res.json().catch(() => ({}));
+      if (res.status === 409 && json?.detail?.stale_lines) {
+        throw new PayoutStaleError(json.detail.stale_lines);
+      }
+      if (!res.ok) {
+        throw new Error(typeof json?.detail === "string" ? json.detail : `Request failed: ${res.status}`);
+      }
+      return json as PayoutOut[];
     },
     onSuccess: () => invalidateRoyaltyData(queryClient),
   });

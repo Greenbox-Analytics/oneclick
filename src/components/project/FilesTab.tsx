@@ -9,6 +9,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Loader2, ChevronRight, Upload, FileText, Search, Download, Trash2, HardDrive, Send,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -43,6 +53,26 @@ function formatBytes(n: number): string {
   return `${n} B`;
 }
 
+interface ContractImpact {
+  lines: number;
+  backed: Record<string, number>;
+  buckets_with_paid_coverage: number;
+}
+
+function formatMoney(amount: number, ccy: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: ccy }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${ccy}`;
+  }
+}
+
+function formatBackedTotals(backed: Record<string, number>): string {
+  const entries = Object.entries(backed).filter(([, amount]) => amount > 0);
+  if (entries.length === 0) return "$0.00";
+  return entries.map(([ccy, amount]) => formatMoney(amount, ccy)).join(", ");
+}
+
 export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -72,6 +102,50 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   const [selectedByCategory, setSelectedByCategory] = useState<Record<string, Set<string>>>({});
   const [bulkAction, setBulkAction] = useState<{ category: string; action: BulkAction } | null>(null);
   const [bulkInFlight, setBulkInFlight] = useState(false);
+
+  // Contract-delete impact warning — a guardrail, not a gate. Deleting a
+  // contract file can remove data OneClick's royalty tracking relies on, so
+  // before a "contract" category file is actually deleted, check whether it
+  // backs any tracked royalty lines and warn if so. No impact (or a failed
+  // check) proceeds straight to the existing delete, same as today.
+  const [contractDeleteImpact, setContractDeleteImpact] = useState<{
+    impact: ContractImpact;
+    onConfirm: () => void;
+  } | null>(null);
+
+  const checkContractImpact = async (fileIds: string[]): Promise<ContractImpact | null> => {
+    try {
+      const results = await Promise.all(
+        fileIds.map((id) =>
+          apiFetch<ContractImpact>(`${API_URL}/oneclick/royalties/contracts/${id}/impact`),
+        ),
+      );
+      return results.reduce<ContractImpact>(
+        (acc, r) => {
+          acc.lines += r.lines;
+          acc.buckets_with_paid_coverage += r.buckets_with_paid_coverage;
+          for (const [ccy, amount] of Object.entries(r.backed)) {
+            acc.backed[ccy] = (acc.backed[ccy] ?? 0) + amount;
+          }
+          return acc;
+        },
+        { lines: 0, backed: {}, buckets_with_paid_coverage: 0 },
+      );
+    } catch (err) {
+      console.error("Error checking contract royalty impact:", err);
+      return null; // fail open — the warning is a guardrail, not a gate
+    }
+  };
+
+  /** Runs `run` immediately unless the contract file(s) back tracked royalty lines, in which case it's held behind a confirm dialog first. */
+  const runAfterContractImpactCheck = async (fileIds: string[], run: () => void) => {
+    const impact = await checkContractImpact(fileIds);
+    if (impact && impact.lines > 0) {
+      setContractDeleteImpact({ impact, onConfirm: run });
+      return;
+    }
+    run();
+  };
 
   // Fetch project files
   const { data: files, isLoading, isError } = useQuery({
@@ -574,7 +648,11 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                               variant="ghost"
                               className="h-7 w-7 p-0 shrink-0 text-destructive hover:text-destructive"
                               title="Delete"
-                              onClick={() => handleDelete(file)}
+                              onClick={() =>
+                                cat.key === "contract"
+                                  ? runAfterContractImpactCheck([file.id], () => handleDelete(file))
+                                  : handleDelete(file)
+                              }
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </Button>
@@ -627,16 +705,58 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                 .map((f) => ({ id: f.id, name: f.file_name }))
             : []
         }
-        onConfirm={() => {
+        onConfirm={async () => {
           if (!bulkAction) return;
           const selected = (filesByCategory.get(bulkAction.category) || []).filter((f) =>
             selectedByCategory[bulkAction.category]?.has(f.id)
           );
-          if (bulkAction.action === "download") bulkDownload(selected);
-          else if (bulkAction.action === "delete") bulkDelete(selected);
+          if (bulkAction.action === "download") {
+            bulkDownload(selected);
+            return;
+          }
+          if (bulkAction.action === "delete" && bulkAction.category === "contract") {
+            // Close this review dialog first — the impact check opens its own
+            // dialog if (and only if) the contracts back tracked royalties.
+            setBulkAction(null);
+            await runAfterContractImpactCheck(selected.map((f) => f.id), () => bulkDelete(selected));
+            return;
+          }
+          bulkDelete(selected);
         }}
         isWorking={bulkInFlight}
       />
+
+      {/* Contract-delete royalty impact warning */}
+      <AlertDialog
+        open={!!contractDeleteImpact}
+        onOpenChange={(open) => { if (!open) setContractDeleteImpact(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>This contract is linked to royalty tracking</AlertDialogTitle>
+            <AlertDialogDescription>
+              This contract backs {formatBackedTotals(contractDeleteImpact?.impact.backed ?? {})} in
+              tracked royalties
+              {(contractDeleteImpact?.impact.buckets_with_paid_coverage ?? 0) > 0
+                ? ", some already paid out"
+                : ""}
+              . Unpaid entries will be removed; paid amounts become credits toward future payouts.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setContractDeleteImpact(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                contractDeleteImpact?.onConfirm();
+                setContractDeleteImpact(null);
+              }}
+            >
+              Delete anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Work-linking dialog (Fix #4) */}
       <Dialog open={!!linkingFileId} onOpenChange={(open) => { if (!open) { setLinkingFileId(null); setSelectedWorkIds([]); } }}>

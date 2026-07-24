@@ -328,6 +328,7 @@ async def _assert_can_access_oneclick_inputs(db, user_id, project_id, statement_
 
 
 from oneclick.royalties.ingest import sync_calc_royalties
+from oneclick.royalties.ledger_sync import SyncGateError
 
 
 def _statement_currency(statement_id: str) -> str:
@@ -1629,6 +1630,17 @@ async def delete_contract(contract_id: str, user_id: str = Depends(get_current_u
 
         contract = contract_res.data[0]
 
+        # Ledger guardrail: strip this contract's assertions first.
+        # Payment records are never touched; imbalances surface as credits.
+        try:
+            from oneclick.royalties.ledger_sync import remove_contract_from_ledger
+
+            remove_contract_from_ledger(get_supabase_client(), user_id, contract_id)
+        except Exception as e:
+            # Ledger cleanup failing must not strand the file half-deleted;
+            # abort the whole delete so the operation stays retryable.
+            raise HTTPException(status_code=500, detail=f"Ledger cleanup failed: {e}")
+
         # 2. (Pinecone deletion removed — vectors are no longer created)
 
         # 3. Delete from Supabase Storage
@@ -1923,6 +1935,8 @@ class ConfirmCalculationRequest(BaseModel):
     royalty_statement_id: str
     project_id: str
     results: dict[str, Any]
+    conflict_resolutions: list[dict] | None = None
+    revision_decision: dict | None = None
 
 
 class RecalcExpense(BaseModel):
@@ -2093,6 +2107,36 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
     await _assert_can_access_oneclick_inputs(
         get_supabase_client(), user_id, request.project_id, request.royalty_statement_id, request.contract_ids or []
     )
+
+    # GATE CHECK — pure reads. A 409 here must leave NO cache row behind, so
+    # this runs before any write. Statement rows are parsed here (not persisted)
+    # so the revision gate sees the REAL period — a today-fallback would let the
+    # revision gate slip past check time and fire only after the cache write.
+    # The full sync below re-runs the gates (belt).
+    try:
+        db = get_supabase_client()
+        _gate_rows = None
+        try:
+            _gate_rows = _parse_statement_rows(db, request.royalty_statement_id) or None
+        except Exception as _pe:  # noqa: BLE001 — parse failure falls back to belt-path gating
+            print(f"[royalties] gate-time statement parse failed: {_pe}")
+        sync_calc_royalties(
+            db,
+            user_id,
+            None,
+            request.royalty_statement_id,
+            request.project_id,
+            request.results,
+            _statement_currency(request.royalty_statement_id),
+            contract_ids=request.contract_ids,
+            statement_rows=_gate_rows,
+            conflict_resolutions=request.conflict_resolutions,
+            revision_decision=request.revision_decision,
+            check_only=True,
+        )
+    except SyncGateError as g:
+        raise HTTPException(status_code=409, detail={"gate": g.gate, "payload": g.payload})
+
     try:
         # 0. Delete old cached calculation for same statement + contracts (if any)
         existing = (
@@ -2159,13 +2203,16 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
         contract_song_titles = [p.get("song_title", "") for p in payments]
         _persist_statement_rows(calculation_id, request.royalty_statement_id, user_id, contract_song_titles)
 
-        # 3b. Sync royalty payees/lines for the payments-history feature. Pass
-        #     statement_rows=None so it reuses the rows persisted in 3a (no double-write)
-        #     and derives the period from them; line sync ALWAYS runs so payees/owed are
-        #     never blocked by a statement-rows problem.
+        # 3b. Sync royalty payees/lines for the payments-history feature. Line
+        #     sync ALWAYS runs so payees/owed are never blocked by a
+        #     statement-rows problem; failures are reported, not swallowed.
+        ledger_synced, ledger_error = True, None
         try:
             db = get_supabase_client()
             currency = _statement_currency(request.royalty_statement_id)
+            # Reuse the gate-time parse: one parse per confirm, and the check
+            # and full-sync periods cannot diverge. persist_rows=False keeps
+            # step 3a the authoritative writer of royalty_statement_rows.
             sync_calc_royalties(
                 db,
                 user_id,
@@ -2174,13 +2221,31 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
                 request.project_id,
                 request.results,
                 currency,
-                statement_rows=None,
+                contract_ids=request.contract_ids,
+                conflict_resolutions=request.conflict_resolutions,
+                revision_decision=request.revision_decision,
+                statement_rows=_gate_rows,
+                persist_rows=False,
             )
+        except SyncGateError as g:
+            # Belt: a gate slipped past check_only (state changed between the two
+            # calls). Surface it; the cache row exists but the cache-hit path
+            # re-runs gates, so nothing can bypass resolution.
+            raise HTTPException(status_code=409, detail={"gate": g.gate, "payload": g.payload})
         except Exception as e:
             print(f"[royalties] ingestion failed for calc {calculation_id}: {e}")
+            ledger_synced, ledger_error = False, str(e)
 
-        return {"status": "success", "message": "Calculation saved successfully", "id": calculation_id}
+        return {
+            "status": "success",
+            "message": "Calculation saved successfully",
+            "id": calculation_id,
+            "ledger_synced": ledger_synced,
+            "ledger_error": ledger_error,
+        }
 
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error saving calculation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to save calculation: {str(e)}")
@@ -2401,6 +2466,7 @@ async def oneclick_calculate_royalties_stream(
                                 # cached calc has none persisted yet (e.g. it was first run before
                                 # royalty_statement_rows existed), parse + backfill them so periods/
                                 # totals become real; otherwise skip the re-parse (cheap).
+                                gate_event = None
                                 try:
                                     _db = get_supabase_client()
                                     _existing_rows = (
@@ -2421,12 +2487,20 @@ async def oneclick_calculate_royalties_stream(
                                         project_id,
                                         calc["results"],
                                         _statement_currency(royalty_statement_file_id),
+                                        contract_ids=list(target_contract_ids),
                                         statement_rows=_rows_for_sync,
                                     )
-                                except Exception as e:
+                                except SyncGateError as g:
+                                    # Gate fired on the cache-hit write path: NO ledger
+                                    # writes happened. Hand the question to the client —
+                                    # resolution comes back through /oneclick/confirm.
+                                    gate_event = {"type": "needs_confirmation", "gate": g.gate, "payload": g.payload}
+                                except Exception as e:  # noqa: BLE001
                                     print(f"[royalties] cache-hit sync failed for calc {calc['id']}: {e}")
 
                                 yield f"data: {json.dumps(result)}\n\n"
+                                if gate_event:
+                                    yield f"data: {json.dumps(gate_event)}\n\n"
                                 return
 
                 except Exception as e:

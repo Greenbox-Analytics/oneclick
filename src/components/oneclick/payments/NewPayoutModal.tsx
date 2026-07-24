@@ -1,12 +1,12 @@
 // src/components/oneclick/payments/NewPayoutModal.tsx
 import { useState } from "react";
-import { FileText, Check as CheckIcon, CheckCheck, Info } from "lucide-react";
+import { FileText, Check as CheckIcon, CheckCheck, Info, AlertTriangle } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { useCreatePayout } from "@/hooks/useRoyalties";
-import type { PayeeSummary } from "@/hooks/useRoyalties";
+import { useCreatePayout, PayoutStaleError } from "@/hooks/useRoyalties";
+import type { PayeeSummary, StaleLine } from "@/hooks/useRoyalties";
 import { PartyAvatar, fmtMoney } from "./shared";
 import { isPaypalEnabled } from "./PayWithPayPalDialog";
 import { useToast } from "@/hooks/use-toast";
@@ -45,6 +45,7 @@ export function NewPayoutModal({ payees, base, initialIds, onClose, onViewDrafts
   const [note, setNote] = useState("");
   const [done, setDone] = useState(false);
   const [resultCount, setResultCount] = useState(0);
+  const [staleLines, setStaleLines] = useState<StaleLine[] | null>(null);
 
   const { toast } = useToast();
   const createPayout = useCreatePayout();
@@ -71,16 +72,21 @@ export function NewPayoutModal({ payees, base, initialIds, onClose, onViewDrafts
     return b.owed - a.owed;
   });
 
-  const handleCreate = () => {
+  const handleCreate = (force = false) => {
     createPayout.mutate(
-      { payee_ids: sel, idempotency_key: idempotencyKey, note: note || undefined },
+      { payee_ids: sel, idempotency_key: idempotencyKey, note: note || undefined, force: force || undefined },
       {
         onSuccess: (created) => {
           const count = Array.isArray(created) ? created.length : sel.length;
           setResultCount(count);
+          setStaleLines(null);
           setDone(true);
         },
         onError: (err) => {
+          if (err instanceof PayoutStaleError) {
+            setStaleLines(err.stale_lines);
+            return;
+          }
           toast({
             variant: "destructive",
             title: "Failed to create invoices",
@@ -95,10 +101,44 @@ export function NewPayoutModal({ payees, base, initialIds, onClose, onViewDrafts
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-lg gap-0 overflow-y-auto p-0 max-h-[90vh]">
         <DialogHeader className="border-b border-border px-5 py-4">
-          <DialogTitle>{done ? "Invoices created" : "New payout"}</DialogTitle>
+          <DialogTitle>
+            {done ? "Invoices created" : staleLines ? "Double-check before paying" : "New payout"}
+          </DialogTitle>
         </DialogHeader>
 
-        {done ? (
+        {staleLines ? (
+          <div className="flex flex-col gap-4 px-5 py-4">
+            <div className="flex items-start gap-2.5 rounded-[10px] border border-[hsl(var(--pay-partial-fg)/0.3)] bg-[hsl(var(--pay-partial-bg))] px-3.5 py-3 text-[13px] leading-relaxed text-[hsl(var(--pay-partial-fg))]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                These amounts were computed from contract files that have since been deleted.
+                Recalculate before paying, or continue anyway.
+              </span>
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-border">
+              <div className="border-b border-border bg-muted/40 px-3.5 py-2 text-[10.5px] font-bold uppercase tracking-wider text-muted-foreground">
+                Affected songs ({staleLines.length})
+              </div>
+              <ul className="max-h-[220px] divide-y divide-border overflow-y-auto">
+                {staleLines.map((line) => (
+                  <li key={line.line_id} className="px-3.5 py-2 text-[13px] font-medium">
+                    {line.song}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button variant="outline" className="mr-auto" onClick={() => setStaleLines(null)}>
+                Cancel
+              </Button>
+              <Button disabled={createPayout.isPending} onClick={() => handleCreate(true)}>
+                {createPayout.isPending ? "Continuing…" : "Continue anyway"}
+              </Button>
+            </div>
+          </div>
+        ) : done ? (
           <div className="px-6 py-8 text-center">
             <div className="mx-auto mb-3.5 flex h-[60px] w-[60px] items-center justify-center rounded-full bg-[hsl(var(--pay-paid-bg))] text-[hsl(var(--pay-paid-fg))]">
               <CheckCheck className="h-7 w-7" />
@@ -223,7 +263,7 @@ export function NewPayoutModal({ payees, base, initialIds, onClose, onViewDrafts
               </Button>
               <Button
                 disabled={sel.length === 0 || createPayout.isPending}
-                onClick={handleCreate}
+                onClick={() => handleCreate()}
               >
                 {createPayout.isPending ? (
                   "Creating…"
