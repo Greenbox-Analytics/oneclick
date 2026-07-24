@@ -38,8 +38,10 @@ from registry.models import (
     WorkRoleUpdate,
     WorkUpdate,
 )
-from subscriptions.enforcement import gated_feature
-from subscriptions.models import Action
+from subscriptions.enforcement import free_credit_grant, gated_create, gated_credits, gated_feature
+from subscriptions.models import Action, CreditAction
+from subscriptions.service import credits_enabled
+from utils.llm.tracking import set_llm_context
 
 router = APIRouter()
 
@@ -120,6 +122,19 @@ def _raise_503_if_schema_stale(e: APIError) -> None:
 @router.post("/works")
 async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
+    # max_works ships with the credits launch (spec: everything behind
+    # CREDITS_ENABLED); the migration seeds the cap but it must not bite
+    # before the flag flips.
+    if credits_enabled():
+        # SP3/credits: per-tier max_works cap — 402 when the user is at the limit.
+        count_res = _get_supabase().table("works_registry").select("id", count="exact").eq("user_id", user_id).execute()
+        # Licensing Phase C (rule 9): pass the target project so a work created in
+        # an org-linked project where the caller holds a seat gets the org's
+        # unlimited count cap. body.project_id is already in scope (required on
+        # WorkCreate); no new query. Ownership is validated downstream in
+        # service.create_work — derivation can only ever UPGRADE the cap, so it is
+        # safe even before that check (a miss falls through to today's behavior).
+        gated_create(user_id, "work", count_res.count or 0, resource_project_id=body.project_id)
     data = body.model_dump(exclude_none=True)
     if "release_date" in data and data["release_date"]:
         data["release_date"] = data["release_date"].isoformat()
@@ -1145,7 +1160,7 @@ async def parse_contract_splits(
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=f"Failed to download contract: {exc}") from exc
 
-    from utils.contract_parsing.cache import get_or_parse
+    from utils.contract_parsing.cache import get_or_parse, peek_cached_parse
     from utils.ingestion.pdf_markdown import pdf_to_markdown
 
     def _load_text() -> str:
@@ -1166,14 +1181,51 @@ async def parse_contract_splits(
                 except OSError:
                     pass
 
+    # Load the text FIRST (pdf→markdown is local compute, no LLM cost), then peek the parse
+    # cache: a guaranteed hit is free (spec §3) and must not be walled at zero balance.
+    # Legacy mode (credits off) skips the peek and always takes the gate below.
     try:
-        # Route through the shared parse cache so this Add-Work parse is cached and
-        # canonicalized (marker-stripped) like every other contract parse.
-        contract_data = get_or_parse(_get_supabase(), _load_text)
-        result = contract_splits.parse_royalty_splits(
-            contract_data=contract_data,
-            main_artist_name=main_artist_name or "",
+        text = _load_text()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Contract parsing failed: {e}")
+
+    cached_peek = peek_cached_parse(_get_supabase(), text) if credits_enabled() else None
+    if credits_enabled() and cached_peek is not None:
+        parse_grant = free_credit_grant(CreditAction.REGISTRY_PARSE)
+    else:
+        # SP3/credits: gate the contract parse; 402 without access or credits.
+        # Resource-derived billing (Licensing Phase C, rule 5): a PICKED existing
+        # contract (contract_file_id) derives its project's linked-org billing —
+        # passed as a one-element list; an UPLOAD has no resource → ambient.
+        # Derivation-vs-access ordering (rule 4, Phase A access-first):
+        # verify_user_owns_contract on the picked file ran above BEFORE this gate,
+        # so derivation can never bill an org for a contract the caller can't
+        # access; charge-on-success is the backstop.
+        parse_grant = gated_credits(
+            user_id,
+            CreditAction.REGISTRY_PARSE,
+            resource_contract_ids=[contract_file_id] if has_picked else None,
         )
+
+    try:
+        with set_llm_context(user_id, "registry"):
+            # Route through the shared parse cache so this Add-Work parse is cached and
+            # canonicalized (marker-stripped) like every other contract parse.
+            cache_missed = {"v": False}
+            contract_data = get_or_parse(_get_supabase(), lambda: text, on_miss=lambda: cache_missed.update(v=True))
+            result = contract_splits.parse_royalty_splits(
+                contract_data=contract_data,
+                main_artist_name=main_artist_name or "",
+            )
+        # Charge only when a real LLM parse happened — cache hits are free (spec §3).
+        if cache_missed["v"]:
+            from subscriptions.deps import _get_entitlements_service
+
+            _get_entitlements_service().debit_for_action(user_id, parse_grant)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

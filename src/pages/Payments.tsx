@@ -2,11 +2,12 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Music, Search, DollarSign, CheckCircle2, XCircle, Clock, Loader2, ArrowLeft, BookOpen } from "lucide-react";
+import { Music, Search, DollarSign, CheckCircle2, XCircle, Clock, Loader2, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSmartBack } from "@/hooks/useSmartBack";
@@ -131,15 +132,7 @@ const Payments = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
+            <HeaderDocsButton />
             <Button variant="outline" onClick={() => navigate("/contacts")}>
               Contacts
             </Button>

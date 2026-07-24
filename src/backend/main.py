@@ -28,6 +28,7 @@ from auth import get_current_user_email, get_current_user_id
 from middleware.analytics_middleware import AnalyticsMiddleware
 from pagination import PaginatedResponse, paginate_query
 from subscriptions.admin_auth import is_active_tester_row, is_user_admin
+from utils.llm.tracking import iter_with_llm_context, set_llm_context, submit_with_context
 from zoe_chatbot.contract_chatbot import ContractChatbot
 from zoe_chatbot.helpers import calculate_royalty_payments
 
@@ -51,6 +52,7 @@ from oneclick.royalties.analytics_router import router as royalties_analytics_ro
 from oneclick.royalties.router import router as royalties_router
 from oneclick.royalty_calculator import CalculationError, RoyaltyCalculator
 from oneclick.share import router as oneclick_share_router
+from orgs.router import router as orgs_router
 from projects.router import router as projects_router
 from projects.share_email import router as projects_share_email_router
 from registry.router import router as registry_router
@@ -60,6 +62,7 @@ from subscriptions.admin_router import router as subscriptions_admin_router
 from subscriptions.billing_router import router as billing_router
 from subscriptions.pro_requests_router import router as pro_requests_router
 from subscriptions.router import router as subscriptions_router
+from subscriptions.sweep import router as sweep_router
 from teams.router import router as teams_router
 from users.router import router as users_router
 
@@ -86,8 +89,10 @@ app.include_router(subscriptions_router, tags=["Entitlements"])
 app.include_router(subscriptions_admin_router, tags=["Admin"])
 app.include_router(pro_requests_router, tags=["Pro Requests"])
 app.include_router(billing_router)
+app.include_router(sweep_router)
 app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
 app.include_router(teams_router, prefix="/teams", tags=["Teams"])
+app.include_router(orgs_router, prefix="/orgs", tags=["Organizations"])
 
 # --- Register Slack notification handlers on events ---
 from integrations import events
@@ -235,8 +240,9 @@ def normalize_file_name(file_name: str) -> str:
 # cycle with subscriptions/enforcement.py. Re-export here so SP1/SP2 callers
 # in this file (Zoe/OneClick increments, etc.) keep working unchanged.
 from subscriptions.deps import _get_entitlements_service  # noqa: I001
-from subscriptions.enforcement import gated_create, gated_feature, gated_upload
-from subscriptions.models import Action
+from subscriptions.enforcement import free_credit_grant, gated_create, gated_credits, gated_upload
+from subscriptions.models import CreditAction
+from subscriptions.service import credits_enabled
 
 
 # --- Ownership verification helpers ---
@@ -610,7 +616,7 @@ def health_check():
 class AnalyticsContext(BaseModel):
     is_tester: bool
     is_admin: bool
-    plan: Literal["free", "pro"]
+    plan: Literal["free", "pro", "pro_max"]
     role: str | None
     email: str | None
     signed_up_at: str | None
@@ -745,6 +751,16 @@ async def bootstrap_tester(
         "granted_at": granted_at,
     }
     sb.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
+
+    # Initial tester credits: once-per-user idempotent (tester-init request_id),
+    # so re-running bootstrap can never double-fill. Best-effort: a sign-in
+    # must never 500 over a credits blip; admins can top up manually.
+    try:
+        from subscriptions.admin_service import grant_initial_tester_credits
+
+        grant_initial_tester_credits(sb, user_id)
+    except Exception as exc:
+        logger.warning("bootstrap tester initial credits failed for %s: %s", user_id, exc)
 
     try:
         analytics_identify(
@@ -1020,7 +1036,11 @@ async def upload_file(
         file_content = await file.read()
 
         # ---- SP3: gate BEFORE Storage write ----
-        gated_upload(user_id, size=len(file_content), host_user_id=user_id)
+        # Licensing Phase C (rule 9): the caller owns this artist/project (verified
+        # above) so host_user_id == user_id — the caller IS the storage-counter
+        # owner, so passing resource_project_id lets an org-linked project raise
+        # storage to the org's seat allowance. project_id is already resolved here.
+        gated_upload(user_id, size=len(file_content), host_user_id=user_id, resource_project_id=project_id)
 
         # Clean filename
         import re
@@ -1462,7 +1482,10 @@ async def upload_contract(
         Upload statistics and confirmation
     """
     file_content = await file.read()
-    gated_upload(user_id, size=len(file_content), host_user_id=user_id)
+    # Licensing Phase C (rule 9): caller uploads to their own project (host==user,
+    # ownership verified in _upload_contract_impl), so resource_project_id lets an
+    # org-linked project raise storage to the org's seat allowance. project_id in scope.
+    gated_upload(user_id, size=len(file_content), host_user_id=user_id, resource_project_id=project_id)
     return await _upload_contract_impl(background_tasks, file, file_content, project_id, user_id)
 
 
@@ -1491,7 +1514,10 @@ async def upload_multiple_contracts(
         file_contents.append((file, contents))
 
     total_size = sum(len(c) for _, c in file_contents)
-    gated_upload(user_id, size=total_size, host_user_id=user_id)
+    # Licensing Phase C (rule 9): caller uploads to their own project (host==user,
+    # ownership verified per-file in _upload_contract_impl), so resource_project_id
+    # lets an org-linked project raise storage to the org's seat allowance.
+    gated_upload(user_id, size=total_size, host_user_id=user_id, resource_project_id=project_id)
 
     # ---- Process each file individually using the shared helper ----
     results = []
@@ -1734,8 +1760,30 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
         raise HTTPException(status_code=403, detail="Access denied")
     _zoe_session_owners[session_id] = user_id
 
-    # SP3: gate Zoe feature; raises 402 for Free users without a Pro host.
-    gated_feature(user_id, Action.USE_ZOE, host_user_id=request.host_user_id)
+    # SP3/credits: gate Zoe; 402 for users without access or credits.
+    # Deterministic conversational fast-path ("hi", "thanks") is FREE (spec §3)
+    # and must stay reachable at zero balance — skip the wall when the pure
+    # text predicate guarantees no LLM call. Legacy mode (credits off) keeps
+    # the feature gate for every query, preserving pre-credits behavior.
+    from zoe_chatbot.contract_chatbot import is_zero_cost_query
+
+    if credits_enabled() and is_zero_cost_query(request.query or ""):
+        zoe_grant = free_credit_grant(CreditAction.ZOE_MESSAGE)
+    else:
+        # Resource-derived billing (Licensing Phase C, rule 5): pass the FULL
+        # contract_ids list — the resolver's UNANIMITY rule decides (all contracts
+        # in ONE org-linked project bill that org; a mixed-project set falls to
+        # ambient). NEVER contract_ids[0]: non-deterministic "first contract wins"
+        # money attribution is forbidden (rule 5). Derivation-vs-access ordering
+        # (rule 4, Phase A access-first): the user_can_access_file loop above (per
+        # contract) runs BEFORE this gate, so derivation can never bill an org for
+        # a contract the caller can't access; charge-on-success is the backstop.
+        zoe_grant = gated_credits(
+            user_id,
+            CreditAction.ZOE_MESSAGE,
+            host_user_id=request.host_user_id,
+            resource_contract_ids=request.contract_ids or None,
+        )
 
     # Step event: fire BEFORE any work begins so we capture even early failures.
     import time as _time
@@ -1824,6 +1872,19 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                             source_count += len(payload.get("sources") or []) + len(
                                 payload.get("reference_sources") or []
                             )
+                        if isinstance(payload, dict) and payload.get("type") in ("done", "complete"):
+                            # Charge on success: the stream reached its terminal event
+                            # (`done`, or `complete` for the instant non-streamed tiers).
+                            # Never fires on the `error` path. The grant's request_id
+                            # keeps the debit RPC idempotent — at most one real debit.
+                            # Zero-cost terminal events are FREE (spec: meter only what
+                            # costs money): conversational fast-path replies and the
+                            # context_cleared notice involve no LLM call.
+                            zero_cost = payload.get("confidence") == "conversational" or bool(
+                                payload.get("context_cleared")
+                            )
+                            if not zero_cost:
+                                _get_entitlements_service().debit_for_action(user_id, zoe_grant)
                     except (ValueError, TypeError):
                         # Best-effort parsing; never block the stream on counter errors.
                         pass
@@ -1852,7 +1913,10 @@ async def zoe_ask_stream(request: ZoeAskRequest, user_id: str = Depends(get_curr
                 )
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
-        return StreamingResponse(generate(), media_type="text/event-stream")
+        return StreamingResponse(
+            iter_with_llm_context(user_id, "zoe", generate()),
+            media_type="text/event-stream",
+        )
 
     except Exception as e:
         print(f"Error in Zoe streaming chatbot: {str(e)}")
@@ -2314,6 +2378,34 @@ async def expenses_summary(user_id: str = Depends(get_current_user_id)):
     return {"expenses": expenses}
 
 
+def _find_cached_oneclick_calc(sb, royalty_statement_file_id: str, target_contract_ids: list[str]) -> dict | None:
+    """Deterministic result-cache probe: a prior calculation for this statement
+    with EXACTLY this contract set, or None. No LLM cost — safe to run before
+    the credit gate so cached re-runs stay free at zero balance (spec §3)."""
+    calcs_res = (
+        sb.table("royalty_calculations")
+        .select("id, results")
+        .eq("royalty_statement_id", royalty_statement_file_id)
+        .execute()
+    )
+    if not calcs_res.data:
+        return None
+    calc_ids = [calc["id"] for calc in calcs_res.data]
+    assoc_res = (
+        sb.table("royalty_calculation_contracts")
+        .select("calculation_id, contract_id")
+        .in_("calculation_id", calc_ids)
+        .execute()
+    )
+    contract_map: dict = {}
+    for row in assoc_res.data or []:
+        contract_map.setdefault(row["calculation_id"], set()).add(row["contract_id"])
+    for calc in calcs_res.data:
+        if contract_map.get(calc["id"], set()) == set(target_contract_ids):
+            return calc
+    return None
+
+
 @app.get("/oneclick/calculate-royalties-stream")
 async def oneclick_calculate_royalties_stream(
     project_id: str,
@@ -2346,8 +2438,8 @@ async def oneclick_calculate_royalties_stream(
     Returns:
         SSE stream with progress updates and final results
     """
-    # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
-    gated_feature(user_id, Action.USE_ONECLICK, host_user_id=host_user_id)
+    # Access first (matches the JSON twin): don't reveal billing state to
+    # unauthorized callers — broke + unauthorized must 403, not 402.
     await _assert_can_access_oneclick_inputs(
         get_supabase_client(),
         user_id,
@@ -2355,6 +2447,30 @@ async def oneclick_calculate_royalties_stream(
         royalty_statement_file_id,
         (contract_ids or []) + ([contract_id] if contract_id else []),
     )
+    # Result-cache probe BEFORE the gate: a cached re-run is free (spec §3) and
+    # must never be walled behind the balance. Probe failure = miss (gate applies).
+    target_contract_ids = list(contract_ids) if contract_ids else ([contract_id] if contract_id else [])
+    cached_calc = None
+    if not force_recalculate and target_contract_ids:
+        try:
+            cached_calc = _find_cached_oneclick_calc(
+                get_supabase_client(), royalty_statement_file_id, target_contract_ids
+            )
+        except Exception as e:
+            print(f"Cache probe failed (continuing as miss): {e}")
+    if credits_enabled() and cached_calc is not None:
+        oneclick_grant = free_credit_grant(CreditAction.ONECLICK_RUN)
+    else:
+        # SP3/credits: gate OneClick; 402 for users without access or credits.
+        # Resource-derived billing (Licensing Phase C, rule 5): pass project_id so
+        # a run inside an org-linked project bills the linked org's seat.
+        # Derivation-vs-access ordering (rule 4, Phase A access-first):
+        # _assert_can_access_oneclick_inputs above runs BEFORE this gate, so
+        # derivation can never bill an org for a project the caller can't access;
+        # charge-on-success is the backstop.
+        oneclick_grant = gated_credits(
+            user_id, CreditAction.ONECLICK_RUN, host_user_id=host_user_id, resource_project_id=project_id
+        )
     # SP2: track per-period OneClick usage; best-effort, never blocks.
     _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
     analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
@@ -2368,421 +2484,394 @@ async def oneclick_calculate_royalties_stream(
     _contract_count = len(contract_ids) if contract_ids else (1 if contract_id else 0)
 
     async def generate_progress():
-        # Initialize paths to None for safe cleanup
-        contract_path = None
-        statement_path = None
+        with set_llm_context(user_id, "oneclick"):
+            # Initialize paths to None for safe cleanup
+            contract_path = None
+            statement_path = None
 
-        try:
-            # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0, 'stage': 'starting'})}\n\n"
-            await asyncio.sleep(0.1)
+            try:
+                # Send initial status
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Starting OneClick calculation...', 'progress': 0, 'stage': 'starting'})}\n\n"
+                await asyncio.sleep(0.1)
 
-            # Determine contracts to process
-            target_contract_ids = []
-            if contract_ids:
-                target_contract_ids = contract_ids
-            elif contract_id:
-                target_contract_ids = [contract_id]
+                # target_contract_ids is computed once at the endpoint level (used
+                # for the pre-gate cache probe) and closed over here — no re-derive.
+                if not target_contract_ids:
+                    analytics_capture(
+                        user_id,
+                        "oneclick_calc_failed",
+                        {"tool": "oneclick", "error_code": "ValidationError", "stage": "validation"},
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'No contracts specified'})}\n\n"
+                    return
 
-            if not target_contract_ids:
-                analytics_capture(
-                    user_id,
-                    "oneclick_calc_failed",
-                    {"tool": "oneclick", "error_code": "ValidationError", "stage": "validation"},
-                )
-                yield f"data: {json.dumps({'type': 'error', 'message': 'No contracts specified'})}\n\n"
-                return
+                # --- CACHE HIT (probed pre-gate; no re-query) ---
+                if cached_calc is not None:
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
 
-            # --- CACHE CHECK ---
-            if not force_recalculate:
-                try:
-                    yield f"data: {json.dumps({'type': 'status', 'message': 'Checking cache...', 'progress': 5, 'stage': 'starting'})}\n\n"
+                    result = cached_calc["results"]
+                    # Ensure is_cached flag is set
+                    result["is_cached"] = True
+                    # Expose the calculation id so the Earnings
+                    # Breakdown tab can load on cache hits (no
+                    # confirm round-trip happens for cached results).
+                    result["calculation_id"] = cached_calc["id"]
+                    # Add type field so frontend SSE handler recognizes it
+                    result["type"] = "complete"
 
-                    # Find calculations that match the statement ID
-                    # We need to find a calculation that has EXACTLY the same set of contracts
-
-                    # 1. Get all calculations for this statement
-                    calcs_res = (
-                        get_supabase_client()
-                        .table("royalty_calculations")
-                        .select("id, results")
-                        .eq("royalty_statement_id", royalty_statement_file_id)
-                        .execute()
+                    # Cache hit: fire paired _started + _completed so
+                    # the funnel sees the same volume on each step.
+                    analytics_capture(
+                        user_id,
+                        "oneclick_calc_started",
+                        {"tool": "oneclick", "contract_count": _contract_count, "cached": True},
+                    )
+                    analytics_capture(
+                        user_id,
+                        "oneclick_calc_completed",
+                        {
+                            "tool": "oneclick",
+                            "duration_ms": 0,
+                            "contract_count": _contract_count,
+                            "cached": True,
+                        },
                     )
 
-                    if calcs_res.data:
-                        calc_ids = [calc["id"] for calc in calcs_res.data]
-
-                        # Single batch query for ALL calculation-contract associations
-                        all_contracts_res = (
-                            get_supabase_client()
-                            .table("royalty_calculation_contracts")
-                            .select("calculation_id, contract_id")
-                            .in_("calculation_id", calc_ids)
+                    # Cache-hit: sync royalty_lines. Self-heal statement rows — if this
+                    # cached calc has none persisted yet (e.g. it was first run before
+                    # royalty_statement_rows existed), parse + backfill them so periods/
+                    # totals become real; otherwise skip the re-parse (cheap).
+                    gate_event = None
+                    try:
+                        _db = get_supabase_client()
+                        _existing_rows = (
+                            _db.table("royalty_statement_rows")
+                            .select("id", count="exact")
+                            .eq("calculation_id", cached_calc["id"])
+                            .limit(1)
                             .execute()
                         )
+                        _rows_for_sync = None
+                        if not (getattr(_existing_rows, "count", 0) or 0):
+                            _rows_for_sync = _parse_statement_rows(_db, royalty_statement_file_id)
+                        sync_calc_royalties(
+                            _db,
+                            user_id,
+                            cached_calc["id"],
+                            royalty_statement_file_id,
+                            project_id,
+                            cached_calc["results"],
+                            _statement_currency(royalty_statement_file_id),
+                            contract_ids=list(target_contract_ids),
+                            statement_rows=_rows_for_sync,
+                        )
+                    except SyncGateError as g:
+                        # Gate fired on the cache-hit write path: NO ledger
+                        # writes happened. Hand the question to the client —
+                        # resolution comes back through /oneclick/confirm.
+                        gate_event = {"type": "needs_confirmation", "gate": g.gate, "payload": g.payload}
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[royalties] cache-hit sync failed for calc {cached_calc['id']}: {e}")
 
-                        # Build lookup map: calculation_id -> set of contract_ids
-                        contract_map = {}
-                        for row in all_contracts_res.data or []:
-                            contract_map.setdefault(row["calculation_id"], set()).add(row["contract_id"])
+                    yield f"data: {json.dumps(result)}\n\n"
+                    if gate_event:
+                        yield f"data: {json.dumps(gate_event)}\n\n"
+                    return
 
-                        # Check each cached calculation against target contracts
-                        for calc in calcs_res.data:
-                            cached_ids = contract_map.get(calc["id"], set())
-                            if cached_ids == set(target_contract_ids):
-                                # CACHE HIT!
-                                yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
-
-                                result = calc["results"]
-                                # Ensure is_cached flag is set
-                                result["is_cached"] = True
-                                # Expose the calculation id so the Earnings
-                                # Breakdown tab can load on cache hits (no
-                                # confirm round-trip happens for cached results).
-                                result["calculation_id"] = calc["id"]
-                                # Add type field so frontend SSE handler recognizes it
-                                result["type"] = "complete"
-
-                                # Cache hit: fire paired _started + _completed so
-                                # the funnel sees the same volume on each step.
-                                analytics_capture(
-                                    user_id,
-                                    "oneclick_calc_started",
-                                    {"tool": "oneclick", "contract_count": _contract_count, "cached": True},
-                                )
-                                analytics_capture(
-                                    user_id,
-                                    "oneclick_calc_completed",
-                                    {
-                                        "tool": "oneclick",
-                                        "duration_ms": 0,
-                                        "contract_count": _contract_count,
-                                        "cached": True,
-                                    },
-                                )
-
-                                # Cache-hit: sync royalty_lines. Self-heal statement rows — if this
-                                # cached calc has none persisted yet (e.g. it was first run before
-                                # royalty_statement_rows existed), parse + backfill them so periods/
-                                # totals become real; otherwise skip the re-parse (cheap).
-                                gate_event = None
-                                try:
-                                    _db = get_supabase_client()
-                                    _existing_rows = (
-                                        _db.table("royalty_statement_rows")
-                                        .select("id", count="exact")
-                                        .eq("calculation_id", calc["id"])
-                                        .limit(1)
-                                        .execute()
-                                    )
-                                    _rows_for_sync = None
-                                    if not (getattr(_existing_rows, "count", 0) or 0):
-                                        _rows_for_sync = _parse_statement_rows(_db, royalty_statement_file_id)
-                                    sync_calc_royalties(
-                                        _db,
-                                        user_id,
-                                        calc["id"],
-                                        royalty_statement_file_id,
-                                        project_id,
-                                        calc["results"],
-                                        _statement_currency(royalty_statement_file_id),
-                                        contract_ids=list(target_contract_ids),
-                                        statement_rows=_rows_for_sync,
-                                    )
-                                except SyncGateError as g:
-                                    # Gate fired on the cache-hit write path: NO ledger
-                                    # writes happened. Hand the question to the client —
-                                    # resolution comes back through /oneclick/confirm.
-                                    gate_event = {"type": "needs_confirmation", "gate": g.gate, "payload": g.payload}
-                                except Exception as e:  # noqa: BLE001
-                                    print(f"[royalties] cache-hit sync failed for calc {calc['id']}: {e}")
-
-                                yield f"data: {json.dumps(result)}\n\n"
-                                if gate_event:
-                                    yield f"data: {json.dumps(gate_event)}\n\n"
-                                return
-
-                except Exception as e:
-                    print(f"Cache check failed (continuing to calculate): {e}")
-
-            # Cache miss (or force_recalculate) — fire `_started` AFTER the
-            # cache check so cache hits don't double-fire.
-            analytics_capture(
-                user_id,
-                "oneclick_calc_started",
-                {"tool": "oneclick", "contract_count": _contract_count, "cached": False},
-            )
-
-            # Step 1: Download royalty statement
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
-
-            statement_res = (
-                get_supabase_client().table("project_files").select("*").eq("id", royalty_statement_file_id).execute()
-            )
-            if not statement_res.data:
+                # Cache miss (or force_recalculate) — fire `_started` AFTER the
+                # cache check so cache hits don't double-fire.
                 analytics_capture(
                     user_id,
-                    "oneclick_calc_failed",
-                    {"tool": "oneclick", "error_code": "ValidationError", "stage": "validation"},
+                    "oneclick_calc_started",
+                    {"tool": "oneclick", "contract_count": _contract_count, "cached": False},
                 )
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Royalty statement file not found'})}\n\n"
-                return
 
-            statement_file = statement_res.data[0]
-            file_data = get_supabase_client().storage.from_("project-files").download(statement_file["file_path"])
+                # Step 1: Download royalty statement
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Downloading royalty statement...', 'progress': 10, 'stage': 'downloading'})}\n\n"
 
-            file_extension = Path(statement_file["file_name"]).suffix.lower()
-            if not file_extension or file_extension not in [".csv", ".xlsx", ".xls"]:
-                file_extension = ".xlsx"
+                statement_res = (
+                    get_supabase_client()
+                    .table("project_files")
+                    .select("*")
+                    .eq("id", royalty_statement_file_id)
+                    .execute()
+                )
+                if not statement_res.data:
+                    analytics_capture(
+                        user_id,
+                        "oneclick_calc_failed",
+                        {"tool": "oneclick", "error_code": "ValidationError", "stage": "validation"},
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Royalty statement file not found'})}\n\n"
+                    return
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
-                tmp_statement.write(file_data)
-                statement_path = tmp_statement.name
+                statement_file = statement_res.data[0]
+                file_data = get_supabase_client().storage.from_("project-files").download(statement_file["file_path"])
 
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Royalty statement downloaded', 'progress': 20, 'stage': 'downloading'})}\n\n"
-            await asyncio.sleep(0.1)
+                file_extension = Path(statement_file["file_name"]).suffix.lower()
+                if not file_extension or file_extension not in [".csv", ".xlsx", ".xls"]:
+                    file_extension = ".xlsx"
 
-            # Step 2: Fetch full contract markdown for each contract
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Loading contract text...', 'progress': 25, 'stage': 'downloading'})}\n\n"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
+                    tmp_statement.write(file_data)
+                    statement_path = tmp_statement.name
 
-            contract_markdowns = {}
-            for cid in target_contract_ids:
-                try:
-                    c_res = (
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Royalty statement downloaded', 'progress': 20, 'stage': 'downloading'})}\n\n"
+                await asyncio.sleep(0.1)
+
+                # Step 2: Fetch full contract markdown for each contract
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Loading contract text...', 'progress': 25, 'stage': 'downloading'})}\n\n"
+
+                contract_markdowns = {}
+                for cid in target_contract_ids:
+                    try:
+                        c_res = (
+                            get_supabase_client()
+                            .table("project_files")
+                            .select("id, file_path, contract_markdown")
+                            .eq("id", cid)
+                            .execute()
+                        )
+                        if c_res.data:
+                            md = c_res.data[0].get("contract_markdown")
+                            if not md:
+                                # Lazy migration: convert PDF to markdown
+                                from utils.ingestion.pdf_markdown import pdf_to_markdown
+
+                                pdf_data = (
+                                    get_supabase_client()
+                                    .storage.from_("project-files")
+                                    .download(c_res.data[0]["file_path"])
+                                )
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+                                    tmp_pdf.write(pdf_data)
+                                    tmp_pdf_path = tmp_pdf.name
+                                try:
+                                    md = pdf_to_markdown(tmp_pdf_path)
+                                    get_supabase_client().table("project_files").update({"contract_markdown": md}).eq(
+                                        "id", cid
+                                    ).execute()
+                                finally:
+                                    os.unlink(tmp_pdf_path)
+                            if md:
+                                from utils.ingestion.pdf_markdown import strip_page_markers
+
+                                contract_markdowns[cid] = strip_page_markers(md)
+                    except Exception as e:
+                        print(f"Warning: Could not fetch markdown for contract {cid}: {e}")
+
+                # Legacy: still download PDF for single contract if markdown unavailable
+                if len(target_contract_ids) == 1 and contract_id and not contract_markdowns:
+                    contract_res = (
                         get_supabase_client()
                         .table("project_files")
-                        .select("id, file_path, contract_markdown")
-                        .eq("id", cid)
+                        .select("*")
+                        .eq("id", target_contract_ids[0])
                         .execute()
                     )
-                    if c_res.data:
-                        md = c_res.data[0].get("contract_markdown")
-                        if not md:
-                            # Lazy migration: convert PDF to markdown
-                            from utils.ingestion.pdf_markdown import pdf_to_markdown
+                    if contract_res.data:
+                        contract_file = contract_res.data[0]
+                        cd = get_supabase_client().storage.from_("project-files").download(contract_file["file_path"])
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_contract:
+                            tmp_contract.write(cd)
+                            contract_path = tmp_contract.name
 
-                            pdf_data = (
-                                get_supabase_client()
-                                .storage.from_("project-files")
-                                .download(c_res.data[0]["file_path"])
-                            )
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
-                                tmp_pdf.write(pdf_data)
-                                tmp_pdf_path = tmp_pdf.name
+                yield f"data: {json.dumps({'type': 'status', 'message': f'Loaded {len(contract_markdowns)} contract(s)', 'progress': 30, 'stage': 'downloading'})}\n\n"
+
+                await asyncio.sleep(0.1)
+
+                # Step 3: Extract contract data with progress updates
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contracts...', 'progress': 35, 'stage': 'extracting_parties'})}\n\n"
+                await asyncio.sleep(0.5)
+
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contracts...', 'progress': 50, 'stage': 'extracting_works'})}\n\n"
+                await asyncio.sleep(0.5)
+
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting royalty splits...', 'progress': 65, 'stage': 'extracting_royalty'})}\n\n"
+                await asyncio.sleep(0.5)
+
+                if len(target_contract_ids) > 1:
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Merging contract data...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
+
+                await asyncio.sleep(0.3)
+
+                # Calculate payments
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Processing statement and verifying splits against the contract(s)...', 'progress': 80, 'stage': 'processing'})}\n\n"
+
+                # Load project expenses so net-basis shares can be calculated.
+                calc_expenses, review_expenses = _load_oneclick_expenses(get_supabase_client(), project_id)
+
+                # Pre-parse each contract through the shared cache, in parallel so a cold
+                # multi-contract run doesn't serialize N extractions. NOTE: force_recalculate
+                # recomputes the PAYOUT (statement/expenses changed) — the contract bytes are
+                # unchanged, so we still READ the parse cache here (do NOT bypass it).
+                #
+                # Concurrency note: get_supabase_client() is a process-wide singleton, so all
+                # workers share one httpx-backed client — thread-safe for concurrent requests,
+                # and the default pool covers max_workers=4. If a cold multi-contract run ever
+                # surfaces PostgREST/connection-pool errors, switch to a fresh create_client(...)
+                # per worker (NOT get_supabase_client(), which returns the same singleton).
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                from utils.contract_parsing.cache import get_or_parse
+
+                db_client = get_supabase_client()
+                contract_data_by_id = {}
+                parse_targets = [
+                    (cid, contract_markdowns[cid]) for cid in target_contract_ids if contract_markdowns.get(cid)
+                ]
+                if parse_targets:
+                    with ThreadPoolExecutor(max_workers=4) as executor:
+                        fut_to_cid = {
+                            submit_with_context(executor, get_or_parse, db_client, (lambda m=md: m)): cid
+                            for cid, md in parse_targets
+                        }
+                        for future in as_completed(fut_to_cid):
+                            cid = fut_to_cid[future]
                             try:
-                                md = pdf_to_markdown(tmp_pdf_path)
-                                get_supabase_client().table("project_files").update({"contract_markdown": md}).eq(
-                                    "id", cid
-                                ).execute()
-                            finally:
-                                os.unlink(tmp_pdf_path)
-                        if md:
-                            from utils.ingestion.pdf_markdown import strip_page_markers
+                                contract_data_by_id[cid] = future.result()
+                            except Exception as e:
+                                print(f"Warning: pre-parse failed for contract {cid}: {e}")
 
-                            contract_markdowns[cid] = strip_page_markers(md)
-                except Exception as e:
-                    print(f"Warning: Could not fetch markdown for contract {cid}: {e}")
-
-            # Legacy: still download PDF for single contract if markdown unavailable
-            if len(target_contract_ids) == 1 and contract_id and not contract_markdowns:
-                contract_res = (
-                    get_supabase_client().table("project_files").select("*").eq("id", target_contract_ids[0]).execute()
-                )
-                if contract_res.data:
-                    contract_file = contract_res.data[0]
-                    cd = get_supabase_client().storage.from_("project-files").download(contract_file["file_path"])
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_contract:
-                        tmp_contract.write(cd)
-                        contract_path = tmp_contract.name
-
-            yield f"data: {json.dumps({'type': 'status', 'message': f'Loaded {len(contract_markdowns)} contract(s)', 'progress': 30, 'stage': 'downloading'})}\n\n"
-
-            await asyncio.sleep(0.1)
-
-            # Step 3: Extract contract data with progress updates
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting parties from contracts...', 'progress': 35, 'stage': 'extracting_parties'})}\n\n"
-            await asyncio.sleep(0.5)
-
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting works from contracts...', 'progress': 50, 'stage': 'extracting_works'})}\n\n"
-            await asyncio.sleep(0.5)
-
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting royalty splits...', 'progress': 65, 'stage': 'extracting_royalty'})}\n\n"
-            await asyncio.sleep(0.5)
-
-            if len(target_contract_ids) > 1:
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Merging contract data...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
-            else:
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Generating contract summary...', 'progress': 75, 'stage': 'extracting_summary'})}\n\n"
-
-            await asyncio.sleep(0.3)
-
-            # Calculate payments
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Processing statement and verifying splits against the contract(s)...', 'progress': 80, 'stage': 'processing'})}\n\n"
-
-            # Load project expenses so net-basis shares can be calculated.
-            calc_expenses, review_expenses = _load_oneclick_expenses(get_supabase_client(), project_id)
-
-            # Pre-parse each contract through the shared cache, in parallel so a cold
-            # multi-contract run doesn't serialize N extractions. NOTE: force_recalculate
-            # recomputes the PAYOUT (statement/expenses changed) — the contract bytes are
-            # unchanged, so we still READ the parse cache here (do NOT bypass it).
-            #
-            # Concurrency note: get_supabase_client() is a process-wide singleton, so all
-            # workers share one httpx-backed client — thread-safe for concurrent requests,
-            # and the default pool covers max_workers=4. If a cold multi-contract run ever
-            # surfaces PostgREST/connection-pool errors, switch to a fresh create_client(...)
-            # per worker (NOT get_supabase_client(), which returns the same singleton).
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-
-            from utils.contract_parsing.cache import get_or_parse
-
-            db_client = get_supabase_client()
-            contract_data_by_id = {}
-            parse_targets = [
-                (cid, contract_markdowns[cid]) for cid in target_contract_ids if contract_markdowns.get(cid)
-            ]
-            if parse_targets:
-                with ThreadPoolExecutor(max_workers=4) as executor:
-                    fut_to_cid = {
-                        executor.submit(get_or_parse, db_client, (lambda m=md: m)): cid for cid, md in parse_targets
-                    }
-                    for future in as_completed(fut_to_cid):
-                        cid = fut_to_cid[future]
-                        try:
-                            contract_data_by_id[cid] = future.result()
-                        except Exception as e:
-                            print(f"Warning: pre-parse failed for contract {cid}: {e}")
-
-            payments, review = calculate_royalty_payments(
-                contract_path=contract_path,
-                statement_path=statement_path,
-                user_id=user_id,
-                contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
-                contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
-                contract_markdowns=contract_markdowns if contract_markdowns else None,
-                expenses=calc_expenses,
-                contract_data_by_id=contract_data_by_id if contract_data_by_id else None,
-            )
-
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
-            await asyncio.sleep(0.3)
-
-            # Note: an empty payments list is no longer possible here — the
-            # calculator now raises a CalculationError with a specific reason
-            # code (NO_SONG_MATCHES / NO_STREAMING_EARNABLE_SHARES / etc.)
-            # which is caught below and surfaced to the user.
-
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
-            await asyncio.sleep(0.2)
-
-            # Send final results
-            payment_responses = []
-            for payment in payments:
-                payment_responses.append(
-                    {
-                        "song_title": payment["song_title"],
-                        "party_name": payment["party_name"],
-                        "role": payment["role"],
-                        "royalty_type": payment["royalty_type"],
-                        "percentage": payment["percentage"],
-                        "total_royalty": payment["total_royalty"],
-                        "amount_to_pay": payment["amount_to_pay"],
-                        "terms": payment.get("terms"),
-                        "basis": payment.get("basis", "gross"),
-                        "gross_amount": payment.get("gross_amount", payment["total_royalty"]),
-                        "expenses_applied": payment.get("expenses_applied", 0.0),
-                        "net_amount": payment.get("net_amount", payment["total_royalty"]),
-                    }
+                payments, review = calculate_royalty_payments(
+                    contract_path=contract_path,
+                    statement_path=statement_path,
+                    user_id=user_id,
+                    contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
+                    contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
+                    contract_markdowns=contract_markdowns if contract_markdowns else None,
+                    expenses=calc_expenses,
+                    contract_data_by_id=contract_data_by_id if contract_data_by_id else None,
                 )
 
-            # Net-basis rows need the user to confirm/edit expenses before the
-            # numbers are final. Surface the gate + the expenses the calc used.
-            expense_review_required = any(p.get("basis") == "net" for p in payment_responses)
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating payments...', 'progress': 90, 'stage': 'calculating'})}\n\n"
+                await asyncio.sleep(0.3)
 
-            result = {
-                "type": "complete",
-                "status": "success",
-                "total_payments": len(payments),
-                "payments": payment_responses,
-                "message": f"Successfully calculated {len(payments)} royalty payments",
-                "progress": 100,
-                "stage": "complete",
-                "expense_review_required": expense_review_required,
-                "expenses": review_expenses if expense_review_required else [],
-                "review": review,
-            }
+                # Note: an empty payments list is no longer possible here — the
+                # calculator now raises a CalculationError with a specific reason
+                # code (NO_SONG_MATCHES / NO_STREAMING_EARNABLE_SHARES / etc.)
+                # which is caught below and surfaced to the user.
 
-            yield f"data: {json.dumps(result)}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Finalizing results...', 'progress': 95, 'stage': 'calculating'})}\n\n"
+                await asyncio.sleep(0.2)
 
-            # Fires for overall="unavailable" too — the event's `overall` property lets
-            # dashboards separate completed verifications from failed passes.
-            if review:
+                # Send final results
+                payment_responses = []
+                for payment in payments:
+                    payment_responses.append(
+                        {
+                            "song_title": payment["song_title"],
+                            "party_name": payment["party_name"],
+                            "role": payment["role"],
+                            "royalty_type": payment["royalty_type"],
+                            "percentage": payment["percentage"],
+                            "total_royalty": payment["total_royalty"],
+                            "amount_to_pay": payment["amount_to_pay"],
+                            "terms": payment.get("terms"),
+                            "basis": payment.get("basis", "gross"),
+                            "gross_amount": payment.get("gross_amount", payment["total_royalty"]),
+                            "expenses_applied": payment.get("expenses_applied", 0.0),
+                            "net_amount": payment.get("net_amount", payment["total_royalty"]),
+                        }
+                    )
+
+                # Net-basis rows need the user to confirm/edit expenses before the
+                # numbers are final. Surface the gate + the expenses the calc used.
+                expense_review_required = any(p.get("basis") == "net" for p in payment_responses)
+
+                result = {
+                    "type": "complete",
+                    "status": "success",
+                    "total_payments": len(payments),
+                    "payments": payment_responses,
+                    "message": f"Successfully calculated {len(payments)} royalty payments",
+                    "progress": 100,
+                    "stage": "complete",
+                    "expense_review_required": expense_review_required,
+                    "expenses": review_expenses if expense_review_required else [],
+                    "review": review,
+                }
+
+                # Charge on success: calculation completed, results streaming out.
+                # Fresh-computation path ONLY — the cache-hit branch above yields
+                # its own terminal event and returns without charging (spec §3).
+                # ACCEPTED RESIDUAL (plan round 3): a deliberate disconnect after
+                # the LLM work but before this event = free run; measurable via
+                # ai_usage_log success=true rows with no matching ledger debit.
+                _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
+
+                yield f"data: {json.dumps(result)}\n\n"
+
+                # Fires for overall="unavailable" too — the event's `overall` property lets
+                # dashboards separate completed verifications from failed passes.
+                if review:
+                    analytics_capture(
+                        user_id,
+                        "oneclick_split_verification_run",
+                        {
+                            "tool": "oneclick",
+                            "checked": review.get("checked", 0),
+                            "flagged": review.get("flagged", 0),
+                            "overall": review.get("overall"),
+                        },
+                    )
+
+                _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
                 analytics_capture(
                     user_id,
-                    "oneclick_split_verification_run",
+                    "oneclick_calc_completed",
                     {
                         "tool": "oneclick",
-                        "checked": review.get("checked", 0),
-                        "flagged": review.get("flagged", 0),
-                        "overall": review.get("overall"),
+                        "duration_ms": _duration_ms,
+                        "contract_count": _contract_count,
+                        "cached": False,
                     },
                 )
 
-            _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
-            analytics_capture(
-                user_id,
-                "oneclick_calc_completed",
-                {
-                    "tool": "oneclick",
-                    "duration_ms": _duration_ms,
-                    "contract_count": _contract_count,
-                    "cached": False,
-                },
-            )
+            except CalculationError as e:
+                # Structured, user-facing reason — surface code/message/suggestion/details
+                # so the frontend can render a rich error panel.
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_failed",
+                    {"tool": "oneclick", "error_code": e.code, "stage": "calc"},
+                )
+                error_payload = {
+                    "type": "error",
+                    "error_code": e.code,
+                    "message": e.user_message,
+                    "suggestion": e.suggestion,
+                    "details": e.details,
+                }
+                yield f"data: {json.dumps(error_payload)}\n\n"
 
-        except CalculationError as e:
-            # Structured, user-facing reason — surface code/message/suggestion/details
-            # so the frontend can render a rich error panel.
-            analytics_capture(
-                user_id,
-                "oneclick_calc_failed",
-                {"tool": "oneclick", "error_code": e.code, "stage": "calc"},
-            )
-            error_payload = {
-                "type": "error",
-                "error_code": e.code,
-                "message": e.user_message,
-                "suggestion": e.suggestion,
-                "details": e.details,
-            }
-            yield f"data: {json.dumps(error_payload)}\n\n"
+            except Exception as e:
+                import traceback
 
-        except Exception as e:
-            import traceback
+                error_detail = str(e)
+                traceback.print_exc()
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_failed",
+                    {"tool": "oneclick", "error_code": type(e).__name__, "stage": "calc"},
+                )
+                yield f"data: {json.dumps({'type': 'error', 'message': error_detail})}\n\n"
 
-            error_detail = str(e)
-            traceback.print_exc()
-            analytics_capture(
-                user_id,
-                "oneclick_calc_failed",
-                {"tool": "oneclick", "error_code": type(e).__name__, "stage": "calc"},
-            )
-            yield f"data: {json.dumps({'type': 'error', 'message': error_detail})}\n\n"
+            finally:
+                # Clean up temporary files safely
+                if contract_path and os.path.exists(contract_path):
+                    try:
+                        os.unlink(contract_path)
+                    except Exception:
+                        pass
 
-        finally:
-            # Clean up temporary files safely
-            if contract_path and os.path.exists(contract_path):
-                try:
-                    os.unlink(contract_path)
-                except Exception:
-                    pass
-
-            if statement_path and os.path.exists(statement_path):
-                try:
-                    os.unlink(statement_path)
-                except Exception:
-                    pass
+                if statement_path and os.path.exists(statement_path):
+                    try:
+                        os.unlink(statement_path)
+                    except Exception:
+                        pass
 
     return StreamingResponse(generate_progress(), media_type="text/event-stream")
 
@@ -2818,158 +2907,175 @@ async def oneclick_calculate_royalties(request: OneClickRoyaltyRequest, user_id:
     )
 
     try:
-        # SP3: gate OneClick feature; raises 402 for Free users without a Pro host.
-        gated_feature(user_id, Action.USE_ONECLICK, host_user_id=request.host_user_id)
-        # SP2: track per-period OneClick usage; best-effort, never blocks.
-        _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
-        analytics_capture(
-            user_id,
-            "oneclick_calc_started",
-            {"tool": "oneclick", "contract_count": _contract_count, "cached": False},
-        )
-        print(f"\n{'=' * 80}")
-        print("ONECLICK ROYALTY CALCULATION")
-        print(f"{'=' * 80}")
-        print(f"Contract ID: {request.contract_id}")
-        print(f"Contract IDs: {request.contract_ids}")
-        print(f"User ID: {user_id}")
-        print(f"Project ID: {request.project_id}")
-        print(f"Royalty Statement File ID: {request.royalty_statement_file_id}")
-
-        # Determine contracts to process
-        target_contract_ids = []
-        if request.contract_ids:
-            target_contract_ids = request.contract_ids
-        elif request.contract_id:
-            target_contract_ids = [request.contract_id]
-
-        if not target_contract_ids:
-            raise HTTPException(status_code=400, detail="No contracts specified")
-
-        # Step 2: Download royalty statement from Supabase
-        print("\n--- Step 1: Downloading Royalty Statement ---")
-        statement_res = (
-            get_supabase_client()
-            .table("project_files")
-            .select("*")
-            .eq("id", request.royalty_statement_file_id)
-            .execute()
-        )
-
-        if not statement_res.data:
-            raise HTTPException(status_code=404, detail="Royalty statement file not found")
-
-        statement_file = statement_res.data[0]
-        file_path = statement_file["file_path"]
-
-        # Download file from Supabase storage
-        file_data = get_supabase_client().storage.from_("project-files").download(file_path)
-
-        # Detect file extension from original filename
-        original_filename = statement_file["file_name"]
-        file_extension = Path(original_filename).suffix.lower()
-
-        # Default to .xlsx if no extension found
-        if not file_extension or file_extension not in [".csv", ".xlsx", ".xls"]:
-            file_extension = ".xlsx"
-
-        # Save to temporary file with correct extension
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
-            tmp_statement.write(file_data)
-            statement_path = tmp_statement.name
-
-        print(f"Downloaded royalty statement: {statement_file['file_name']} (detected as {file_extension})")
-
-        # Step 3: Get contract file for parsing (Legacy/Single mode only)
-        contract_path = None
-        if len(target_contract_ids) == 1 and request.contract_id:
-            print("\n--- Step 2: Downloading Contract File ---")
-            contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
-
-            if not contract_res.data:
-                raise HTTPException(status_code=404, detail="Contract file not found")
-
-            contract_file = contract_res.data[0]
-            contract_file_path = contract_file["file_path"]
-
-            # Download contract from Supabase storage
-            contract_data = supabase.storage.from_("project-files").download(contract_file_path)
-
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_contract:
-                tmp_contract.write(contract_data)
-                contract_path = tmp_contract.name
-
-            print(f"Downloaded contract: {contract_file['file_name']}")
-        else:
-            print(f"\n--- Step 2: Preparing {len(target_contract_ids)} contracts (Pinecone) ---")
-
-        try:
-            # Step 4: Calculate payments using helper function
-            print("\n--- Step 3: Calculating Royalty Payments ---")
-
-            # Use helper function from helpers.py
-            payments, review = calculate_royalty_payments(
-                contract_path=contract_path,
-                statement_path=statement_path,
-                user_id=user_id,
-                contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
-                contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
+        with set_llm_context(user_id, "oneclick"):
+            # SP3/credits: gate OneClick; 402 for users without access or credits.
+            # Resource-derived billing (Licensing Phase C, rule 5): pass project_id
+            # so a run inside an org-linked project bills the linked org's seat.
+            # Derivation-vs-access ordering (rule 4, Phase A access-first):
+            # _assert_can_access_oneclick_inputs above runs BEFORE this gate, so
+            # derivation can never bill an org for a project the caller can't
+            # access; charge-on-success is the backstop.
+            oneclick_grant = gated_credits(
+                user_id,
+                CreditAction.ONECLICK_RUN,
+                host_user_id=request.host_user_id,
+                resource_project_id=request.project_id,
             )
-
-            # Note: empty payments is no longer possible here — the calculator
-            # now raises CalculationError with a specific reason code, caught
-            # by the dedicated handler below.
-
-            print(f"Calculated {len(payments)} payments")
-
-            # Step 5: Format response (payments are already dictionaries from helper)
-            payment_responses = []
-            for payment in payments:
-                payment_responses.append(
-                    RoyaltyPaymentResponse(
-                        song_title=payment["song_title"],
-                        party_name=payment["party_name"],
-                        role=payment["role"],
-                        royalty_type=payment["royalty_type"],
-                        percentage=payment["percentage"],
-                        total_royalty=payment["total_royalty"],
-                        amount_to_pay=payment["amount_to_pay"],
-                        terms=payment.get("terms"),
-                    )
-                )
-
-            print(f"\n{'=' * 80}")
-            print("CALCULATION COMPLETE")
-            print(f"{'=' * 80}\n")
-
-            _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
+            # SP2: track per-period OneClick usage; best-effort, never blocks.
+            _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
             analytics_capture(
                 user_id,
-                "oneclick_calc_completed",
-                {
-                    "tool": "oneclick",
-                    "duration_ms": _duration_ms,
-                    "contract_count": _contract_count,
-                    "cached": False,
-                },
+                "oneclick_calc_started",
+                {"tool": "oneclick", "contract_count": _contract_count, "cached": False},
+            )
+            print(f"\n{'=' * 80}")
+            print("ONECLICK ROYALTY CALCULATION")
+            print(f"{'=' * 80}")
+            print(f"Contract ID: {request.contract_id}")
+            print(f"Contract IDs: {request.contract_ids}")
+            print(f"User ID: {user_id}")
+            print(f"Project ID: {request.project_id}")
+            print(f"Royalty Statement File ID: {request.royalty_statement_file_id}")
+
+            # Determine contracts to process
+            target_contract_ids = []
+            if request.contract_ids:
+                target_contract_ids = request.contract_ids
+            elif request.contract_id:
+                target_contract_ids = [request.contract_id]
+
+            if not target_contract_ids:
+                raise HTTPException(status_code=400, detail="No contracts specified")
+
+            # Step 2: Download royalty statement from Supabase
+            print("\n--- Step 1: Downloading Royalty Statement ---")
+            statement_res = (
+                get_supabase_client()
+                .table("project_files")
+                .select("*")
+                .eq("id", request.royalty_statement_file_id)
+                .execute()
             )
 
-            return OneClickRoyaltyResponse(
-                status="success",
-                total_payments=len(payments),
-                payments=payment_responses,
-                excel_file_url=None,
-                message=f"Successfully calculated {len(payments)} royalty payments",
-                review=review,
-            )
+            if not statement_res.data:
+                raise HTTPException(status_code=404, detail="Royalty statement file not found")
 
-        finally:
-            # Clean up temporary files
-            if contract_path and os.path.exists(contract_path):
-                os.unlink(contract_path)
-            if os.path.exists(statement_path):
-                os.unlink(statement_path)
+            statement_file = statement_res.data[0]
+            file_path = statement_file["file_path"]
+
+            # Download file from Supabase storage
+            file_data = get_supabase_client().storage.from_("project-files").download(file_path)
+
+            # Detect file extension from original filename
+            original_filename = statement_file["file_name"]
+            file_extension = Path(original_filename).suffix.lower()
+
+            # Default to .xlsx if no extension found
+            if not file_extension or file_extension not in [".csv", ".xlsx", ".xls"]:
+                file_extension = ".xlsx"
+
+            # Save to temporary file with correct extension
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_statement:
+                tmp_statement.write(file_data)
+                statement_path = tmp_statement.name
+
+            print(f"Downloaded royalty statement: {statement_file['file_name']} (detected as {file_extension})")
+
+            # Step 3: Get contract file for parsing (Legacy/Single mode only)
+            contract_path = None
+            if len(target_contract_ids) == 1 and request.contract_id:
+                print("\n--- Step 2: Downloading Contract File ---")
+                contract_res = supabase.table("project_files").select("*").eq("id", request.contract_id).execute()
+
+                if not contract_res.data:
+                    raise HTTPException(status_code=404, detail="Contract file not found")
+
+                contract_file = contract_res.data[0]
+                contract_file_path = contract_file["file_path"]
+
+                # Download contract from Supabase storage
+                contract_data = supabase.storage.from_("project-files").download(contract_file_path)
+
+                # Save to temporary file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_contract:
+                    tmp_contract.write(contract_data)
+                    contract_path = tmp_contract.name
+
+                print(f"Downloaded contract: {contract_file['file_name']}")
+            else:
+                print(f"\n--- Step 2: Preparing {len(target_contract_ids)} contracts (Pinecone) ---")
+
+            try:
+                # Step 4: Calculate payments using helper function
+                print("\n--- Step 3: Calculating Royalty Payments ---")
+
+                # Use helper function from helpers.py
+                payments, review = calculate_royalty_payments(
+                    contract_path=contract_path,
+                    statement_path=statement_path,
+                    user_id=user_id,
+                    contract_id=target_contract_ids[0] if len(target_contract_ids) == 1 else None,
+                    contract_ids=target_contract_ids if len(target_contract_ids) > 1 else None,
+                )
+
+                # Note: empty payments is no longer possible here — the calculator
+                # now raises CalculationError with a specific reason code, caught
+                # by the dedicated handler below.
+
+                print(f"Calculated {len(payments)} payments")
+
+                # Step 5: Format response (payments are already dictionaries from helper)
+                payment_responses = []
+                for payment in payments:
+                    payment_responses.append(
+                        RoyaltyPaymentResponse(
+                            song_title=payment["song_title"],
+                            party_name=payment["party_name"],
+                            role=payment["role"],
+                            royalty_type=payment["royalty_type"],
+                            percentage=payment["percentage"],
+                            total_royalty=payment["total_royalty"],
+                            amount_to_pay=payment["amount_to_pay"],
+                            terms=payment.get("terms"),
+                        )
+                    )
+
+                print(f"\n{'=' * 80}")
+                print("CALCULATION COMPLETE")
+                print(f"{'=' * 80}\n")
+
+                _duration_ms = int((_time.perf_counter() - _calc_started_at) * 1000)
+                analytics_capture(
+                    user_id,
+                    "oneclick_calc_completed",
+                    {
+                        "tool": "oneclick",
+                        "duration_ms": _duration_ms,
+                        "contract_count": _contract_count,
+                        "cached": False,
+                    },
+                )
+
+                # Charge on success: calculation completed, response about to be
+                # returned. This endpoint has no cached-result path — every run
+                # here is a fresh computation. Never reached by the except paths.
+                _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
+
+                return OneClickRoyaltyResponse(
+                    status="success",
+                    total_payments=len(payments),
+                    payments=payment_responses,
+                    excel_file_url=None,
+                    message=f"Successfully calculated {len(payments)} royalty payments",
+                    review=review,
+                )
+
+            finally:
+                # Clean up temporary files
+                if contract_path and os.path.exists(contract_path):
+                    os.unlink(contract_path)
+                if os.path.exists(statement_path):
+                    os.unlink(statement_path)
 
     except HTTPException:
         raise

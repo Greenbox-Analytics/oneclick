@@ -14,6 +14,7 @@ import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -42,7 +43,6 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
-  BookOpen,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useSmartBack } from "@/hooks/useSmartBack";
@@ -320,15 +320,7 @@ const Portfolio = () => {
         showBack={false}
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
+            <HeaderDocsButton />
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }

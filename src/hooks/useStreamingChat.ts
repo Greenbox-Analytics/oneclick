@@ -24,11 +24,37 @@ export interface MessageSource {
   section_category?: string;
 }
 
+/**
+ * Verbatim `detail` payload of a credit-402 (subscriptions/enforcement.py's
+ * gated_credits) — present on a message when `confidence === "credit_wall"`.
+ * Only populated when the backend served the structured object shape; a
+ * legacy plain-string 402 (credits disabled) leaves this undefined and the
+ * reason lives in `content` instead.
+ */
+export interface CreditWallDetail {
+  reason?: string;
+  price?: number;
+  resetDate?: string | null;
+  upgradeRequired?: boolean;
+  overageAvailable?: boolean;
+  managedByOrg?: boolean;
+  requestUrl?: string;
+  /** Licensing Phase C (spec §6/§11 rule 11c, plan Task 8) — set when this
+   * denial is a dry ORG seat on a project the caller OWNS and can unlink.
+   * Lands on the 402 in Task 6 (running separately); undefined until then,
+   * so every consumer renders it behind a presence-check. */
+  ownerCanUnlink?: boolean;
+  projectId?: string;
+  projectName?: string;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   confidence?: string;
+  /** Present when confidence === "credit_wall" — see CreditWallDetail. */
+  detail?: CreditWallDetail;
   sources?: MessageSource[];
   /** Contract IDs that were in context when this message was sent — pins the source
    *  chips to this turn so they don't re-attach to a later contract selection. */
@@ -115,7 +141,7 @@ type SSEEvent =
 
 // ── Hook ──
 
-import { API_URL, getAuthHeaders } from "@/lib/apiFetch";
+import { API_URL, getAuthHeaders, apiErrorFromBody } from "@/lib/apiFetch";
 const MAX_CONVERSATION_MESSAGES = 100;
 
 export function useStreamingChat() {
@@ -239,7 +265,8 @@ export function useStreamingChat() {
         });
 
         if (!response.ok) {
-          throw new Error("Failed to get response from Zoe");
+          const body = await response.json().catch(() => ({}));
+          throw apiErrorFromBody(body, response.status, "Failed to get response from Zoe");
         }
 
         const reader = response.body?.getReader();
@@ -379,23 +406,56 @@ export function useStreamingChat() {
           );
         } else {
           console.error("Error sending message:", err);
+          const streamErr = err as Error & { status?: number; detail?: unknown };
+          const status = err instanceof Error ? streamErr.status : undefined;
+          // apiErrorFromBody attaches the raw `detail` (a string for legacy
+          // plain-string 402s); the credit_wall card only understands the
+          // structured object shape, so drop non-objects to undefined.
+          const detail =
+            err instanceof Error && streamErr.detail && typeof streamErr.detail === "object"
+              ? (streamErr.detail as CreditWallDetail)
+              : undefined;
           const errorText =
             err instanceof Error ? err.message : "An unexpected error occurred";
           setError(errorText);
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    content:
-                      m.content ||
-                      "I'm sorry, I encountered an error. Please try again.",
-                    confidence: "error",
-                    isStreaming: false,
-                  }
-                : m
-            )
-          );
+
+          if (status === 402) {
+            // Credit wall (pre-stream HTTP 402): map-replace the placeholder with
+            // a wall card, not a canned "I'm sorry" bubble — the transcript
+            // renderer branches on confidence === "credit_wall". `content` still
+            // carries the human-readable reason (Step 1 guarantees a fallback
+            // string even for legacy plain-string 402s where `detail` is
+            // undefined), so the renderer never has to show a blank card. The
+            // separate error banner stays quiet for 402s (nothing renders it).
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content: errorText,
+                      confidence: "credit_wall",
+                      detail,
+                      isStreaming: false,
+                    }
+                  : m
+              )
+            );
+          } else {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content:
+                        m.content ||
+                        "I'm sorry, I encountered an error. Please try again.",
+                      confidence: "error",
+                      isStreaming: false,
+                    }
+                  : m
+              )
+            );
+          }
         }
       } finally {
         setIsStreaming(false);

@@ -2,10 +2,11 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, FileText, Trash2, CheckCircle, BookOpen, Users } from "lucide-react";
+import { Plus, Search, FileText, Trash2, CheckCircle, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -126,15 +127,7 @@ const Artists = () => {
         backTo="/dashboard"
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
+            <HeaderDocsButton />
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }

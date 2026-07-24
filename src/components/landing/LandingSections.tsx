@@ -1,6 +1,6 @@
 import { CSSProperties, ReactNode, SVGProps } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { CreditCard, LogOut, Shield, User } from "lucide-react";
+import { LogOut, Shield, User } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -204,11 +204,7 @@ export function LandingHeader() {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => navigate("/profile")}>
                     <User className="mr-2 h-4 w-4" />
-                    <span>Profile settings</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => navigate("/subscription")}>
-                    <CreditCard className="mr-2 h-4 w-4" />
-                    <span>Subscription</span>
+                    <span>Profile & billing</span>
                   </DropdownMenuItem>
                   {isAdmin ? (
                     <DropdownMenuItem onClick={() => navigate("/admin/users")}>

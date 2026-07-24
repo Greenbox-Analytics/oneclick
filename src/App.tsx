@@ -3,7 +3,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -42,8 +42,9 @@ const InviteClaim = lazy(() => import("./pages/InviteClaim"));
 const ProjectDetail = lazy(() => import("./pages/ProjectDetail"));
 const ConfirmEmail = lazy(() => import("./pages/ConfirmEmail"));
 const Pricing = lazy(() => import("./pages/Pricing"));
-const Subscription = lazy(() => import("./pages/Subscription"));
 const AdminUsers = lazy(() => import("./pages/AdminUsers"));
+const Organization = lazy(() => import("./pages/Organization"));
+const OrgInviteClaim = lazy(() => import("./pages/OrgInviteClaim"));
 const Team = lazy(() => import("./pages/Team"));
 const About = lazy(() => import("./pages/About"));
 const Features = lazy(() => import("./pages/Features"));
@@ -61,6 +62,14 @@ const PageLoader = () => (
 function PageTimer() {
   usePageTimer();
   return null;
+}
+
+// /subscription merged into /profile (Account & Billing). The redirect keeps
+// the query string so Stripe success URLs minted before the merge
+// (?stripe_session_id=...&welcome=true) still reach the post-checkout handler.
+function SubscriptionRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/profile${search}`} replace />;
 }
 
 function AdminPosthogTagger() {
@@ -165,14 +174,19 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            <Route path="/subscription" element={<SubscriptionRedirect />} />
             <Route
-              path="/subscription"
+              path="/organization"
               element={
                 <ProtectedRoute>
-                  <Subscription />
+                  <Organization />
                 </ProtectedRoute>
               }
             />
+            {/* Public: invited members may not be signed in yet — the page
+                shows a sign-in gate and only calls the (auth-required) accept/
+                decline endpoints once a user session exists. */}
+            <Route path="/orgs/invite/:token" element={<OrgInviteClaim />} />
             <Route
               path="/workspace"
               element={
