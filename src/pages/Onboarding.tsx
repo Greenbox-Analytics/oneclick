@@ -198,7 +198,7 @@ const Onboarding = () => {
       const url = await createCheckout({
         plan,
         cancel_path: "/onboarding?upgrade=cancelled",
-        // success_path stays default → /profile?stripe_session_id=...&welcome=true
+        // success_path stays default → /subscription?stripe_session_id=...&welcome=true
       });
       window.location.href = url;
     } catch (e) {

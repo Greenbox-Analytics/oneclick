@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { API_URL, getAuthHeaders, apiErrorFromBody } from "@/lib/apiFetch";
+import { API_URL, getAuthHeaders, ApiError } from "@/lib/apiFetch";
 
 export interface ParsedParty {
   name: string;
@@ -48,7 +48,7 @@ export function useParseContractSplits() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw apiErrorFromBody(body, res.status);
+        throw new ApiError(body.detail || `Request failed: ${res.status}`, res.status);
       }
       return res.json();
     },

@@ -62,12 +62,6 @@ All colors MUST be HSL.
     --pay-sched-bg: 217 80% 93%;  --pay-sched-fg: 217 65% 43%;
     --pay-out-bg: 0 80% 94%;      --pay-out-fg: 0 70% 45%;
     --pay-partial-bg: 38 90% 90%; --pay-partial-fg: 35 80% 38%;
-
-    /* Per-tool accent colors (credits usage) — theme-independent oklch. */
-    --t-oneclick: oklch(0.74 0.14 152);
-    --t-zoe: oklch(0.74 0.14 300);
-    --t-registry: oklch(0.74 0.14 250);
-    --t-split: oklch(0.74 0.14 196);
   }
 
   .dark {

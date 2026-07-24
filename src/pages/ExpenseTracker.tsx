@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -12,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { ArrowLeft, Plus, Receipt, ChevronRight, Loader2, Download, FileText, FileSpreadsheet } from "lucide-react";
+import { ArrowLeft, BookOpen, Plus, Receipt, ChevronRight, Loader2, Download, FileText, FileSpreadsheet } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 import {
   ChartContainer,
@@ -188,7 +187,15 @@ const ExpenseTracker = () => {
         showBack={false}
         actions={
           <>
-            <HeaderDocsButton />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back

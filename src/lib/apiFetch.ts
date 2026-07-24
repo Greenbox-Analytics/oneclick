@@ -10,37 +10,11 @@ export const API_URL =
  */
 export class ApiError extends Error {
   status: number;
-  /** Raw `detail` from the error body — a string for legacy errors, or a
-   * structured object (e.g. credit-wall 402s carry {reason, price, ...}). */
-  detail?: unknown;
   constructor(message: string, status: number) {
     super(message);
     this.name = "ApiError";
     this.status = status;
   }
-}
-
-/**
- * Build an ApiError from a parsed error body and HTTP status. `detail` is a
- * plain string for legacy errors; structured 402s carry an object with a
- * human-readable `reason` (and, for org-seat walls, managedByOrg/requestUrl/…).
- * The raw `detail` is attached to the returned error so callers can branch on
- * the structured shape — never render the raw object. Message precedence:
- * string detail → detail.reason → `fallback`.
- */
-export function apiErrorFromBody(
-  body: { detail?: unknown } | null | undefined,
-  status: number,
-  fallback = `Request failed: ${status}`
-): ApiError {
-  const detail = body?.detail;
-  const message =
-    typeof detail === "string"
-      ? detail
-      : (detail as { reason?: string } | undefined)?.reason ?? fallback;
-  const err = new ApiError(message, status);
-  err.detail = detail;
-  return err;
 }
 
 /**
@@ -80,7 +54,7 @@ export async function apiFetch<T>(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw apiErrorFromBody(body, res.status);
+    throw new ApiError(body.detail || `Request failed: ${res.status}`, res.status);
   }
   // 204 No Content (and 205 Reset Content) MUST NOT have a body — calling
   // res.json() on these throws SyntaxError, which surfaces as a false-failure

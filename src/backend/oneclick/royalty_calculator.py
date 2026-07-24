@@ -37,7 +37,6 @@ from utils.contract_parsing.parser import (
 )
 from utils.contract_parsing.split_verification import ReviewResult, SplitFinding, verify_royalty_shares
 from utils.llm.client import get_openai_client
-from utils.llm.tracking import submit_with_context
 from utils.text.normalize import find_matching_song, normalize_name, normalize_title, simplify_role
 
 # Configure logging
@@ -1060,8 +1059,7 @@ class RoyaltyCalculator:
 
             with ThreadPoolExecutor(max_workers=4) as executor:
                 future_to_cid = {
-                    submit_with_context(
-                        executor,
+                    executor.submit(
                         self.contract_parser.parse_contract,
                         full_text=contract_markdowns.get(cid) if contract_markdowns else None,
                     ): cid
@@ -1105,8 +1103,7 @@ class RoyaltyCalculator:
             unavailable_findings: list[SplitFinding] = []
             with ThreadPoolExecutor(max_workers=4) as executor:
                 future_map = {
-                    submit_with_context(
-                        executor,
+                    executor.submit(
                         verify_royalty_shares,
                         contract_markdowns.get(cid) if contract_markdowns else None,
                         data,

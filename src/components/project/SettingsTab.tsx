@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +19,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Loader2, Trash2, LogOut, Settings, UserMinus, AlertTriangle, BarChart2, Building2 } from "lucide-react";
+import { Loader2, Trash2, LogOut, Settings, UserMinus, AlertTriangle, BarChart2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
@@ -28,8 +27,6 @@ import { useRemoveProjectMember, useProjectMembers } from "@/hooks/useProjectMem
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { ProjectSlackSettings } from "./integrations/ProjectSlackSettings";
 import { useDeleteProjectRoyalties } from "@/hooks/useRoyalties";
-import { useEntitlements, type OrgBillingContext } from "@/hooks/useEntitlements";
-import { useProjectOrgLink, useLinkProjectToOrg, useUnlinkProjectFromOrg } from "@/hooks/useOrgs";
 
 interface SettingsTabProps {
   projectId: string;
@@ -44,126 +41,6 @@ interface SettingsTabProps {
 }
 
 const canEdit = (role: string | null) => role === "owner" || role === "admin";
-
-// Licensing Phase C (spec §6, rules 10-11, plan Task 8) — EXACT consent copy,
-// shown at the moment an owner links a project. Every clause is load-bearing:
-// admins managing team access, credits (including the owner's OWN work)
-// always billing the org while linked, storage counting against the org's
-// allowance, and ownership never changing.
-const ORG_LINK_CONSENT_COPY =
-  "Your organization's admins will be able to manage who on your team can access this project, and work anyone with a seat does here will use the organization's credits — including yours: while linked, this project always bills the organization, even if it runs out of credits (you can unlink anytime). Storage you use here counts against the organization's larger allowance. Your ownership never changes.";
-
-// Phase B rule 13's block-don't-bill covers the billing side of unlinking;
-// this is the storage-specific warning the plan requires verbatim.
-const ORG_UNLINK_STORAGE_WARNING =
-  "If you're using more storage than your personal plan includes, you won't be able to upload new files after unlinking until you're back under your limit.";
-
-/** Owner-only "Link to organization" control (plan Task 8). Gated on the
- * owner holding >=1 ACTIVE seat in an ACTIVE org (probed via
- * `availableContexts`, same signal the billing-context switcher uses) OR
- * the project already being linked — an owner who later loses their seat
- * can still see and undo an existing link, since unlinking never re-checks
- * seat status (only ownership, `orgs/projects.py::unlink_project`). */
-function OrganizationLinkSection({ projectId }: { projectId: string }) {
-  const { data: entitlements } = useEntitlements();
-  const { data: link, isLoading: linkLoading } = useProjectOrgLink(projectId);
-  const linkProject = useLinkProjectToOrg();
-  const unlinkProject = useUnlinkProjectFromOrg();
-  const [selectedOrgId, setSelectedOrgId] = useState("");
-
-  const eligibleOrgs = (entitlements?.availableContexts ?? []).filter(
-    (c) => c.type === "org" && !c.pending,
-  ) as (OrgBillingContext & { type: "org"; pending: boolean })[];
-
-  if (linkLoading) return null;
-  if (!link && eligibleOrgs.length === 0) return null;
-
-  const handleLink = () => {
-    if (!selectedOrgId) return;
-    linkProject.mutate({ orgId: selectedOrgId, projectId }, { onSuccess: () => setSelectedOrgId("") });
-  };
-
-  const handleUnlink = () => {
-    if (!link) return;
-    unlinkProject.mutate({ orgId: link.orgId, projectId });
-  };
-
-  return (
-    <>
-      <Card className="p-6 space-y-4">
-        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-          <Building2 className="w-4 h-4 text-muted-foreground" />
-          Organization
-        </h3>
-
-        {link ? (
-          <>
-            <p className="text-xs text-muted-foreground">
-              Linked to <span className="font-medium text-foreground">{link.orgName ?? "your organization"}</span>
-              {link.linkedAt &&
-                ` since ${new Date(link.linkedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`}
-              . Its admins manage who on your team can access this project, and work here bills the
-              organization's credits.
-            </p>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm" disabled={unlinkProject.isPending}>
-                  {unlinkProject.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  Unlink
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Unlink this project?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Your organization's admins will no longer manage access to this project, and new work here
-                    will bill your own plan instead. {ORG_UNLINK_STORAGE_WARNING}
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={unlinkProject.isPending}>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    disabled={unlinkProject.isPending}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      handleUnlink();
-                    }}
-                  >
-                    {unlinkProject.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                    Unlink
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </>
-        ) : (
-          <>
-            <p className="text-xs text-muted-foreground">{ORG_LINK_CONSENT_COPY}</p>
-            <div className="flex items-center gap-2">
-              <Select value={selectedOrgId} onValueChange={setSelectedOrgId}>
-                <SelectTrigger className="w-56" aria-label="Choose an organization to link">
-                  <SelectValue placeholder="Choose an organization" />
-                </SelectTrigger>
-                <SelectContent>
-                  {eligibleOrgs.map((o) => (
-                    <SelectItem key={o.orgId} value={o.orgId}>
-                      {o.orgName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button size="sm" onClick={handleLink} disabled={!selectedOrgId || linkProject.isPending}>
-                {linkProject.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Link
-              </Button>
-            </div>
-          </>
-        )}
-      </Card>
-      <Separator />
-    </>
-  );
-}
 
 export default function SettingsTab({ projectId, userRole, project }: SettingsTabProps) {
   const navigate = useNavigate();
@@ -310,8 +187,6 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
           </Button>
         )}
       </Card>
-
-      {isOwner && <OrganizationLinkSection projectId={projectId} />}
 
       {slackConnected && (
         <>

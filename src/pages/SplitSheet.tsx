@@ -10,7 +10,6 @@ import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -34,6 +33,7 @@ import {
   Users,
   CheckCircle,
   Folder,
+  BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -373,7 +373,15 @@ const SplitSheet = () => {
       <PageHeader
         actions={
           <>
-            <HeaderDocsButton />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
             <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
               <ArrowLeft className="w-4 h-4 mr-2" />

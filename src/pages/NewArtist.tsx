@@ -1,10 +1,9 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Music, ArrowLeft, Upload } from "lucide-react";
+import { Music, ArrowLeft, Upload, BookOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -136,7 +135,15 @@ const NewArtist = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <HeaderDocsButton />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <Button variant="outline" onClick={() => navigate("/artists")}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back to Artists

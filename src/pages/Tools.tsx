@@ -1,8 +1,7 @@
 import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
-import { Calculator, ArrowRight, Bot, FileText, Shield, Receipt } from "lucide-react";
+import { Calculator, ArrowRight, Bot, FileText, Shield, BookOpen, Receipt } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
@@ -60,7 +59,15 @@ const Tools = () => {
       <PageHeader
         backTo="/dashboard"
         actions={
-          <HeaderDocsButton />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate("/docs")}
+            title="Documentation"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <BookOpen className="w-4 h-4" />
+          </Button>
         }
       />
 

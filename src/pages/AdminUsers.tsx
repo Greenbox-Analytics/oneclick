@@ -25,7 +25,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { AnalyticsSummaryCard } from "@/components/admin/AnalyticsSummaryCard";
 import { BehaviorAnalyticsCard } from "@/components/admin/BehaviorAnalyticsCard";
-import { isPaidTier, tierLabel } from "@/lib/tiers";
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -231,7 +230,7 @@ const TesterGrantsPanel = () => {
                     >
                       <span className="font-medium">{u.email}</span>
                       <span className="text-[11px] text-muted-foreground">
-                        {tierLabel(u.tier)}
+                        {u.tier === "pro" ? "Pro" : "Free"}
                         {u.is_admin || u.is_env_admin ? " · Admin" : ""}
                         {u.has_override ? " · Override" : ""}
                       </span>
@@ -406,8 +405,8 @@ const AdminUsers = () => {
                 <tr key={u.id} className="border-t border-border hover:bg-muted/30">
                   <td className="px-4 py-3">{u.email ?? <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-4 py-3">
-                    <Badge variant={isPaidTier(u.tier) ? "default" : "outline"}>
-                      {tierLabel(u.tier)}
+                    <Badge variant={u.tier === "pro" ? "default" : "outline"}>
+                      {u.tier === "pro" ? "Pro" : "Free"}
                     </Badge>
                   </td>
                   <td className="px-4 py-3">
@@ -566,22 +565,19 @@ const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
             <section>
               <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Tier</div>
               <div className="flex items-center gap-2">
-                <Badge variant={isPaidTier(data.entitlements.tier) ? "default" : "outline"}>
-                  {tierLabel(data.entitlements.tier)}
+                <Badge variant={data.entitlements.tier === "pro" ? "default" : "outline"}>
+                  {data.entitlements.tier === "pro" ? "Pro" : "Free"}
                 </Badge>
-                {!isPaidTier(data.entitlements.tier) ? (
+                {data.entitlements.tier === "free" ? (
                   <Button size="sm" onClick={handleGrant} disabled={grantPro.isPending}>
-                    Grant {tierLabel("pro")}
+                    Grant Pro
                   </Button>
                 ) : (
                   <Button size="sm" variant="outline" onClick={handleRevoke} disabled={revokePro.isPending}>
-                    Revoke {tierLabel(data.entitlements.tier)}
+                    Revoke Pro
                   </Button>
                 )}
               </div>
-              {/* No pro_max-specific grant control exists yet — the backend
-                  /grant endpoint always sets tier="pro" (Basic). Adding a
-                  pro_max grant path is a backend change, out of scope here. */}
             </section>
 
             {/* Role */}

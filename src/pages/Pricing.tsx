@@ -9,10 +9,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { useCreateCheckoutSession } from "@/hooks/useBilling";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { tierLabel, ENTERPRISE_LABEL } from "@/lib/tiers";
 
 type Feature = { included: boolean; label: string };
-type Period = "monthly" | "annual";
 
 const FREE_FEATURES: Feature[] = [
   { included: true, label: "3 artists" },
@@ -27,8 +25,7 @@ const FREE_FEATURES: Feature[] = [
   { included: false, label: "Slack integration" },
 ];
 
-// "pro" DB tier — labeled Basic (spec 2026-07-19 §2).
-const BASIC_FEATURES: Feature[] = [
+const PRO_FEATURES: Feature[] = [
   { included: true, label: "Unlimited artists, projects, tasks" },
   { included: true, label: "Unlimited storage" },
   { included: true, label: "Unlimited split sheets" },
@@ -36,23 +33,7 @@ const BASIC_FEATURES: Feature[] = [
   { included: true, label: "Unlimited OneClick royalty calculations" },
   { included: true, label: "Metadata Registry" },
   { included: true, label: "All integrations: Drive, Slack" },
-  { included: true, label: "3,000 monthly credits for AI-powered tools" },
-];
-
-// "pro_max" DB tier — labeled Pro (spec 2026-07-19 §2).
-const PRO_FEATURES: Feature[] = [
-  { included: true, label: `Everything in ${tierLabel("pro")}` },
-  { included: true, label: "8,000 monthly credits for AI-powered tools" },
-  { included: true, label: "More storage headroom" },
   { included: true, label: "Priority support" },
-];
-
-// No DB tier — org seats resolve to these entitlements (Phase B).
-const ENTERPRISE_FEATURES: Feature[] = [
-  { included: true, label: `Everything in ${tierLabel("pro_max")}` },
-  { included: true, label: "Centralized billing for your whole team" },
-  { included: true, label: "Email-invited member seats" },
-  { included: true, label: "Org credit pool with per-seat allocation" },
 ];
 
 const FeatureItem = ({ included, label }: Feature) => (
@@ -72,41 +53,24 @@ const Pricing = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const [basicPeriod, setBasicPeriod] = useState<Period>("monthly");
-  const [proPeriod, setProPeriod] = useState<Period>("monthly");
-  const { mutateAsync: createBasicCheckout, isPending: isBasicPending } = useCreateCheckoutSession();
-  const { mutateAsync: createProCheckout, isPending: isProPending } = useCreateCheckoutSession();
+  const [plan, setPlan] = useState<"monthly" | "annual">("monthly");
+  const { mutateAsync: createCheckout, isPending } = useCreateCheckoutSession();
   const { captureCheckoutStarted } = useAnalytics();
 
   const handleFreeClick = () => {
     navigate(user ? "/dashboard" : "/auth");
   };
 
-  const handleBasicClick = async () => {
-    if (!user) {
-      navigate(`/auth?redirect=/pricing&plan=${basicPeriod}`);
-      return;
-    }
-    try {
-      const url = await createBasicCheckout(basicPeriod);
-      captureCheckoutStarted(basicPeriod);
-      window.location.href = url;
-    } catch {
-      toast.error("Couldn't start checkout. Try again or contact support.");
-    }
-  };
-
   const handleProClick = async () => {
-    const planParam = proPeriod === "annual" ? "pro_max_annual" : "pro_max_monthly";
     if (!user) {
-      navigate(`/auth?redirect=/pricing&plan=${planParam}`);
+      navigate(`/auth?redirect=/pricing&plan=${plan}`);
       return;
     }
     try {
-      const url = await createProCheckout(planParam);
-      captureCheckoutStarted(proPeriod);
+      const url = await createCheckout(plan);
+      captureCheckoutStarted(plan);
       window.location.href = url;
-    } catch {
+    } catch (err) {
       toast.error("Couldn't start checkout. Try again or contact support.");
     }
   };
@@ -153,14 +117,13 @@ const Pricing = () => {
           Simple pricing
         </h1>
         <p className="text-muted-foreground text-lg">
-          Free for indie artists. Basic and Pro for growing catalogs. Enterprise for organizations running it all
-          centrally.
+          Free for indie artists. Pro for everyone scaling beyond a roster of one.
         </p>
       </section>
 
       {/* Pricing cards */}
       <section className="container mx-auto px-4 pb-24">
-        <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-6 max-w-7xl mx-auto items-stretch">
+        <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
           {/* Free */}
           <Card className="p-8 flex flex-col">
             <div className="mb-6">
@@ -188,24 +151,26 @@ const Pricing = () => {
             </Button>
           </Card>
 
-          {/* Basic ("pro" DB tier) */}
+          {/* Pro */}
           <Card className="p-8 flex flex-col border-primary relative">
             <Badge className="absolute -top-3 left-8">Most popular</Badge>
             <div className="mb-6">
-              <h2 className="text-xl font-semibold mb-1">{tierLabel("pro")}</h2>
+              <h2 className="text-xl font-semibold mb-1">Pro</h2>
               <p className="text-sm text-muted-foreground">
                 For managers, labels, and serious creators
               </p>
             </div>
 
-            <Tabs value={basicPeriod} onValueChange={(v) => setBasicPeriod(v as Period)} className="mb-6">
+            {/* Plan toggle */}
+            <Tabs value={plan} onValueChange={(v) => setPlan(v as "monthly" | "annual")} className="mb-6">
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="monthly">Monthly</TabsTrigger>
                 <TabsTrigger value="annual">Annual</TabsTrigger>
               </TabsList>
             </Tabs>
 
-            {basicPeriod === "monthly" ? (
+            {/* Price */}
+            {plan === "monthly" ? (
               <div className="mb-8">
                 <span className="text-4xl font-semibold tracking-tight">$25</span>
                 <span className="text-muted-foreground ml-1">/month</span>
@@ -219,88 +184,13 @@ const Pricing = () => {
             )}
 
             <ul className="space-y-3 flex-1 mb-8">
-              {BASIC_FEATURES.map((f) => (
-                <FeatureItem key={f.label} {...f} />
-              ))}
-            </ul>
-            <Button size="lg" className="w-full" onClick={handleBasicClick} disabled={isBasicPending}>
-              {isBasicPending ? "Starting checkout…" : `Upgrade to ${tierLabel("pro")}`}
-            </Button>
-          </Card>
-
-          {/* Pro ("pro_max" DB tier) */}
-          <Card className="p-8 flex flex-col relative">
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold mb-1">{tierLabel("pro_max")}</h2>
-              <p className="text-sm text-muted-foreground">
-                For power users who lean hardest on Zoe, OneClick, and Registry
-              </p>
-            </div>
-
-            <Tabs value={proPeriod} onValueChange={(v) => setProPeriod(v as Period)} className="mb-6">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="monthly">Monthly</TabsTrigger>
-                <TabsTrigger value="annual">Annual</TabsTrigger>
-              </TabsList>
-            </Tabs>
-
-            {proPeriod === "monthly" ? (
-              <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">$50</span>
-                <span className="text-muted-foreground ml-1">/month</span>
-              </div>
-            ) : (
-              <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">$500</span>
-                <span className="text-muted-foreground ml-1">/year</span>
-                <div className="text-sm text-muted-foreground mt-1">≈ $41.67/month — save 2 months</div>
-              </div>
-            )}
-
-            <ul className="space-y-3 flex-1 mb-8">
               {PRO_FEATURES.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
-            <Button
-              size="lg"
-              variant="outline"
-              className="w-full"
-              onClick={handleProClick}
-              disabled={isProPending}
-            >
-              {isProPending ? "Starting checkout…" : `Upgrade to ${tierLabel("pro_max")}`}
+            <Button size="lg" className="w-full" onClick={handleProClick} disabled={isPending}>
+              {isPending ? "Starting checkout…" : "Upgrade to Pro"}
             </Button>
-          </Card>
-
-          {/* Enterprise — no DB tier; org seats resolve to these entitlements
-              in Phase B. Non-functional CTA for now. */}
-          <Card className="p-8 flex flex-col">
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold mb-1">{ENTERPRISE_LABEL}</h2>
-              <p className="text-sm text-muted-foreground">
-                For organizations managing multiple artists and teams centrally
-              </p>
-            </div>
-            <div className="mb-8">
-              <span className="text-2xl font-semibold tracking-tight">Custom</span>
-              <div className="text-sm text-muted-foreground mt-1">Org credit pool — priced to fit your team</div>
-            </div>
-            <ul className="space-y-3 flex-1 mb-8">
-              {ENTERPRISE_FEATURES.map((f) => (
-                <FeatureItem key={f.label} {...f} />
-              ))}
-            </ul>
-            <Button size="lg" variant="outline" className="w-full" disabled title="Coming soon">
-              Create an organization
-            </Button>
-            <p className="text-xs text-muted-foreground mt-3 text-center">
-              Coming soon —{" "}
-              <a href="mailto:tech@greenboxanalytics.ca" className="underline">
-                reach out
-              </a>{" "}
-              for early access.
-            </p>
           </Card>
         </div>
 

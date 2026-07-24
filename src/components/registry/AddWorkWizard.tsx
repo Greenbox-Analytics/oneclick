@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -39,8 +38,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
-import { parseCreditWallDetail } from "@/components/paywall/creditWall";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
 import {
@@ -98,19 +96,6 @@ interface QueuedContract {
   displayName: string;
   status: "pending" | "parsing" | "done" | "error";
   error?: string;
-  /** Licensing Phase B (plan Task 13) — set when `error` came from a credit-402
-   * whose seat wallet is managed by an organization: there's no upgrade path
-   * on a seat, so the row offers a "Request credits" link instead. */
-  managedByOrg?: boolean;
-  requestUrl?: string;
-  /** Licensing Phase C (spec §6/§11 rule 11c, plan Task 8) — set when the
-   * dry-seat wall is on a project the caller OWNS and can unlink. Lands on
-   * the 402 in Task 6 (running separately); rendered behind a
-   * presence-check until then, alongside (never instead of) "Request
-   * credits". */
-  ownerCanUnlink?: boolean;
-  projectId?: string;
-  projectName?: string;
   parties?: ParsedParty[]; // raw parse result, kept for provenance + re-merge
   mainArtistFound?: boolean;
 }
@@ -460,12 +445,7 @@ export function AddWorkWizard({
         });
         done.push(parsed);
       } catch (e) {
-        const cw = parseCreditWallDetail(e instanceof ApiError ? e.detail : undefined);
-        patchQueued(qc.id, {
-          status: "error",
-          error: (e as Error).message || "Parse failed",
-          ...cw,
-        });
+        patchQueued(qc.id, { status: "error", error: (e as Error).message || "Parse failed" });
       }
     }
     if (done.length === 0) {
@@ -1771,27 +1751,6 @@ function RoyaltyStep({
                       {q.status === "done" &&
                         `Parsed · ${q.parties?.length ?? 0} ${(q.parties?.length ?? 0) === 1 ? "party" : "parties"} found`}
                       {q.status === "error" && (q.error || "Parse failed")}
-                      {q.status === "error" && q.managedByOrg && (
-                        <>
-                          {" · "}
-                          <Link to={q.requestUrl || "/organization"} className="underline underline-offset-2">
-                            Request credits
-                          </Link>
-                        </>
-                      )}
-                      {q.status === "error" && q.managedByOrg && q.ownerCanUnlink && (
-                        <>
-                          {" · "}
-                          {q.projectId ? (
-                            <Link to={`/projects/${q.projectId}?tab=settings`} className="underline underline-offset-2">
-                              unlink {q.projectName ? `"${q.projectName}"` : "this project"}
-                            </Link>
-                          ) : (
-                            "unlink this project in its settings"
-                          )}{" "}
-                          for your own plan
-                        </>
-                      )}
                     </div>
                   </div>
                   <button

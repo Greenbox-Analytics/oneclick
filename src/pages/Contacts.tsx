@@ -2,10 +2,9 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Music, Plus, Search, Trash2, Pencil, Mail, Phone, Building2, DollarSign, ArrowLeft } from "lucide-react";
+import { Music, Plus, Search, Trash2, Pencil, Mail, Phone, Building2, DollarSign, ArrowLeft, BookOpen } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertDialog,
@@ -199,7 +198,15 @@ const Contacts = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <HeaderDocsButton />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <Button variant="outline" onClick={() => navigate("/payments")}>
               Payment History
             </Button>

@@ -2,7 +2,6 @@ import { useNavigate } from "react-router-dom";
 import { BookOpen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useSmartBack } from "@/hooks/useSmartBack";
@@ -22,7 +21,15 @@ export function ComingSoon({ icon: Icon, title, message }: ComingSoonProps) {
       <PageHeader
         actions={
           <>
-            <HeaderDocsButton />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/docs")}
+              title="Documentation"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
             <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
               Back
             </Button>

@@ -4,7 +4,6 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Check, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { tierLabel } from "@/lib/tiers";
 
 interface StepPlanProps {
   /** Free path — complete onboarding, navigate to dashboard. */
@@ -118,7 +117,7 @@ export default function StepPlan({ onChooseFree, onChoosePro, onBack }: StepPlan
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-base font-semibold flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-primary" />
-              {tierLabel("pro")}
+              Pro
             </h3>
             <Badge className="text-xs bg-primary/90">Recommended</Badge>
           </div>
@@ -147,7 +146,7 @@ export default function StepPlan({ onChooseFree, onChoosePro, onBack }: StepPlan
           {busy === "free" ? "..." : "Continue with Free"}
         </Button>
         <Button onClick={handlePro} disabled={busy !== null} className="min-w-[160px]">
-          {busy === "pro" ? "Redirecting..." : `Upgrade to ${tierLabel("pro")} (${billingCycle})`}
+          {busy === "pro" ? "Redirecting..." : `Upgrade to Pro (${billingCycle})`}
         </Button>
       </div>
     </div>

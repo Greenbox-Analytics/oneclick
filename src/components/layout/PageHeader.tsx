@@ -1,11 +1,10 @@
 import { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Home, Music } from "lucide-react";
+import { ArrowLeft, CreditCard, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSmartBack } from "@/hooks/useSmartBack";
-import { AutoHideTooltip } from "@/components/layout/AutoHideTooltip";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 import { cn } from "@/lib/utils";
@@ -16,9 +15,9 @@ interface PageHeaderProps {
   backTo?: string | (() => void);
   /** Page-specific actions (docs link, search, etc.) — rendered first. */
   actions?: ReactNode;
-  /** The user/profile dropdown — rendered LAST. Use this slot (instead of
-   * stuffing the profile menu into `actions`) so the order stays consistent:
-   * actions → home → notifications → profile. */
+  /** The user/profile dropdown — rendered LAST, after the auto-injected
+   * billing icon. Use this slot (instead of stuffing the profile menu into
+   * `actions`) so the order stays consistent: actions → billing → profile. */
   userMenu?: ReactNode;
   showLogo?: boolean;
   showBack?: boolean;
@@ -39,20 +38,20 @@ export function PageHeader({
   const isMobile = useIsMobile();
   const { user } = useAuth();
 
-  // House icon next to the bell — one-click route to the landing page
-  // (replaces the avatar-dropdown "View landing page" hop).
-  const homeButton = user ? (
-    <AutoHideTooltip label="Landing page">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => navigate("/")}
-        aria-label="Home page"
-        className="text-muted-foreground hover:text-foreground"
-      >
-        <Home className="w-4 h-4" />
-      </Button>
-    </AutoHideTooltip>
+  // Renders globally for authenticated users only — appears in the actions
+  // slot, positioned after page-specific actions (so it lands right of "docs"
+  // on pages that include the docs icon there, and left of any profile
+  // dropdown that lives further right).
+  const billingButton = user ? (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => navigate("/subscription")}
+      title="Billing & subscription"
+      className="text-muted-foreground hover:text-foreground"
+    >
+      <CreditCard className="w-4 h-4" />
+    </Button>
   ) : null;
 
   const notificationBell = user ? <NotificationBell /> : null;
@@ -91,11 +90,11 @@ export function PageHeader({
               </div>
             ) : null}
           </div>
-          {(actions || homeButton || notificationBell || userMenu) && (
+          {(actions || notificationBell || billingButton || userMenu) && (
             <div className="flex items-center gap-1 shrink-0">
               {actions}
-              {homeButton}
               {notificationBell}
+              {billingButton}
               {userMenu}
             </div>
           )}
@@ -139,11 +138,11 @@ export function PageHeader({
             </div>
           )}
         </div>
-        {(actions || homeButton || notificationBell || userMenu) && (
+        {(actions || notificationBell || billingButton || userMenu) && (
           <div className="flex items-center gap-2 shrink-0">
             {actions}
-            {homeButton}
             {notificationBell}
+            {billingButton}
             {userMenu}
           </div>
         )}

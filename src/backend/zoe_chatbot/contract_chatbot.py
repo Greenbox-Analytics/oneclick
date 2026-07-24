@@ -33,7 +33,6 @@ from openai import OpenAI
 from knowledge.reference_search import search_reference
 from utils.ingestion.pdf_markdown import strip_page_markers
 from utils.ingestion.tables import detect_and_extract_tables, linearize_table
-from utils.llm.tracking import TrackedOpenAI
 from utils.text.normalize import normalize_name
 
 # Configure logging
@@ -509,7 +508,7 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env file")
 
-openai_client = TrackedOpenAI(OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None))
+openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None)
 
 # Configuration
 DEFAULT_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")  # Updated to stable model
@@ -1042,7 +1041,14 @@ class ContractChatbot:
         Returns:
             True if it's an affirmative response
         """
-        return is_affirmative_text(query)
+        query_lower = query.lower().strip()
+        query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace()).strip()
+
+        for pattern in self.AFFIRMATIVE_PATTERNS:
+            if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
+                return True
+
+        return False
 
     def _no_result_message(self, contract_ids: list[str] | None = None) -> str:
         """Return a context-aware, actionable fallback message when no results are found."""
@@ -1200,7 +1206,19 @@ class ContractChatbot:
         Returns:
             True if it's a conversational query
         """
-        return is_conversational_text(query)
+        query_lower = query.lower().strip()
+        # Remove punctuation for matching
+        query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace())
+
+        # Check for exact or partial matches
+        for pattern in self.CONVERSATIONAL_PATTERNS:
+            if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
+                return True
+            # Also check if the entire query is just the pattern with punctuation
+            if pattern in query_clean and len(query_clean) < len(pattern) + 10:
+                return True
+
+        return False
 
     def _handle_conversational_query(self, query: str, session_id: str | None = None) -> dict:
         """
@@ -4075,60 +4093,3 @@ Your answers should be:
             {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp.isoformat(), "metadata": msg.metadata}
             for msg in messages
         ]
-
-
-# ── Pure module-level text predicates ──
-#
-# Extracted from ContractChatbot._is_conversational_query /
-# _is_affirmative_response so the credit gate (main.py) can classify a query
-# WITHOUT constructing a chatbot. Defined after the class so the class-level
-# pattern lists (CONVERSATIONAL_PATTERNS / AFFIRMATIVE_PATTERNS) are resolved
-# lazily at call time — no import-order dependency.
-#
-# NOTE: the two originals clean the query slightly differently (conversational
-# does NOT .strip() after stripping punctuation; affirmative does). That's
-# preserved faithfully below rather than unified behind one shared cleaner.
-
-
-def is_conversational_text(query: str) -> bool:
-    """Pure-text version of ContractChatbot._is_conversational_query."""
-    query_lower = (query or "").lower().strip()
-    # Remove punctuation for matching
-    query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace())
-
-    # Check for exact or partial matches
-    for pattern in ContractChatbot.CONVERSATIONAL_PATTERNS:
-        if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
-            return True
-        # Also check if the entire query is just the pattern with punctuation
-        if pattern in query_clean and len(query_clean) < len(pattern) + 10:
-            return True
-
-    return False
-
-
-def is_affirmative_text(query: str) -> bool:
-    """Pure-text version of ContractChatbot._is_affirmative_response."""
-    query_lower = (query or "").lower().strip()
-    query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace()).strip()
-
-    for pattern in ContractChatbot.AFFIRMATIVE_PATTERNS:
-        if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
-            return True
-
-    return False
-
-
-def is_zero_cost_query(query: str) -> bool:
-    """True only when stream_query is GUARANTEED to take the conversational
-    fast-path (canned reply, zero LLM cost) regardless of session state.
-
-    Affirmative-overlapping patterns ("ok", "sure") are excluded: with a
-    pending suggestion they route to a real LLM answer first (see
-    stream_query's routing order — the affirmative-with-pending-suggestion
-    branch is checked before the conversational fast path). Used by the
-    credit gate so zero-balance users still get free replies for guaranteed-
-    free queries. PURE — must never construct a chatbot or touch session
-    memory.
-    """
-    return is_conversational_text(query) and not is_affirmative_text(query)
