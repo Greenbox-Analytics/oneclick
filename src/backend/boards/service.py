@@ -254,6 +254,49 @@ def _personal_board_ids(db: Client, user_id: str) -> list[str]:
     return [r["id"] for r in rows]
 
 
+def _calendar_board_ids(db: Client, user_id: str) -> list[str]:
+    """Every board whose tasks belong on the workspace calendar: the caller's personal
+    boards PLUS the non-archived boards of every non-archived team they're a member of.
+
+    Unlike _resolve_read_board_ids' personal-only default, the calendar is cross-board by
+    design. Membership is still the gate — no board the caller can't already read is added.
+    """
+    ids = _personal_board_ids(db, user_id)
+    memberships = db.table("team_members").select("team_id").eq("user_id", user_id).execute().data or []
+    team_ids = [m["team_id"] for m in memberships]
+    if not team_ids:
+        return ids
+    active = db.table("teams").select("id").in_("id", team_ids).is_("archived_at", "null").execute().data or []
+    active_ids = [t["id"] for t in active]
+    if not active_ids:
+        return ids
+    rows = db.table("boards").select("id").in_("team_id", active_ids).eq("archived", False).execute().data or []
+    return ids + [r["id"] for r in rows]
+
+
+def _stamp_team_context(db: Client, tasks: list) -> list:
+    """Attach team_id / team_name to each task via its board (both None → personal board).
+
+    The calendar colours and groups by team, so it needs the task→team edge that
+    board_tasks doesn't carry directly.
+    """
+    board_ids = list({t["board_id"] for t in tasks if t.get("board_id")})
+    if not board_ids:
+        return tasks
+    boards = db.table("boards").select("id, team_id").in_("id", board_ids).execute().data or []
+    by_board = {b["id"]: b.get("team_id") for b in boards}
+    team_ids = list({tid for tid in by_board.values() if tid})
+    names = {}
+    if team_ids:
+        rows = db.table("teams").select("id, name").in_("id", team_ids).execute().data or []
+        names = {r["id"]: r["name"] for r in rows}
+    for task in tasks:
+        team_id = by_board.get(task.get("board_id"))
+        task["team_id"] = team_id
+        task["team_name"] = names.get(team_id)
+    return tasks
+
+
 def _resolve_read_board_ids(db: Client, user_id: str, artist_id: str | None, board_id: str | None) -> list[str]:
     """Reads: explicit board_id (gated) → [board_id]; artist_id → [personal board];
     neither → the caller's personal boards (backward-compat default)."""
@@ -638,8 +681,15 @@ async def get_tasks_by_date_range(
     The calendar keys off end dates only: a task appears on its due_date, not its
     start_date. start_date remains a task field (shown on cards / task detail) but
     does not place the task on the calendar.
+
+    With no explicit board/artist filter the calendar spans personal AND team boards
+    (_calendar_board_ids), and every task is stamped with its team so the UI can colour
+    and group by team.
     """
-    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    if board_id or artist_id:
+        board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    else:
+        board_ids = _calendar_board_ids(supabase, user_id)
     if not board_ids:
         return []
     due_result = (
@@ -652,7 +702,7 @@ async def get_tasks_by_date_range(
         .execute()
     )
 
-    return _enrich_tasks(supabase, due_result.data or [], user_id)
+    return _stamp_team_context(supabase, _enrich_tasks(supabase, due_result.data or [], user_id))
 
 
 # --- Period-based Tasks ---
