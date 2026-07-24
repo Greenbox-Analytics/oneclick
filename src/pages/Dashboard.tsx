@@ -1,6 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, CreditCard, Shield, Home, Receipt, type LucideIcon } from "lucide-react";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
+import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, Shield, Receipt, type LucideIcon } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
@@ -208,15 +209,7 @@ const Dashboard = () => {
       <PageHeader
         showBack={false}
         actions={
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate("/docs")}
-            title="Documentation"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <BookOpen className="w-4 h-4" />
-          </Button>
+          <HeaderDocsButton />
         }
         userMenu={
           <DropdownMenu>
@@ -240,11 +233,7 @@ const Dashboard = () => {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => navigate("/profile")}>
                   <User className="mr-2 h-4 w-4" />
-                  <span>Profile</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => navigate("/subscription")}>
-                  <CreditCard className="mr-2 h-4 w-4" />
-                  <span>Billing & subscription</span>
+                  <span>Profile & billing</span>
                 </DropdownMenuItem>
                 {isAdmin && (
                   <DropdownMenuItem onClick={() => navigate("/admin/users")}>
@@ -253,10 +242,6 @@ const Dashboard = () => {
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => navigate("/")}>
-                  <Home className="mr-2 h-4 w-4" />
-                  <span>View landing page</span>
-                </DropdownMenuItem>
                 <DropdownMenuItem onClick={async () => { await signOut(); navigate("/"); }}>
                   <LogOut className="mr-2 h-4 w-4" />
                   <span>Log out</span>

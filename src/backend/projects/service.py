@@ -23,7 +23,10 @@ async def get_user_role(db: Client, user_id: str, project_id: str):
         .maybe_single()
         .execute()
     )
-    return result.data["role"] if result.data else None
+    # maybe_single() returns None (not a response object) on zero rows in
+    # current postgrest-py — without the `result and` guard, every non-member
+    # lookup raised AttributeError and surfaced as a 500 instead of a deny.
+    return result.data["role"] if result and result.data else None
 
 
 def _find_user_id_by_email(db: Client, email: str) -> str | None:

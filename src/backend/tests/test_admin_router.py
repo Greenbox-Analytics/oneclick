@@ -8,6 +8,7 @@ from tests.conftest import TEST_USER_ID, MockQueryBuilder
 
 ADMIN_EMAIL = "admin@example.com"
 NON_ADMIN_EMAIL = "user@example.com"
+ORG_ID = "20000000-0000-0000-0000-000000000001"
 
 
 @pytest.fixture(autouse=True)
@@ -730,9 +731,142 @@ class TestNonAdminBlocked:
         ("GET", "/admin/pro-requests"),
         ("GET", "/admin/tester-grants"),
         ("DELETE", f"/admin/tester-grants/{TEST_USER_ID}"),
+        ("POST", f"/admin/orgs/{ORG_ID}/suspend"),
+        ("POST", f"/admin/orgs/{ORG_ID}/reactivate"),
+        ("POST", f"/admin/orgs/{ORG_ID}/pool/clawback"),
+        ("GET", f"/admin/orgs/{ORG_ID}/pool"),
     ]
 
     @pytest.mark.parametrize("method,path", ROUTES)
     def test_non_admin_blocked(self, method, path, non_admin_client):
         resp = non_admin_client.request(method, path, json={} if method in ("POST",) else None)
         assert resp.status_code == 403, f"{method} {path} should be 403 for non-admin"
+
+
+class TestOrgSuspendReactivate:
+    """POST /admin/orgs/{id}/suspend and /reactivate (Licensing Phase B).
+
+    Deliberately on THIS router (not orgs/router.py) and flag-INDEPENDENT: a
+    platform admin may need to suspend/reactivate an org precisely when
+    LICENSING_ENABLED is off. None of these tests set the flag."""
+
+    @staticmethod
+    def _install_org_table(mock_supabase, org_row: dict | None, captured: dict | None = None):
+        """Wire mock_supabase.table('organizations') so a .select()...execute()
+        returns *org_row* as a single dict (mirrors real .maybe_single()
+        semantics used throughout this codebase) and a subsequent
+        .update(...)...execute() returns [merged_row] as a LIST (mirrors
+        supabase-py's list-shaped update response), capturing the update
+        payload into *captured* if given."""
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name != "organizations":
+                return b
+
+            def _select(*a, **kw):
+                b.execute.return_value = MagicMock(data=org_row)
+                return b
+
+            def _update(payload, *a, **kw):
+                if captured is not None:
+                    captured["payload"] = payload
+                merged = {**org_row, **payload} if org_row else None
+                b.execute.return_value = MagicMock(data=[merged] if merged else [])
+                return b
+
+            b.select = _select
+            b.update = _update
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+    def test_suspend_active_org_sets_suspended(self, admin_client, mock_supabase, monkeypatch):
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        captured = {}
+        self._install_org_table(mock_supabase, {"id": ORG_ID, "status": "active"}, captured)
+
+        resp = admin_client.post(f"/admin/orgs/{ORG_ID}/suspend")
+        assert resp.status_code == 200
+        assert captured["payload"] == {"status": "suspended"}
+        assert resp.json()["status"] == "suspended"
+
+    def test_suspend_pending_org_409(self, admin_client, mock_supabase):
+        self._install_org_table(mock_supabase, {"id": ORG_ID, "status": "pending"})
+        resp = admin_client.post(f"/admin/orgs/{ORG_ID}/suspend")
+        assert resp.status_code == 409
+
+    def test_suspend_already_suspended_org_409(self, admin_client, mock_supabase):
+        self._install_org_table(mock_supabase, {"id": ORG_ID, "status": "suspended"})
+        resp = admin_client.post(f"/admin/orgs/{ORG_ID}/suspend")
+        assert resp.status_code == 409
+
+    def test_suspend_unknown_org_404(self, admin_client, mock_supabase):
+        self._install_org_table(mock_supabase, None)
+        resp = admin_client.post(f"/admin/orgs/{ORG_ID}/suspend")
+        assert resp.status_code == 404
+
+    def test_reactivate_suspended_org_sets_active(self, admin_client, mock_supabase):
+        captured = {}
+        self._install_org_table(mock_supabase, {"id": ORG_ID, "status": "suspended"}, captured)
+
+        resp = admin_client.post(f"/admin/orgs/{ORG_ID}/reactivate")
+        assert resp.status_code == 200
+        assert captured["payload"] == {"status": "active"}
+        assert resp.json()["status"] == "active"
+
+    def test_reactivate_pending_org_409_not_activated(self, admin_client, mock_supabase):
+        self._install_org_table(mock_supabase, {"id": ORG_ID, "status": "pending"})
+        resp = admin_client.post(f"/admin/orgs/{ORG_ID}/reactivate")
+        assert resp.status_code == 409
+        assert "not been activated" in resp.json()["detail"]
+
+    def test_reactivate_active_org_409(self, admin_client, mock_supabase):
+        self._install_org_table(mock_supabase, {"id": ORG_ID, "status": "active"})
+        resp = admin_client.post(f"/admin/orgs/{ORG_ID}/reactivate")
+        assert resp.status_code == 409
+
+    def test_reactivate_unknown_org_404(self, admin_client, mock_supabase):
+        self._install_org_table(mock_supabase, None)
+        resp = admin_client.post(f"/admin/orgs/{ORG_ID}/reactivate")
+        assert resp.status_code == 404
+
+    def test_non_admin_blocked_regardless_of_flag(self, non_admin_client, monkeypatch):
+        """Flag-independence, negative direction: even with the flag fully
+        unset, a non-admin still gets 403 (not a licensing-related 404) —
+        confirms these routes are gated ONLY by platform require_admin."""
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        resp = non_admin_client.post(f"/admin/orgs/{ORG_ID}/suspend")
+        assert resp.status_code == 403
+
+
+class TestOrgPoolEndpointsFlagIndependence:
+    """POST /admin/orgs/{id}/pool/clawback and GET /admin/orgs/{id}/pool
+    (follow-ups plan 2026-07-22, Task 2) placement mirrors
+    TestOrgSuspendReactivate exactly: PLATFORM require_admin, flag-
+    INDEPENDENT. Full behavioral coverage (RPC shape, 404s, GET shape,
+    cumulativePurchased) lives in tests/test_admin_credits.py alongside the
+    per-user credit tooling it mirrors; this class only pins the
+    admin-gating + flag-independence contract at the router level, same as
+    the suspend/reactivate class above."""
+
+    def test_non_admin_blocked_regardless_of_flag(self, non_admin_client, monkeypatch):
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        resp = non_admin_client.post(
+            f"/admin/orgs/{ORG_ID}/pool/clawback",
+            json={"amount": 100, "reason": "x", "idempotency_key": "k1"},
+        )
+        assert resp.status_code == 403
+
+        resp = non_admin_client.get(f"/admin/orgs/{ORG_ID}/pool")
+        assert resp.status_code == 403
+
+    def test_admin_reaches_handler_with_flag_unset(self, admin_client, mock_supabase, monkeypatch):
+        """Positive direction: with LICENSING_ENABLED fully unset, an admin
+        still reaches the handler (not blocked by some latent flag check) —
+        a 404 here (unknown org, since mock_supabase's default table stub
+        has no 'organizations' row) proves the handler ran, as opposed to a
+        403/500 that would indicate an accidental flag gate."""
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        resp = admin_client.get(f"/admin/orgs/{ORG_ID}/pool")
+        assert resp.status_code == 404

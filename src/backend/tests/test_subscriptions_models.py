@@ -123,6 +123,7 @@ class TestAction:
             "create_artist",
             "create_project",
             "create_task",
+            "create_work",
             "upload_bytes",
             "generate_split_sheet",
             "use_zoe",
@@ -199,3 +200,82 @@ class TestOverridePayload:
 
         p = OverridePayload(max_artists=-1)
         assert p.max_artists == -1
+
+
+class TestCreditModels:
+    def test_credit_action_keys_match_seeded_prices(self):
+        from subscriptions.models import CreditAction
+
+        assert {a.value for a in CreditAction} == {"zoe_message", "oneclick_run", "registry_parse"}
+
+    def test_create_work_action_exists(self):
+        from subscriptions.models import Action
+
+        assert Action.CREATE_WORK == "create_work"
+
+    def test_to_dict_includes_credits_block(self):
+        from subscriptions.models import Caps, CreditsInfo, Entitlements, Features, Usage
+
+        ent = Entitlements(
+            user_id="u1",
+            tier="pro_max",
+            status="active",
+            caps=Caps(
+                max_artists=-1,
+                max_projects=-1,
+                max_tasks=-1,
+                max_storage_bytes=-1,
+                max_split_sheets_per_month=-1,
+                max_oneclick_runs_per_month=-1,
+                monthly_credits=8000,
+                max_works=-1,
+                included_storage_bytes=268435456000,
+            ),
+            features=Features(True, True, True, ["google_drive", "slack"]),
+            usage=Usage(0, 0, 0, 0, datetime(2026, 8, 1, tzinfo=UTC)),
+            has_overrides=False,
+            credits=CreditsInfo(
+                bundle_balance=7000,
+                reserve_balance=100,
+                monthly_grant=8000,
+                overage_this_period=0,
+                overage_enabled=False,
+                overage_cap_credits=None,
+                storage_overage_enabled=False,
+                period_end=datetime(2026, 8, 1, tzinfo=UTC),
+                prices={"zoe_message": 3, "oneclick_run": 21, "registry_parse": 12},
+            ),
+        )
+        d = ent.to_dict()
+        c = d["credits"]
+        assert c["balance"] == 7100  # bundle + reserve
+        assert c["bundleBalance"] == 7000
+        assert c["monthlyGrant"] == 8000
+        assert c["prices"]["oneclickRun"] == 21
+        assert d["caps"]["maxWorks"] == -1
+
+    def test_to_dict_credits_none_when_absent(self):
+        from subscriptions.models import Caps, Entitlements, Features, Usage
+
+        ent = Entitlements(
+            user_id="u1",
+            tier="pro",
+            status="active",
+            caps=Caps(-1, -1, -1, -1, -1, -1),
+            features=Features(True, True, True, []),
+            usage=Usage(0, 0, 0, 0, datetime.now(UTC)),
+            has_overrides=False,
+        )
+        assert ent.to_dict()["credits"] is None
+
+    def test_credit_check_result_defaults(self):
+        from subscriptions.models import CreditCheckResult
+
+        r = CreditCheckResult(allowed=True, price=3)
+        assert r.use_overage is False and r.reason is None
+
+    def test_credit_grant_shape(self):
+        from subscriptions.models import CreditGrant
+
+        g = CreditGrant(request_id="abc", action="zoe_message", price=3, kind="debit", enabled=True)
+        assert g.kind in ("debit", "overage_debit")

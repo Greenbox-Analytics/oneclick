@@ -6,11 +6,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { useMyRole } from "@/hooks/useProjectMembers";
 import { InlineEdit } from "@/components/InlineEdit";
 import { Button } from "@/components/ui/button";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Music, ArrowLeft, Loader2,
-  FileText, Volume2, Users, Settings, StickyNote, BookOpen, MessageSquare, Receipt,
+  FileText, Volume2, Users, Settings, StickyNote, MessageSquare, Receipt,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -200,15 +201,7 @@ const ProjectDetail = () => {
 
             <div className="flex items-center gap-2 shrink-0">
               <ToolHelpButton onClick={() => walkthrough.replay()} />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => navigate("/docs")}
-                title="Documentation"
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <BookOpen className="w-4 h-4" />
-              </Button>
+              <HeaderDocsButton />
             </div>
           </div>
         </div>
