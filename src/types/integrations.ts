@@ -52,6 +52,8 @@ export interface BoardTask {
   parent_title?: string;
   column_title?: string;
   board_id?: string;
+  team_id?: string | null;
+  team_name?: string | null;
   artist_id?: string;
   project_id?: string;
   artist_ids?: string[];
