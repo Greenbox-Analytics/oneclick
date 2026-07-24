@@ -15,7 +15,7 @@ import re
 from collections import defaultdict
 from datetime import UTC, date, datetime
 
-from oneclick.royalties import fx, paypal_client
+from oneclick.royalties import fx, history, paypal_client
 from oneclick.royalties.ingest import statement_meta, upsert_payee
 from oneclick.royalties.models import (
     PayeeDetail,
@@ -113,6 +113,18 @@ def _detect_collision(db, user_id: str, normalized_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _bucket_state(earned_b: float, paid_b: float, drafted_b: float) -> str:
+    """Single source of truth for a bucket's derived state — used by
+    payee_summary, periods_ledger, and payee_detail."""
+    if earned_b - paid_b - drafted_b > 0.01:
+        return "owed"
+    if paid_b > earned_b + 0.01:
+        return "overpaid"
+    if drafted_b > 0:
+        return "scheduled"
+    return "settled"
+
+
 def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict], coverage: list[dict], db, base: str):
     """Return aggregated totals (base-currency and payout-currency) for one payee.
 
@@ -123,6 +135,11 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
       4. owed_b    = max(0, earned_b - paid_b - drafted_b)           (statement ccy, CLAMPED)
       5. Convert each of earned_b/paid_b/drafted_b/owed_b → base → accumulate
       6. Convert each of earned_b/paid_b/drafted_b/owed_b → payout_currency → accumulate
+
+    Overpayment credit (credit_by_ccy) is derived separately, from PAID coverage
+    only (never drafted — a draft can be canceled, cascading its coverage away,
+    which would make drafted-backed credit phantom). It is tracked per statement
+    currency and never FX-netted across buckets, same as owed/unpaid.
     """
     payee_id = payee["id"]
     payout_ccy = payee.get("payout_currency") or base
@@ -159,6 +176,8 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
     earned_r = paid_r = drafted_r = owed_r = unpaid_r = 0.0
     # Native (payout_currency) accumulators
     earned_n = paid_n = drafted_n = owed_n = unpaid_n = 0.0
+    # Overpayment credit, per statement currency (never FX-netted across buckets)
+    credit_by_ccy: dict[str, float] = {}
 
     # Collect project ids
     project_ids: set[str] = set()
@@ -176,6 +195,16 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
         # subtract drafted amounts — a draft is a plan, not a payment, so the
         # money stays outstanding until the payout is completed.
         unpaid_b = max(0.0, earned_b - paid_b)
+
+        # Overpayment credit — derived from PAID coverage only (a draft can be
+        # canceled, cascading its coverage away; credit backed by it would be
+        # phantom). Tracked per statement currency: coverage amounts are frozen
+        # in statement ccy and are never FX-netted (service invariant, line 8).
+        overpaid_b = max(0.0, paid_b - earned_b)
+        # Epsilon, not zero: float residue from coverage slicing must not
+        # surface as a $0.00 "Overpaid" chip.
+        if overpaid_b > 0.01:
+            credit_by_ccy[ccy] = credit_by_ccy.get(ccy, 0.0) + overpaid_b
 
         # Convert each component → reporting base (on_missing="none" → skip unconvertible buckets)
         earned_conv = fx.convert(db, earned_b, ccy, base, on_missing="none")
@@ -216,6 +245,7 @@ def _aggregate_payee_buckets(payee: dict, lines: list[dict], payouts: list[dict]
         "unpaid_native": unpaid_n,
         "project_ids": project_ids,
         "unconvertible_count": unconvertible_count,
+        "credit_by_ccy": credit_by_ccy,
     }
 
 
@@ -241,8 +271,11 @@ def payee_summary(db, user_id: str, base: str = "USD") -> list[dict]:
 
         owed = totals["owed"]
         drafted = totals["drafted"]
+        credit_by_ccy = totals["credit_by_ccy"]
         if owed > 0:
             status = "owed"
+        elif credit_by_ccy:
+            status = "overpaid"
         elif drafted > 0:
             status = "scheduled"
         else:
@@ -271,6 +304,7 @@ def payee_summary(db, user_id: str, base: str = "USD") -> list[dict]:
                 owed_native=totals["owed_native"],
                 unpaid_native=totals["unpaid_native"],
                 unconvertible_count=totals["unconvertible_count"],
+                credit_by_ccy=credit_by_ccy,
             ).model_dump()
         )
 
@@ -297,8 +331,11 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
     totals = _aggregate_payee_buckets(payee, all_lines, all_payouts, coverage, db, base)
     owed = totals["owed"]
     drafted = totals["drafted"]
+    credit_by_ccy = totals["credit_by_ccy"]
     if owed > 0:
         status = "owed"
+    elif credit_by_ccy:
+        status = "overpaid"
     elif drafted > 0:
         status = "scheduled"
     else:
@@ -325,6 +362,7 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
         owed_native=totals["owed_native"],
         unpaid_native=totals["unpaid_native"],
         unconvertible_count=totals["unconvertible_count"],
+        credit_by_ccy=credit_by_ccy,
     )
 
     # Build projects → statements → lines tree
@@ -373,13 +411,7 @@ def payee_detail(db, user_id: str, payee_id: str, base: str = "USD") -> dict:
             drafted_b = cov_drafted_stmt.get((sid, pid), 0.0)
             owed_b = max(0.0, earned_b - paid_b - drafted_b)
             unpaid_b = max(0.0, earned_b - paid_b)
-
-            if owed_b > 0:
-                st_state = "owed"
-            elif drafted_b > 0:
-                st_state = "scheduled"
-            else:
-                st_state = "settled"
+            st_state = _bucket_state(earned_b, paid_b, drafted_b)
 
             # statement_total from statement_meta (may be None)
             st_meta = None
@@ -493,14 +525,7 @@ def periods_ledger(db, user_id: str, base: str = "USD") -> dict:
             earned_b = sum(float(sl.get("amount_owed") or 0) for sl in slines)
             paid_b = cov_paid.get((stmt_id, proj_id), 0.0)
             drafted_b = cov_drafted.get((stmt_id, proj_id), 0.0)
-            owed_b = max(0.0, earned_b - paid_b - drafted_b)
-
-            if owed_b > 0:
-                state = "owed"
-            elif drafted_b > 0:
-                state = "scheduled"
-            else:
-                state = "settled"
+            state = _bucket_state(earned_b, paid_b, drafted_b)
 
             earned_base = fx.convert(db, earned_b, ccy, base, on_missing="none")
             if earned_base is None:
@@ -538,12 +563,25 @@ def periods_ledger(db, user_id: str, base: str = "USD") -> dict:
 
 
 def payee_owed_buckets(db, user_id: str, payee_id: str) -> list[dict]:
-    """Return the owed buckets for a single payee, filtered to owed_b > 0.
+    """Return the owed buckets for a single payee, filtered to owed_b > 0."""
+    return _payee_buckets(db, user_id, payee_id)[0]
 
-    Each bucket dict contains:
+
+def _payee_buckets(db, user_id: str, payee_id: str) -> tuple[list[dict], list[dict]]:
+    """Return (owed, overpaid) bucket lists for a single payee, from one pass.
+
+    owed entries (owed_b > 0):
       royalty_statement_id, project_id, calculation_id,
       ccy (statement currency), owed_b (statement-ccy amount, > 0),
       lines (the bucket's royalty_lines rows).
+
+    overpaid entries (paid_b - earned_b > 0.01) — the credit side:
+      royalty_statement_id, project_id, ccy, excess (statement ccy),
+      coverage_rows (the bucket's PAID payout coverage rows — whose money the
+      excess is). PAID coverage only, mirroring _aggregate_payee_buckets'
+      credit_by_ccy: drafted-backed credit would be phantom (a draft can be
+      canceled, cascading its coverage away). Buckets with no remaining lines
+      contribute no credit, same as the read path.
 
     Coverage is loaded from royalty_payout_coverage for this payee, indexed
     by (statement, project) to compute the per-bucket clamp identical to _aggregate_payee_buckets.
@@ -552,7 +590,7 @@ def payee_owed_buckets(db, user_id: str, payee_id: str) -> list[dict]:
     lines_res = db.table("royalty_lines").select("*").eq("user_id", user_id).eq("payee_id", payee_id).execute()
     all_lines = lines_res.data or []
     if not all_lines:
-        return []
+        return [], []
 
     # Load all payouts for this user (needed to resolve coverage status)
     all_payouts = _load_payouts(db, user_id)
@@ -566,6 +604,7 @@ def payee_owed_buckets(db, user_id: str, payee_id: str) -> list[dict]:
     # a statement spanning multiple projects does not blur coverage across them.
     cov_paid: dict[tuple, float] = defaultdict(float)
     cov_drafted: dict[tuple, float] = defaultdict(float)
+    cov_paid_rows: dict[tuple, list[dict]] = defaultdict(list)
     for cov in coverage:
         stmt_id = cov.get("royalty_statement_id")
         proj_id = cov.get("project_id", "")
@@ -575,6 +614,7 @@ def payee_owed_buckets(db, user_id: str, payee_id: str) -> list[dict]:
         amt = float(cov.get("covered_amount") or 0)
         if status == "paid":
             cov_paid[(stmt_id, proj_id)] += amt
+            cov_paid_rows[(stmt_id, proj_id)].append(cov)
         elif status == "draft":
             cov_drafted[(stmt_id, proj_id)] += amt
 
@@ -585,7 +625,8 @@ def payee_owed_buckets(db, user_id: str, payee_id: str) -> list[dict]:
         proj_id = line.get("project_id", "")
         buckets[(stmt_id, proj_id)].append(line)
 
-    result = []
+    owed: list[dict] = []
+    overpaid: list[dict] = []
     for (stmt_id, proj_id), bucket_lines in buckets.items():
         ccy = (bucket_lines[0].get("statement_currency") or "USD").upper()
         earned_b = sum(float(bl.get("amount_owed") or 0) for bl in bucket_lines)
@@ -593,29 +634,81 @@ def payee_owed_buckets(db, user_id: str, payee_id: str) -> list[dict]:
         drafted_b = cov_drafted.get((stmt_id, proj_id), 0.0)
         owed_b = max(0.0, earned_b - paid_b - drafted_b)
 
+        if paid_b - earned_b > 0.01:
+            overpaid.append(
+                {
+                    "royalty_statement_id": stmt_id,
+                    "project_id": proj_id,
+                    "ccy": ccy,
+                    "excess": paid_b - earned_b,
+                    "coverage_rows": cov_paid_rows.get((stmt_id, proj_id), []),
+                }
+            )
+
         if owed_b <= 0:
             continue
 
-        project_id = proj_id
-        calc_id = bucket_lines[0].get("calculation_id")
-
-        result.append(
+        owed.append(
             {
                 "royalty_statement_id": stmt_id,
-                "project_id": project_id,
-                "calculation_id": calc_id,
+                "project_id": proj_id,
+                "calculation_id": bucket_lines[0].get("calculation_id"),
                 "ccy": ccy,
                 "owed_b": owed_b,
                 "lines": bucket_lines,
             }
         )
 
-    return result
+    return owed, overpaid
 
 
 # ---------------------------------------------------------------------------
 # Payout creation and management
 # ---------------------------------------------------------------------------
+
+
+class StaleSourcesError(Exception):
+    def __init__(self, lines):
+        super().__init__("stale sources")
+        self.lines = lines
+
+
+def _stale_lines(db, buckets) -> list[dict]:
+    """Lines with NO live source: every source id dead AND no live project file
+    shares any stored source hash (dead ids alongside a live source are normal
+    history and never warn)."""
+    all_ids, all_hashes = set(), set()
+    for b in buckets:
+        for line in b["lines"]:
+            for e in line.get("source_contracts") or []:
+                if e.get("id"):
+                    all_ids.add(e["id"])
+                if e.get("hash"):
+                    all_hashes.add(e["hash"])
+    if not all_ids:
+        return []
+    live = db.table("project_files").select("id, content_hash").in_("id", list(all_ids)).execute().data or []
+    live_ids = {r["id"] for r in live}
+    live_hashes = set()
+    if all_hashes:
+        # Scope hash-liveness to THIS user's projects — the service-role client
+        # bypasses RLS, and another user's identical file must not count as live.
+        project_ids = list({b["project_id"] for b in buckets if b.get("project_id")})
+        hash_rows = (
+            db.table("project_files")
+            .select("content_hash")
+            .in_("content_hash", list(all_hashes))
+            .in_("project_id", project_ids)
+            .execute()
+        ).data or []
+        live_hashes = {r["content_hash"] for r in hash_rows}
+    stale = []
+    for b in buckets:
+        for line in b["lines"]:
+            entries = line.get("source_contracts") or []
+            if entries and all(e.get("id") not in live_ids and e.get("hash") not in live_hashes for e in entries):
+                stale.append({"song": line.get("song_title"), "line_id": line.get("id")})
+    return stale
 
 
 def create_payouts(
@@ -624,6 +717,7 @@ def create_payouts(
     payee_ids: list[str],
     idempotency_key: str | None,
     note: str | None,
+    force: bool = False,
 ) -> list[dict]:
     """Create draft payouts for one or more payees.
 
@@ -631,6 +725,10 @@ def create_payouts(
     - Assert the payee belongs to the caller.
     - Compute owed buckets; skip if empty (no $0 invoices).
     - Idempotency: if derived_key already exists, return the existing payout.
+    - Staleness gate: raise StaleSourcesError if any owed line has no live
+      source contract (unless force=True).
+    - Net same-currency overpayment credit against owed buckets by re-allocating
+      PAID coverage; skip the payee entirely if credit covers everything.
     - Insert royalty_payouts + royalty_payout_coverage rows.
 
     CRITICAL invariant: coverage.covered_amount is stored in STATEMENT currency (owed_b),
@@ -652,14 +750,16 @@ def create_payouts(
             raise PermissionError(f"Payee {payee_id} not found or not owned by caller")
         payee = payee_rows[0]
 
-        # Compute owed buckets
-        buckets = payee_owed_buckets(db, user_id, payee_id)
+        # Compute owed buckets + overpayment credits in one pass
+        buckets, credits = _payee_buckets(db, user_id, payee_id)
         if not buckets:
             continue  # skip — no $0 invoices
 
         payout_ccy = (payee.get("payout_currency") or "USD").upper()
 
-        # Idempotency: derive a per-payee key and check for existing payout
+        # Idempotency: derive a per-payee key and check for existing payout.
+        # Checked BEFORE the credit moves so a retried request returns the
+        # existing payout without re-applying side effects.
         derived_key = f"{idempotency_key}:{payee_id}" if idempotency_key else None
         if derived_key:
             existing_res = (
@@ -673,6 +773,75 @@ def create_payouts(
             if existing:
                 results.append(existing[0])
                 continue  # idempotent — do not create a second
+
+        stale = _stale_lines(db, buckets)
+        if stale and not force:
+            raise StaleSourcesError(stale)
+
+        # Apply same-currency credits: excess PAID coverage re-allocates from
+        # overpaid buckets onto owed buckets, attributed to the ORIGINAL payout
+        # (that's whose money it was). Never FX-converted.
+        for bucket in buckets:
+            for credit in credits:
+                if credit["ccy"] != bucket["ccy"] or credit["excess"] <= 0.01 or bucket["owed_b"] <= 0.01:
+                    continue
+                take = min(credit["excess"], bucket["owed_b"])
+                for cov in credit["coverage_rows"]:
+                    if take <= 0.01:
+                        break
+                    avail = float(cov["covered_amount"])
+                    if avail <= 0:
+                        continue  # already fully re-allocated onto an earlier bucket
+                    slice_amt = min(take, avail)
+                    history.record(db, user_id, "coverage_moved", dict(cov), "payout_credit")
+                    db.table("royalty_payout_coverage").update({"covered_amount": avail - slice_amt}).eq(
+                        "id", cov["id"]
+                    ).execute()
+                    # Keep the local view fresh: a later bucket slicing the same
+                    # row must see the reduced amount, not the loaded snapshot.
+                    cov["covered_amount"] = avail - slice_amt
+                    moved_from = {
+                        "statement_id": cov["royalty_statement_id"],
+                        "project_id": cov["project_id"],
+                        "action": "payout_credit",
+                    }
+                    # Composite PK forbids two rows per (payout, statement,
+                    # project): UPDATE-add when the original payout already
+                    # covers the target bucket, INSERT otherwise.
+                    existing_target = (
+                        db.table("royalty_payout_coverage")
+                        .select("*")
+                        .eq("payout_id", cov["payout_id"])
+                        .eq("royalty_statement_id", bucket["royalty_statement_id"])
+                        .eq("project_id", bucket["project_id"])
+                        .execute()
+                    ).data or []
+                    if existing_target:
+                        # moved_from set here too: the own-coverage check in the
+                        # revert guard is then sufficient on every path.
+                        db.table("royalty_payout_coverage").update(
+                            {
+                                "covered_amount": float(existing_target[0]["covered_amount"]) + slice_amt,
+                                "moved_from": moved_from,
+                            }
+                        ).eq("id", existing_target[0]["id"]).execute()
+                    else:
+                        db.table("royalty_payout_coverage").insert(
+                            {
+                                "payout_id": cov["payout_id"],
+                                "payee_id": payee_id,
+                                "project_id": bucket["project_id"],
+                                "royalty_statement_id": bucket["royalty_statement_id"],
+                                "covered_amount": slice_amt,
+                                "moved_from": moved_from,
+                            }
+                        ).execute()
+                    take -= slice_amt
+                    credit["excess"] -= slice_amt
+                    bucket["owed_b"] -= slice_amt
+        buckets = [b for b in buckets if b["owed_b"] > 0.01]
+        if not buckets:
+            continue  # fully covered by credit (or nothing owed) — no payout row
 
         # Convert each bucket's owed_b → payout_ccy and accumulate total
         total = 0.0
@@ -858,6 +1027,15 @@ def revert_payout_to_draft(db, user_id: str, payout_id: str) -> dict:
     if payout.get("payment_method") == "paypal":
         raise ValueError("This payout was paid through PayPal and can't be reverted here")
 
+    # Blocked once this payout's money was re-allocated as credit — reverting
+    # would double-free the moved amounts (and a later cancel would cascade
+    # them away, violating the payment-record invariant). Every move target
+    # (insert, merge, and revision re-point) sets moved_from, and moves only
+    # ever touch the SAME payout's rows — so the own-coverage check suffices.
+    cov = db.table("royalty_payout_coverage").select("id, moved_from").eq("payout_id", payout_id).execute()
+    if any(r.get("moved_from") for r in (cov.data or [])):
+        raise ValueError("Credit from this payout has been applied to other periods — revert is unavailable")
+
     update_res = (
         db.table("royalty_payouts")
         .update({"status": "draft", "paid_at": None})
@@ -992,9 +1170,42 @@ def split_payee(db, user_id: str, payee_id: str, line_ids: list[str], new_displa
     # All clear — upsert the target payee
     target_id = upsert_payee(db, user_id, new_display_name)
 
-    # Reassign the selected lines
-    selected_ids = [l["id"] for l in selected_lines]
-    db.table("royalty_lines").update({"payee_id": target_id}).in_("id", selected_ids).execute()
+    # Unique-identity guard: an EXISTING target payee may already hold a line
+    # with the same (statement, project, song, type) — reassigning would violate
+    # the royalty_lines identity index and surface as an opaque 500. NULL keys
+    # are skipped (the index treats NULLs as distinct, so they cannot collide).
+    selected_ids = {l["id"] for l in selected_lines}
+
+    def _identity(l):
+        return (l.get("royalty_statement_id"), l.get("project_id"), l.get("song_key"), l.get("royalty_type_key"))
+
+    target_lines = (
+        db.table("royalty_lines").select("*").eq("user_id", user_id).eq("payee_id", target_id).execute()
+    ).data or []
+    taken = {
+        _identity(l)
+        for l in target_lines
+        if l["id"] not in selected_ids and l.get("song_key") and l.get("royalty_type_key")
+    }
+    if any(_identity(l) in taken for l in selected_lines):
+        raise ValueError(
+            "That person already has a royalty entry for this song on this statement — remove or merge it first"
+        )
+
+    # Lock the reassigned lines so recalculations keep routing this party's
+    # money to the split payee instead of re-inserting under the original.
+    # Chained splits: an already-locked line KEEPS its original locked_party_key
+    # — overwriting it with the intermediate payee's name would break the match
+    # against the calculator's party and silently undo the split on re-run.
+    source_party_key = payee_rows[0].get("normalized_name") or ""
+    fresh_ids = [l["id"] for l in selected_lines if not l.get("locked_party_key")]
+    keep_ids = [l["id"] for l in selected_lines if l.get("locked_party_key")]
+    if fresh_ids:
+        db.table("royalty_lines").update(
+            {"payee_id": target_id, "payee_locked": True, "locked_party_key": source_party_key}
+        ).in_("id", fresh_ids).execute()
+    if keep_ids:
+        db.table("royalty_lines").update({"payee_id": target_id, "payee_locked": True}).in_("id", keep_ids).execute()
 
     # Return the target payee row
     target_res = db.table("royalty_payees").select("*").eq("id", target_id).execute()
@@ -1019,15 +1230,32 @@ def delete_project_royalty_entries(db, user_id: str, project_id: str) -> dict:
     )
     calc_ids = [r["id"] for r in (calc_res.data or [])]
 
-    # Delete the project's payout coverage — scoped to the user's own payouts
+    # Delete the project's payout coverage — scoped to the user's own payouts.
+    # History-record every doomed row first: a manual purge is a destructive,
+    # user-triggered action outside the ledger's normal gates, so it must leave
+    # an audit trail just like the automated sync paths do.
     user_payouts = _load_payouts(db, user_id)
     payout_ids = [p["id"] for p in user_payouts]
     if payout_ids:
+        doomed_cov = (
+            db.table("royalty_payout_coverage")
+            .select("*")
+            .eq("project_id", project_id)
+            .in_("payout_id", payout_ids)
+            .execute()
+        ).data or []
+        for cov in doomed_cov:
+            history.record(db, user_id, "manual_purge", dict(cov), "manual_purge")
         db.table("royalty_payout_coverage").delete().eq("project_id", project_id).in_("payout_id", payout_ids).execute()
 
     # Delete the project's royalty lines directly — under ON DELETE SET NULL they
     # outlive their calc, so the calc deletion would not remove them (and this also
     # sweeps null-calc lines left behind by a cache wipe).
+    doomed_lines = (
+        db.table("royalty_lines").select("*").eq("project_id", project_id).eq("user_id", user_id).execute()
+    ).data or []
+    for line in doomed_lines:
+        history.record(db, user_id, "manual_purge", dict(line), "manual_purge")
     db.table("royalty_lines").delete().eq("project_id", project_id).eq("user_id", user_id).execute()
 
     # Delete the calculations (the cache rows)

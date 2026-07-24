@@ -155,7 +155,7 @@ export function OverviewDashboard({ base }: OverviewDashboardProps) {
                 />
                 <YAxis
                   tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                  tickFormatter={(v: number) => fmtMoney(v, base, { dp: 0 })}
+                  tickFormatter={(v: number) => fmtMoney(v, base)}
                   axisLine={false}
                   tickLine={false}
                   width={72}
@@ -203,7 +203,7 @@ export function OverviewDashboard({ base }: OverviewDashboardProps) {
                 <XAxis
                   type="number"
                   tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                  tickFormatter={(v: number) => fmtMoney(v, base, { dp: 0 })}
+                  tickFormatter={(v: number) => fmtMoney(v, base)}
                   axisLine={false}
                   tickLine={false}
                 />

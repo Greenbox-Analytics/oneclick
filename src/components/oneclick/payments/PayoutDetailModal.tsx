@@ -90,7 +90,7 @@ function Donut({ slices, total, payCur }: { slices: DonutSlice[]; total: number;
     >
       <div className="absolute inset-[30px] flex flex-col items-center justify-center rounded-full bg-card">
         <span className="font-mono text-[19px] font-bold tracking-tight">
-          {fmtMoney(total, payCur, { dp: 0 })}
+          {fmtMoney(total, payCur)}
         </span>
         <span className="text-[11px] font-semibold tracking-wide text-muted-foreground">
           {payCur}

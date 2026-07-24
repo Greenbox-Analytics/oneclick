@@ -1,16 +1,19 @@
 """Unit tests for oneclick.royalties.ingest — compute_statement_meta + statement_meta +
-normalize_name + upsert_payee + persist_statement_rows + sync_royalty_lines."""
+normalize_name + upsert_payee + persist_statement_rows + sync_calc_royalties (delegation
+to the gated ledger_sync engine)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from oneclick.royalties.ingest import (
     compute_statement_meta,
     normalize_name,
     persist_statement_rows,
     statement_meta,
-    sync_royalty_lines,
     upsert_payee,
 )
+from oneclick.royalties.ledger_sync import SyncGateError
 from oneclick.royalty_calculator import StatementRow
 
 # ---------------------------------------------------------------------------
@@ -338,310 +341,24 @@ class TestPersistStatementRows:
 
 
 # ---------------------------------------------------------------------------
-# sync_royalty_lines — the main sync function
+# sync_calc_royalties — loads file metadata, delegates to ledger_sync.gated_sync
 # ---------------------------------------------------------------------------
 
 
-class TestSyncRoyaltyLines:
-    def _make_sync_db(
-        self,
-        *,
-        works_data=None,
-        payee_select_data=None,
-        payee_insert_id="payee-inserted",
-    ):
-        """Build a mock db suitable for sync_royalty_lines tests.
-
-        works_data: list of {id, title} dicts for works_registry.
-        payee_select_data: data returned by the royalty_payees select (empty → insert path).
-        """
-        works_data = works_data or []
-        payee_select_data = payee_select_data if payee_select_data is not None else []
-
-        # royalty_lines builder — tracks delete and insert.
-        lines_builder = _TableBuilder()
-        lines_execute_calls = []
-
-        def _lines_execute():
-            lines_execute_calls.append("called")
-            return MagicMock(data=[])
-
-        lines_builder.execute = MagicMock(side_effect=_lines_execute)
-        lines_builder._lines_execute_calls = lines_execute_calls
-
-        # works_registry builder — simple select result.
-        works_builder = _TableBuilder(execute_data=works_data)
-
-        # royalty_payees builder — select returns payee_select_data;
-        # if empty, insert returns payee_insert_id.
-        payees_builder = _TableBuilder()
-        payees_execute_calls = []
-
-        def _payees_execute():
-            if not payees_execute_calls:
-                payees_execute_calls.append("select")
-                return MagicMock(data=payee_select_data)
-            payees_execute_calls.append("insert")
-            return MagicMock(data=[{"id": payee_insert_id}])
-
-        payees_builder.execute = MagicMock(side_effect=_payees_execute)
-
-        db = _make_multi_table_db(
-            {
-                "royalty_lines": lines_builder,
-                "works_registry": works_builder,
-                "royalty_payees": payees_builder,
-            }
-        )
-        db._lines_builder = lines_builder
-        db._works_builder = works_builder
-        db._payees_builder = payees_builder
-        return db
-
-    def test_deletes_by_statement_and_project_ids(self):
-        """Delete is filtered by both royalty_statement_id and project_id."""
-        db = self._make_sync_db()
-
-        sync_royalty_lines(
-            db,
-            USER_ID,
-            CALC_ID,
-            STMT_ID,
-            PROJECT_ID,
-            results={"payments": []},
-            statement_currency="USD",
-            period_start="2024-01-01",
-            period_end="2024-06-30",
-        )
-
-        # Confirm the delete touched royalty_lines with the correct eq filters.
-        eq_args = [a[0] for a in db._lines_builder._delete_eq_args]
-        assert ("royalty_statement_id", STMT_ID) in eq_args
-        assert ("project_id", PROJECT_ID) in eq_args
-
-    def test_inserts_one_line_per_payment_with_correct_mapping(self):
-        """Each payment dict is mapped to a royalty_lines row with correct field names."""
-        db = self._make_sync_db(payee_select_data=[{"id": PAYEE_ID}])
-
-        results = {
-            "payments": [
-                {
-                    "party_name": "John Smith",
-                    "song_title": "My Song",
-                    "role": "Producer",
-                    "royalty_type": "mechanical",
-                    "percentage": 50.0,
-                    "total_royalty": 200.0,
-                    "amount_to_pay": 100.0,
-                }
-            ]
-        }
-
-        # Execute calls: 1 delete + 1 works select + 1 payees select + 1 lines insert = 4
-        sync_royalty_lines(
-            db,
-            USER_ID,
-            CALC_ID,
-            STMT_ID,
-            PROJECT_ID,
-            results=results,
-            statement_currency="USD",
-            period_start="2024-01-01",
-            period_end="2024-06-30",
-        )
-
-        assert len(db._lines_builder._insert_calls) == 1
-        inserted = db._lines_builder._insert_calls[0]
-        assert len(inserted) == 1
-        row = inserted[0]
-        assert row["song_title"] == "My Song"
-        assert row["role"] == "Producer"
-        assert row["royalty_type"] == "mechanical"
-        assert row["percentage"] == 50.0
-        assert row["song_revenue"] == 200.0  # total_royalty → song_revenue
-        assert row["amount_owed"] == 100.0  # amount_to_pay → amount_owed
-        assert row["statement_currency"] == "USD"
-        assert row["period_start"] == "2024-01-01"
-        assert row["period_end"] == "2024-06-30"
-        assert row["payee_id"] == PAYEE_ID
-        assert row["calculation_id"] == CALC_ID
-        assert row["royalty_statement_id"] == STMT_ID
-        assert row["project_id"] == PROJECT_ID
-
-    def test_work_id_set_when_title_matches_project_work(self):
-        """song_title that matches a works_registry title (case-insensitive) sets work_id."""
-        db = self._make_sync_db(
-            works_data=[{"id": WORK_ID, "title": "My Song"}],
-            payee_select_data=[{"id": PAYEE_ID}],
-        )
-
-        results = {
-            "payments": [
-                {
-                    "party_name": "Alice",
-                    "song_title": "  My Song  ",  # extra whitespace, same title
-                    "total_royalty": 10.0,
-                    "amount_to_pay": 5.0,
-                }
-            ]
-        }
-
-        sync_royalty_lines(
-            db,
-            USER_ID,
-            CALC_ID,
-            STMT_ID,
-            PROJECT_ID,
-            results=results,
-            statement_currency="USD",
-            period_start=None,
-            period_end=None,
-        )
-
-        row = db._lines_builder._insert_calls[0][0]
-        assert row["work_id"] == WORK_ID
-
-    def test_work_id_none_when_title_does_not_match(self):
-        """Unmatched song_title leaves work_id as None."""
-        db = self._make_sync_db(
-            works_data=[{"id": WORK_ID, "title": "Different Track"}],
-            payee_select_data=[{"id": PAYEE_ID}],
-        )
-
-        results = {
-            "payments": [
-                {
-                    "party_name": "Bob",
-                    "song_title": "Unknown Track",
-                    "total_royalty": 5.0,
-                    "amount_to_pay": 2.5,
-                }
-            ]
-        }
-
-        sync_royalty_lines(
-            db,
-            USER_ID,
-            CALC_ID,
-            STMT_ID,
-            PROJECT_ID,
-            results=results,
-            statement_currency="USD",
-            period_start=None,
-            period_end=None,
-        )
-
-        row = db._lines_builder._insert_calls[0][0]
-        assert row["work_id"] is None
-
-    def test_idempotent_second_call_deletes_first(self):
-        """Calling twice with same results still deletes before inserting."""
-        db = self._make_sync_db(payee_select_data=[{"id": PAYEE_ID}])
-
-        results = {
-            "payments": [
-                {
-                    "party_name": "Carol",
-                    "song_title": "Repeat",
-                    "total_royalty": 10.0,
-                    "amount_to_pay": 5.0,
-                }
-            ]
-        }
-
-        # First call
-        sync_royalty_lines(
-            db,
-            USER_ID,
-            CALC_ID,
-            STMT_ID,
-            PROJECT_ID,
-            results=results,
-            statement_currency="USD",
-            period_start=None,
-            period_end=None,
-        )
-        first_delete_count = len(db._lines_builder._delete_eq_args)
-
-        # Second call — must delete again.
-        sync_royalty_lines(
-            db,
-            USER_ID,
-            CALC_ID,
-            STMT_ID,
-            PROJECT_ID,
-            results=results,
-            statement_currency="USD",
-            period_start=None,
-            period_end=None,
-        )
-        second_delete_count = len(db._lines_builder._delete_eq_args)
-
-        # Each call adds 2 eq args (statement_id + project_id).
-        assert second_delete_count == first_delete_count * 2
-
-    def test_never_touches_royalty_calculations(self):
-        """sync_royalty_lines must never access the royalty_calculations table."""
-        db = self._make_sync_db(payee_select_data=[{"id": PAYEE_ID}])
-
-        results = {
-            "payments": [
-                {
-                    "party_name": "Dan",
-                    "song_title": "Safe",
-                    "total_royalty": 1.0,
-                    "amount_to_pay": 0.5,
-                }
-            ]
-        }
-
-        sync_royalty_lines(
-            db,
-            USER_ID,
-            CALC_ID,
-            STMT_ID,
-            PROJECT_ID,
-            results=results,
-            statement_currency="USD",
-            period_start=None,
-            period_end=None,
-        )
-
-        called_tables = [c.args[0] for c in db.table.call_args_list]
-        assert "royalty_calculations" not in called_tables
-
-    def test_empty_payments_skips_insert(self):
-        """With no payments, only delete is issued, no lines insert."""
-        db = self._make_sync_db()
-
-        sync_royalty_lines(
-            db,
-            USER_ID,
-            CALC_ID,
-            STMT_ID,
-            PROJECT_ID,
-            results={"payments": []},
-            statement_currency="USD",
-            period_start=None,
-            period_end=None,
-        )
-
-        assert db._lines_builder._insert_calls == []
-
-
 class TestSyncCalcRoyalties:
-    """sync_calc_royalties must ALWAYS sync lines, even when the statement-rows step fails."""
+    """sync_calc_royalties must ALWAYS reach the gated sync engine, even when the
+    best-effort statement-rows step fails, and it must propagate SyncGateError
+    (never swallow it)."""
 
-    def test_syncs_lines_even_when_persist_raises(self):
-        from unittest.mock import patch
-
+    def test_calls_gated_sync_even_when_persist_raises(self):
         from oneclick.royalties import ingest
 
         db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
         rows = [StatementRow(song_title="A", net_payable=10.0, sale_date="2026-01-05")]
         with (
             patch.object(ingest, "persist_statement_rows", side_effect=RuntimeError("table missing")) as p_persist,
-            patch.object(ingest, "sync_royalty_lines") as p_sync,
+            patch("oneclick.royalties.ledger_sync.gated_sync", return_value="stmt1") as p_gated,
         ):
             ingest.sync_calc_royalties(
                 db,
@@ -651,47 +368,122 @@ class TestSyncCalcRoyalties:
                 "proj1",
                 {"payments": [{"party_name": "X", "song_title": "A", "amount_to_pay": 5}]},
                 "USD",
+                contract_ids=["c1"],
                 statement_rows=rows,
             )
         p_persist.assert_called_once()
-        p_sync.assert_called_once()
-        # args: (db, user_id, calc_id, stmt_id, project_id, results, currency, period_start, period_end)
-        args = p_sync.call_args.args
+        p_gated.assert_called_once()
+        # positional args: (db, user_id, calc_id, stmt_id, project_id, results, currency,
+        #                   period_start, period_end, contract_ids)
+        args = p_gated.call_args.args
         assert args[7] == args[8]  # fallback period: start == end
         assert isinstance(args[7], str) and len(args[7]) == 10
 
-    def test_cache_hit_path_syncs_when_statement_meta_raises(self):
-        from unittest.mock import patch
-
+    def test_cache_hit_path_calls_gated_sync_when_statement_meta_raises(self):
         from oneclick.royalties import ingest
 
         db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
         with (
             patch.object(ingest, "statement_meta", side_effect=RuntimeError("table missing")),
-            patch.object(ingest, "sync_royalty_lines") as p_sync,
+            patch("oneclick.royalties.ledger_sync.gated_sync", return_value="stmt1") as p_gated,
         ):
             ingest.sync_calc_royalties(
-                db, "u1", "calc1", "stmt1", "proj1", {"payments": []}, "USD", statement_rows=None
+                db,
+                "u1",
+                "calc1",
+                "stmt1",
+                "proj1",
+                {"payments": []},
+                "USD",
+                contract_ids=["c1"],
+                statement_rows=None,
             )
-        p_sync.assert_called_once()
+        p_gated.assert_called_once()
 
     def test_uses_derived_period_on_success(self):
-        from unittest.mock import patch
-
         from oneclick.royalties import ingest
 
         db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
         rows = [
             StatementRow(song_title="A", net_payable=10.0, sale_date="2026-01-05"),
             StatementRow(song_title="B", net_payable=5.0, sale_date="2026-03-31"),
         ]
         with (
             patch.object(ingest, "persist_statement_rows"),
-            patch.object(ingest, "sync_royalty_lines") as p_sync,
+            patch("oneclick.royalties.ledger_sync.gated_sync", return_value="stmt1") as p_gated,
         ):
             ingest.sync_calc_royalties(
-                db, "u1", "calc1", "stmt1", "proj1", {"payments": []}, "USD", statement_rows=rows
+                db,
+                "u1",
+                "calc1",
+                "stmt1",
+                "proj1",
+                {"payments": []},
+                "USD",
+                contract_ids=["c1"],
+                statement_rows=rows,
             )
-        args = p_sync.call_args.args
+        args = p_gated.call_args.args
         assert args[7] == "2026-01-05"
         assert args[8] == "2026-03-31"
+
+    def test_sync_calc_royalties_delegates_to_gated_sync(self):
+        db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+            {"file_name": "stmt.xlsx", "content_hash": "h1"}
+        ]
+        with patch("oneclick.royalties.ledger_sync.gated_sync", return_value="stmt-1") as g:
+            from oneclick.royalties.ingest import sync_calc_royalties
+
+            out = sync_calc_royalties(
+                db, "u1", "calc-1", "stmt-1", "proj-1", {"payments": []}, "USD", contract_ids=["K"]
+            )
+        assert out == "stmt-1"
+        assert g.call_args.kwargs["contract_files"]["K"]["content_hash"] == "h1"
+
+    def test_persist_rows_false_skips_persist_but_derives_real_period(self):
+        """persist_rows=False (confirm endpoint's gate-check call): rows are only
+        used to derive the period, never written to royalty_statement_rows."""
+        from oneclick.royalties import ingest
+
+        db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        rows = [
+            StatementRow(song_title="A", net_payable=10.0, sale_date="2026-02-01"),
+            StatementRow(song_title="B", net_payable=5.0, sale_date="2026-02-20"),
+        ]
+        with (
+            patch.object(ingest, "persist_statement_rows") as p_persist,
+            patch("oneclick.royalties.ledger_sync.gated_sync", return_value="stmt-1") as p_gated,
+        ):
+            ingest.sync_calc_royalties(
+                db,
+                "u1",
+                "calc-1",
+                "stmt-1",
+                "proj-1",
+                {"payments": []},
+                "USD",
+                contract_ids=["K"],
+                statement_rows=rows,
+                persist_rows=False,
+            )
+        p_persist.assert_not_called()
+        args = p_gated.call_args.args
+        assert args[7] == "2026-02-01"  # derived from the rows, not today
+        assert args[8] == "2026-02-20"
+
+    def test_sync_gate_error_propagates(self):
+        """SyncGateError from gated_sync is NOT swallowed — it must reach the caller."""
+        from oneclick.royalties import ingest
+
+        db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        with (
+            patch("oneclick.royalties.ledger_sync.gated_sync", side_effect=SyncGateError("revision", {})),
+            pytest.raises(SyncGateError) as exc_info,
+        ):
+            ingest.sync_calc_royalties(db, "u1", None, "stmt-1", "proj-1", {"payments": []}, "USD", contract_ids=["K"])
+        assert exc_info.value.gate == "revision"

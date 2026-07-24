@@ -211,7 +211,7 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 - SHA-256 content hash for deduplication on upload
 
 ### Tool Integration
-- **OneClick** reads contracts from portfolio, works, and artist profiles for royalty analysis
+- **OneClick** reads contracts from portfolio, works, and artist profiles for royalty analysis. Confirmed calculations feed a gated payment ledger (`src/backend/oneclick/royalties/ledger_sync.py` is the ONLY writer of `royalty_lines`) — identity, gates, credits, and invariants are documented in `src/backend/oneclick/ONECLICK.md` ("Royalty Ledger & Payment Tracking"); read that before touching royalties code
 - **Zoe** analyzes contracts tied to works (including shared works where user is a collaborator)
 - Both tools are standalone but read from the shared data model
 

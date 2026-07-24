@@ -49,62 +49,6 @@ def persist_statement_rows(db, user_id: str, calculation_id: str, rows, currency
     ).execute()
 
 
-def sync_royalty_lines(
-    db,
-    user_id: str,
-    calculation_id: str,
-    royalty_statement_id: str,
-    project_id: str,
-    results: dict,
-    statement_currency: str,
-    period_start,
-    period_end,
-) -> None:
-    """Refresh royalty_lines for a (statement, project) bucket from *results*.
-
-    Delete-then-insert is idempotent: calling twice with the same results
-    yields the same set of rows.  Never touches royalty_calculations.
-    """
-    (
-        db.table("royalty_lines")
-        .delete()
-        .eq("royalty_statement_id", royalty_statement_id)
-        .eq("project_id", project_id)
-        .execute()
-    )
-
-    # Build a case-insensitive, trimmed work-title → id map scoped to the project.
-    works_res = db.table("works_registry").select("id, title").eq("project_id", project_id).execute()
-    work_map = {w["title"].strip().lower(): w["id"] for w in (works_res.data or []) if w.get("title")}
-
-    payments = results.get("payments", [])
-    if not payments:
-        return
-
-    db.table("royalty_lines").insert(
-        [
-            {
-                "user_id": user_id,
-                "calculation_id": calculation_id,
-                "royalty_statement_id": royalty_statement_id,
-                "payee_id": upsert_payee(db, user_id, payment["party_name"]),
-                "project_id": project_id,
-                "work_id": work_map.get(payment["song_title"].strip().lower()),
-                "song_title": payment["song_title"],
-                "role": payment.get("role"),
-                "royalty_type": payment.get("royalty_type"),
-                "percentage": payment.get("percentage"),
-                "song_revenue": payment.get("total_royalty"),
-                "amount_owed": payment.get("amount_to_pay"),
-                "statement_currency": statement_currency,
-                "period_start": period_start,
-                "period_end": period_end,
-            }
-            for payment in payments
-        ]
-    ).execute()
-
-
 def compute_statement_meta(rows):
     dates = sorted(r.sale_date for r in rows if getattr(r, "sale_date", None))
     return {
@@ -130,38 +74,54 @@ def statement_meta(db, calculation_id):
     }
 
 
+def _file_meta(db, file_id: str) -> dict:
+    """{'name','content_hash'} for a project_files row, or {} if it's gone."""
+    res = db.table("project_files").select("file_name, content_hash").eq("id", file_id).execute()
+    rows = res.data or []
+    if not rows:
+        return {}
+    return {"name": rows[0].get("file_name"), "content_hash": rows[0].get("content_hash")}
+
+
 def sync_calc_royalties(
     db,
     user_id: str,
-    calculation_id: str,
+    calculation_id: str | None,
     royalty_statement_id: str,
     project_id: str,
     results: dict,
     statement_currency: str,
+    contract_ids: list[str],
     statement_rows=None,
-) -> None:
-    """Persist statement rows + sync royalty lines after a calc is saved.
+    persist_rows: bool = True,
+    conflict_resolutions: list[dict] | None = None,
+    revision_decision: dict | None = None,
+    check_only: bool = False,
+) -> str:
+    """Persist statement rows (best-effort) then run the GATED ledger sync.
 
-    The statement-rows step (persistence + period derivation) is **best-effort and
-    isolated**: if it fails — e.g. the optional ``royalty_statement_rows`` table is
-    absent, or a statement parses oddly — we log and continue. ``sync_royalty_lines``
-    (which creates the payees/lines the UI shows) is on the **critical path and ALWAYS
-    runs**, with a fallback period, so payee/owed data is never blocked by a
-    statement-rows problem.
-
-    ``statement_rows``: pre-parsed ``list[StatementRow]`` (the /confirm path) → persisted
-    and the period derived in-memory. ``None`` (the stream cache-hit path) → the period is
-    derived from already-persisted rows.
+    SyncGateError propagates — callers turn it into a 409 (confirm) or a
+    needs_confirmation SSE event (stream). Returns the effective statement id.
     """
     from datetime import UTC, datetime
+
+    from oneclick.royalties.ledger_sync import gated_sync
 
     period_start = period_end = None
     try:
         if statement_rows is not None:
-            persist_statement_rows(db, user_id, calculation_id, statement_rows, statement_currency)
+            # persist_rows=False: rows supplied purely to derive the REAL period
+            # (the confirm flow reuses its gate-time parse for BOTH the check and
+            # the full sync — one parse, and the two periods can't diverge —
+            # while the endpoint's own rows-persist step stays the authoritative
+            # writer of the rows table).
+            if calculation_id is not None and persist_rows:
+                persist_statement_rows(db, user_id, calculation_id, statement_rows, statement_currency)
             meta = compute_statement_meta(statement_rows)
-        else:
+        elif calculation_id is not None:
             meta = statement_meta(db, calculation_id)
+        else:
+            meta = {}
         period_start = meta.get("period_start")
         period_end = meta.get("period_end")
     except Exception as e:  # noqa: BLE001 - best-effort; MUST NOT block line sync
@@ -169,6 +129,21 @@ def sync_calc_royalties(
 
     ps = period_start or datetime.now(UTC).date().isoformat()
     pe = period_end or ps
-    sync_royalty_lines(
-        db, user_id, calculation_id, royalty_statement_id, project_id, results, statement_currency, ps, pe
+
+    return gated_sync(
+        db,
+        user_id,
+        calculation_id,
+        royalty_statement_id,
+        project_id,
+        results,
+        statement_currency,
+        ps,
+        pe,
+        contract_ids,
+        statement_file=_file_meta(db, royalty_statement_id),
+        contract_files={cid: _file_meta(db, cid) for cid in contract_ids},
+        conflict_resolutions=conflict_resolutions,
+        revision_decision=revision_decision,
+        check_only=check_only,
     )

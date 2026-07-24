@@ -158,7 +158,7 @@ export function PayeeTrendChart({ payeeId, base }: PayeeTrendChartProps) {
           />
           <YAxis
             tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-            tickFormatter={(v: number) => fmtMoney(v, base, { dp: 0 })}
+            tickFormatter={(v: number) => fmtMoney(v, base)}
             axisLine={false}
             tickLine={false}
             width={68}

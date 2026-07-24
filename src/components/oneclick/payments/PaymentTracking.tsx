@@ -52,6 +52,7 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
   // ── Derived totals — amounts already in base; no client FX ───────────────
   const totals = useMemo(() => {
     let earned = 0, paid = 0, outstanding = 0, awaitingCount = 0;
+    const creditByCcy: Record<string, number> = {};
     payees.forEach((p) => {
       earned += p.earned;
       paid   += p.paid;
@@ -59,9 +60,12 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
       // "Awaiting payout" = any unpaid balance, drafted or not — consistent with
       // the Outstanding total above.
       if (p.unpaid > 0) awaitingCount++;
+      Object.entries(p.credit_by_ccy ?? {}).forEach(([ccy, amount]) => {
+        if (amount > 0) creditByCcy[ccy] = (creditByCcy[ccy] ?? 0) + amount;
+      });
     });
     const runsPaid = payouts.filter((r) => r.status === "paid").length;
-    return { earned, paid, outstanding, awaitingCount, runsPaid };
+    return { earned, paid, outstanding, awaitingCount, runsPaid, creditByCcy };
   }, [payees, payouts]);
 
   // ── Filtered + sorted parties list ───────────────────────────────────────
@@ -230,10 +234,22 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
 // StatBand
 // ---------------------------------------------------------------------------
 
-type StatTotals = { earned: number; paid: number; owed: number; awaitingCount: number; runsPaid: number };
+type StatTotals = {
+  earned: number;
+  paid: number;
+  owed: number;
+  awaitingCount: number;
+  runsPaid: number;
+  creditByCcy: Record<string, number>;
+};
 
 function StatBand({ totals, base, isLoading }: { totals: StatTotals; base: string; isLoading: boolean }) {
-  const f = (n: number) => money(n, base, { dp: 0 });
+  const f = (n: number) => money(n, base);
+  const creditEntries = Object.entries(totals.creditByCcy ?? {});
+  const creditSub =
+    creditEntries.length > 0
+      ? ` · ${creditEntries.map(([ccy, amount]) => money(amount, ccy)).join(", ")} credit available`
+      : "";
   const cards = [
     {
       ic: Coins,
@@ -254,7 +270,7 @@ function StatBand({ totals, base, isLoading }: { totals: StatTotals; base: strin
       tone: "bg-[hsl(var(--pay-out-bg))] text-[hsl(var(--pay-out-fg))]",
       label: "Outstanding",
       num: f(totals.outstanding),
-      sub: `${totals.awaitingCount} part${totals.awaitingCount !== 1 ? "ies" : "y"} awaiting payout`,
+      sub: `${totals.awaitingCount} part${totals.awaitingCount !== 1 ? "ies" : "y"} awaiting payout${creditSub}`,
     },
   ];
   return (

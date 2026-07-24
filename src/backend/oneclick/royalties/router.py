@@ -126,6 +126,51 @@ async def delete_project_entries(
     return service.delete_project_royalty_entries(_get_supabase(), user_id, project_id)
 
 
+@router.get("/contracts/{contract_id}/impact")
+def contract_ledger_impact(
+    contract_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Preview what deleting a contract would do to the ledger: how many lines
+    assert it as a source, the backed amount per currency, and how many of the
+    affected (payee, statement, project) buckets already have paid coverage.
+
+    No separate ownership check needed: every query below is scoped to the
+    caller's own user_id, so a foreign contract_id simply matches nothing.
+    """
+    gated_feature(user_id, Action.USE_ONECLICK)
+    db = _get_supabase()
+    lines = (
+        db.table("royalty_lines")
+        .select("*")
+        .eq("user_id", user_id)
+        .contains("source_contracts", [{"id": contract_id}])
+        .execute()
+    ).data or []
+    backed: dict[str, float] = {}
+    buckets = set()
+    for line in lines:
+        ccy = (line.get("statement_currency") or "USD").upper()
+        backed[ccy] = backed.get(ccy, 0.0) + float(line.get("amount_owed") or 0)
+        buckets.add((line.get("payee_id"), line.get("royalty_statement_id"), line.get("project_id")))
+    paid_buckets = 0
+    if buckets:
+        # Scope the coverage load to this user's paid payouts — the service-role
+        # client bypasses RLS; per-endpoint filtering is the only authz here.
+        paid_ids = [p["id"] for p in service._load_payouts(db, user_id) if p.get("status") == "paid"]
+        covered = set()
+        if paid_ids:
+            cov = (
+                db.table("royalty_payout_coverage")
+                .select("payee_id, royalty_statement_id, project_id")
+                .in_("payout_id", paid_ids)
+                .execute()
+            ).data or []
+            covered = {(c["payee_id"], c["royalty_statement_id"], c["project_id"]) for c in cov}
+        paid_buckets = len(buckets & covered)
+    return {"lines": len(lines), "backed": backed, "buckets_with_paid_coverage": paid_buckets}
+
+
 @router.get("/periods")
 def get_periods(
     base: str = "USD",
@@ -144,9 +189,12 @@ def get_periods(
 @router.post("/payouts")
 def create_payouts(
     body: CreatePayoutRequest,
+    force: bool = False,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Create draft payouts for one or more payees.  Skips payees with no owed amount."""
+    """Create draft payouts for one or more payees.  Skips payees with no owed amount.
+    409 with {"stale_lines": [...]} if any owed line has no live source contract —
+    retry with ?force=true to proceed anyway."""
     gated_feature(user_id, Action.USE_ONECLICK)
     try:
         return service.create_payouts(
@@ -155,7 +203,10 @@ def create_payouts(
             body.payee_ids,
             body.idempotency_key,
             body.note,
+            force=force,
         )
+    except service.StaleSourcesError as exc:
+        raise HTTPException(status_code=409, detail={"stale_lines": exc.lines})
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
 

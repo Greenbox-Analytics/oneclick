@@ -102,6 +102,7 @@ def calculate_royalty_payments(
                 "gross_amount": payment.gross_amount,
                 "expenses_applied": payment.expenses_applied,
                 "net_amount": payment.net_amount,
+                "source_contract_ids": list(getattr(payment, "source_contract_ids", []) or []),
             }
         )
 

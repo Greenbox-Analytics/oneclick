@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import openpyxl
@@ -191,6 +191,9 @@ class RoyaltyPayment:
     gross_amount: float = 0.0
     expenses_applied: float = 0.0
     net_amount: float = 0.0
+    # IDs of the contract(s) that assert this payment's underlying share.
+    # Empty in single-contract mode (no provenance to carry).
+    source_contract_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -402,10 +405,10 @@ class RoyaltyCalculator:
 
         # Resolve each StatementRow field to a concrete header present in the file.
         field_to_key: dict[str, str] = {}
-        for field, aliases in _STATEMENT_DIMENSION_ALIASES.items():
+        for field_name, aliases in _STATEMENT_DIMENSION_ALIASES.items():
             for alias in aliases:
                 if alias in headers:
-                    field_to_key[field] = alias
+                    field_to_key[field_name] = alias
                     break
 
         rows: list[StatementRow] = []
@@ -417,16 +420,16 @@ class RoyaltyCalculator:
                 continue
 
             values: dict = {}
-            for field, key in field_to_key.items():
+            for field_name, key in field_to_key.items():
                 cell = raw.get(key)
-                if field == "sale_date":
-                    values[field] = _coerce_iso_date(cell)
-                elif field in _STATEMENT_NUMERIC_FIELDS:
-                    values[field] = _coerce_number(cell)
-                elif field == "currency":
-                    values[field] = str(cell).strip() if cell not in (None, "") else "USD"
+                if field_name == "sale_date":
+                    values[field_name] = _coerce_iso_date(cell)
+                elif field_name in _STATEMENT_NUMERIC_FIELDS:
+                    values[field_name] = _coerce_number(cell)
+                elif field_name == "currency":
+                    values[field_name] = str(cell).strip() if cell not in (None, "") else "USD"
                 else:
-                    values[field] = str(cell).strip() if cell not in (None, "") else None
+                    values[field_name] = str(cell).strip() if cell not in (None, "") else None
 
             rows.append(StatementRow(song_title=title, net_payable=net_payable, **values))
 
@@ -854,7 +857,9 @@ class RoyaltyCalculator:
                         if work.work_type != "work" and existing.work_type == "work":
                             existing.work_type = work.work_type
 
-            # Merge royalty shares with conflict resolution
+            # Merge royalty shares. Same party + same type-class:
+            #   identical (basis, %)  -> corroboration: union sources, one share
+            #   different (basis, %)  -> keep BOTH (the sync gate blocks until resolved)
             for share in contract.royalty_shares:
                 # Resolve the income basis using THIS contract's default before merging,
                 # so a share inherits the basis of the contract it came from (not a
@@ -863,35 +868,31 @@ class RoyaltyCalculator:
                     share.basis = contract.default_basis
 
                 norm_name = normalize_name(share.party_name)
-
-                # Check for existing share with same name AND similar type
-                existing_share_for_party = None
-
-                # Determine if current share is streaming-related
                 is_streaming_share = is_streaming_equivalent_royalty_type(share.royalty_type)
 
+                corroborated = None
                 for existing in merged_royalty_shares:
-                    if normalize_name(existing.party_name) == norm_name:
-                        # Check if percentages match
-                        if abs(existing.percentage - share.percentage) < 0.01:
-                            # CRITICAL: Only consider it a duplicate if the royalty TYPE is also similar.
-                            # If one is "Publishing" and one is "Streaming", they are different entitlements
-                            # even if they have the same percentage (e.g. 50% Pub / 50% Master).
+                    if (
+                        normalize_name(existing.party_name) == norm_name
+                        and is_streaming_equivalent_royalty_type(existing.royalty_type) == is_streaming_share
+                        and abs(existing.percentage - share.percentage) < 0.01
+                        and existing.basis == share.basis
+                    ):
+                        corroborated = existing
+                        break
 
-                            is_existing_streaming = is_streaming_equivalent_royalty_type(existing.royalty_type)
-
-                            # If both are streaming or both are NOT streaming (e.g. both publishing), likely a duplicate
-                            if is_streaming_share == is_existing_streaming:
-                                existing_share_for_party = existing
-                                break
-
-                if existing_share_for_party:
+                if corroborated:
                     logger.info(
-                        f"      ℹ️  Duplicate share found for {share.party_name} ({share.percentage}%) - skipping"
+                        f"      ℹ️  Corroborating share found for {share.party_name} ({share.percentage}%) - merging sources"
                     )
+                    for cid in share.source_contract_ids:
+                        if cid not in corroborated.source_contract_ids:
+                            corroborated.source_contract_ids.append(cid)
                     continue
 
-                # If no exact duplicate found, add it
+                # No corroborating share found — keep it (even if it conflicts on
+                # percentage with another share for this party; the sync gate
+                # downstream is responsible for flagging that, not this merge).
                 merged_royalty_shares.append(share)
 
         # Simplify combined roles
@@ -1052,6 +1053,9 @@ class RoyaltyCalculator:
                 data = provided[cid]
                 all_contracts_data.append(data)
                 parsed_pairs.append((cid, data))
+                for _s in data.royalty_shares:
+                    if cid not in _s.source_contract_ids:
+                        _s.source_contract_ids.append(cid)
 
         missing = [cid for cid in contract_ids if cid not in provided]
         if missing:
@@ -1071,6 +1075,9 @@ class RoyaltyCalculator:
                         data = future.result()
                         all_contracts_data.append(data)
                         parsed_pairs.append((cid, data))
+                        for _s in data.royalty_shares:
+                            if cid not in _s.source_contract_ids:
+                                _s.source_contract_ids.append(cid)
                         logger.info(
                             f"   ✓ Contract parsed successfully ({len(data.parties)} parties, {len(data.works)} works)"
                         )
@@ -1089,7 +1096,14 @@ class RoyaltyCalculator:
         song_totals = self.read_royalty_statement(statement_path, title_column, payable_column)
 
         # Step 4: Calculate payments
-        payments = self._calculate_payments_from_data(merged_data, song_totals, expenses)
+        # Map each work (normalized title) to the contracts that cover it, so a
+        # share never applies to a work its own contract doesn't mention.
+        work_sources: dict[str, set] = {}
+        for cid, data in parsed_pairs:
+            for w in data.works:
+                work_sources.setdefault(normalize_title(w.title), set()).add(cid)
+
+        payments = self._calculate_payments_from_data(merged_data, song_totals, expenses, work_sources=work_sources)
         logger.info("[NuanceAudit] multi-contract: basis-nuance detection deferred (v1 single-contract only)")
 
         # Step 5 (advisory): blind-verify each contract's splits against its OWN markdown
@@ -1229,6 +1243,7 @@ class RoyaltyCalculator:
         contract_data: ContractData,
         song_totals: dict[str, float],
         expenses: list[dict] | None = None,
+        work_sources: dict[str, set] | None = None,
     ) -> list[RoyaltyPayment]:
         """
         Internal method to calculate payments from parsed contract data.
@@ -1238,6 +1253,12 @@ class RoyaltyCalculator:
             song_totals: Dictionary of song titles to amounts
             expenses: Optional project expenses (each {amount, work_titles}) used
                 to compute net-basis payouts. Gross-basis shares ignore them.
+            work_sources: Optional map of normalized work title -> set of contract
+                IDs that cover that work (built by calculate_payments_from_contract_ids).
+                When given, a share is only applied to a work if at least one of the
+                share's source_contract_ids covers that work. None (single-contract
+                mode / no provenance) preserves the old behavior of applying every
+                streaming share to every matched work.
 
         Returns:
             List of RoyaltyPayment objects
@@ -1337,6 +1358,12 @@ class RoyaltyCalculator:
 
                 # Calculate payment for each party with streaming shares
                 for share in streaming_shares:
+                    if work_sources is not None:
+                        allowed = work_sources.get(normalize_title(work.title), set())
+                        share_sources = set(getattr(share, "source_contract_ids", None) or [])
+                        if allowed and not (share_sources & allowed):
+                            continue  # this share's contract doesn't cover this work
+
                     basis = effective_basis(share, contract_data)
                     if basis == "net":
                         base = max(total_royalty - expenses_for_song, 0.0)
@@ -1368,6 +1395,9 @@ class RoyaltyCalculator:
                         gross_amount=total_royalty,
                         expenses_applied=expenses_for_song if basis == "net" else 0.0,
                         net_amount=base,
+                        # getattr tolerates lightweight share stand-ins (e.g. test
+                        # SimpleNamespace fixtures) that predate this field.
+                        source_contract_ids=list(getattr(share, "source_contract_ids", None) or []),
                     )
                     payments.append(payment)
 

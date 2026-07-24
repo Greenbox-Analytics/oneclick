@@ -27,6 +27,10 @@ class RoyaltyShare:
     # Income basis this party is paid on: "net" (after track expenses), "gross"
     # (full earnings), or None when the contract is silent for this party.
     basis: str | None = None
+    # IDs of the contract(s) that assert this share. Populated by
+    # calculate_payments_from_contract_ids and unioned across corroborating
+    # shares in merge_contracts; empty in single-contract mode.
+    source_contract_ids: list[str] = field(default_factory=list)
 
 
 @dataclass

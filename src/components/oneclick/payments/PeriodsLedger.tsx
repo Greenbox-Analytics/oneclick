@@ -148,7 +148,7 @@ export function PeriodsLedger({ ledger, onOpenParty }: PeriodsLedgerProps) {
                     <td key={col.key} className="border-b border-border px-4 py-3 text-right font-mono text-[13px] tabular-nums">
                       {cell && cell.earned > 0 ? (
                         <span className="inline-flex flex-col items-end gap-0.5">
-                          <span>{fmtMoney(cell.earned, base, { dp: 0 })}</span>
+                          <span>{fmtMoney(cell.earned, base)}</span>
                           <span
                             className={cn("h-[7px] w-[7px] rounded-full", dotClass(cell.state))}
                             title={cell.state === "settled" ? "Paid" : cell.state === "scheduled" ? "Draft" : "Unpaid"}
@@ -161,7 +161,7 @@ export function PeriodsLedger({ ledger, onOpenParty }: PeriodsLedgerProps) {
                   );
                 })}
                 <td className="border-b border-border px-4 py-3 text-right font-mono text-[13px] font-bold tabular-nums">
-                  {fmtMoney(row.total, base, { dp: 0 })}
+                  {fmtMoney(row.total, base)}
                 </td>
               </tr>
             ))}
@@ -170,9 +170,9 @@ export function PeriodsLedger({ ledger, onOpenParty }: PeriodsLedgerProps) {
             <tr className="[&>td]:border-t-2 [&>td]:border-border [&>td]:bg-muted/50 [&>td]:px-4 [&>td]:py-3 [&>td]:text-right [&>td]:font-mono [&>td]:text-[13px] [&>td]:font-bold [&>td]:tabular-nums">
               <td className="sticky left-0 z-[1] !text-left">Total earned</td>
               {columns.map((col) => (
-                <td key={col.key}>{fmtMoney(colTotals[col.key] ?? 0, base, { dp: 0 })}</td>
+                <td key={col.key}>{fmtMoney(colTotals[col.key] ?? 0, base)}</td>
               ))}
-              <td>{fmtMoney(grandTotal, base, { dp: 0 })}</td>
+              <td>{fmtMoney(grandTotal, base)}</td>
             </tr>
           </tfoot>
         </table>

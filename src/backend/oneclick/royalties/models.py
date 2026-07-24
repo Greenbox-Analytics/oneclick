@@ -42,7 +42,7 @@ class PayeeSummary(BaseModel):
     email: str | None = None
     collision: bool = False
     project_count: int = 0
-    status: str  # "owed" | "scheduled" | "settled"
+    status: str  # "owed" | "overpaid" | "scheduled" | "settled"
     # reporting-currency totals
     earned: float
     paid: float
@@ -57,6 +57,9 @@ class PayeeSummary(BaseModel):
     unpaid_native: float
     # buckets whose statement currency could not be converted to the reporting base
     unconvertible_count: int = 0
+    # overpayment credit, derived from PAID coverage only, per statement currency —
+    # never FX-netted across currencies (mirrors the owed/unpaid per-bucket clamp invariant)
+    credit_by_ccy: dict[str, float] = {}
 
 
 class PayeeLine(BaseModel):
@@ -80,7 +83,7 @@ class PayeeStatement(BaseModel):
     drafted: float
     owed: float  # earned − paid − drafted
     unpaid: float  # earned − paid (outstanding until actually paid)
-    state: str  # "owed" | "scheduled" | "settled"
+    state: str  # "owed" | "overpaid" | "scheduled" | "settled"
     lines: list[PayeeLine]
 
 
