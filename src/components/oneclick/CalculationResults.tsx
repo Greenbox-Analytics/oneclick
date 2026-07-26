@@ -33,6 +33,7 @@ import { toast } from "sonner";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 import EarningsBreakdown from "@/components/oneclick/EarningsBreakdown";
+import { formatCurrency } from "@/lib/currency";
 import "./royalty-results.css";
 
 export interface RoyaltyPayment {
@@ -86,12 +87,6 @@ interface CalculationResultsProps {
   calculationId?: string | null;
 }
 
-const formatCurrency = (amount: number) => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
-};
 
 const isNet = (p: RoyaltyPayment) => p.basis === "net";
 const grossOf = (p: RoyaltyPayment) => (p.gross_amount ?? p.total_royalty);

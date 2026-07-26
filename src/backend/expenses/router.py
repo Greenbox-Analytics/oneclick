@@ -44,23 +44,26 @@ async def export_expenses(
     format: str = Query("pdf"),
     project_id: str | None = Query(None),
     category: str | None = Query(None),
+    artist_id: str | None = Query(None),
     user_id: str = Depends(get_current_user_id),
 ):
     """Download the (optionally filtered) expense report as PDF or XLSX.
 
-    ``project_id`` / ``category`` mirror the on-screen filters — omit them for
-    an overall report. Rows are scoped to projects the caller is a member of by
-    ``get_expenses_summary`` (RLS parity with the Expense Tracker).
+    ``project_id`` / ``category`` / ``artist_id`` mirror the on-screen filters —
+    omit them for an overall report. Rows are scoped to projects the caller is a
+    member of by ``get_expenses_summary`` (RLS parity with the Expense Tracker).
     """
     fmt = (format or "pdf").lower()
     if fmt not in ("pdf", "xlsx"):
         raise HTTPException(status_code=400, detail="format must be 'pdf' or 'xlsx'")
 
     rows = await get_expenses_summary(_get_supabase(), user_id)
-    rows = filter_expense_rows(rows, project_id, category)
+    rows = filter_expense_rows(rows, project_id, category, artist_id)
 
     if project_id:
         scope_label = next((r.get("project_name") for r in rows if r.get("project_name")), None) or "Selected project"
+    elif artist_id:
+        scope_label = next((r.get("artist_name") for r in rows if r.get("artist_name")), None) or "Selected artist"
     else:
         scope_label = "All projects"
     cat_label = category_label(category) if category else "All categories"
@@ -82,8 +85,9 @@ async def export_expenses(
         {
             "tool": "expense_tracker",
             "format": fmt,
-            "scope": "project" if project_id else "all",
+            "scope": "project" if project_id else "artist" if artist_id else "all",
             "category_filtered": bool(category),
+            "artist_filtered": bool(artist_id),
             "expense_count": len(rows),
         },
     )

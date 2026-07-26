@@ -1,5 +1,7 @@
 from supabase import Client
 
+from oneclick.royalties import fx
+
 
 class DuplicateInviteError(Exception):
     """Raised when an invite already exists for (project_id, email)."""
@@ -209,6 +211,23 @@ def _attach_expense_works(db: Client, expenses: list[dict]) -> list[dict]:
     return expenses
 
 
+def _attach_amount_usd(db: Client, expenses: list[dict]) -> list[dict]:
+    """Annotate each expense with ``amount_usd`` (aggregation/deduction currency).
+
+    USD rows skip conversion. ``on_missing="amount"`` falls back to the raw
+    amount — Bank of Canada covers every supported currency, so a miss only
+    happens on network failure with an empty rate cache.
+    """
+    for e in expenses:
+        amount = float(e.get("amount") or 0)
+        currency = (e.get("currency") or "USD").upper()
+        if currency == "USD":
+            e["amount_usd"] = amount
+        else:
+            e["amount_usd"] = round(fx.convert(db, amount, currency, "USD", on_missing="amount"), 2)
+    return expenses
+
+
 def _replace_expense_works(db: Client, expense_id: str, work_ids: list[str]) -> None:
     """Replace the set of work links for an expense."""
     db.table("project_expense_works").delete().eq("expense_id", expense_id).execute()
@@ -229,7 +248,7 @@ async def get_expenses(db: Client, user_id: str, project_id: str):
         .order("created_at", desc=True)
         .execute()
     )
-    return _attach_expense_works(db, result.data or [])
+    return _attach_amount_usd(db, _attach_expense_works(db, result.data or []))
 
 
 async def create_expense(db: Client, user_id: str, project_id: str, data: dict):
@@ -243,8 +262,9 @@ async def create_expense(db: Client, user_id: str, project_id: str, data: dict):
             {
                 "project_id": project_id,
                 "created_by": user_id,
-                "description": data["description"],
+                "description": data.get("description") or "",
                 "amount": data["amount"],
+                "currency": data.get("currency") or "USD",
                 "category": data.get("category"),
                 "incurred_on": data.get("incurred_on"),
             }
@@ -255,6 +275,7 @@ async def create_expense(db: Client, user_id: str, project_id: str, data: dict):
     if expense:
         _replace_expense_works(db, expense["id"], work_ids)
         expense["work_ids"] = list(dict.fromkeys(work_ids))
+        _attach_amount_usd(db, [expense])
     return expense
 
 
@@ -279,6 +300,7 @@ async def update_expense(db: Client, user_id: str, project_id: str, expense_id: 
     expense = result.data
     if expense:
         _attach_expense_works(db, [expense])
+        _attach_amount_usd(db, [expense])
     return expense
 
 
@@ -333,9 +355,10 @@ async def get_expenses_summary(db: Client, user_id: str):
                 "artist_name": artist_by_id.get(artist_id),
                 "description": e.get("description"),
                 "amount": float(e.get("amount") or 0),
+                "currency": e.get("currency") or "USD",
                 "category": e.get("category"),
                 "incurred_on": e.get("incurred_on"),
                 "is_tagged": e["id"] in tagged_ids,
             }
         )
-    return summary
+    return _attach_amount_usd(db, summary)

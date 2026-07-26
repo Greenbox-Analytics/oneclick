@@ -24,6 +24,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import type { Tables } from "@/integrations/supabase/types";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { currencySymbol as symbolForCurrency } from "@/lib/currency";
 
 interface PaymentDialogProps {
   open: boolean;
@@ -47,9 +48,8 @@ export const PaymentDialog = ({
 
   if (!contact) return null;
 
-  const currency = contact.bank_currency || "cad";
-  const currencySymbol =
-    currency === "eur" ? "€" : currency === "gbp" ? "£" : "$";
+  const currency = contact.bank_currency || "usd";
+  const currencySymbol = symbolForCurrency(currency) ?? "$";
   const isCanadian = contact.bank_country === "CA";
 
   const copyToClipboard = (text: string, label: string) => {
@@ -254,7 +254,7 @@ export const PaymentDialog = ({
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   placeholder="0.00"
-                  className="pl-7"
+                  className="pl-11"
                   disabled={saving}
                 />
               </div>

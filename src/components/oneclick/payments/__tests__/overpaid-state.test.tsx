@@ -49,7 +49,7 @@ describe("overpaid party state", () => {
     );
 
     expect(screen.getByText("Overpaid")).toBeInTheDocument();
-    expect(screen.getByText(/Overpaid \$0\.50 USD/)).toBeInTheDocument();
+    expect(screen.getByText(/Overpaid US\$0\.50/)).toBeInTheDocument();
   });
 
   it("renders no credit chip when credit_by_ccy is empty", () => {
@@ -65,7 +65,7 @@ describe("overpaid party state", () => {
       />,
     );
 
-    expect(screen.queryByText(/Overpaid \$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Overpaid US\$/)).not.toBeInTheDocument();
     expect(screen.getByText("Unpaid")).toBeInTheDocument();
   });
 });

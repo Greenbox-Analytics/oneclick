@@ -42,18 +42,8 @@ const WorkDetail = () => {
     <RequireFeature feature="registry">
       <div className="min-h-screen bg-background">
         <PageHeader
-          actions={
-            <>
-              <ToolHelpButton onClick={() => walkthrough.replay()} />
-              <Button
-                variant="outline"
-                className="hidden md:inline-flex"
-                onClick={() => navigate("/tools/registry")}
-              >
-                <ArrowLeft className="w-4 h-4 mr-1" /> Registry
-              </Button>
-            </>
-          }
+          backTo="/tools/registry"
+          actions={<ToolHelpButton onClick={() => walkthrough.replay()} />}
         />
 
         <main className="container mx-auto px-4 py-8 max-w-6xl">

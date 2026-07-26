@@ -317,8 +317,8 @@ const Subscription = () => {
             </p>
             <Tabs value={plan} onValueChange={(v) => setPlan(v as "monthly" | "annual")} className="mb-6">
               <TabsList className="grid w-full max-w-xs grid-cols-2">
-                <TabsTrigger value="monthly">Monthly — $25/mo</TabsTrigger>
-                <TabsTrigger value="annual">Annual — $250/yr</TabsTrigger>
+                <TabsTrigger value="monthly">Monthly — US$25/mo</TabsTrigger>
+                <TabsTrigger value="annual">Annual — US$250/yr</TabsTrigger>
               </TabsList>
             </Tabs>
             <Button onClick={handleSubscribe} disabled={isStartingCheckout} size="lg">
@@ -357,9 +357,9 @@ const Subscription = () => {
             <div className="text-muted-foreground">
               {isPro
                 ? ent.subscription?.planPeriod === "annual"
-                  ? "$250 / year"
-                  : "$25 / month"
-                : "$0 / month"}
+                  ? "US$250 / year"
+                  : "US$25 / month"
+                : "US$0 / month"}
             </div>
             {isPro && hasStripeSubscription && ent.subscription?.currentPeriodEnd && (
               <div className="text-xs text-muted-foreground mt-1">

@@ -89,7 +89,7 @@ export function PartiesTable({
                         className="rounded-[5px] bg-[hsl(var(--pay-partial-bg))] px-1.5 py-px text-[10px] font-bold text-[hsl(var(--pay-partial-fg))]"
                         title="Credit from an earlier overpayment — applied automatically to their next payout"
                       >
-                        Overpaid {fmtMoney(amount, ccy)} {ccy}
+                        Overpaid {fmtMoney(amount, ccy)}
                       </span>
                     ))}
                   {payee.project_count > 0 && (

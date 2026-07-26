@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Select,
@@ -123,6 +124,9 @@ const SplitSheet = () => {
     createEmptyContributor(),
     createEmptyContributor(),
   ]);
+  // Opt-in: reveals per-contributor "Published" options. Off by default so the
+  // common self-published case stays a single Publishing % input per row.
+  const [showPublished, setShowPublished] = useState(false);
 
   // Step 3
   const [format, setFormat] = useState<"pdf" | "docx">("pdf");
@@ -241,6 +245,15 @@ const SplitSheet = () => {
     setContributors((prev) =>
       prev.map((c) => (c.id === id ? { ...c, [field]: value } : c))
     );
+  };
+
+  // Toggling the published option off returns every row to self-published so no
+  // stale publisher/deal data leaks into the payload or the dealOver check.
+  const togglePublished = (on: boolean) => {
+    setShowPublished(on);
+    if (!on) {
+      setContributors((prev) => prev.map((c) => ({ ...c, isPublished: false })));
+    }
   };
 
   const addContributor = () =>
@@ -407,8 +420,8 @@ const SplitSheet = () => {
         <div data-walkthrough="splitsheet-info" className="flex gap-2 items-start mb-6 px-4 py-3 rounded-lg bg-primary/5 border border-primary/20">
           <Info className="w-4 h-4 text-primary mt-0.5 shrink-0" />
           <p className="text-xs text-muted-foreground leading-relaxed">
-            A <span className="font-medium text-foreground">split sheet</span> is a legally binding contract
-            that identifies all co-creators of a song and dictates their exact percentage ownership of the
+            A <span className="font-medium text-foreground">split sheet</span> is a written agreement
+            that identifies the song&rsquo;s co-writers and sets out each person&rsquo;s ownership percentage in the
             composition. It serves as a paper trail to prevent disputes and ensures accurate royalty payouts
             from Performing Rights Organizations (PROs) and publishers. It can cover{" "}
             <span className="font-medium text-foreground">publishing</span> (composition),{" "}
@@ -611,6 +624,26 @@ const SplitSheet = () => {
                     )}
                   </div>
                 </CardTitle>
+                {needsPublishing && (
+                  <div className="mt-3 flex items-start justify-between gap-3 rounded-md border border-border/70 bg-muted/30 p-2.5">
+                    <div>
+                      <label
+                        htmlFor="include-published"
+                        className="text-sm font-medium"
+                      >
+                        Include published artists
+                      </label>
+                      <p className="text-xs text-muted-foreground">
+                        Turn this on if any writer's publishing is handled by a publisher.
+                      </p>
+                    </div>
+                    <Switch
+                      id="include-published"
+                      checked={showPublished}
+                      onCheckedChange={togglePublished}
+                    />
+                  </div>
+                )}
               </CardHeader>
               <CardContent className="space-y-3">
                 {contributors.map((c, index) => (
@@ -687,24 +720,26 @@ const SplitSheet = () => {
                           </span>
                         )}
 
-                        {/* Publishing status — gates the writer/publisher split */}
-                        <div>
-                          <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                            Publishing status
-                          </label>
-                          <Select
-                            value={c.isPublished ? "published" : "self"}
-                            onValueChange={(val) =>
-                              updateContributor(c.id, "isPublished", val === "published")
-                            }
-                          >
-                            <SelectTrigger><SelectValue placeholder="Publishing status" /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="self">Self-published</SelectItem>
-                              <SelectItem value="published">Published</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
+                        {/* Publishing status — only when published artists are in scope */}
+                        {showPublished && (
+                          <div>
+                            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                              Publishing status
+                            </label>
+                            <Select
+                              value={c.isPublished ? "published" : "self"}
+                              onValueChange={(val) =>
+                                updateContributor(c.id, "isPublished", val === "published")
+                              }
+                            >
+                              <SelectTrigger><SelectValue placeholder="Publishing status" /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="self">Self-published</SelectItem>
+                                <SelectItem value="published">Published</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
 
                         {!c.isPublished ? (
                           <Input
