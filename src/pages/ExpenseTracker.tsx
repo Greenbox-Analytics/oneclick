@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { ArrowLeft, BookOpen, Plus, Receipt, ChevronRight, Loader2, Download, FileText, FileSpreadsheet } from "lucide-react";
+import { BookOpen, Plus, Receipt, ChevronRight, Loader2, Download, FileText, FileSpreadsheet } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 import {
   ChartContainer,
@@ -28,10 +28,8 @@ import {
   type ExportFormat,
 } from "@/hooks/useProjectExpenses";
 import ExpenseFormDialog from "@/components/project/ExpenseFormDialog";
-import { useSmartBack } from "@/hooks/useSmartBack";
-
-const formatCurrency = (n: number) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
+import { useArtistsList } from "@/hooks/useArtistsList";
+import { formatCurrency } from "@/lib/currency";
 
 const trendChartConfig: ChartConfig = {
   total: {
@@ -80,9 +78,11 @@ export function filterExpenseRows(
   rows: ExpenseSummaryRow[],
   projectFilter: string,
   categoryFilter: string,
+  artistFilter: string,
 ): ExpenseSummaryRow[] {
   return rows.filter(
     (r) =>
+      (artistFilter === "all" || r.artist_id === artistFilter) &&
       (projectFilter === "all" || r.project_id === projectFilter) &&
       (categoryFilter === "all" || (r.category ?? "other") === categoryFilter),
   );
@@ -90,17 +90,23 @@ export function filterExpenseRows(
 
 const ExpenseTracker = () => {
   const navigate = useNavigate();
-  const goBack = useSmartBack("/tools");
   const { data: expenses, isLoading, isError } = useExpenseSummary();
   const [granularity, setGranularity] = useState<Granularity>("month");
   const [addOpen, setAddOpen] = useState(false);
+  const [artistFilter, setArtistFilter] = useState<string>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
-  const filtersActive = projectFilter !== "all" || categoryFilter !== "all";
+  const filtersActive =
+    artistFilter !== "all" || projectFilter !== "all" || categoryFilter !== "all";
   const exportExpenses = useExportExpenses();
 
   const handleExport = (format: ExportFormat) => {
-    exportExpenses.mutate({ format, projectId: projectFilter, category: categoryFilter });
+    exportExpenses.mutate({
+      format,
+      projectId: projectFilter,
+      category: categoryFilter,
+      artistId: artistFilter,
+    });
   };
 
   const rows: ExpenseSummaryRow[] = useMemo(() => expenses ?? [], [expenses]);
@@ -117,18 +123,30 @@ const ExpenseTracker = () => {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [rows]);
 
+  // Every artist is listed, including ones without expenses yet. Expenses on
+  // artist-less projects show only under "All artists".
+  const { artists } = useArtistsList();
+  const artistOptions = useMemo(
+    () => [...artists].sort((a, b) => a.name.localeCompare(b.name)),
+    [artists],
+  );
+
   const filteredRows = useMemo(
-    () => filterExpenseRows(rows, projectFilter, categoryFilter),
-    [rows, projectFilter, categoryFilter],
+    () => filterExpenseRows(rows, projectFilter, categoryFilter, artistFilter),
+    [rows, projectFilter, categoryFilter, artistFilter],
   );
 
   const clearFilters = () => {
+    setArtistFilter("all");
     setProjectFilter("all");
     setCategoryFilter("all");
   };
 
+  // Totals/charts always aggregate in USD (amount_usd; amount for legacy rows).
+  const usdAmount = (r: ExpenseSummaryRow) => r.amount_usd ?? r.amount ?? 0;
+
   const grandTotal = useMemo(
-    () => filteredRows.reduce((s, r) => s + (r.amount || 0), 0),
+    () => filteredRows.reduce((s, r) => s + usdAmount(r), 0),
     [filteredRows],
   );
 
@@ -136,7 +154,7 @@ const ExpenseTracker = () => {
     const acc: Record<string, number> = {};
     for (const r of filteredRows) {
       const key = r.category ?? "other";
-      acc[key] = (acc[key] || 0) + (r.amount || 0);
+      acc[key] = (acc[key] || 0) + usdAmount(r);
     }
     return Object.entries(acc)
       .map(([key, value]) => ({ key, label: EXPENSE_CATEGORY_LABELS[key] ?? key, value }))
@@ -149,7 +167,7 @@ const ExpenseTracker = () => {
       if (!r.incurred_on) continue; // undated expenses are excluded from the trend
       const { key, label } = bucketKeyAndLabel(r.incurred_on, granularity);
       if (!acc[key]) acc[key] = { label, total: 0 };
-      acc[key].total += r.amount || 0;
+      acc[key].total += usdAmount(r);
     }
     return Object.entries(acc)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -169,12 +187,12 @@ const ExpenseTracker = () => {
       if (!byArtist[aid]) {
         byArtist[aid] = { artistName: r.artist_name ?? "Unknown artist", total: 0, projects: {} };
       }
-      byArtist[aid].total += r.amount || 0;
+      byArtist[aid].total += usdAmount(r);
       const pid = r.project_id;
       if (!byArtist[aid].projects[pid]) {
         byArtist[aid].projects[pid] = { name: r.project_name ?? "Untitled project", total: 0 };
       }
-      byArtist[aid].projects[pid].total += r.amount || 0;
+      byArtist[aid].projects[pid].total += usdAmount(r);
     }
     return Object.values(byArtist).sort((a, b) => b.total - a.total);
   }, [filteredRows]);
@@ -184,23 +202,17 @@ const ExpenseTracker = () => {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
-        showBack={false}
+        backTo="/tools"
         actions={
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
-            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate("/docs")}
+            title="Documentation"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <BookOpen className="w-4 h-4" />
+          </Button>
         }
       />
 
@@ -243,6 +255,19 @@ const ExpenseTracker = () => {
           <div className="space-y-6">
             {/* Filters — scope every section below */}
             <div className="flex flex-wrap items-center gap-2">
+              <Select value={artistFilter} onValueChange={setArtistFilter}>
+                <SelectTrigger className="w-full sm:w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All artists</SelectItem>
+                  {artistOptions.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Select value={projectFilter} onValueChange={setProjectFilter}>
                 <SelectTrigger className="w-full sm:w-56">
                   <SelectValue />
@@ -355,7 +380,7 @@ const ExpenseTracker = () => {
                         <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                         <YAxis
                           tick={{ fontSize: 11 }}
-                          tickFormatter={(v) => `$${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : v}`}
+                          tickFormatter={(v) => `US$${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : v}`}
                         />
                         <ChartTooltip
                           content={

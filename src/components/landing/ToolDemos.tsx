@@ -165,11 +165,11 @@ function makeLazyDemo(Inner: ComponentType<DemoBodyProps>) {
 // 1. OneClick — royalty calculator
 // ======================================================================
 const ONECLICK_ROWS = [
-  { song: "Cold Mornings", party: "Mara Greene", role: "Producer", pct: 25, pay: "$1,240.00" },
-  { song: "Cold Mornings", party: "Sasha Lin", role: "Co-writer", pct: 15, pay: "$744.00" },
-  { song: "Lila", party: "Jane Doe", role: "Artist", pct: 50, pay: "$2,300.00" },
-  { song: "Lila", party: "Kibet", role: "Mix Eng.", pct: 5, pay: "$230.00" },
-  { song: "Nine to Six", party: "Jane Doe", role: "Artist", pct: 50, pay: "$1,815.50" },
+  { song: "Cold Mornings", party: "Mara Greene", role: "Producer", pct: 25, pay: "US$1,240.00" },
+  { song: "Cold Mornings", party: "Sasha Lin", role: "Co-writer", pct: 15, pay: "US$744.00" },
+  { song: "Lila", party: "Jane Doe", role: "Artist", pct: 50, pay: "US$2,300.00" },
+  { song: "Lila", party: "Kibet", role: "Mix Eng.", pct: 5, pay: "US$230.00" },
+  { song: "Nine to Six", party: "Jane Doe", role: "Artist", pct: 50, pay: "US$1,815.50" },
 ];
 
 const ONECLICK_STAGES = ["starting", "downloading", "extracting_royalty", "processing", "complete"];
@@ -252,7 +252,7 @@ function DemoOneClickInner({ playing, height }: DemoBodyProps) {
                 <div>
                   <div style={{ fontSize: 11.5, color: "var(--muted-fg)" }}>Total payments owed</div>
                   <div className="tighter" style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>
-                    $6,329.50
+                    US$6,329.50
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>

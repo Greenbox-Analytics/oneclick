@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Loader2, AlertCircle, BookOpen } from "lucide-react";
+import { Loader2, AlertCircle, BookOpen } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { toast } from "sonner";
@@ -10,7 +10,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { useSmartBack } from "@/hooks/useSmartBack";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -109,7 +108,6 @@ const postConfirm = async (body: Record<string, unknown>): Promise<{ id?: string
 
 const OneClickDocuments = () => {
   const navigate = useNavigate();
-  const goBack = useSmartBack("/tools/oneclick");
   const { artistId } = useParams<{ artistId: string }>();
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -666,7 +664,7 @@ const OneClickDocuments = () => {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
-        showBack={false}
+        backTo="/tools/oneclick"
         actions={
           <>
             <Button
@@ -679,10 +677,6 @@ const OneClickDocuments = () => {
               <BookOpen className="w-4 h-4" />
             </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
           </>
         }
       />

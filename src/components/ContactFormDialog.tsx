@@ -34,7 +34,7 @@ const ROLES = [
   "Other",
 ];
 
-const CURRENCIES = ["cad", "usd", "eur", "gbp"];
+const CURRENCIES = ["usd", "cad", "eur", "gbp"];
 
 interface ContactFormDialogProps {
   open: boolean;
@@ -79,7 +79,7 @@ export const ContactFormDialog = ({
   const [bankAccountNumber, setBankAccountNumber] = useState("");
   const [bankIban, setBankIban] = useState("");
   const [bankSwiftBic, setBankSwiftBic] = useState("");
-  const [bankCurrency, setBankCurrency] = useState("cad");
+  const [bankCurrency, setBankCurrency] = useState("usd");
 
   const isEdit = !!contact;
 
@@ -97,7 +97,7 @@ export const ContactFormDialog = ({
       setBankAccountNumber(contact.bank_account_number || "");
       setBankIban(contact.bank_iban || "");
       setBankSwiftBic(contact.bank_swift_bic || "");
-      setBankCurrency(contact.bank_currency || "cad");
+      setBankCurrency(contact.bank_currency || "usd");
       // Auto-expand bank section if bank details exist
       const hasBankDetails = contact.bank_account_number || contact.bank_iban;
       setShowBankDetails(!!hasBankDetails);
@@ -114,7 +114,7 @@ export const ContactFormDialog = ({
       setBankAccountNumber("");
       setBankIban("");
       setBankSwiftBic("");
-      setBankCurrency("cad");
+      setBankCurrency("usd");
       setShowBankDetails(false);
     }
   }, [contact, open]);

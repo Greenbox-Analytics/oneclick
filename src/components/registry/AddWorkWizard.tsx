@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
   CheckCircle2,
   Clock,
   ChevronRight,
@@ -53,6 +55,7 @@ import {
 import { Artwork } from "./Artwork";
 import { RegistryAvatar } from "./RegistryAvatar";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
+import { splitsOverCap } from "./splitsShared";
 import { mergeParsedContracts, type MergeConflict } from "./mergeParsedContracts";
 import { AddWorkConfirmDialog } from "./AddWorkConfirmDialog";
 import { NewArtistDialog } from "@/components/NewArtistDialog";
@@ -109,6 +112,7 @@ export function AddWorkWizard({
   const needsDestination = !initialProjectId;
 
   // -------- destination state --------
+  const navigate = useNavigate();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const storageStatus = useStorageStatus();
@@ -562,6 +566,39 @@ export function AddWorkWizard({
         ? [{ key: "you", name: artistName, role: "Primary Artist", isYou: true, master: 0, publishing: 0 }]
         : [];
 
+  // Manual path: the artists credited on the Track details step usually ARE the
+  // split parties, so seed a row per credited artist (deletable, 0%) after "You".
+  const buildManualSeed = (): SplitRow[] => {
+    const credited = manualArtists
+      .map((a) => ({ name: a.name.trim(), role: a.role }))
+      .filter((a) => a.name && a.name.toLowerCase() !== artistName.trim().toLowerCase());
+    return [
+      { key: "you", name: artistName, role: "Primary Artist", isYou: true, master: 0, publishing: 0 },
+      ...credited.map((a, i) => ({
+        key: `credit-${i}-${a.name}`,
+        name: a.name,
+        role: a.role,
+        master: 0,
+        publishing: 0,
+      })),
+    ];
+  };
+
+  const handleSetRoyMode = (m: null | "ai" | "manual") => {
+    setRoyMode(m);
+    if (
+      m === "manual" &&
+      !rowsDirty &&
+      splitsSource?.type !== "ai" &&
+      released === false &&
+      manualArtists.some((a) => a.name.trim())
+    ) {
+      // rowsDirty stays false so going Back and returning re-seeds from the
+      // (possibly edited) artist list; any hand edit locks the rows in.
+      setSplitRows(buildManualSeed());
+    }
+  };
+
   const finish = async (overrideRows?: SplitRow[]) => {
     const rows = overrideRows ?? splitRows;
     if (!projectIdInUse || !artistIdInUse) {
@@ -634,13 +671,6 @@ export function AddWorkWizard({
             stakesSaved += 1;
           }
         }
-        // Link everything attached in "Parse with AI" into Related documents.
-        // Best-effort — a linking hiccup must never fail the already-created work.
-        try {
-          await linkParsedContractsToWork(workId);
-        } catch {
-          // swallow: the work exists; linking is a non-blocking nicety
-        }
       }
       // useCreateStake intentionally doesn't toast per stake — show one
       // consolidated toast here (useCreateWork already toasts "Work created").
@@ -655,6 +685,8 @@ export function AddWorkWizard({
 
       setConfirmOpen(false);
       onClose();
+      // Land the user on the freshly registered work.
+      if (workId) navigate(`/tools/registry/${workId}`);
     } catch (e) {
       toast.error((e as Error).message || "Failed to add work");
     } finally {
@@ -709,6 +741,14 @@ export function AddWorkWizard({
             onClick={() => {
               if (!projectIdInUse || !artistIdInUse) {
                 toast.error("Pick a project first");
+                return;
+              }
+              const over = splitsOverCap(effectiveRows);
+              if (over.over) {
+                const pools = [over.master && "Master", over.publishing && "Publishing"]
+                  .filter(Boolean)
+                  .join(" and ");
+                toast.error(`${pools} splits exceed 100% — reduce them before adding this work.`);
                 return;
               }
               setConfirmOpen(true);
@@ -876,7 +916,7 @@ export function AddWorkWizard({
           ) : onRoyalty ? (
             <RoyaltyStep
               royMode={royMode}
-              setRoyMode={setRoyMode}
+              setRoyMode={handleSetRoyMode}
               queuedContracts={queuedContracts}
               onAddContracts={addContracts}
               onRemoveContract={removeContract}
@@ -1665,6 +1705,21 @@ function RoyaltyStep({
                           picked && "bg-muted/40"
                         )}
                       >
+                        {/* Round check indicator — mirrors the OneClick artist
+                            selector so the rows read as selectable options. A
+                            span (not a Checkbox) because the row itself is
+                            already a button. */}
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            "h-4 w-4 shrink-0 rounded-full border flex items-center justify-center transition-colors",
+                            picked
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-primary"
+                          )}
+                        >
+                          {picked && <Check className="h-3 w-3" />}
+                        </span>
                         <FileText
                           className={cn(
                             "w-4 h-4 shrink-0",
@@ -1677,7 +1732,6 @@ function RoyaltyStep({
                             {c.folder_category === "split_sheet" ? "Split sheet" : "Contract"}
                           </div>
                         </div>
-                        {picked && <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />}
                       </button>
                     );
                   })}

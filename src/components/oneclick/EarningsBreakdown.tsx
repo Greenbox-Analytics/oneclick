@@ -15,9 +15,7 @@ import {
   type BreakdownDimension,
   type BreakdownResponse,
 } from "@/hooks/useEarningsBreakdown";
-
-const formatCurrency = (amount: number) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+import { formatCurrency } from "@/lib/currency";
 
 const DIMENSION_META: Record<
   BreakdownDimension,

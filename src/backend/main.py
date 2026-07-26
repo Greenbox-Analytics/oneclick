@@ -2285,17 +2285,28 @@ def _load_oneclick_expenses(db, project_id: str):
     works_res = db.table("works_registry").select("id, title").eq("project_id", project_id).execute()
     title_by_id = {w["id"]: w["title"] for w in (works_res.data or [])}
 
+    from oneclick.royalties import fx
+
     calc_expenses, review_expenses = [], []
     for e in expenses:
         work_ids = by_expense.get(e["id"], [])
         work_titles = [title_by_id[wid] for wid in work_ids if wid in title_by_id]
         amount = float(e.get("amount") or 0)
-        calc_expenses.append({"amount": amount, "work_titles": work_titles})
+        currency = (e.get("currency") or "USD").upper()
+        # Deductions happen in USD; the review dialog also operates in USD, with
+        # original_amount/currency kept for display only.
+        if currency == "USD":
+            amount_usd = amount
+        else:
+            amount_usd = round(fx.convert(db, amount, currency, "USD", on_missing="amount"), 2)
+        calc_expenses.append({"amount": amount_usd, "work_titles": work_titles})
         review_expenses.append(
             {
                 "id": e["id"],
                 "description": e.get("description"),
-                "amount": amount,
+                "amount": amount_usd,
+                "original_amount": amount,
+                "currency": currency,
                 "category": e.get("category"),
                 "incurred_on": e.get("incurred_on"),
                 "work_ids": work_ids,

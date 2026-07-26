@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Loader2 } from "lucide-react";
+import { formatCurrency } from "@/lib/currency";
 
 export interface ConflictClaim {
   contract_ids: string[];
@@ -64,9 +65,6 @@ const claimLabel = (claim: ConflictClaim) =>
   claim.contract_names && claim.contract_names.length > 0
     ? claim.contract_names.join(", ")
     : claim.contract_ids.join(", ");
-
-const formatCurrency = (n: number) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 
 /**
  * Turns a "cross_run" conflict payload (one value saved from an earlier

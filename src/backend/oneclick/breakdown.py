@@ -275,7 +275,7 @@ def _generate_breakdown_pdf(sections: list[tuple[str, dict]], track_label: str |
 
     for dimension, agg in sections:
         section_title = _PDF_SECTION_TITLES.get(dimension, dimension.title())
-        elements.append(Paragraph(f"{section_title} &mdash; ${agg['total']:,.2f}", section_style))
+        elements.append(Paragraph(f"{section_title} &mdash; US${agg['total']:,.2f}", section_style))
 
         if not agg["rows"]:
             elements.append(Paragraph("No data for this dimension.", sub_style))
@@ -314,7 +314,7 @@ def _generate_breakdown_pdf(sections: list[tuple[str, dict]], track_label: str |
             table_data.append(
                 [
                     Paragraph(escape(str(r["key"])), cell_style),
-                    f"${r['net_payable']:,.2f}",
+                    f"US${r['net_payable']:,.2f}",
                     f"{r['percent_of_total']:.2f}%",
                 ]
             )

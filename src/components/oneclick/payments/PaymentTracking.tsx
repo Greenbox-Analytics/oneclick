@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { useRoyaltyPayees, useRoyaltyPeriods, useRoyaltyPayouts } from "@/hooks/useRoyalties";
 import type { PeriodLedger } from "@/hooks/useRoyalties";
 import { useReportingCurrency } from "@/hooks/useReportingCurrency";
-import { CurrencySelect, money } from "./shared";
+import { CurrencySelect, money, partyStatusKind, partyStatusLabel, STATUS_ICON, SelectBox } from "./shared";
 import { PartiesTable } from "./PartiesTable";
 import { PeriodsLedger } from "./PeriodsLedger";
 import { NewPayoutModal } from "./NewPayoutModal";
@@ -27,6 +27,21 @@ import { OverviewDashboard } from "./analytics/OverviewDashboard";
 /** Normalize a name the same way the backend keys payees (see ingest.normalize_name). */
 const normalizeName = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
 
+// Parties sub-tabs — one per party status. `kind` matches partyStatusKind()
+// output; the "all" tab has no kind and shows everything. Labels reuse
+// partyStatusLabel so they stay in sync with the row badges.
+const PARTY_STATUS_TABS: {
+  key: string;
+  label: string;
+  kind?: "out" | "sched" | "settled" | "overpaid";
+}[] = [
+  { key: "all", label: "All" },
+  { key: "owed", label: partyStatusLabel("owed"), kind: "out" },
+  { key: "scheduled", label: partyStatusLabel("scheduled"), kind: "sched" },
+  { key: "settled", label: partyStatusLabel("settled"), kind: "settled" },
+  { key: "overpaid", label: partyStatusLabel("overpaid"), kind: "overpaid" },
+];
+
 interface PaymentTrackingProps {
   /** Collaborator names from a OneClick calc to pre-select in a new payout. */
   initialPayoutNames?: string[];
@@ -39,6 +54,7 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
   const [baseCur, setBaseCur] = useReportingCurrency();
   const [selection, setSelection] = useState<string[]>([]);
   const [query, setQuery] = useState("");
+  const [partyStatus, setPartyStatus] = useState("all");
 
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [payoutOpen, setPayoutOpen] = useState<{ initialIds: string[] } | null>(null);
@@ -76,6 +92,37 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
       : payees;
     return [...filtered].sort((a, b) => b.unpaid - a.unpaid);
   }, [payees, query]);
+
+  // ── Per-status counts + the list shown under the active status sub-tab ────
+  // Counts are computed from the searched set so the tab badges match what the
+  // current search surfaces. Parties bucket by `partyStatusKind` so any
+  // unexpected server status falls into "Settled" safely.
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: filteredParties.length, out: 0, sched: 0, settled: 0, overpaid: 0 };
+    filteredParties.forEach((p) => { counts[partyStatusKind(p.status)]++; });
+    return counts;
+  }, [filteredParties]);
+
+  const shownParties = useMemo(() => {
+    const tab = PARTY_STATUS_TABS.find((t) => t.key === partyStatus);
+    if (!tab?.kind) return filteredParties;
+    return filteredParties.filter((p) => partyStatusKind(p.status) === tab.kind);
+  }, [filteredParties, partyStatus]);
+
+  // Select-all support for the Unpaid tab — only parties with an outstanding
+  // balance to draft (owed > 0) are eligible, matching the per-row checkbox.
+  const selectableShownIds = useMemo(
+    () => shownParties.filter((p) => p.owed > 0).map((p) => p.id),
+    [shownParties],
+  );
+  const selectedShownCount = selectableShownIds.filter((id) => selection.includes(id)).length;
+  const allShownSelected = selectableShownIds.length > 0 && selectedShownCount === selectableShownIds.length;
+  const toggleSelectAllShown = () =>
+    setSelection((prev) =>
+      allShownSelected
+        ? prev.filter((id) => !selectableShownIds.includes(id))
+        : Array.from(new Set([...prev, ...selectableShownIds])),
+    );
 
   const toggleSel = (id: string) =>
     setSelection((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
@@ -163,15 +210,53 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
           ) : isEmpty ? (
             <EmptyState />
           ) : (
-            <PartiesTable
-              parties={filteredParties}
-              base={baseCur}
-              selection={selection}
-              toggleSel={toggleSel}
-              onOpenParty={(id) => setDrawerId(id)}
-              onPaySelected={() => setPayoutOpen({ initialIds: selection })}
-              onClear={() => setSelection([])}
-            />
+            <Tabs value={partyStatus} onValueChange={setPartyStatus} className="flex flex-col gap-3.5">
+              <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+                {PARTY_STATUS_TABS.map((t) => {
+                  const count = t.kind ? statusCounts[t.kind] : statusCounts.all;
+                  const Icon = t.kind ? STATUS_ICON[t.kind] : null;
+                  return (
+                    <TabsTrigger key={t.key} value={t.key} className="gap-1.5">
+                      {Icon && <Icon className="h-3.5 w-3.5" />}
+                      {t.label}
+                      <span className="rounded-full bg-muted px-1.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
+                        {count}
+                      </span>
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+
+              {shownParties.length === 0 ? (
+                <div className="rounded-2xl border border-border bg-card px-6 py-12 text-center text-sm text-muted-foreground shadow-sm">
+                  No parties in this status.
+                </div>
+              ) : (
+                <>
+                  {partyStatus === "owed" && selectableShownIds.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllShown}
+                        className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                      >
+                        <SelectBox on={allShownSelected} onClick={toggleSelectAllShown} />
+                        {selectedShownCount > 0 ? `${selectedShownCount} selected` : "Select all"}
+                      </button>
+                    </div>
+                  )}
+                  <PartiesTable
+                    parties={shownParties}
+                    base={baseCur}
+                    selection={selection}
+                    toggleSel={toggleSel}
+                    onOpenParty={(id) => setDrawerId(id)}
+                    onPaySelected={() => setPayoutOpen({ initialIds: selection })}
+                    onClear={() => setSelection([])}
+                  />
+                </>
+              )}
+            </Tabs>
           )}
         </TabsContent>
 

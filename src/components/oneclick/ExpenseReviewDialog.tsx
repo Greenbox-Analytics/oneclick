@@ -13,12 +13,17 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Trash2, Receipt, Plus } from "lucide-react";
 import ExpenseFormDialog from "@/components/project/ExpenseFormDialog";
 import { useWorksByProject } from "@/hooks/useRegistry";
-import type { ProjectExpense } from "@/hooks/useProjectExpenses";
+import { formatAmount, type ProjectExpense } from "@/hooks/useProjectExpenses";
+import { currencySymbol, formatCurrency } from "@/lib/currency";
 
 export interface ReviewExpense {
   id: string;
   description?: string;
+  /** USD amount — deductions and edits in this dialog are always USD. */
   amount: number;
+  /** Amount as originally entered, in `currency` (display only). */
+  original_amount?: number;
+  currency?: string;
   category?: string | null;
   incurred_on?: string | null;
   work_ids?: string[];
@@ -34,9 +39,6 @@ interface ExpenseReviewDialogProps {
   onConfirm: (expenses: ReviewExpense[]) => void;
   onCancel: () => void;
 }
-
-const formatCurrency = (n: number) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 
 /**
  * Shown before finalizing a calculation when one or more collaborators are paid
@@ -74,7 +76,9 @@ const ExpenseReviewDialog = ({
     const reviewRow: ReviewExpense = {
       id: expense.id,
       description: expense.description,
-      amount: expense.amount,
+      amount: expense.amount_usd ?? expense.amount,
+      original_amount: expense.amount,
+      currency: expense.currency,
       category: expense.category,
       incurred_on: expense.incurred_on,
       work_ids: workIds,
@@ -101,7 +105,7 @@ const ExpenseReviewDialog = ({
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Review track expenses</DialogTitle>
+          <DialogTitle>Review expenses</DialogTitle>
           <DialogDescription>
             Some collaborators on this contract are paid on <strong>net income</strong>, so these
             expenses will be deducted from each track's earnings before their share is applied.
@@ -149,13 +153,18 @@ const ExpenseReviewDialog = ({
                       ))
                     ) : (
                       <span className="text-xs text-muted-foreground/70">
-                        Project-wide (all tracks)
+                        Project-wide (all works)
+                      </span>
+                    )}
+                    {row.currency && row.currency !== "USD" && (
+                      <span className="text-xs text-muted-foreground/70">
+                        Originally {formatAmount(row.original_amount ?? 0, row.currency)}
                       </span>
                     )}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <span className="text-sm text-muted-foreground">$</span>
+                  <span className="text-sm text-muted-foreground">{currencySymbol("USD")}</span>
                   <Input
                     type="number"
                     min="0"
