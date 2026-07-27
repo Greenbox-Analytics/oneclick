@@ -745,7 +745,7 @@ const FOOTER_COLS: Array<[string, Array<[string, string]>]> = [
     [
       ["About", "/about"],
       ["Team", "/team"],
-      ["Contact", "mailto:hello@msanii.app"],
+      ["Contact", "/contact"],
     ],
   ],
   ["Resources", [["Docs", "/docs"]]],
@@ -852,6 +852,8 @@ const HTML_TO_ROUTE: Record<string, string> = {
   "privacy.html": "/privacy",
   "security.html": "/security",
   "terms.html": "/terms",
+  "Contact.html": "/contact",
+  "docs.html": "/docs",
 };
 
 // Internal routes go through react-router (no full reload, no scroll reset);
