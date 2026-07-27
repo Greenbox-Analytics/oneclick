@@ -381,7 +381,8 @@ const AdminUsers = () => {
         </div>
 
         <Card className="overflow-hidden">
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3 font-medium">Email</th>
@@ -433,6 +434,7 @@ const AdminUsers = () => {
               ))}
             </tbody>
           </table>
+          </div>
         </Card>
 
         <div className="flex items-center justify-end gap-2 mt-4">

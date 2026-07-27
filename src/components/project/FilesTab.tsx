@@ -519,6 +519,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                   <input
                     ref={(el) => { fileInputRefs.current[cat.key] = el; }}
                     type="file"
+                    multiple
                     className="hidden"
                     onChange={(e) => handleUpload(cat.key, e)}
                   />

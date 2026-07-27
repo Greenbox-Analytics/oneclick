@@ -685,7 +685,7 @@ const OneClickDocuments = () => {
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-foreground mb-2">OneClick Royalty Calculator</h2>
           <p className="text-muted-foreground flex items-center gap-2">
-            Upload documents for{" "}
+            Upload documents for{""}
             {isLoadingArtist ? (
               <span className="inline-block h-4 w-32 rounded bg-muted animate-pulse" aria-label="Loading artist name" />
             ) : (

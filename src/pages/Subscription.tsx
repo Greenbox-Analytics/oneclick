@@ -249,7 +249,7 @@ const Subscription = () => {
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-5xl">
-        <h1 className="text-3xl font-semibold tracking-tight mb-6">Subscription &amp; usage</h1>
+        <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight mb-6">Subscription &amp; usage</h1>
 
         {/* Over-cap banner (SP3) */}
         {isOverCap && (

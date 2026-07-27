@@ -93,7 +93,7 @@ function RunCard({
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
-      <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3.5 px-[18px] py-[15px]">
+      <div className="flex flex-wrap items-center gap-3.5 px-[18px] py-[15px]">
         {/* Selection checkbox (drafts only) + status icon */}
         <span className="flex items-center gap-2.5">
           {onToggleSelect && <SelectBox on={!!selected} onClick={onToggleSelect} />}
@@ -103,7 +103,7 @@ function RunCard({
         </span>
 
         {/* Info */}
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <PartyAvatar id={payout.payee_id} name={payeeName} size={22} />
             <span className="text-[15px] font-bold tracking-tight">{payeeName}</span>
@@ -116,15 +116,17 @@ function RunCard({
           </div>
         </div>
 
-        {/* Amount + actions — one evenly-spaced cluster on the right */}
-        <div className="flex items-center gap-7 shrink-0">
-          <div className="text-right">
-            <div className="font-mono text-[18px] font-bold tabular-nums tracking-tight">
-              {fmtMoney(payout.total_amount, payout.pay_currency)}
-            </div>
-            <div className="mt-px text-[11.5px] text-muted-foreground">{payout.pay_currency}</div>
+        {/* Amount — stays inline with the identity row */}
+        <div className="text-right shrink-0">
+          <div className="font-mono text-[18px] font-bold tabular-nums tracking-tight">
+            {fmtMoney(payout.total_amount, payout.pay_currency)}
           </div>
+          <div className="mt-px text-[11.5px] text-muted-foreground">{payout.pay_currency}</div>
+        </div>
 
+        {/* Actions — wrap to their own full-width row on mobile so they never
+            squeeze the name column; inline on the right on desktop. */}
+        <div className="flex w-full items-center justify-end gap-3 sm:w-auto sm:gap-7">
           {/* Analysis button — always visible */}
           <button
             className="inline-flex items-center gap-1.5 rounded-lg bg-secondary px-2.5 py-1.5 text-xs font-semibold text-primary hover:brightness-95"
