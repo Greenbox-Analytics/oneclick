@@ -40,6 +40,7 @@ init_analytics()
 # --- Mount Integration & Board Routers ---
 from admin.analytics_router import router as admin_analytics_router
 from boards.router import router as boards_router
+from contact.router import router as contact_router
 from credentials.router import router as credentials_router
 from expenses.router import router as expenses_router
 from integrations.connections_router import router as connections_router
@@ -85,6 +86,7 @@ app.include_router(users_router, prefix="/users", tags=["Users"])
 app.include_router(subscriptions_router, tags=["Entitlements"])
 app.include_router(subscriptions_admin_router, tags=["Admin"])
 app.include_router(pro_requests_router, tags=["Pro Requests"])
+app.include_router(contact_router, tags=["Contact"])
 app.include_router(billing_router)
 app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
 app.include_router(teams_router, prefix="/teams", tags=["Teams"])

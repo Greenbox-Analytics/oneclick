@@ -386,3 +386,78 @@ All colors MUST be HSL.
   .landing-page .pillar-grid { grid-template-columns: 1fr; }
   .landing-page .doc .toc { grid-template-columns: 1fr; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Contact page — form controls. Ported from the design's Contact.html */
+/* class set (.field-label/.inp/.sel/.txt), re-scoped onto the landing */
+/* tokens so the controls adapt to light + dark.                       */
+/* ------------------------------------------------------------------ */
+.landing-page .field-label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--fg);
+}
+.landing-page .field-label .opt {
+  margin-left: 4px;
+  font-weight: 400;
+  color: var(--muted-fg);
+}
+
+.landing-page .inp,
+.landing-page .sel,
+.landing-page .txt {
+  width: 100%;
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 15px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.landing-page .txt {
+  min-height: 130px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+/* Chevron is a data URI, which cannot read currentColor — so the stroke is
+   restated in the dark scope below rather than inherited. */
+.landing-page .sel {
+  appearance: none;
+  padding-right: 40px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23578b73' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+.dark .landing-page .sel {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236ec49b' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+}
+
+.landing-page .inp:focus,
+.landing-page .sel:focus,
+.landing-page .txt:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.landing-page .inp::placeholder,
+.landing-page .txt::placeholder {
+  color: color-mix(in srgb, var(--muted-fg) 75%, transparent);
+}
+.landing-page .inp.err,
+.landing-page .sel.err,
+.landing-page .txt.err {
+  border-color: hsl(0 60% 55%);
+  box-shadow: 0 0 0 3px hsl(0 70% 55% / 0.12);
+}
+
+@media (max-width: 900px) {
+  .landing-page .lp-contact-grid { grid-template-columns: 1fr !important; gap: 28px !important; }
+  .landing-page .lp-contact-pair { grid-template-columns: 1fr !important; }
+}
