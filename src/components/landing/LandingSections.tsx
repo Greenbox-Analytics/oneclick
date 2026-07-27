@@ -62,7 +62,10 @@ const NAV_LINKS: NavItem[] = [
     label: "Company",
     children: [
       { label: "About", href: "/about" },
-      { label: "Team", href: "/team" },
+      // Team is intentionally unlisted while the page is still being reworked.
+      // The /team route still exists, so it can be reviewed by direct URL.
+      // To bring it back, restore { label: "Team", href: "/team" } here and
+      // the matching footer entry in FOOTER_COLS.
     ],
   },
   { label: "Pricing", href: "/pricing" },
@@ -744,7 +747,7 @@ const FOOTER_COLS: Array<[string, Array<[string, string]>]> = [
     "Company",
     [
       ["About", "/about"],
-      ["Team", "/team"],
+      // Team unlisted while the page is reworked — see NAV_LINKS above.
       ["Contact", "/contact"],
     ],
   ],
