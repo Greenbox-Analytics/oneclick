@@ -217,15 +217,15 @@ const ExpenseTracker = () => {
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
-        <div className="mb-8 flex items-start justify-between gap-4">
+        <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
           <div>
-            <h2 className="text-3xl font-bold text-foreground mb-2">Expense Tracker</h2>
+            <h2 className="text-2xl sm:text-3xl font-bold text-foreground mb-2">Expense Tracker</h2>
             <p className="text-muted-foreground">
               Track project expenses across your portfolio. Net royalty calculations in OneClick
               deduct these from each track's earnings.
             </p>
           </div>
-          <Button onClick={() => setAddOpen(true)} className="shrink-0">
+          <Button onClick={() => setAddOpen(true)} className="w-full sm:w-auto sm:shrink-0">
             <Plus className="w-4 h-4 mr-2" /> Add Expense
           </Button>
         </div>
@@ -355,7 +355,7 @@ const ExpenseTracker = () => {
             <div className="grid gap-6 lg:grid-cols-2">
               {/* Trend over time */}
               <Card>
-                <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+                <CardHeader className="flex flex-col items-start gap-2 pb-2 sm:flex-row sm:items-center sm:justify-between">
                   <CardTitle className="text-base">Spend over time</CardTitle>
                   <ToggleGroup
                     type="single"

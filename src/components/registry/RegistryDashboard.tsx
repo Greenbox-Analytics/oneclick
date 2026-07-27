@@ -317,7 +317,7 @@ export function RegistryDashboard() {
             { value: "shared", label: "Shared with Me", icon: Users, count: sharedWorks.length },
           ]}
         />
-        <div className="relative flex-1 max-w-md min-w-[200px]">
+        <div className="relative w-full sm:flex-1 sm:max-w-md sm:min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             data-walkthrough="registry-search"

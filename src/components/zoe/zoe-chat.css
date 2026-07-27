@@ -785,7 +785,8 @@
 .zoe-chat .scroll::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 10px; border: 3px solid var(--bg); }
 .zoe-chat .scroll::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, hsl(var(--border)) 70%, hsl(var(--muted-foreground))); }
 
-@media (max-width: 600px) {
+/* 767px matches the app-wide mobile breakpoint (useIsMobile / Tailwind md). */
+@media (max-width: 767px) {
   .zoe-chat .user-msg { max-width: 88%; }
   .zoe-chat .ctx-pill,
   .zoe-chat .label-hide { display: none; }

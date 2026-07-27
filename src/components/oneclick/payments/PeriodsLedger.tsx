@@ -106,6 +106,7 @@ export function PeriodsLedger({ ledger, onOpenParty }: PeriodsLedgerProps) {
         <Calendar className="h-4 w-4 text-primary" />
         <span className="text-[15px] font-bold tracking-tight">Quarterly royalty ledger</span>
         <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold text-muted-foreground">{columns.length} period{columns.length !== 1 ? "s" : ""}</span>
+        <span className="ml-auto text-[11px] text-muted-foreground sm:hidden">Swipe to see all →</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] border-collapse">

@@ -197,12 +197,13 @@ const ContractSelector = ({
                 id="contract-upload"
                 type="file"
                 accept=".pdf,application/pdf"
+                multiple
                 onChange={handleContractFileChange}
                 className="hidden"
               />
               <label htmlFor="contract-upload">
                 <Button variant="outline" size="sm" asChild className="cursor-pointer">
-                  <span><Upload className="w-4 h-4 mr-2" />Select File</span>
+                  <span><Upload className="w-4 h-4 mr-2" />Select Files</span>
                 </Button>
               </label>
             </div>
