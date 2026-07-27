@@ -269,7 +269,7 @@ const Dashboard = () => {
       <main className="container mx-auto px-4 py-8">
         <UpgradeBanner />
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground mb-1">Dashboard</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-foreground mb-1">Dashboard</h2>
           <p className="text-lg text-foreground/80 mb-1">{greeting}</p>
           <p className="text-sm text-muted-foreground mb-3">{formattedDateTime}</p>
           <div className="h-0.5 w-24 bg-gradient-to-r from-primary to-primary/0 rounded-full" />

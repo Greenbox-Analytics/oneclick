@@ -62,7 +62,12 @@ const MAX_VISIBLE_TASKS = 3;
 export function CalendarView() {
   const { settings } = useWorkspaceSettings();
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [viewMode, setViewMode] = useState<CalendarViewMode>(settings?.calendar_view || "month");
+  // On phones the multi-column month/week grids are cramped, so default to the
+  // single-column day agenda there (an explicit workspace setting still wins).
+  const [viewMode, setViewMode] = useState<CalendarViewMode>(
+    settings?.calendar_view ||
+      (typeof window !== "undefined" && window.innerWidth < 768 ? "day" : "month"),
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
@@ -217,7 +222,7 @@ export function CalendarView() {
     <>
       <div className="space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-2">
             <Button variant="outline" size="icon" onClick={goToPrev}>
               <ChevronLeft className="h-4 w-4" />
@@ -225,9 +230,9 @@ export function CalendarView() {
             <Button variant="outline" size="icon" onClick={goToNext}>
               <ChevronRight className="h-4 w-4" />
             </Button>
-            <h3 className="text-xl font-semibold ml-2">{headerLabel}</h3>
+            <h3 className="text-lg sm:text-xl font-semibold ml-1 sm:ml-2 truncate">{headerLabel}</h3>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* View mode toggle */}
             <div className="flex rounded-lg border overflow-hidden">
               {(["day", "week", "month", "year"] as CalendarViewMode[]).map((mode) => (
@@ -245,13 +250,13 @@ export function CalendarView() {
                 </button>
               ))}
             </div>
-            <div className="relative">
+            <div className="relative flex-1 min-w-[140px] sm:flex-none">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search tasks..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 w-[200px] h-9"
+                className="pl-9 w-full sm:w-[200px] h-9"
               />
             </div>
             <Button variant="outline" size="sm" onClick={goToToday}>
@@ -272,24 +277,34 @@ export function CalendarView() {
           </div>
         )}
 
-        {/* Views */}
+        {/* Views. The 7-column month/week grids can't shrink below a usable
+            width, so on narrow screens they scroll horizontally (min-w) rather
+            than crushing each day cell. */}
         {viewMode === "month" && (
-          <MonthGrid
-            currentDate={currentDate}
-            tasksByDate={tasksByDate}
-            colorFor={colorFor}
-            onTaskClick={setSelectedTaskId}
-            onAddTask={setCreateDate}
-          />
+          <div className="overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
+            <div className="min-w-[640px] sm:min-w-0">
+              <MonthGrid
+                currentDate={currentDate}
+                tasksByDate={tasksByDate}
+                colorFor={colorFor}
+                onTaskClick={setSelectedTaskId}
+                onAddTask={setCreateDate}
+              />
+            </div>
+          </div>
         )}
         {viewMode === "week" && (
-          <WeekGrid
-            currentDate={currentDate}
-            tasksByDate={tasksByDate}
-            colorFor={colorFor}
-            onTaskClick={setSelectedTaskId}
-            onAddTask={setCreateDate}
-          />
+          <div className="overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
+            <div className="min-w-[640px] sm:min-w-0">
+              <WeekGrid
+                currentDate={currentDate}
+                tasksByDate={tasksByDate}
+                colorFor={colorFor}
+                onTaskClick={setSelectedTaskId}
+                onAddTask={setCreateDate}
+              />
+            </div>
+          </div>
         )}
         {viewMode === "day" && (
           <DayView
@@ -347,7 +362,7 @@ export function CalendarView() {
                 rows={2}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Priority</Label>
                 <Select value={newTaskPriority} onValueChange={setNewTaskPriority}>
@@ -453,7 +468,7 @@ function MonthGrid({
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-px bg-border rounded-b-lg overflow-hidden -mt-4">
+      <div className="grid grid-cols-7 gap-px bg-border rounded-b-lg overflow-hidden -mt-px">
         {calendarDays.map((day) => {
           const dateKey = format(day, "yyyy-MM-dd");
           const dayTasks = tasksByDate.get(dateKey) || [];
@@ -530,7 +545,7 @@ function WeekGrid({
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-px bg-border rounded-b-lg overflow-hidden -mt-4">
+      <div className="grid grid-cols-7 gap-px bg-border rounded-b-lg overflow-hidden -mt-px">
         {weekDays.map((day) => {
           const dateKey = format(day, "yyyy-MM-dd");
           const dayTasks = tasksByDate.get(dateKey) || [];
@@ -667,7 +682,7 @@ function YearGrid({
   }, [currentDate]);
 
   return (
-    <div className="grid grid-cols-3 md:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
       {months.map((monthDate) => {
         const monthStart = startOfMonth(monthDate);
         const monthEnd = endOfMonth(monthDate);

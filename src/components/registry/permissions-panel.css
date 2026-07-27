@@ -817,3 +817,34 @@
   height: 13px;
   flex-shrink: 0;
 }
+
+/* ============================================================
+   Mobile: collapse the two-pane layout into a single scrolling
+   column. The controls stack above the manifest preview, and the
+   whole modal body scrolls as one region instead of two fixed-height
+   panes side-by-side.
+   ============================================================ */
+@media (max-width: 767px) {
+  .perm-modal {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 1rem);
+  }
+  .perm-two {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  /* Let the single parent (.perm-two) own the scroll rather than each
+     pane keeping its own nested scrollbar. */
+  .perm-two-controls,
+  .mf-scroll {
+    overflow-y: visible;
+  }
+  .perm-manifest {
+    border-left: none;
+    border-top: 1px solid hsl(var(--border));
+  }
+}

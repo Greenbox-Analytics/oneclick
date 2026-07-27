@@ -1,6 +1,6 @@
 import { CSSProperties, ReactNode, SVGProps } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { CreditCard, LogOut, Shield, User } from "lucide-react";
+import { CreditCard, LogOut, Menu, Shield, User } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -114,6 +114,43 @@ function NavDropdown({ label, items }: { label: string; items: NavLink[] }) {
   );
 }
 
+// Replaces the hidden `.lp-nav` on mobile (≤640px). A single hamburger menu
+// surfaces every marketing nav link (children flattened) so small screens keep
+// access to Tools/Pricing/Docs/etc. Shown only when `.lp-nav` is hidden.
+function MobileNavMenu({ items }: { items: NavItem[] }) {
+  const flat: NavLink[] = items.flatMap((item) =>
+    "children" in item ? item.children : [item],
+  );
+  return (
+    <div className="lp-nav-mobile" style={{ display: "none", alignItems: "center" }}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Open menu"
+            style={{
+              ...NAV_DROPDOWN_TRIGGER_STYLE,
+              padding: 8,
+              opacity: 1,
+            }}
+          >
+            <Menu style={{ width: 22, height: 22 }} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          {flat.map((it) => (
+            <DropdownMenuItem key={it.label} asChild>
+              <Link to={it.href} className="cursor-pointer">
+                {it.label}
+              </Link>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
 export function LandingHeader() {
   const navigate = useNavigate();
   const { user, loading, signOut } = useAuth();
@@ -160,6 +197,7 @@ export function LandingHeader() {
         </nav>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <MobileNavMenu items={NAV_LINKS} />
           {!loading && user ? (
             <>
               <Link

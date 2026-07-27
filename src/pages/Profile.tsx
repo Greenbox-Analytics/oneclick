@@ -170,7 +170,7 @@ const Profile = () => {
 
       <main className="container mx-auto px-4 py-8 max-w-2xl">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground mb-2">Profile Settings</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-foreground mb-2">Profile Settings</h2>
           <p className="text-muted-foreground">Manage your account information</p>
         </div>
 
@@ -180,7 +180,7 @@ const Profile = () => {
             <CardDescription>Update your personal details</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="first_name">First Name</Label>
                 <Input

@@ -2,7 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+@layer utilities {
+  /* Hide the scrollbar while keeping the element scrollable. Used for
+     horizontally-scrolling tab bars and carousels on narrow viewports. */
+  .no-scrollbar {
+    -ms-overflow-style: none; /* IE / old Edge */
+    scrollbar-width: none; /* Firefox */
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none; /* Chrome / Safari / WebKit */
+  }
+}
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here.
 All colors MUST be HSL.
 */
 
@@ -273,6 +285,10 @@ All colors MUST be HSL.
 @media (max-width: 640px) {
   .landing-page .lp-nav {
     display: none !important;
+  }
+  /* Surface the hamburger that replaces the hidden desktop nav. */
+  .landing-page .lp-nav-mobile {
+    display: inline-flex !important;
   }
   .landing-page .lp-footer-grid {
     grid-template-columns: 1fr !important;

@@ -840,7 +840,11 @@ export function AddWorkWizard({
                 <span
                   className={cn(
                     "text-[11px] font-medium truncate",
-                    state === "active" ? "text-foreground" : "text-muted-foreground"
+                    // Non-active labels are hidden on mobile to save width; the
+                    // step number circle still conveys progress.
+                    state === "active"
+                      ? "text-foreground"
+                      : "text-muted-foreground hidden sm:inline"
                   )}
                 >
                   {label}
