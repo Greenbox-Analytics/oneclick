@@ -88,7 +88,7 @@ export function TopUpCreditsDialog({ open, onOpenChange, orgId, orgName }: TopUp
                   )}
                 </div>
                 <div className="text-[13px] text-muted-foreground mt-0.5">
-                  ${(pack.price_cents / 100).toFixed(0)} · ${perCredit(pack).toFixed(3)}/credit
+                  US${(pack.price_cents / 100).toFixed(0)} · US${perCredit(pack).toFixed(3)}/credit
                 </div>
               </div>
               <Button

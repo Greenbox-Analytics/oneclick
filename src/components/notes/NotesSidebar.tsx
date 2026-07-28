@@ -70,7 +70,8 @@ export default function NotesSidebar({ folders, notes, selectedNoteId, onSelectN
           {isExpanded ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
           <Folder className="w-4 h-4 text-muted-foreground shrink-0" />
           <span className="text-sm truncate flex-1">{folder.name}</span>
-          <div className="hidden group-hover:flex items-center gap-0.5">
+          {/* Always visible on touch (max-sm); hover-reveal on desktop. */}
+          <div className="flex sm:hidden sm:group-hover:flex items-center gap-0.5">
             <Button size="icon" variant="ghost" className="h-5 w-5" onClick={(e) => { e.stopPropagation(); handleCreateNote(folder.id); }}>
               <FilePlus className="w-3 h-3" />
             </Button>
@@ -102,7 +103,7 @@ export default function NotesSidebar({ folders, notes, selectedNoteId, onSelectN
       <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
       {note.pinned && <Pin className="w-3 h-3 text-amber-500 shrink-0" />}
       <span className="text-sm truncate flex-1">{note.title}</span>
-      <Button size="icon" variant="ghost" className="h-5 w-5 hidden group-hover:flex text-destructive shrink-0"
+      <Button size="icon" variant="ghost" className="h-5 w-5 flex sm:hidden sm:group-hover:flex text-destructive shrink-0"
         onClick={(e) => { e.stopPropagation(); deleteNote.mutate(note.id); }}>
         <Trash2 className="w-3 h-3" />
       </Button>
@@ -110,7 +111,7 @@ export default function NotesSidebar({ folders, notes, selectedNoteId, onSelectN
   );
 
   return (
-    <div className="w-64 border-r bg-muted/30 flex flex-col h-full">
+    <div className="w-full sm:w-64 border-r bg-muted/30 flex flex-col h-full">
       <div className="p-3 border-b flex items-center justify-between">
         <span className="text-sm font-medium">Notes</span>
         <div className="flex items-center gap-1">

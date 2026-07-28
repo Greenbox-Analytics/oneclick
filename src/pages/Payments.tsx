@@ -13,6 +13,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSmartBack } from "@/hooks/useSmartBack";
 import { useToast } from "@/hooks/use-toast";
 import type { Tables } from "@/integrations/supabase/types";
+import { formatCurrency } from "@/lib/currency";
 
 const Payments = () => {
   const navigate = useNavigate();
@@ -52,13 +53,6 @@ const Payments = () => {
     fetchPayments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
-
-  const formatCurrency = (amount: number, currency: string = "usd") => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency.toUpperCase(),
-    }).format(amount);
-  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {

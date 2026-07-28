@@ -1,9 +1,9 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigationType } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -50,6 +50,7 @@ const About = lazy(() => import("./pages/About"));
 const Features = lazy(() => import("./pages/Features"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const Security = lazy(() => import("./pages/Security"));
+const Contact = lazy(() => import("./pages/Contact"));
 
 const queryClient = new QueryClient();
 
@@ -72,6 +73,25 @@ function SubscriptionRedirect() {
   return <Navigate to={`/profile${search}`} replace />;
 }
 
+/**
+ * Reset scroll on navigation. React Router keeps the current scroll offset
+ * across route changes, so following a link from a page footer (e.g. Contact)
+ * lands you partway down the new page.
+ *
+ * Skipped for POP so the browser's own scroll restoration still works on
+ * back/forward. Keyed on pathname only — same-path `?query` changes (the
+ * `/docs?section=` links) are handled by the page itself.
+ */
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  const navigationType = useNavigationType();
+  useEffect(() => {
+    if (navigationType === "POP") return;
+    window.scrollTo({ top: 0, left: 0 });
+  }, [pathname, navigationType]);
+  return null;
+}
+
 function AdminPosthogTagger() {
   useAdminPosthogTag();
   return null;
@@ -85,6 +105,7 @@ const App = () => (
         <Sonner />
         <ThemeToggle />
         <BrowserRouter>
+          <ScrollToTop />
           <PageTimer />
           <AuthProvider>
             <TesterBanner />
@@ -242,6 +263,7 @@ const App = () => (
             <Route path="/features" element={<Features />} />
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/security" element={<Security />} />
+            <Route path="/contact" element={<Contact />} />
             <Route path="/tools/registry" element={<ProtectedRoute><Registry /></ProtectedRoute>} />
             <Route path="/tools/expense-tracker" element={<ProtectedRoute><ExpenseTracker /></ProtectedRoute>} />
             {/* Public: invited collaborators may not be signed in yet — the page

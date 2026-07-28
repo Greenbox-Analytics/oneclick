@@ -29,7 +29,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  ArrowLeft,
   Folder,
   Search,
   X,
@@ -45,7 +44,6 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { useSmartBack } from "@/hooks/useSmartBack";
 import { useGatedAction } from "@/hooks/useGatedAction";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { apiFetch, API_URL, ApiError } from "@/lib/apiFetch";
@@ -78,7 +76,6 @@ function getArtistColor(name: string) {
 
 const Portfolio = () => {
   const navigate = useNavigate();
-  const goBack = useSmartBack("/dashboard");
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { toast } = useToast();
@@ -300,10 +297,10 @@ const Portfolio = () => {
     });
   };
 
-  // Track collapsed artists
-  const [collapsedArtists, setCollapsedArtists] = useState<Set<string>>(new Set());
+  // Track expanded artists (collapsed by default)
+  const [expandedArtists, setExpandedArtists] = useState<Set<string>>(new Set());
   const toggleArtist = (key: string) => {
-    setCollapsedArtists((prev) => {
+    setExpandedArtists((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -317,7 +314,6 @@ const Portfolio = () => {
     <div className="min-h-screen bg-background">
       {/* === HEADER === */}
       <PageHeader
-        showBack={false}
         actions={
           <>
             <HeaderDocsButton />
@@ -358,17 +354,12 @@ const Portfolio = () => {
 
       <main className="container mx-auto px-4 py-8">
         {/* === PAGE TITLE === */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={goBack}>
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            <div>
-              <h2 className="text-3xl font-bold text-foreground">Portfolio</h2>
-              <p className="text-muted-foreground">Your projects organized by artist</p>
-            </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+          <div>
+            <h2 className="text-2xl sm:text-3xl font-bold text-foreground">Portfolio</h2>
+            <p className="text-muted-foreground">Your projects organized by artist</p>
           </div>
-          <Button data-walkthrough="portfolio-add" onClick={() => handleAddProject()} className="gap-2">
+          <Button data-walkthrough="portfolio-add" onClick={() => handleAddProject()} className="gap-2 w-full sm:w-auto">
             <Plus className="w-4 h-4" />
             Create Project
           </Button>
@@ -378,7 +369,7 @@ const Portfolio = () => {
         <div data-walkthrough="portfolio-filters" className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-4 mb-6 border-b border-border">
           <div className="flex flex-wrap items-end gap-4">
             {/* Artist search with suggestions */}
-            <div className="w-64 relative" ref={artistSearchRef}>
+            <div className="w-full sm:w-64 relative" ref={artistSearchRef}>
               <Label className="text-xs text-muted-foreground mb-1 block">Artist</Label>
               <Input
                 placeholder="Search artists..."
@@ -430,7 +421,7 @@ const Portfolio = () => {
             </div>
 
             {/* Text search */}
-            <div className="flex-1 min-w-[200px]">
+            <div className="flex-1 w-full min-w-0 sm:min-w-[200px]">
               <Label className="text-xs text-muted-foreground mb-1 block">Search</Label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -526,7 +517,7 @@ const Portfolio = () => {
                 {!collapsedYears.has(year) && artists.map(({ name: artistName, projects }) => {
                   const artistColor = getArtistColor(artistName);
                   const artistKey = `my-${year}-${artistName}`;
-                  const isCollapsed = collapsedArtists.has(artistKey);
+                  const isCollapsed = !expandedArtists.has(artistKey);
                   return (
                     <div key={artistName} className={`mb-5 ml-6 border-l-4 ${artistColor.border} pl-4 rounded-sm`}>
                       <button
@@ -588,7 +579,7 @@ const Portfolio = () => {
                 {!collapsedYears.has(year + 10000) && artists.map(({ name: artistName, projects }) => {
                   const artistColor = getArtistColor(artistName);
                   const artistKey = `shared-${year}-${artistName}`;
-                  const isCollapsed = collapsedArtists.has(artistKey);
+                  const isCollapsed = !expandedArtists.has(artistKey);
                   return (
                     <div key={artistName} className={`mb-5 ml-6 border-l-4 ${artistColor.border} pl-4 rounded-sm`}>
                       <button

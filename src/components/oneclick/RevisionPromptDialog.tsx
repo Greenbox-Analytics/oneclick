@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Loader2 } from "lucide-react";
+import { formatCurrency } from "@/lib/currency";
 
 export interface RevisionCandidate {
   statement_id: string;
@@ -33,9 +34,6 @@ interface RevisionPromptDialogProps {
 // Sentinel radio value for "these are new earnings, not a revision" — kept
 // out of statement_id space since real ids are UUIDs.
 const NEW_EARNINGS_VALUE = "__keep_both__";
-
-const formatCurrency = (n: number) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 
 const candidateLabel = (c: RevisionCandidate) =>
   c.name?.trim() || `Statement covering ${c.period_start} – ${c.period_end}`;

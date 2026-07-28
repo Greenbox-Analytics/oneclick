@@ -117,8 +117,8 @@ def _generate_pdf(artist_name: str, payments: list[dict], total: float, message:
         [
             Paragraph(str(len(songs)), stat_value),
             Paragraph(str(len(payees)), stat_value),
-            Paragraph(f"${total_revenue:,.2f}", stat_value),
-            Paragraph(f"${total:,.2f}", stat_value_accent),
+            Paragraph(f"US${total_revenue:,.2f}", stat_value),
+            Paragraph(f"US${total:,.2f}", stat_value_accent),
         ],
     ]
     stat_table = Table(stat_cells, colWidths=[1.85 * inch] * 4)
@@ -179,7 +179,7 @@ def _generate_pdf(artist_name: str, payments: list[dict], total: float, message:
         legend_rows = [["", "Payee", "Share", "Payout"]]
         for name, value in segments:
             legend_rows.append(
-                ["", Paragraph(name, legend_cell), f"{(value / seg_total) * 100:.1f}%", f"${value:,.2f}"]
+                ["", Paragraph(name, legend_cell), f"{(value / seg_total) * 100:.1f}%", f"US${value:,.2f}"]
             )
         legend = Table(legend_rows, colWidths=[0.18 * inch, 2.5 * inch, 0.7 * inch, 0.9 * inch])
         legend_style = [
@@ -216,14 +216,14 @@ def _generate_pdf(artist_name: str, payments: list[dict], total: float, message:
                     Paragraph(str(p.get("role", "")), cell_style),
                     Paragraph(str(p.get("royalty_type", "")), cell_style),
                     "Net" if is_net else "Gross",
-                    f"${_payment_gross(p):,.2f}",
-                    f"-${expenses:,.2f}" if is_net and expenses > 0 else "—",
-                    f"${_payment_net(p):,.2f}",
+                    f"US${_payment_gross(p):,.2f}",
+                    f"-US${expenses:,.2f}" if is_net and expenses > 0 else "—",
+                    f"US${_payment_net(p):,.2f}",
                     f"{p.get('percentage', 0):g}%",
-                    f"${p.get('amount_to_pay', 0):,.2f}",
+                    f"US${p.get('amount_to_pay', 0):,.2f}",
                 ]
             )
-        table_data.append(["", "", "", "", "", "", "", "", "Total owed", f"${total:,.2f}"])
+        table_data.append(["", "", "", "", "", "", "", "", "Total owed", f"US${total:,.2f}"])
 
         col_w = [0.85, 1.25, 0.72, 0.72, 0.45, 0.62, 0.62, 0.62, 0.45, 0.8]
         t = Table(table_data, repeatRows=1, colWidths=[w * inch for w in col_w])

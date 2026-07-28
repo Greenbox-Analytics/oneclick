@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import { formatCurrency } from "@/lib/currency";
 
 export type ExpenseCategory =
   | "studio"
@@ -28,12 +29,24 @@ export const EXPENSE_CATEGORY_LABELS: Record<string, string> = Object.fromEntrie
   EXPENSE_CATEGORIES.map((c) => [c.value, c.label]),
 );
 
+// Keep in sync with EXPENSE_CURRENCIES in src/backend/projects/models.py and the
+// CHECK constraint on project_expenses.currency.
+export const EXPENSE_CURRENCIES = ["USD", "EUR", "CAD", "AUD"] as const;
+export type ExpenseCurrency = (typeof EXPENSE_CURRENCIES)[number];
+
+/** Format an amount in its own currency (totals across expenses are always USD). */
+export const formatAmount = (n: number, currency: string = "USD") =>
+  formatCurrency(n, currency);
+
 export interface ProjectExpense {
   id: string;
   project_id: string;
   created_by: string;
   description: string;
   amount: number;
+  currency: ExpenseCurrency;
+  /** USD-converted amount attached by the backend; used for totals. */
+  amount_usd?: number;
   category: ExpenseCategory | null;
   incurred_on: string | null;
   work_ids: string[];
@@ -44,6 +57,7 @@ export interface ProjectExpense {
 export interface ExpenseInput {
   description: string;
   amount: number;
+  currency?: ExpenseCurrency;
   category?: ExpenseCategory | null;
   incurred_on?: string | null;
   work_ids?: string[];
@@ -57,6 +71,8 @@ export interface ExpenseSummaryRow {
   artist_name: string | null;
   description: string | null;
   amount: number;
+  currency: ExpenseCurrency;
+  amount_usd: number;
   category: ExpenseCategory | null;
   incurred_on: string | null;
   is_tagged: boolean;
@@ -96,16 +112,19 @@ export interface ExportExpensesVars {
   projectId?: string;
   /** Omit / "all" to include every category. */
   category?: string;
+  /** Omit / "all" to include every artist. */
+  artistId?: string;
 }
 
 // Streaming download can't use apiFetch (JSON-only). Mirror useExportProof:
 // raw fetch with auth headers → blob → anchor download, filename from header.
 export function useExportExpenses() {
   return useMutation({
-    mutationFn: async ({ format, projectId, category }: ExportExpensesVars) => {
+    mutationFn: async ({ format, projectId, category, artistId }: ExportExpensesVars) => {
       const params = new URLSearchParams({ format });
       if (projectId && projectId !== "all") params.set("project_id", projectId);
       if (category && category !== "all") params.set("category", category);
+      if (artistId && artistId !== "all") params.set("artist_id", artistId);
 
       const authHeaders = await getAuthHeaders();
       const res = await fetch(`${API_URL}/expenses/export?${params.toString()}`, {

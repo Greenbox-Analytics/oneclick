@@ -242,6 +242,62 @@ def test_create_stake_exactly_at_100_percent(client, mock_supabase):
     assert response.status_code == 200
 
 
+def test_create_stake_within_margin_at_100_5_percent(client, mock_supabase):
+    """POST /registry/stakes succeeds at 100.5% — inside the 0.5% rounding margin."""
+    existing_stake = {"id": "other-id", "percentage": 70.5}
+    validate_builder = MockQueryBuilder()
+    validate_builder.execute.return_value = MagicMock(data=[existing_stake])
+
+    insert_builder = MockQueryBuilder()
+    insert_builder.execute.return_value = MagicMock(data=[SAMPLE_STAKE])
+
+    call_count = [0]
+
+    def table_side_effect(name):
+        if name == "works_registry":
+            return _work_owner_builder()
+        if name == "ownership_stakes":
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return validate_builder
+            return insert_builder
+        return MockQueryBuilder()
+
+    mock_supabase.table.side_effect = _sub_wrap(table_side_effect)
+
+    payload = {
+        "work_id": WORK_ID,
+        "stake_type": "master",
+        "holder_name": "Jane Doe",
+        "holder_role": "producer",
+        "percentage": 30.0,
+    }
+    with grant_owner_access():
+        response = client.post("/registry/stakes", json=payload)
+
+    assert response.status_code == 200
+
+
+def test_create_stake_exceeds_margin_at_100_6_percent(client, mock_supabase):
+    """POST /registry/stakes returns 400 at 100.6% — just past the 0.5% margin."""
+    existing_stake = {"id": "other-id", "percentage": 70.6}
+    validate_builder = MockQueryBuilder()
+    validate_builder.execute.return_value = MagicMock(data=[existing_stake])
+    mock_supabase.table.side_effect = _sub_wrap(lambda name: validate_builder)
+
+    payload = {
+        "work_id": WORK_ID,
+        "stake_type": "master",
+        "holder_name": "Bob Smith",
+        "holder_role": "artist",
+        "percentage": 30.0,
+    }
+    response = client.post("/registry/stakes", json=payload)
+
+    assert response.status_code == 400
+    assert "exceed 100%" in response.json()["detail"]
+
+
 # ============================================================
 # Update Stake
 # ============================================================

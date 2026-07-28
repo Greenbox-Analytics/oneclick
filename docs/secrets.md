@@ -73,6 +73,7 @@ Without these, the "Pay with PayPal" button is hidden and payout capture fails. 
 | `RESEND_API_KEY` | resend.com → API Keys | Yes for transactional email |
 | `RESEND_FROM_EMAIL` | An address on a Resend-verified domain | Yes — no fallback. Format: `Display Name <noreply@verified-domain.com>` |
 | `OPS_NOTIFICATION_EMAIL` | Where `/pro-requests` submissions get emailed | Optional; defaults to `tech@greenboxanalytics.ca` |
+| `CONTACT_NOTIFICATION_EMAIL` | Where Contact page (`/contact-submissions`) mail goes | Optional; falls back to `OPS_NOTIFICATION_EMAIL`. Set this to route support mail to a dedicated address without moving other ops notifications. |
 
 ---
 

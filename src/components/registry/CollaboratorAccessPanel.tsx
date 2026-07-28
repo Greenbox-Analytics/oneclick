@@ -12,7 +12,6 @@ import {
   Plus,
   Search,
   Shield,
-  Sparkles,
   Trash2,
   TrendingUp,
   Users,
@@ -24,7 +23,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
   Select,
@@ -50,7 +48,6 @@ import { useWorkFiles } from "@/hooks/useWorkFiles";
 import { useWorkAudio } from "@/hooks/useWorkAudio";
 
 import { RegistryAvatar } from "./RegistryAvatar";
-import DeriveCollaboratorSplitDialog from "./DeriveCollaboratorSplitDialog";
 import "./permissions-panel.css";
 
 // ============================================================
@@ -551,7 +548,6 @@ interface InvitePayload {
   access_level: AccessLevel;
   initial_grants?: Array<{ resource_type: string; resource_id: string }>;
   ownership_breakdown: boolean;
-  terms?: Array<{ label: string; value: string }>;
 }
 
 // A person listed in Royalty Splits who is not yet a collaborator (unlinked,
@@ -749,11 +745,8 @@ export default function CollaboratorAccessPanel({
   // When set, this invite links the person's existing Royalty Splits rows
   // (their stakes get updated/linked instead of new ones being created).
   const [linkedHolder, setLinkedHolder] = useState<SplitHolder | null>(null);
-
-  // Derive-from-contracts (invite only).
-  const [useContracts, setUseContracts] = useState(false);
-  const [deriveDialogOpen, setDeriveDialogOpen] = useState(false);
-  const [terms, setTerms] = useState<Array<{ label: string; value: string }>>([]);
+  // Which identity path the inviter chose. null = the chooser cards are showing.
+  const [invitePath, setInvitePath] = useState<null | "splits" | "new">(null);
 
   // Track whether the editable state has been seeded for the current open/collaborator,
   // so we reseed once when grant data arrives. We compare against the data identity
@@ -791,12 +784,33 @@ export default function CollaboratorAccessPanel({
       setMasterPct("");
       setPublishingPct("");
       setLinkedHolder(null);
-      setUseContracts(false);
-      setTerms([]);
+      setInvitePath(null);
     }
   }
 
   const isAdmin = accessLevel === "admin";
+
+  // The chooser only makes sense when there are unlinked split holders to pick
+  // from. splitHolders can arrive after the panel opens (stakes load async), so
+  // derive at render instead of baking the decision into seeded state.
+  const showChooser = mode === "invite" && splitHolders.length > 0;
+  const effectivePath: null | "splits" | "new" = showChooser ? invitePath : "new";
+
+  // Clears everything either path may have prefilled, so nothing leaks when the
+  // inviter switches between "from splits" and "someone new".
+  const resetIdentity = () => {
+    setLinkedHolder(null);
+    setSelectedArtistId("");
+    setName("");
+    setEmail("");
+    setMasterPct("");
+    setPublishingPct("");
+  };
+
+  const choosePath = (p: "splits" | "new") => {
+    resetIdentity();
+    setInvitePath(p);
+  };
 
   // ---- draft mutators (functional setState) ----
   const toggleDoc = (key: string) =>
@@ -849,30 +863,6 @@ export default function CollaboratorAccessPanel({
     setEmail(holder.email ?? "");
     setMasterPct(holder.master ? String(holder.master.pct) : "");
     setPublishingPct(holder.publishing ? String(holder.publishing.pct) : "");
-  };
-
-  // ---- derive-from-contracts apply (invite) ----
-  const handleDeriveApply = ({
-    masterPct: mPct,
-    publishingPct: pPct,
-    terms: derivedTerms,
-    matchedFileIds,
-  }: {
-    masterPct: number;
-    publishingPct: number;
-    terms: Array<{ label: string; value: string }>;
-    matchedFileIds: string[];
-  }) => {
-    setMasterPct(mPct > 0 ? String(mPct) : "");
-    setPublishingPct(pPct > 0 ? String(pPct) : "");
-    setTerms(derivedTerms);
-    if (matchedFileIds.length > 0) {
-      setDraft((prev) => {
-        const next = new Set(prev);
-        for (const id of matchedFileIds) next.add(`project_file:${id}`);
-        return next;
-      });
-    }
   };
 
   // ---- save (edit) ----
@@ -997,7 +987,6 @@ export default function CollaboratorAccessPanel({
       stakes,
       access_level: accessLevel,
       ownership_breakdown: isAdmin ? false : ownershipBreakdown,
-      terms,
     };
     if (!isAdmin) {
       payload.initial_grants = Array.from(draft)
@@ -1069,88 +1058,154 @@ export default function CollaboratorAccessPanel({
               </div>
             ) : (
               <>
-                {splitHolders.length > 0 && (
-                  <div>
-                    <Label className="text-sm font-medium">Add someone from Royalty Splits</Label>
-                    <Select value={linkedHolder?.name ?? ""} onValueChange={handleSplitHolderSelect}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Choose a person from the splits" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {splitHolders.map((h) => (
-                          <SelectItem key={h.name} value={h.name}>
-                            {h.name} (
-                            {[
-                              h.master ? `Master ${h.master.pct}%` : null,
-                              h.publishing ? `Publishing ${h.publishing.pct}%` : null,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ")}
-                            )
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {linkedHolder && (
-                      <div className="mt-2 flex items-start justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
-                        <p className="text-xs text-muted-foreground">
-                          Linking to <b>{linkedHolder.name}</b>'s existing split row — their
-                          current % is prefilled and will be updated, not duplicated.
-                        </p>
+                {/* Step 1: pick who this invite is for. Only shown when the
+                    work has unlinked split holders — otherwise there's just
+                    one path and we go straight to the fields. */}
+                {showChooser && effectivePath === null && (
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="text-sm font-medium">Who are you inviting?</div>
+                    <button
+                      type="button"
+                      onClick={() => choosePath("splits")}
+                      className="rounded-xl border p-4 text-left hover:border-primary/40 hover:bg-muted/40 transition-colors flex items-start gap-3"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-emerald-500/15 text-emerald-500 flex items-center justify-center shrink-0">
+                        <TrendingUp className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold">Someone from the royalty splits</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          They're already listed on this work — their share is prefilled and
+                          linked, not duplicated.
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => choosePath("new")}
+                      className="rounded-xl border p-4 text-left hover:border-primary/40 hover:bg-muted/40 transition-colors flex items-start gap-3"
+                    >
+                      <div className="w-9 h-9 rounded-lg bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
+                        <Plus className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold">Someone new</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          Invite by email — set their role, share, and what they can see.
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+                )}
+
+                {effectivePath !== null && (
+                  <>
+                    {showChooser && (
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-medium">
+                          {effectivePath === "splits"
+                            ? "Someone from the royalty splits"
+                            : "Someone new"}
+                        </Label>
                         <button
                           type="button"
-                          onClick={() => setLinkedHolder(null)}
-                          aria-label="Stop linking to this split row"
-                          className="shrink-0 text-muted-foreground hover:text-foreground"
+                          onClick={() => {
+                            resetIdentity();
+                            setInvitePath(null);
+                          }}
+                          className="text-xs font-semibold text-primary hover:text-primary/80"
                         >
-                          <X className="h-3.5 w-3.5" />
+                          Change
                         </button>
                       </div>
                     )}
-                  </div>
+
+                    {effectivePath === "splits" && (
+                      <div>
+                        <Select value={linkedHolder?.name ?? ""} onValueChange={handleSplitHolderSelect}>
+                          <SelectTrigger className="mt-1">
+                            <SelectValue placeholder="Choose a person from the splits" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {splitHolders.map((h) => (
+                              <SelectItem key={h.name} value={h.name}>
+                                {h.name} (
+                                {[
+                                  h.master ? `Master ${h.master.pct}%` : null,
+                                  h.publishing ? `Publishing ${h.publishing.pct}%` : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                                )
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {linkedHolder && (
+                          <div className="mt-2 flex items-start justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
+                            <p className="text-xs text-muted-foreground">
+                              Linking to <b>{linkedHolder.name}</b>'s existing split row — their
+                              current % is prefilled and will be updated, not duplicated.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setLinkedHolder(null)}
+                              aria-label="Stop linking to this split row"
+                              className="shrink-0 text-muted-foreground hover:text-foreground"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {effectivePath === "new" && artists && artists.length > 0 && (
+                      <div>
+                        <Label className="text-sm font-medium">Select from roster</Label>
+                        <Select value={selectedArtistId} onValueChange={handleArtistSelect}>
+                          <SelectTrigger className="mt-1">
+                            <SelectValue placeholder="Choose an artist" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {artists.map((a) => (
+                              <SelectItem key={a.id} value={a.id}>
+                                {a.name} ({a.email})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">
+                          Email <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          type="email"
+                          value={email}
+                          placeholder="name@example.com"
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="mt-1"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium">
+                          Name <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          value={name}
+                          placeholder="Display name"
+                          disabled={effectivePath === "splits" && !!linkedHolder}
+                          onChange={(e) => setName(e.target.value)}
+                          className="mt-1"
+                        />
+                      </div>
+                    </div>
+                  </>
                 )}
-                {artists && artists.length > 0 && (
-                  <div>
-                    <Label className="text-sm font-medium">Select from roster</Label>
-                    <Select value={selectedArtistId} onValueChange={handleArtistSelect}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Choose an artist" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {artists.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name} ({a.email})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-sm font-medium">
-                      Email <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      type="email"
-                      value={email}
-                      placeholder="name@example.com"
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">
-                      Name <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      value={name}
-                      placeholder="Display name"
-                      onChange={(e) => setName(e.target.value)}
-                      className="mt-1"
-                    />
-                  </div>
-                </div>
               </>
             )}
 
@@ -1278,40 +1333,6 @@ export default function CollaboratorAccessPanel({
                         Royalty splits can't exceed 100%. Reduce this person's share before sending the invitation.
                       </div>
                     )}
-
-                    <div className="mt-3 space-y-2 rounded-lg border border-border bg-card px-3 py-2.5">
-                      <label className="flex cursor-pointer items-start gap-2.5">
-                        <Checkbox
-                          checked={useContracts}
-                          onCheckedChange={(c) => setUseContracts(!!c)}
-                          className="mt-0.5"
-                        />
-                        <span className="flex flex-col">
-                          <span className="text-sm font-medium text-foreground">
-                            Use my contracts to fill in the details
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            Scan this work's documents for {resolvedName || "this person"}'s split.
-                          </span>
-                        </span>
-                      </label>
-                      {useContracts && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={!resolvedName}
-                          onClick={() => setDeriveDialogOpen(true)}
-                          className="w-full"
-                        >
-                          <Sparkles className="mr-2 h-4 w-4" />
-                          Derive from contracts
-                        </Button>
-                      )}
-                      {useContracts && !resolvedName && (
-                        <p className="text-xs text-muted-foreground">Enter a name first.</p>
-                      )}
-                    </div>
                   </div>
                 )}
               </>
@@ -1375,17 +1396,6 @@ export default function CollaboratorAccessPanel({
           </div>
         </div>
       </DialogContent>
-
-      {mode === "invite" && (
-        <DeriveCollaboratorSplitDialog
-          workId={workId}
-          projectId={workFullQuery.data?.project_id || undefined}
-          collaboratorName={name}
-          open={deriveDialogOpen}
-          onOpenChange={setDeriveDialogOpen}
-          onApply={handleDeriveApply}
-        />
-      )}
     </Dialog>
   );
 }

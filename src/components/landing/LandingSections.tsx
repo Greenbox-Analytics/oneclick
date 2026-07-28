@@ -1,6 +1,6 @@
 import { CSSProperties, ReactNode, SVGProps } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { LogOut, Shield, User } from "lucide-react";
+import { LogOut, Menu, Shield, User } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -62,7 +62,10 @@ const NAV_LINKS: NavItem[] = [
     label: "Company",
     children: [
       { label: "About", href: "/about" },
-      { label: "Team", href: "/team" },
+      // Team is intentionally unlisted while the page is still being reworked.
+      // The /team route still exists, so it can be reviewed by direct URL.
+      // To bring it back, restore { label: "Team", href: "/team" } here and
+      // the matching footer entry in FOOTER_COLS.
     ],
   },
   { label: "Pricing", href: "/pricing" },
@@ -114,6 +117,43 @@ function NavDropdown({ label, items }: { label: string; items: NavLink[] }) {
   );
 }
 
+// Replaces the hidden `.lp-nav` on mobile (≤640px). A single hamburger menu
+// surfaces every marketing nav link (children flattened) so small screens keep
+// access to Tools/Pricing/Docs/etc. Shown only when `.lp-nav` is hidden.
+function MobileNavMenu({ items }: { items: NavItem[] }) {
+  const flat: NavLink[] = items.flatMap((item) =>
+    "children" in item ? item.children : [item],
+  );
+  return (
+    <div className="lp-nav-mobile" style={{ display: "none", alignItems: "center" }}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Open menu"
+            style={{
+              ...NAV_DROPDOWN_TRIGGER_STYLE,
+              padding: 8,
+              opacity: 1,
+            }}
+          >
+            <Menu style={{ width: 22, height: 22 }} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          {flat.map((it) => (
+            <DropdownMenuItem key={it.label} asChild>
+              <Link to={it.href} className="cursor-pointer">
+                {it.label}
+              </Link>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
 export function LandingHeader() {
   const navigate = useNavigate();
   const { user, loading, signOut } = useAuth();
@@ -160,6 +200,7 @@ export function LandingHeader() {
         </nav>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <MobileNavMenu items={NAV_LINKS} />
           {!loading && user ? (
             <>
               <Link
@@ -702,8 +743,8 @@ const FOOTER_COLS: Array<[string, Array<[string, string]>]> = [
     "Company",
     [
       ["About", "/about"],
-      ["Team", "/team"],
-      ["Contact", "mailto:hello@msanii.app"],
+      // Team unlisted while the page is reworked — see NAV_LINKS above.
+      ["Contact", "/contact"],
     ],
   ],
   ["Resources", [["Docs", "/docs"]]],
@@ -810,6 +851,8 @@ const HTML_TO_ROUTE: Record<string, string> = {
   "privacy.html": "/privacy",
   "security.html": "/security",
   "terms.html": "/terms",
+  "Contact.html": "/contact",
+  "docs.html": "/docs",
 };
 
 // Internal routes go through react-router (no full reload, no scroll reset);

@@ -2499,9 +2499,9 @@ Artist Profile:
         lines.append(f"\n  Total accounted for: {total_pct:.1f}%")
 
         if revenue and payouts:
-            lines.append(f"\n--- Payout calculation (total revenue: ${revenue:,.2f}) ---")
+            lines.append(f"\n--- Payout calculation (total revenue: US${revenue:,.2f}) ---")
             for pay in payouts:
-                lines.append(f"  {pay['name']}: ${pay['amount']:,.2f}")
+                lines.append(f"  {pay['name']}: US${pay['amount']:,.2f}")
 
         lines.append("=== END AGGREGATED SPLITS ===")
         return "\n".join(lines)

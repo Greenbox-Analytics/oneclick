@@ -244,7 +244,7 @@ export function CreditsUsageCard() {
             <div className="text-sm font-semibold">Pay-per-use</div>
             <div className="text-[12.5px] text-muted-foreground mt-0.5 max-w-[520px]">
               Keep working past your monthly credits — overage is billed on your next invoice at
-              $0.02 / credit.
+              US$0.02 / credit.
               {(usage.overageThisPeriod ?? 0) > 0 && ` (${usage.overageThisPeriod} cr this period)`}
             </div>
           </div>

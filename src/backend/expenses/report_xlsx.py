@@ -11,7 +11,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from expenses.common import category_label, category_totals, grand_total, sorted_rows
+from expenses.common import category_label, category_totals, grand_total, sorted_rows, usd_amount
 
 HEADER_FILL = PatternFill(start_color="1A3A2A", end_color="1A3A2A", fill_type="solid")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -34,10 +34,10 @@ def generate_expense_report_xlsx(
     ws.append([f"Expense Report — {scope_label}"])
     ws.cell(row=1, column=1).font = Font(bold=True, size=14)
     ws.append([f"Category: {category_label_str}"])
-    ws.append([f"Generated: {generated_on}  ·  Amounts in USD"])
+    ws.append([f"Generated: {generated_on}  ·  Line items in original currency; totals in USD"])
     ws.append([])
 
-    headers = ["Date", "Project", "Artist", "Description", "Category", "Amount (USD)"]
+    headers = ["Date", "Project", "Artist", "Description", "Category", "Amount", "Currency", "Amount (USD)"]
     ws.append(headers)
     header_idx = ws.max_row
     for col in range(1, len(headers) + 1):
@@ -45,7 +45,8 @@ def generate_expense_report_xlsx(
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
 
-    amount_col = len(headers)
+    amount_col = headers.index("Amount") + 1
+    usd_col = len(headers)
     for r in sorted_rows(rows):
         ws.append(
             [
@@ -55,21 +56,24 @@ def generate_expense_report_xlsx(
                 r.get("description") or "",
                 category_label(r.get("category")),
                 round(float(r.get("amount") or 0), 2),
+                r.get("currency") or "USD",
+                round(usd_amount(r), 2),
             ]
         )
 
     total = round(grand_total(rows), 2)
-    ws.append(["", "", "", "", "TOTAL", total])
+    ws.append(["", "", "", "", "", "", "TOTAL", total])
     for col in range(1, len(headers) + 1):
         ws.cell(row=ws.max_row, column=col).font = BOLD
 
-    # Amount column: number format + right alignment for data + total rows
+    # Amount columns: number format + right alignment for data + total rows
     for row in range(header_idx + 1, ws.max_row + 1):
-        cell = ws.cell(row=row, column=amount_col)
-        cell.number_format = MONEY_FMT
-        cell.alignment = Alignment(horizontal="right")
+        for col in (amount_col, usd_col):
+            cell = ws.cell(row=row, column=col)
+            cell.number_format = MONEY_FMT
+            cell.alignment = Alignment(horizontal="right")
 
-    for i, width in enumerate([12, 24, 20, 40, 18, 14], start=1):
+    for i, width in enumerate([12, 24, 20, 36, 18, 12, 10, 14], start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
 
     # --- Summary sheet (by category) ---
