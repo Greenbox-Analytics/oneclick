@@ -147,6 +147,9 @@ export function CreditsUsageCard() {
   const tier = ent?.tier ?? "free";
   const isPaid = isPaidTier(tier);
   const overageOn = ent?.credits?.overageEnabled ?? false;
+  // Rate comes from the backend (same getter the Stripe biller uses) so the
+  // quote here can't drift from what a user is actually charged.
+  const overageRate = ent?.credits?.overageUsdPerCredit;
 
   const toggleOverage = (next: boolean) =>
     setPrefs.mutate(
@@ -243,8 +246,8 @@ export function CreditsUsageCard() {
           <div>
             <div className="text-sm font-semibold">Pay-per-use</div>
             <div className="text-[12.5px] text-muted-foreground mt-0.5 max-w-[520px]">
-              Keep working past your monthly credits — overage is billed on your next invoice at
-              US$0.02 / credit.
+              Keep working past your monthly credits — overage is billed on your next invoice
+              {overageRate ? ` at US$${overageRate.toFixed(2)} / credit` : ""}.
               {(usage.overageThisPeriod ?? 0) > 0 && ` (${usage.overageThisPeriod} cr this period)`}
             </div>
           </div>

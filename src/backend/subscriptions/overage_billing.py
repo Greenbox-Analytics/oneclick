@@ -7,17 +7,13 @@ NEVER called on the request path — only from the sweep and invoice.created.
 """
 
 import logging
-import os
 
 import stripe as stripe_errors
 
 import subscriptions.stripe_client as stripe_client_module
+from subscriptions.ai_pricing import overage_usd_per_credit as _overage_usd_per_credit
 
 logger = logging.getLogger(__name__)
-
-
-def _overage_usd_per_credit() -> float:
-    return float(os.getenv("CREDIT_OVERAGE_USD", "0.02"))
 
 
 def bill_overage_row(supabase, user_id: str, ledger_row: dict, *, invoice_id: str | None = None) -> str | None:

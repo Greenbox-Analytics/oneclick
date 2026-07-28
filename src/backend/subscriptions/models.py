@@ -16,6 +16,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from subscriptions.ai_pricing import overage_usd_per_credit
+
 
 @dataclass
 class Caps:
@@ -106,6 +108,9 @@ class Entitlements:
                 "monthlyGrant": self.credits.monthly_grant,
                 "overageThisPeriod": self.credits.overage_this_period,
                 "overageEnabled": self.credits.overage_enabled,
+                # Shipped so the UI never hardcodes the rate it quotes (it must
+                # match what overage_billing.py actually charges).
+                "overageUsdPerCredit": overage_usd_per_credit(),
                 "overageCapCredits": self.credits.overage_cap_credits,
                 "storageOverageEnabled": self.credits.storage_overage_enabled,
                 "periodEnd": self.credits.period_end.isoformat() if self.credits.period_end else None,

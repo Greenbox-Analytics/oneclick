@@ -1,14 +1,26 @@
 """Authoritative model-rate table + cost estimator for AI usage logging.
 
-SOURCE OF TRUTH for real-cost computation (`ai_usage_log.cost_usd`).
-The pricing dashboard (subscriptions/pricing_model/index.html, JS `MODELS` map)
-carries a planning-tool copy of these rates — when OpenAI pricing changes,
-update BOTH (the dashboard README says the same).
+SOURCE OF TRUTH for real-cost computation (`ai_usage_log.cost_usd`) and for the
+overage rate quoted to users. The pricing dashboard
+(subscriptions/pricing_model/index.html) needs the rates in JS, so it keeps a
+copy — but its entry point (pricing_model/open.py) diffs that copy against this
+table and refuses to open when they disagree, so drift can't go unnoticed.
 
 Rates are USD per 1M tokens, standard tier.
 """
 
+import os
 from dataclasses import dataclass
+
+
+def overage_usd_per_credit() -> float:
+    """USD charged per credit of pay-per-use overage.
+
+    SOURCE OF TRUTH for the rate: the Stripe biller (overage_billing.py) and the
+    rate shown in the UI (Entitlements.to_dict → CreditsUsageCard) both read it
+    here, so changing CREDIT_OVERAGE_USD can never leave the two disagreeing.
+    """
+    return float(os.getenv("CREDIT_OVERAGE_USD", "0.02"))
 
 
 @dataclass(frozen=True)

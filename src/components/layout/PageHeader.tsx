@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSmartBack } from "@/hooks/useSmartBack";
-import { AutoHideTooltip } from "@/components/layout/AutoHideTooltip";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 import { cn } from "@/lib/utils";
@@ -42,17 +41,16 @@ export function PageHeader({
   // House icon next to the bell — one-click route to the landing page
   // (replaces the avatar-dropdown "View landing page" hop).
   const homeButton = user ? (
-    <AutoHideTooltip label="Landing page">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => navigate("/")}
-        aria-label="Home page"
-        className="text-muted-foreground hover:text-foreground"
-      >
-        <Home className="w-4 h-4" />
-      </Button>
-    </AutoHideTooltip>
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => navigate("/")}
+      aria-label="Home page"
+      title="Landing page"
+      className="text-muted-foreground hover:text-foreground"
+    >
+      <Home className="w-4 h-4" />
+    </Button>
   ) : null;
 
   const notificationBell = user ? <NotificationBell /> : null;

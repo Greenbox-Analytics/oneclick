@@ -690,6 +690,9 @@ class TestToDictRegressionSnapshot:
                 "monthlyGrant": 3000,
                 "overageThisPeriod": 0,
                 "overageEnabled": False,
+                # Default CREDIT_OVERAGE_USD; shipped so the UI quotes the same
+                # rate overage_billing.py charges instead of hardcoding one.
+                "overageUsdPerCredit": 0.02,
                 "overageCapCredits": None,
                 "storageOverageEnabled": False,
                 "periodEnd": None,

@@ -9,13 +9,14 @@ import { useEntitlements } from "@/hooks/useEntitlements";
 import { useCreatePortalSession } from "@/hooks/useBilling";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { AdminBadge } from "@/components/admin/AdminBadge";
-import { isPaidTier, tierLabel, ENTERPRISE_LABEL } from "@/lib/tiers";
+import { isPaidTier, tierLabel, usd, ENTERPRISE_LABEL, TIER_PRICES, type TierKey } from "@/lib/tiers";
 import { fmtDate } from "@/lib/utils";
 
 const priceLabel = (tier: string, period: string | null): { amount: string; unit: string } => {
-  if (tier === "pro_max") return period === "annual" ? { amount: "US$500", unit: "/ year" } : { amount: "US$50", unit: "/ month" };
-  if (tier === "pro") return period === "annual" ? { amount: "US$250", unit: "/ year" } : { amount: "US$25", unit: "/ month" };
-  return { amount: "US$0", unit: "/ month" };
+  const key: TierKey = tier === "pro" || tier === "pro_max" ? tier : "free";
+  // Free has no annual price to state — it always reads "/ month".
+  if (key !== "free" && period === "annual") return { amount: usd(TIER_PRICES[key].annual), unit: "/ year" };
+  return { amount: usd(TIER_PRICES[key].monthly), unit: "/ month" };
 };
 
 export function PlanCard() {

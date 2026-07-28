@@ -22,3 +22,23 @@ export function tierLabel(tier: string | null | undefined): string {
 export function isPaidTier(tier: string | null | undefined): boolean {
   return tier === "pro" || tier === "pro_max";
 }
+
+/**
+ * List prices in USD — the ONLY place the frontend states them. Must match the
+ * Stripe prices behind STRIPE_PRICE_* / STRIPE_PRICE_PRO_MAX_*; change together.
+ */
+export const TIER_PRICES: Record<TierKey, { monthly: number; annual: number }> = {
+  free: { monthly: 0, annual: 0 },
+  pro: { monthly: 25, annual: 250 },
+  pro_max: { monthly: 50, annual: 500 },
+};
+
+/** "US$25" / "US$20.83" — cents only when the amount has them. */
+export function usd(amount: number): string {
+  return `US$${Number.isInteger(amount) ? amount : amount.toFixed(2)}`;
+}
+
+/** An annual price restated per month, e.g. "US$20.83" for pro. */
+export function annualPerMonth(tier: TierKey): string {
+  return usd(Math.round((TIER_PRICES[tier].annual / 12) * 100) / 100);
+}

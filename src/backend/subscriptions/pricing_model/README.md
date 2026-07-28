@@ -48,6 +48,9 @@ Broken down per tool / integration:
   graph; the backend does not yet log `response.usage`. Treat this as a planning tool and
   reconcile against the OpenAI invoice before locking prices.
 - **Rates and model IDs are hard-coded** in `index.html` (the `MODELS` map and the rates
-  footer). Update them there when OpenAI pricing or the models change — e.g. the extractor
-  (`OPENAI_LLM_MODEL_LARGE`, default `gpt-5.2`), Zoe (`OPENAI_LLM_MODEL`, default
-  `gpt-5-mini`), or the OneClick payable-column detector (`gpt-5.4-mini`).
+  footer), because a static page can't import Python. `open.py` diffs them against
+  `subscriptions/ai_pricing.py` (`MODEL_RATES` — the authoritative table) and refuses to
+  open the dashboard while they disagree, so update `index.html` when OpenAI pricing or
+  the models change — e.g. the extractor (`OPENAI_LLM_MODEL_LARGE`, default `gpt-5.2`),
+  Zoe (`OPENAI_LLM_MODEL`, default `gpt-5-mini`), or the OneClick payable-column
+  detector (`gpt-5.4-mini`).

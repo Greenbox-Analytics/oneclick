@@ -9,7 +9,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { useCreateCheckoutSession } from "@/hooks/useBilling";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { tierLabel, ENTERPRISE_LABEL } from "@/lib/tiers";
+import { tierLabel, usd, annualPerMonth, ENTERPRISE_LABEL, TIER_PRICES } from "@/lib/tiers";
 
 type Feature = { included: boolean; label: string };
 type Period = "monthly" | "annual";
@@ -170,7 +170,7 @@ const Pricing = () => {
               </p>
             </div>
             <div className="mb-8">
-              <span className="text-4xl font-semibold tracking-tight">US$0</span>
+              <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.free.monthly)}</span>
               <span className="text-muted-foreground ml-1">/month</span>
             </div>
             <ul className="space-y-3 flex-1 mb-8">
@@ -207,14 +207,14 @@ const Pricing = () => {
 
             {basicPeriod === "monthly" ? (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">US$25</span>
+                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro.monthly)}</span>
                 <span className="text-muted-foreground ml-1">/month</span>
               </div>
             ) : (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">US$250</span>
+                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro.annual)}</span>
                 <span className="text-muted-foreground ml-1">/year</span>
-                <div className="text-sm text-muted-foreground mt-1">≈ US$20.83/month — save 2 months</div>
+                <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth("pro")}/month — save 2 months</div>
               </div>
             )}
 
@@ -246,14 +246,14 @@ const Pricing = () => {
 
             {proPeriod === "monthly" ? (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">US$50</span>
+                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro_max.monthly)}</span>
                 <span className="text-muted-foreground ml-1">/month</span>
               </div>
             ) : (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">US$500</span>
+                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro_max.annual)}</span>
                 <span className="text-muted-foreground ml-1">/year</span>
-                <div className="text-sm text-muted-foreground mt-1">≈ US$41.67/month — save 2 months</div>
+                <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth("pro_max")}/month — save 2 months</div>
               </div>
             )}
 
