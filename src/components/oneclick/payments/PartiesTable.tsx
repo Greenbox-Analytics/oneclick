@@ -17,8 +17,11 @@ interface PartiesTableProps {
 }
 
 // 5 cols on mobile (earned/paid hidden via `hidden md:block`), 7 on md+.
+// On mobile the party column flexes from 0 so it truncates instead of colliding
+// with the outstanding/status columns; outstanding + status are content-sized
+// (status is icon-only on mobile — see the label's `hidden sm:inline`).
 const COLS =
-  "grid grid-cols-[26px_minmax(140px,1.6fr)_1fr_110px_24px] md:grid-cols-[26px_minmax(180px,1.6fr)_1fr_1fr_1fr_132px_24px] items-center gap-3.5 px-4 md:px-[18px]";
+  "grid grid-cols-[26px_minmax(0,1fr)_auto_auto_24px] md:grid-cols-[26px_minmax(180px,1.6fr)_1fr_1fr_1fr_132px_24px] items-center gap-2.5 md:gap-3.5 px-3 md:px-[18px]";
 
 export function PartiesTable({
   parties,
@@ -89,7 +92,7 @@ export function PartiesTable({
                         className="rounded-[5px] bg-[hsl(var(--pay-partial-bg))] px-1.5 py-px text-[10px] font-bold text-[hsl(var(--pay-partial-fg))]"
                         title="Credit from an earlier overpayment — applied automatically to their next payout"
                       >
-                        Overpaid {fmtMoney(amount, ccy)} {ccy}
+                        Overpaid {fmtMoney(amount, ccy)}
                       </span>
                     ))}
                   {payee.project_count > 0 && (
@@ -135,7 +138,8 @@ export function PartiesTable({
             {/* Status badge */}
             <span className="flex justify-end">
               <StatusBadge kind={kind}>
-                <StatusIcon className="h-3 w-3" /> {statusLabel}
+                <StatusIcon className="h-3 w-3" />{" "}
+                <span className="hidden sm:inline">{statusLabel}</span>
               </StatusBadge>
             </span>
 

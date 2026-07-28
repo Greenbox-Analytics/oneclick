@@ -18,9 +18,11 @@ import {
   useProjectExpenses,
   useDeleteProjectExpense,
   EXPENSE_CATEGORY_LABELS,
+  formatAmount,
   type ProjectExpense,
 } from "@/hooks/useProjectExpenses";
 import ExpenseFormDialog from "./ExpenseFormDialog";
+import { formatCurrency } from "@/lib/currency";
 
 interface ExpenseTrackerTabProps {
   projectId: string;
@@ -29,9 +31,6 @@ interface ExpenseTrackerTabProps {
 
 const canEdit = (role: string | null) =>
   role === "owner" || role === "admin" || role === "editor";
-
-const formatCurrency = (n: number) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n || 0);
 
 export default function ExpenseTrackerTab({ projectId, userRole }: ExpenseTrackerTabProps) {
   const { data: expenses, isLoading, isError } = useProjectExpenses(projectId);
@@ -80,7 +79,8 @@ export default function ExpenseTrackerTab({ projectId, userRole }: ExpenseTracke
   }
 
   const items = expenses ?? [];
-  const total = items.reduce((sum, e) => sum + (e.amount || 0), 0);
+  // Totals are always USD; per-expense rows show their own currency.
+  const total = items.reduce((sum, e) => sum + (e.amount_usd ?? e.amount ?? 0), 0);
   const isEmpty = items.length === 0;
 
   return (
@@ -121,7 +121,7 @@ export default function ExpenseTrackerTab({ projectId, userRole }: ExpenseTracke
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-medium text-foreground">
-                        {expense.description}
+                        {expense.description || "Untitled expense"}
                       </span>
                       {expense.category && (
                         <Badge variant="outline" className="text-xs shrink-0">
@@ -135,12 +135,12 @@ export default function ExpenseTrackerTab({ projectId, userRole }: ExpenseTracke
                       )}
                       {expense.work_ids.length === 0 ? (
                         <span className="text-xs text-muted-foreground/70">
-                          Project-wide (all tracks)
+                          Project-wide (all works)
                         </span>
                       ) : (
                         expense.work_ids.map((wid) => (
                           <Badge key={wid} variant="secondary" className="text-xs">
-                            {worksById.get(wid) ?? "Track"}
+                            {worksById.get(wid) ?? "Work"}
                           </Badge>
                         ))
                       )}
@@ -148,7 +148,7 @@ export default function ExpenseTrackerTab({ projectId, userRole }: ExpenseTracke
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <span className="text-sm font-semibold text-foreground">
-                      {formatCurrency(expense.amount)}
+                      {formatAmount(expense.amount, expense.currency)}
                     </span>
                     {editable && (
                       <div className="flex items-center gap-1">
@@ -192,8 +192,9 @@ export default function ExpenseTrackerTab({ projectId, userRole }: ExpenseTracke
           <AlertDialogHeader>
             <AlertDialogTitle>Remove this expense?</AlertDialogTitle>
             <AlertDialogDescription>
-              "{deleteTarget?.description}" ({formatCurrency(deleteTarget?.amount ?? 0)}) will be
-              permanently removed. This cannot be undone.
+              "{deleteTarget?.description || "Untitled expense"}" (
+              {formatAmount(deleteTarget?.amount ?? 0, deleteTarget?.currency)}) will be permanently
+              removed. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

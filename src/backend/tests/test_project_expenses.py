@@ -21,6 +21,7 @@ EXPENSE_RECORD = {
     "created_by": TEST_USER_ID,
     "description": "Studio time",
     "amount": 500.0,
+    "currency": "USD",
     "category": "studio",
     "incurred_on": "2026-06-01",
     "created_at": "2026-06-01T00:00:00+00:00",
@@ -150,6 +151,91 @@ class TestCreateExpense:
 
         assert response.status_code == 422
 
+    def test_returns_422_for_unsupported_currency(self, client, mock_supabase):
+        response = client.post(
+            f"/projects/{PROJECT_ID}/expenses",
+            json={"description": "x", "amount": 10.0, "currency": "GBP"},
+        )
+
+        assert response.status_code == 422
+
+    def test_description_is_optional(self, client, mock_supabase):
+        """Only amount is required by the API model; description defaults to ""."""
+        record = {**EXPENSE_RECORD, "description": ""}
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "editor"},  # get_user_role
+                [record],  # project_expenses INSERT
+                [],  # project_expense_works DELETE (replace)
+            ]
+        )
+
+        response = client.post(
+            f"/projects/{PROJECT_ID}/expenses",
+            json={"amount": 25.0, "currency": "USD", "category": "other", "incurred_on": "2026-06-02"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["expense"]["description"] == ""
+
+    def test_non_usd_expense_gets_amount_usd(self, client, mock_supabase, monkeypatch):
+        """A EUR expense persists its currency and the response carries amount_usd."""
+        import projects.service as proj_service
+
+        record = {**EXPENSE_RECORD, "amount": 100.0, "currency": "EUR"}
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "editor"},  # get_user_role
+                [record],  # project_expenses INSERT
+                [],  # project_expense_works DELETE (replace)
+            ]
+        )
+        monkeypatch.setattr(proj_service.fx, "convert", lambda db, amount, frm, to, on_missing="amount": amount * 1.1)
+
+        response = client.post(
+            f"/projects/{PROJECT_ID}/expenses",
+            json={
+                "description": "Berlin studio",
+                "amount": 100.0,
+                "currency": "EUR",
+                "category": "studio",
+                "incurred_on": "2026-06-01",
+            },
+        )
+
+        assert response.status_code == 200
+        expense = response.json()["expense"]
+        assert expense["currency"] == "EUR"
+        assert expense["amount_usd"] == 110.0
+
+    def test_amount_usd_falls_back_to_raw_amount_when_rate_missing(self, client, mock_supabase, monkeypatch):
+        """On an FX miss (empty cache / network failure) the raw amount is used,
+        so a non-USD expense never silently drops its USD value to zero."""
+        import projects.service as proj_service
+
+        record = {**EXPENSE_RECORD, "amount": 100.0, "currency": "CAD"}
+        mock_supabase.table.side_effect = _seq_side_effect(
+            [
+                {"role": "editor"},  # get_user_role
+                [record],  # project_expenses INSERT
+                [],  # project_expense_works DELETE (replace)
+            ]
+        )
+        # Mirror fx.convert's on_missing="amount" contract: return the input amount.
+        monkeypatch.setattr(
+            proj_service.fx,
+            "convert",
+            lambda db, amount, frm, to, on_missing="amount": amount if on_missing == "amount" else None,
+        )
+
+        response = client.post(
+            f"/projects/{PROJECT_ID}/expenses",
+            json={"description": "Toronto studio", "amount": 100.0, "currency": "CAD"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["expense"]["amount_usd"] == 100.0
+
 
 # ===========================================================================
 # PUT /projects/{project_id}/expenses/{expense_id}
@@ -245,6 +331,8 @@ class TestExpensesSummary:
         assert row["project_name"] == "Midnight EP"
         assert row["artist_name"] == "Nova"
         assert row["amount"] == 500.0
+        assert row["currency"] == "USD"
+        assert row["amount_usd"] == 500.0
         assert row["is_tagged"] is True
 
     def test_untagged_expense_flagged_false(self, client, mock_supabase):

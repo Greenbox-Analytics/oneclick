@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, ArrowLeft, Info, Calculator, Wallet } from "lucide-react";
+import { AlertCircle, Info, Calculator, Wallet } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -11,7 +11,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/AuthContext";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { useSmartBack } from "@/hooks/useSmartBack";
 import { PaymentTracking } from "@/components/oneclick/payments/PaymentTracking";
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
@@ -26,7 +25,6 @@ interface Artist {
 const OneClick = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const goBack = useSmartBack("/tools");
   const { user } = useAuth();
 
   // When arriving from a OneClick calculation's "Pay Royalties" button, open the
@@ -103,15 +101,9 @@ const OneClick = () => {
     <RequireFeature feature="oneclick">
       <div className="min-h-screen bg-background">
         <PageHeader
-          showBack={false}
+          backTo="/tools"
           actions={
-          <>
-            <HeaderDocsButton />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </>
+          <HeaderDocsButton />
         }
       />
 

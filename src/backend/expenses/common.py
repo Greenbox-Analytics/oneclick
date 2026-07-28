@@ -3,8 +3,9 @@
 Mirrors the category labels and filter semantics used on the frontend Expense
 Tracker (``EXPENSE_CATEGORY_LABELS`` and ``filterExpenseRows`` in
 ``src/pages/ExpenseTracker.tsx``) so the exported report matches exactly what
-the user sees on screen. Amounts are USD, matching the page's hardcoded
-formatting — currency selection is intentionally out of scope.
+the user sees on screen. Line items are shown in their original currency;
+totals sum the USD-converted ``amount_usd`` (falling back to ``amount`` for
+pre-currency rows), matching the page's USD totals.
 """
 
 # Keep in sync with EXPENSE_CATEGORY_LABELS in src/hooks/useProjectExpenses.ts
@@ -26,22 +27,48 @@ def category_label(cat: str | None) -> str:
     return CATEGORY_LABELS.get(cat, cat.replace("_", " ").title())
 
 
-def fmt_money(n) -> str:
-    """Format a number as USD, matching the page's ``$`` formatting."""
-    return f"${float(n or 0):,.2f}"
+# Keep in sync with EXPENSE_CURRENCIES in projects/models.py and
+# CURRENCY_SYMBOLS in src/lib/currency.ts
+CURRENCY_SYMBOLS: dict[str, str] = {
+    "USD": "US$",
+    "EUR": "€",
+    "CAD": "CA$",
+    "AUD": "A$",
+}
 
 
-def filter_expense_rows(rows: list[dict], project_id: str | None, category: str | None) -> list[dict]:
+def fmt_money(n, currency: str = "USD") -> str:
+    """Format a number in the given currency, matching the page's formatting."""
+    symbol = CURRENCY_SYMBOLS.get((currency or "USD").upper())
+    if symbol is None:
+        return f"{float(n or 0):,.2f} {currency}"
+    return f"{symbol}{float(n or 0):,.2f}"
+
+
+def usd_amount(r: dict) -> float:
+    """USD value of an expense row (``amount_usd``; ``amount`` for legacy rows)."""
+    return float(r.get("amount_usd", r.get("amount")) or 0)
+
+
+def filter_expense_rows(
+    rows: list[dict],
+    project_id: str | None,
+    category: str | None,
+    artist_id: str | None = None,
+) -> list[dict]:
     """Apply the same scoping the page applies via ``filterExpenseRows``.
 
     Uncategorized expenses count as ``other`` so a category filter behaves the
-    same way the on-screen ``byCategory`` bucketing does.
+    same way the on-screen ``byCategory`` bucketing does. Rows without an
+    artist are excluded whenever an artist filter is set, matching the page.
     """
     out = []
     for r in rows:
         if project_id and r.get("project_id") != project_id:
             continue
         if category and (r.get("category") or "other") != category:
+            continue
+        if artist_id and r.get("artist_id") != artist_id:
             continue
         out.append(r)
     return out
@@ -53,13 +80,14 @@ def sorted_rows(rows: list[dict]) -> list[dict]:
 
 
 def category_totals(rows: list[dict]) -> list[tuple[str, float]]:
-    """(category_code, total) pairs sorted by total descending."""
+    """(category_code, USD total) pairs sorted by total descending."""
     acc: dict[str, float] = {}
     for r in rows:
         key = r.get("category") or "other"
-        acc[key] = acc.get(key, 0.0) + float(r.get("amount") or 0)
+        acc[key] = acc.get(key, 0.0) + usd_amount(r)
     return sorted(acc.items(), key=lambda kv: kv[1], reverse=True)
 
 
 def grand_total(rows: list[dict]) -> float:
-    return sum(float(r.get("amount") or 0) for r in rows)
+    """USD grand total across rows."""
+    return sum(usd_amount(r) for r in rows)

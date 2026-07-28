@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { toast } from "sonner";
@@ -11,7 +11,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { useSmartBack } from "@/hooks/useSmartBack";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
@@ -124,7 +123,6 @@ const postConfirm = async (body: Record<string, unknown>): Promise<{ id?: string
 
 const OneClickDocuments = () => {
   const navigate = useNavigate();
-  const goBack = useSmartBack("/tools/oneclick");
   const { artistId } = useParams<{ artistId: string }>();
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -685,15 +683,11 @@ const OneClickDocuments = () => {
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
-        showBack={false}
+        backTo="/tools/oneclick"
         actions={
           <>
             <HeaderDocsButton />
             <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={goBack}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
           </>
         }
       />
@@ -702,7 +696,7 @@ const OneClickDocuments = () => {
         <div className="mb-8">
           <h2 className="text-3xl font-bold text-foreground mb-2">OneClick Royalty Calculator</h2>
           <p className="text-muted-foreground flex items-center gap-2">
-            Upload documents for{" "}
+            Upload documents for{""}
             {isLoadingArtist ? (
               <span className="inline-block h-4 w-32 rounded bg-muted animate-pulse" aria-label="Loading artist name" />
             ) : (

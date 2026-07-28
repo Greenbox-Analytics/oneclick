@@ -11,6 +11,11 @@ const LABEL_COLORS = [
   { bg: "bg-slate-100", text: "text-slate-700" },
 ];
 
+// Teams are coloured by index (not by hash) so two teams never collide, and slate is
+// reserved for personal tasks — see CalendarView's legend.
+export const TEAM_COLORS = LABEL_COLORS.slice(0, 9);
+export const PERSONAL_COLOR = LABEL_COLORS[9];
+
 function hashString(str: string): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {

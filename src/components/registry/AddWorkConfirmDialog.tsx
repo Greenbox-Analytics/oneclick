@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { RoyaltySplitsTable, type SplitRow } from "./RoyaltySplitsTable";
+import { splitsOverCap } from "./splitsShared";
 
 interface AddWorkConfirmDialogProps {
   open: boolean;
@@ -54,6 +55,12 @@ export function AddWorkConfirmDialog({
     (r) => (r.master || 0) > 0 || (r.publishing || 0) > 0 || (r.soundexchange || 0) > 0
   );
   const balanced = totals.master === 100 && totals.publishing === 100;
+  // Over-allocation is a hard block; under-100% only warns (below).
+  const overCap = useMemo(() => splitsOverCap(namedRows), [namedRows]);
+  const overPools = [
+    overCap.master ? `Master ${totals.master}%` : null,
+    overCap.publishing ? `Publishing ${totals.publishing}%` : null,
+  ].filter(Boolean);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
@@ -72,14 +79,26 @@ export function AddWorkConfirmDialog({
             <div className="max-h-72 overflow-y-auto pr-1">
               <RoyaltySplitsTable rows={namedRows} />
             </div>
-            {hasSplits && !balanced && (
-              <div className="flex items-start gap-2 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg px-3 py-2">
+            {overCap.over ? (
+              <div className="flex items-start gap-2 text-xs bg-destructive/10 text-destructive border border-destructive/20 rounded-lg px-3 py-2">
                 <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                 <span>
-                  Splits don't total 100% (Master {totals.master}% · Publishing {totals.publishing}
-                  %). You can still add the work and fix them later on the work page.
+                  {overPools.join(" and ")} exceed{overPools.length === 1 ? "s" : ""} 100%. Reduce
+                  the splits to 100% or less before adding this work.
                 </span>
               </div>
+            ) : (
+              hasSplits &&
+              !balanced && (
+                <div className="flex items-start gap-2 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg px-3 py-2">
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    Splits don't total 100% (Master {totals.master}% · Publishing{" "}
+                    {totals.publishing}%). You can still add the work and fix them later on the work
+                    page.
+                  </span>
+                </div>
+              )
             )}
           </>
         ) : null}
@@ -88,8 +107,8 @@ export function AddWorkConfirmDialog({
           <div className="flex items-start gap-2 text-xs bg-muted/60 text-muted-foreground border rounded-lg px-3 py-2">
             <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <span>
-              No royalty splits will be saved with this work — you can add them any time on the
-              work page.
+              No royalty splits have been added — go back to the Splits step to add them now, or
+              add them any time later on the work page.
             </span>
           </div>
         )}
@@ -98,7 +117,7 @@ export function AddWorkConfirmDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             Go back
           </Button>
-          <Button onClick={onConfirm} disabled={submitting}>
+          <Button onClick={onConfirm} disabled={submitting || overCap.over}>
             {submitting ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (

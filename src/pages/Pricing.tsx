@@ -170,7 +170,7 @@ const Pricing = () => {
               </p>
             </div>
             <div className="mb-8">
-              <span className="text-4xl font-semibold tracking-tight">$0</span>
+              <span className="text-4xl font-semibold tracking-tight">US$0</span>
               <span className="text-muted-foreground ml-1">/month</span>
             </div>
             <ul className="space-y-3 flex-1 mb-8">
@@ -207,14 +207,14 @@ const Pricing = () => {
 
             {basicPeriod === "monthly" ? (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">$25</span>
+                <span className="text-4xl font-semibold tracking-tight">US$25</span>
                 <span className="text-muted-foreground ml-1">/month</span>
               </div>
             ) : (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">$250</span>
+                <span className="text-4xl font-semibold tracking-tight">US$250</span>
                 <span className="text-muted-foreground ml-1">/year</span>
-                <div className="text-sm text-muted-foreground mt-1">≈ $20.83/month — save 2 months</div>
+                <div className="text-sm text-muted-foreground mt-1">≈ US$20.83/month — save 2 months</div>
               </div>
             )}
 

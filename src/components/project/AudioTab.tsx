@@ -260,7 +260,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
     if (storageStatus.cap !== -1 && (storageStatus.used + totalSize) > storageStatus.cap) {
       const mb = (totalSize / (1024 * 1024)).toFixed(1);
       toast.error(
-        `Uploading this file (${mb} MB) would exceed your storage cap. Upgrade to Pro for unlimited.`,
+        `Uploading ${fileList.length} file${fileList.length === 1 ? "" : "s"} (${mb} MB) would exceed your storage cap. Upgrade to Pro for unlimited.`,
       );
       return;
     }
@@ -417,6 +417,7 @@ export default function AudioTab({ projectId, userRole, artistId }: AudioTabProp
         ref={fileInputRef}
         type="file"
         accept="audio/*"
+        multiple
         className="hidden"
         onChange={handleUpload}
       />

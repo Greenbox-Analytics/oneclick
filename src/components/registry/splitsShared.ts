@@ -31,3 +31,25 @@ export function splitTotals(
     { master: 0, publishing: 0 }
   );
 }
+
+/**
+ * Allowed overage above 100% for a stake-total pool. Absorbs tiny rounding from
+ * AI-parsed fractional splits — kept in sync with the backend STAKE_TOTAL_MARGIN
+ * (src/backend/registry/service.py) and the validate_stake_total DB trigger.
+ */
+export const SPLIT_TOTAL_MARGIN = 0.5;
+
+/**
+ * Whether master and/or publishing totals exceed 100% by more than `margin`.
+ * Mirrors the per-stake_type 100% pools the backend enforces (soundexchange is
+ * excluded, consistent with splitTotals).
+ */
+export function splitsOverCap(
+  rows: Array<{ master?: number; publishing?: number }>,
+  margin: number = SPLIT_TOTAL_MARGIN
+): { master: boolean; publishing: boolean; over: boolean } {
+  const totals = splitTotals(rows);
+  const master = totals.master > 100 + margin;
+  const publishing = totals.publishing > 100 + margin;
+  return { master, publishing, over: master || publishing };
+}

@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { formatCurrency } from "@/lib/currency";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useDriveExport } from "@/hooks/useGoogleDrive";
 import { DriveImportDialog } from "./integrations/DriveImportDialog";
@@ -59,18 +60,10 @@ interface ContractImpact {
   buckets_with_paid_coverage: number;
 }
 
-function formatMoney(amount: number, ccy: string): string {
-  try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: ccy }).format(amount);
-  } catch {
-    return `${amount.toFixed(2)} ${ccy}`;
-  }
-}
-
 function formatBackedTotals(backed: Record<string, number>): string {
   const entries = Object.entries(backed).filter(([, amount]) => amount > 0);
-  if (entries.length === 0) return "$0.00";
-  return entries.map(([ccy, amount]) => formatMoney(amount, ccy)).join(", ");
+  if (entries.length === 0) return formatCurrency(0);
+  return entries.map(([ccy, amount]) => formatCurrency(amount, ccy)).join(", ");
 }
 
 export default function FilesTab({ projectId, userRole }: FilesTabProps) {
@@ -526,6 +519,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                   <input
                     ref={(el) => { fileInputRefs.current[cat.key] = el; }}
                     type="file"
+                    multiple
                     className="hidden"
                     onChange={(e) => handleUpload(cat.key, e)}
                   />

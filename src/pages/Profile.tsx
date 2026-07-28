@@ -291,7 +291,7 @@ const Profile = () => {
 
       <main className="container mx-auto px-4 py-8 max-w-5xl">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Account &amp; Billing</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">Account &amp; Billing</h1>
           <p className="text-muted-foreground mt-1">
             Your profile, plan, and credit usage — all in one place.
           </p>

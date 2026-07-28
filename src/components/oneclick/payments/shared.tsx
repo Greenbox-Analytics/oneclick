@@ -39,7 +39,7 @@ export interface CurrencyMeta {
 }
 
 export const CURRENCIES: Record<string, CurrencyMeta> = {
-  USD: { code: "USD", symbol: "$",   name: "US Dollar",         flag: "🇺🇸" },
+  USD: { code: "USD", symbol: "US$", name: "US Dollar",         flag: "🇺🇸" },
   GBP: { code: "GBP", symbol: "£",   name: "British Pound",     flag: "🇬🇧" },
   EUR: { code: "EUR", symbol: "€",   name: "Euro",              flag: "🇪🇺" },
   CAD: { code: "CAD", symbol: "C$",  name: "Canadian Dollar",   flag: "🇨🇦" },

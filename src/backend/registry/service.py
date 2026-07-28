@@ -12,6 +12,12 @@ from registry.access import get_work_access
 
 logger = logging.getLogger(__name__)
 
+# Allowed overage above 100% for a stake-total pool (per work + stake_type).
+# Absorbs tiny rounding from AI-parsed fractional splits. Kept in sync with the
+# frontend SPLIT_TOTAL_MARGIN (src/components/registry/splitsShared.ts) and the
+# validate_stake_total DB trigger.
+STAKE_TOTAL_MARGIN = 0.5
+
 
 def _resolve_auth_email(db: Client, user_id: str) -> str | None:
     """Return the verified email for `user_id` from auth.users (Supabase).
@@ -166,7 +172,7 @@ async def validate_stake_percentage(
         .execute()
     )
     total = sum(row["percentage"] for row in (existing.data or []) if row["id"] != exclude_stake_id)
-    return (total + new_percentage) <= 100.0
+    return (total + new_percentage) <= 100.0 + STAKE_TOTAL_MARGIN
 
 
 async def create_stake(db: Client, user_id: str, data: dict):
