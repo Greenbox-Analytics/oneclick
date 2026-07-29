@@ -1,5 +1,5 @@
 # src/backend/subscriptions/sweep.py
-"""Daily billing sweep (spec §3 clock, §5 storage, §7 annual overage).
+"""Daily billing sweep (spec §3 clock, §7 annual overage).
 
 Cloud Scheduler hits POST /internal/billing-sweep once a day with the
 X-Sweep-Token header. Idempotent: every step no-ops on re-run. Lazy per-request
@@ -10,13 +10,11 @@ billing events that must fire without user activity.
 import hmac
 import logging
 import os
-import uuid
 from datetime import UTC, datetime
 
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Header, HTTPException
 
-import subscriptions.stripe_client as stripe_client_module
 from subscriptions.overage_billing import bill_pending_overage, invoice_unswept_items
 from subscriptions.service import _parse_iso, credits_enabled, licensing_enabled
 
@@ -60,7 +58,7 @@ def _capped(builder, name: str) -> list:
 async def billing_sweep(x_sweep_token: str | None = Header(None)):
     _require_token(x_sweep_token)
     if not credits_enabled():
-        return {"walletsRolled": 0, "storageBilled": 0, "overageBilled": 0, "annualInvoiced": 0, "disabled": True}
+        return {"walletsRolled": 0, "overageBilled": 0, "annualInvoiced": 0, "disabled": True}
 
     from main import get_supabase_client
 
@@ -70,18 +68,17 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     # client) if the user base or per-user work grows.
     sb = get_supabase_client()
     now = datetime.now(UTC)
-    rolled = storage_billed = overage_billed = annual_invoiced = 0
-    storage_grandfathered = seats_topped_up = pool_low = 0
+    rolled = overage_billed = annual_invoiced = 0
+    seats_topped_up = pool_low = 0
 
     tier_data = _capped(
-        sb.table("tier_entitlements").select("tier, monthly_credits, included_storage_bytes"),
+        sb.table("tier_entitlements").select("tier, monthly_credits"),
         "tier_entitlements",
     )
     grants = {r["tier"]: r["monthly_credits"] for r in tier_data}
-    included = {r["tier"]: r.get("included_storage_bytes", -1) for r in tier_data}
     paid_subs = _capped(
         sb.table("subscriptions")
-        .select("user_id, tier, stripe_customer_id, stripe_price_id, storage_overage_enabled")
+        .select("user_id, tier, stripe_customer_id, stripe_price_id")
         .in_("tier", list(PAID_TIERS)),
         "subscriptions",
     )
@@ -106,132 +103,7 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
             continue
         override_grants[r["user_id"]] = r["monthly_credits"]
 
-    # Licensing rule 13 (storage-billing grandfather): storage is a single
-    # per-user counter that follows a member out of an org seat — an
-    # ex-seat member who accrued hundreds of GB under org context must never
-    # be auto-billed for it in personal context (block-don't-bill; the wall
-    # copy points at support, never "ask your admin"). Any org_members row —
-    # ANY status, including 'removed' — exempts the user, because removal is
-    # a SOFT-remove and the surviving row is exactly the durability marker
-    # rule 13 relies on. Unconditional (not gated on licensing_enabled()):
-    # once the org tables exist, historical org-accrued storage must stay
-    # exempt even if the flag is later toggled off.
-    try:
-        org_member_rows = _capped(
-            sb.table("org_members").select("user_id"),
-            "org_members(storage-grandfather)",
-        )
-        org_member_user_ids = {r["user_id"] for r in org_member_rows if r.get("user_id")}
-    except Exception as exc:
-        # Expected pre-migration state (Phase B review finding 2): deploys are
-        # automatic but the org_members migration
-        # (20260721000001_licensing_core.sql) is applied manually, so a
-        # backend deploy can land before the table exists. This scan is
-        # unconditional (not gated on licensing_enabled()/CREDITS_ENABLED
-        # beyond the early-return above) and was the ONLY step-level DB
-        # access in this sweep with no try/except — an unguarded failure
-        # here aborted the ENTIRE sweep (rollover, storage billing, overage
-        # billing all silently stopped). Fail OPEN on an EMPTY grandfather
-        # set: correct pre-migration, since nobody can have org history yet.
-        # logger.warning (not .exception) — this is anticipated, not a bug.
-        logger.warning(
-            "sweep: org_members scan failed (expected if the licensing migration "
-            "hasn't run yet) — proceeding with an empty storage-grandfather set: %s",
-            exc,
-        )
-        org_member_user_ids: set[str] = set()
-
-    # --- 1. Storage overage snapshot — BEFORE rollover, so it's keyed on the
-    # period that is about to close. Semantics (spec §5 refined): a monthly
-    # charge for current bytes above included, billed once per wallet period.
-    rate = float(os.getenv("STORAGE_OVERAGE_USD_PER_GB", "0.05"))
-    for sub in paid_subs:
-        try:
-            if not sub.get("storage_overage_enabled") or not sub.get("stripe_customer_id"):
-                continue
-            if sub["user_id"] in org_member_user_ids:
-                storage_grandfathered += 1
-                logger.info(
-                    "sweep storage billing: user %s grandfathered (holds an org_members row) — never auto-billed",
-                    sub["user_id"],
-                )
-                continue
-            usage = sb.table("usage_counters").select("total_storage_bytes").eq("user_id", sub["user_id"]).execute()
-            used = usage.data[0]["total_storage_bytes"] if usage.data else 0
-            inc = included.get(sub["tier"], -1)
-            if inc == -1 or used <= inc:
-                continue
-            wallet_res = (
-                sb.table("credit_wallets")
-                .select("id, period_end")
-                .eq("owner_type", "user")
-                .eq("owner_id", sub["user_id"])
-                .execute()
-            )
-            if not wallet_res.data:
-                continue
-            wallet = wallet_res.data[0]
-            # Idempotency: one storage_bill ledger row per wallet period. The
-            # check counts ANY storage_bill row for the period (even one whose
-            # invoice_item_id backfill never landed — see safe-direction note
-            # below), so a crashed prior run skips the period rather than
-            # retrying it into a double charge.
-            existing = (
-                sb.table("credit_ledger")
-                .select("metadata")
-                .eq("wallet_id", wallet["id"])
-                .eq("kind", "storage_bill")
-                .execute()
-            )
-            already = any(
-                (r.get("metadata") or {}).get("period_end") == wallet["period_end"] for r in (existing.data or [])
-            )
-            if already:
-                continue
-            over_gb = (used - inc) / 1_073_741_824
-            amount_cents = round(over_gb * rate * 100)
-            if amount_cents <= 0:
-                continue
-            # Safe-direction ordering (spec §5): INSERT the ledger row first,
-            # THEN create the Stripe InvoiceItem, THEN backfill invoice_item_id.
-            # A crash between create and insert — combined with cron drift past
-            # Stripe's 24h idempotency-key window — would double-charge. Insert-
-            # first turns that rare race into a rare UNDER-charge instead: the
-            # `already` check above sees the row and skips the period next run.
-            ledger_id = str(uuid.uuid4())
-            base_metadata = {
-                "period_end": wallet["period_end"],
-                "gb": round(over_gb, 2),
-                "usd": amount_cents / 100,
-            }
-            sb.table("credit_ledger").insert(
-                {
-                    "id": ledger_id,
-                    "wallet_id": wallet["id"],
-                    "delta": 0,
-                    "kind": "storage_bill",
-                    "balance_after": 0,
-                    "metadata": base_metadata,
-                }
-            ).execute()
-            stripe = stripe_client_module.get_stripe()
-            # idempotency_key defends the check-then-act gap if two sweeps race.
-            item = stripe.InvoiceItem.create(
-                idempotency_key=f"storage:{wallet['id']}:{wallet['period_end']}",
-                customer=sub["stripe_customer_id"],
-                amount=amount_cents,
-                currency="usd",
-                description=f"Storage overage: {over_gb:.1f} GB × ${rate:.2f}/GB/mo",
-                metadata={"user_id": sub["user_id"], "period_end": wallet["period_end"]},
-            )
-            sb.table("credit_ledger").update({"metadata": {**base_metadata, "invoice_item_id": item.id}}).eq(
-                "id", ledger_id
-            ).execute()
-            storage_billed += 1
-        except Exception:
-            logger.exception("sweep storage billing failed user=%s", sub.get("user_id"))
-
-    # --- 2. Roll over stale wallets at their tier's grant --------------------
+    # --- 1. Roll over stale wallets at their tier's grant --------------------
     stale = _capped(
         sb.table("credit_wallets").select("*").eq("owner_type", "user").lt("period_end", now.isoformat()),
         "credit_wallets(stale)",
@@ -256,7 +128,7 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         except Exception:
             logger.exception("sweep rollover failed wallet=%s", wallet.get("id"))
 
-    # --- 3. Bill unbilled overage rows for ALL paid users (daily, cheap) ----
+    # --- 2. Bill unbilled overage rows for ALL paid users (daily, cheap) ----
     # Creates pending InvoiceItems only. Monthly plans: items ride the next
     # renewal invoice automatically. This is the ONLY place (besides the
     # invoice.created safety net) that talks to Stripe about credit overage —
@@ -269,7 +141,7 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         except Exception:
             logger.exception("sweep overage billing failed user=%s", sub.get("user_id"))
 
-    # --- 4. Annual plans: standalone invoice on a MONTHLY cadence ------------
+    # --- 3. Annual plans: standalone invoice on a MONTHLY cadence ------------
     # CRITICAL: gate on a per-wallet cadence timestamp (last_standalone_invoice_at),
     # NOT on "did THIS sweep roll the wallet". The lazy get_for_user path
     # (_maybe_rollover_wallet in service.py) advances the period on the user's
@@ -279,8 +151,8 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     # (violating spec §7's ≤1-month unbilled-liability guarantee). Gating on the
     # cadence timestamp makes the invoice fire monthly regardless of which path
     # advanced the wallet. auto_advance pulls EVERY floating pending item into
-    # the one invoice, so this sweeps in both credit overage (overage_debit) and
-    # storage (storage_bill) — the latter also otherwise starves on annual plans.
+    # the one invoice, so credit overage (overage_debit) can't starve on an
+    # annual plan waiting for its ~12-month renewal.
     cadence_floor = now - relativedelta(days=ANNUAL_INVOICE_MIN_DAYS)
     for sub in paid_subs:
         try:
@@ -317,7 +189,7 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         except Exception:
             logger.exception("sweep annual invoicing failed user=%s", sub.get("user_id"))
 
-    # --- 5. Default seat allowance (licensing Phase B, spec §4 flow, rule 6):
+    # --- 4. Default seat allowance (licensing Phase B, spec §4 flow, rule 6):
     # for every ACTIVE, non-archived org with default_seat_allowance > 0, top
     # each ACTIVE seat up to the allowance — FULL amount or SKIP. LICENSING_
     # ENABLED only; the credits-disabled early-return above already covers
@@ -425,8 +297,6 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
 
     return {
         "walletsRolled": rolled,
-        "storageBilled": storage_billed,
-        "storageGrandfathered": storage_grandfathered,
         "overageBilled": overage_billed,
         "annualInvoiced": annual_invoiced,
         "seatsToppedUp": seats_topped_up,

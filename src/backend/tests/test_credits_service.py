@@ -180,7 +180,6 @@ def _paid_supabase(
     cap=None,
     tier="pro",
     overage_used=0,
-    storage_overage_enabled=False,
     status="active",
 ):
     sb = MagicMock()
@@ -204,7 +203,6 @@ def _paid_supabase(
                         "status": status,
                         "overage_enabled": overage_enabled,
                         "overage_cap_credits": cap,
-                        "storage_overage_enabled": storage_overage_enabled,
                     }
                 ],
                 count=1,
@@ -546,10 +544,12 @@ class TestStorageIncludedCheck:
         r = EntitlementsService(sb).can(TEST_USER_ID, Action.UPLOAD_BYTES, size=1)
         assert not r.allowed
 
-    def test_paid_over_included_with_optin_allowed(self, monkeypatch):
+    def test_paid_under_included_allowed(self, monkeypatch):
+        """Counterpart to the denial above: the allowance gate must not fire
+        while usage is still under included_storage_bytes. (There is no storage
+        pay-per-use — past the allowance the upload simply blocks.)"""
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        # paid, storage_overage_enabled=True, usage at included, +1 byte → ALLOWED (opt-in)
-        sb = _paid_supabase(bundle=100, storage_overage_enabled=True)
+        sb = _paid_supabase(bundle=100)
         orig = sb.table.side_effect
 
         def side_effect(name):
@@ -559,7 +559,7 @@ class TestStorageIncludedCheck:
                     data=[
                         {
                             "user_id": TEST_USER_ID,
-                            "total_storage_bytes": 107374182400,
+                            "total_storage_bytes": 107374182400 - 1024,
                             "split_sheets_this_period": 0,
                             "zoe_queries_this_period": 0,
                             "oneclick_runs_this_period": 0,

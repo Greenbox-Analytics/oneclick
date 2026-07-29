@@ -78,10 +78,11 @@ ALTER TABLE tier_overrides
 -- ---------------------------------------------------------------------------
 -- 3. Billing prefs (opt-in overage) on subscriptions
 -- ---------------------------------------------------------------------------
+-- Storage has no pay-per-use: uploads block at included_storage_bytes, so the
+-- only opt-in here is credit overage.
 ALTER TABLE subscriptions
   ADD COLUMN IF NOT EXISTS overage_enabled BOOLEAN NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS overage_cap_credits INTEGER,
-  ADD COLUMN IF NOT EXISTS storage_overage_enabled BOOLEAN NOT NULL DEFAULT false;
+  ADD COLUMN IF NOT EXISTS overage_cap_credits INTEGER;
 
 -- ---------------------------------------------------------------------------
 -- 4. credit_prices — published per-action prices (public read, like tiers)
@@ -134,7 +135,7 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
   wallet_id UUID NOT NULL REFERENCES credit_wallets(id),
   delta INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN
-    ('monthly_grant', 'debit', 'overage_debit', 'admin_grant', 'refund', 'expiry', 'storage_bill')),
+    ('monthly_grant', 'debit', 'overage_debit', 'admin_grant', 'refund', 'expiry')),
   action TEXT,
   request_id TEXT,
   balance_after INTEGER NOT NULL,
@@ -324,9 +325,7 @@ DECLARE
 BEGIN
   IF p_amount < 0 THEN RAISE EXCEPTION 'grant amount must be >= 0'; END IF;
   IF p_bucket NOT IN ('bundle', 'reserve') THEN RAISE EXCEPTION 'invalid bucket %', p_bucket; END IF;
-  -- Kind whitelist symmetric with debit_credits. storage_bill rows are
-  -- inserted directly by the sweep, never via grant_credits — that's why
-  -- it's absent here.
+  -- Kind whitelist symmetric with debit_credits.
   IF p_kind NOT IN ('monthly_grant', 'admin_grant', 'refund') THEN
     RAISE EXCEPTION 'invalid grant kind %', p_kind;
   END IF;

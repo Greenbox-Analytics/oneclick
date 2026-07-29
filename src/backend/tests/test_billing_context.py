@@ -79,7 +79,6 @@ def _sub_row(tier="pro"):
         "cancel_at_period_end": False,
         "overage_enabled": False,
         "overage_cap_credits": None,
-        "storage_overage_enabled": False,
     }
 
 
@@ -608,9 +607,15 @@ class TestBillingContextFieldMatrix:
 
 
 class TestToDictRegressionSnapshot:
-    def test_to_dict_personal_shape_regression_snapshot(self):
+    def test_to_dict_personal_shape_regression_snapshot(self, monkeypatch):
         """Deep-equal against a captured pre-licensing shape: to_dict for a personal
-        Entitlements (no managed_by_org, available_contexts=None) is byte-identical."""
+        Entitlements (no managed_by_org, available_contexts=None) is byte-identical.
+
+        The overage rate is pinned: it is read from CREDIT_OVERAGE_USD at
+        serialization time, and main.py load_dotenv()s the developer's .env, so
+        without this the snapshot asserts against whatever rate that file carries.
+        """
+        monkeypatch.setenv("CREDIT_OVERAGE_USD", "0.02")
         from datetime import datetime
 
         from subscriptions.models import Caps, CreditsInfo, Entitlements, Features, Usage
@@ -651,7 +656,6 @@ class TestToDictRegressionSnapshot:
                 overage_this_period=0,
                 overage_enabled=False,
                 overage_cap_credits=None,
-                storage_overage_enabled=False,
                 period_end=None,
                 prices={"zoe_message": 3, "oneclick_run": 21, "registry_parse": 12},
             ),
@@ -694,7 +698,6 @@ class TestToDictRegressionSnapshot:
                 # rate overage_billing.py charges instead of hardcoding one.
                 "overageUsdPerCredit": 0.02,
                 "overageCapCredits": None,
-                "storageOverageEnabled": False,
                 "periodEnd": None,
                 "prices": {"zoeMessage": 3, "oneclickRun": 21, "registryParse": 12},
             },

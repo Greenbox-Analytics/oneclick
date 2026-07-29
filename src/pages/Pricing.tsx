@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Check, X, Music, ArrowLeft } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { useCreateCheckoutSession } from "@/hooks/useBilling";
@@ -296,9 +296,9 @@ const Pricing = () => {
             </Button>
             <p className="text-xs text-muted-foreground mt-3 text-center">
               Coming soon —{" "}
-              <a href="mailto:tech@greenboxanalytics.ca" className="underline">
+              <Link to="/contact" className="underline">
                 reach out
-              </a>{" "}
+              </Link>{" "}
               for early access.
             </p>
           </Card>

@@ -156,7 +156,6 @@ class TestBillingPrefs:
             "status": "active",
             "overage_enabled": True,
             "overage_cap_credits": 500,
-            "storage_overage_enabled": False,
         }
 
         def side_effect(name):
@@ -175,7 +174,6 @@ class TestBillingPrefs:
         assert resp.status_code == 200
         assert resp.json()["overageEnabled"] is True
         assert resp.json()["overageCapCredits"] == 500
-        assert resp.json()["storageOverageEnabled"] is False
 
     def test_free_tier_cannot_enable_credit_overage(self, client, mock_supabase, monkeypatch):
         monkeypatch.setenv("CREDITS_ENABLED", "true")
@@ -245,7 +243,7 @@ class TestBillingPrefs:
             return b
 
         mock_supabase.table.side_effect = side_effect
-        resp = client.post("/me/billing-prefs", json={"storage_overage_enabled": True})
+        resp = client.post("/me/billing-prefs", json={"overage_cap_credits": 400})
         assert resp.status_code == 200
 
         upserts = [b.upsert for b in sub_builders if b.upsert.called]
@@ -253,7 +251,7 @@ class TestBillingPrefs:
         args, kwargs = upserts[0].call_args
         # Plain shape: user_id + provided prefs only — tier/status/overage columns
         # all have NOT NULL DEFAULTs in the schema, so the insert path is safe.
-        assert args[0] == {"storage_overage_enabled": True, "user_id": TEST_USER_ID}
+        assert args[0] == {"overage_cap_credits": 400, "user_id": TEST_USER_ID}
         assert kwargs.get("on_conflict") == "user_id"
 
     def test_sparse_update_response_reflects_row_not_request(self, client, mock_supabase, monkeypatch):
@@ -269,7 +267,6 @@ class TestBillingPrefs:
             "status": "active",
             "overage_enabled": False,
             "overage_cap_credits": 250,
-            "storage_overage_enabled": True,
         }
 
         def side_effect(name):
@@ -284,7 +281,6 @@ class TestBillingPrefs:
         data = resp.json()
         assert data["overageEnabled"] is False  # from the persisted row, not the request
         assert data["overageCapCredits"] == 250
-        assert data["storageOverageEnabled"] is True
 
     def test_empty_payload_400(self, client, monkeypatch):
         monkeypatch.setenv("CREDITS_ENABLED", "true")

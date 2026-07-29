@@ -75,7 +75,6 @@ export interface EntitlementCredits {
   /** USD per overage credit — quote this, never a hardcoded rate. */
   overageUsdPerCredit: number;
   overageCapCredits: number | null;
-  storageOverageEnabled: boolean;
   /** ISO timestamp when the credit period resets. */
   periodEnd: string | null;
   prices: CreditPrices;

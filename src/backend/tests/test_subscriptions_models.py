@@ -241,7 +241,6 @@ class TestCreditModels:
                 overage_this_period=0,
                 overage_enabled=False,
                 overage_cap_credits=None,
-                storage_overage_enabled=False,
                 period_end=datetime(2026, 8, 1, tzinfo=UTC),
                 prices={"zoe_message": 3, "oneclick_run": 21, "registry_parse": 12},
             ),

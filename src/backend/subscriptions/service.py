@@ -225,7 +225,6 @@ class EntitlementsService:
                     # NO seat overage (spec §5) — the request/approve loop replaces it.
                     overage_enabled=False,
                     overage_cap_credits=None,
-                    storage_overage_enabled=False,
                     period_end=None,  # seat wallets are NULL-period by construction.
                     prices=self._get_credit_prices(),
                 )
@@ -262,7 +261,6 @@ class EntitlementsService:
                     overage_this_period=wallet.get("overage_this_period", 0),
                     overage_enabled=bool(sub.get("overage_enabled", False)),
                     overage_cap_credits=sub.get("overage_cap_credits"),
-                    storage_overage_enabled=bool(sub.get("storage_overage_enabled", False)),
                     period_end=_parse_iso(wallet.get("period_end")),
                     prices=self._get_credit_prices(),
                 )
@@ -970,10 +968,11 @@ class EntitlementsService:
                     f"Upload would exceed the project owner's storage limit "
                     f"({owner_ent.usage.total_storage_bytes} + {size} > {cap} bytes)."
                 )
-            # Credits model: paid tiers have unlimited hard cap (-1) but an
-            # included allowance; past it, uploads need storage pay-per-use
-            # opt-in (spec §5). Existing files are never touched. SKIP this
-            # personal pay-per-use gate when storage was DERIVED to an org seat
+            # Credits model: paid tiers have unlimited hard cap (-1) but a finite
+            # included allowance, and uploads BLOCK at it — there is no storage
+            # pay-per-use (that path billed nobody, so it was cut; storage is a
+            # hard cap on every tier). Existing files are never touched. SKIP this
+            # personal allowance gate when storage was DERIVED to an org seat
             # (rule 9): a personal per-plan included-allowance prompt is
             # incoherent for org-billed storage. What bounds the upload then
             # depends on the caller's PERSONAL cap (rule 4, upgrade-only max):
@@ -987,11 +986,10 @@ class EntitlementsService:
             # this gate never independently fires).
             if not derived_storage and credits_enabled() and owner_ent.tier in self.PAID_TIERS:
                 included = owner_ent.caps.included_storage_bytes
-                storage_ok = owner_ent.credits.storage_overage_enabled if owner_ent.credits else False
-                if included != -1 and projected > included and not storage_ok:
+                if included != -1 and projected > included:
                     return deny(
                         "This upload goes past the storage included in your plan. "
-                        "Turn on storage pay-per-use in Billing settings to continue."
+                        "Upgrade for more storage, or remove some files to free up space."
                     )
             return allow()
 

@@ -112,7 +112,6 @@ class Entitlements:
                 # match what overage_billing.py actually charges).
                 "overageUsdPerCredit": overage_usd_per_credit(),
                 "overageCapCredits": self.credits.overage_cap_credits,
-                "storageOverageEnabled": self.credits.storage_overage_enabled,
                 "periodEnd": self.credits.period_end.isoformat() if self.credits.period_end else None,
                 "prices": {
                     "zoeMessage": self.credits.prices.get("zoe_message", 0),
@@ -251,7 +250,6 @@ class CreditsInfo:
     overage_this_period: int
     overage_enabled: bool
     overage_cap_credits: int | None
-    storage_overage_enabled: bool
     period_end: datetime | None
     prices: dict[str, int]
 

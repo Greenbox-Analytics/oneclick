@@ -61,7 +61,6 @@ export function useCreatePortalSession() {
 export interface BillingPrefs {
   overage_enabled?: boolean;
   overage_cap_credits?: number | null;
-  storage_overage_enabled?: boolean;
 }
 
 export function useSetBillingPrefs() {

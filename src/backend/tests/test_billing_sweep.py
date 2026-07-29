@@ -1,4 +1,4 @@
-"""Task 12: Daily billing sweep — auth gate + rollover/storage/overage/annual behavior.
+"""Task 12: Daily billing sweep — auth gate + rollover/overage/annual behavior.
 
 Covers:
   - POST /internal/billing-sweep auth gate (403/503/200/disabled) via the shared `client` fixture
@@ -174,7 +174,7 @@ class TestSweepAuth:
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         resp = client.post("/internal/billing-sweep", headers={"X-Sweep-Token": "s3cret"})
         assert resp.status_code == 200
-        assert set(resp.json()) >= {"walletsRolled", "storageBilled", "annualInvoiced"}
+        assert set(resp.json()) >= {"walletsRolled", "overageBilled", "annualInvoiced"}
 
     def test_disabled_flag_short_circuits(self, client, monkeypatch):
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
@@ -185,7 +185,7 @@ class TestSweepAuth:
         # Regression (Task 10): the credits-disabled early-return is BYTE-IDENTICAL —
         # the licensing allowance/grandfather keys must never appear here, whether or
         # not LICENSING_ENABLED is set.
-        assert set(body.keys()) == {"walletsRolled", "storageBilled", "overageBilled", "annualInvoiced", "disabled"}
+        assert set(body.keys()) == {"walletsRolled", "overageBilled", "annualInvoiced", "disabled"}
 
 
 # ---------------------------------------------------------------------------
@@ -214,14 +214,12 @@ class TestSweepRollover:
                         "tier": "pro",
                         "stripe_customer_id": None,
                         "stripe_price_id": None,
-                        "storage_overage_enabled": False,
                     },
                     {
                         "user_id": "u_fresh",
                         "tier": "pro",
                         "stripe_customer_id": None,
                         "stripe_price_id": None,
-                        "storage_overage_enabled": False,
                     },
                 ],
                 "credit_wallets": [
@@ -318,7 +316,8 @@ class TestSweepOverrideGrants:
 
 class TestSweepPaidOnly:
     async def test_free_tier_sub_never_billed(self, monkeypatch):
-        """Over-limit paid user IS storage-billed; over-limit free user is NOT.
+        """A paid user with unbilled overage IS billed; a free user with the same
+        ledger row is NOT.
 
         With the filter-aware mock, the free sub is excluded by `.in_("tier", PAID_TIERS)`
         before any billing loop, so only the paid customer's InvoiceItem is created. If the
@@ -326,14 +325,14 @@ class TestSweepPaidOnly:
         """
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("CREDIT_OVERAGE_USD", "0.02")
         from subscriptions.sweep import billing_sweep
 
-        one_gb = 1_073_741_824
         sb = _filter_aware_supabase(
             {
                 "tier_entitlements": [
-                    {"tier": "pro", "monthly_credits": 3000, "included_storage_bytes": one_gb},
-                    {"tier": "free", "monthly_credits": 0, "included_storage_bytes": one_gb},
+                    {"tier": "pro", "monthly_credits": 3000},
+                    {"tier": "free", "monthly_credits": 0},
                 ],
                 "subscriptions": [
                     {
@@ -341,19 +340,13 @@ class TestSweepPaidOnly:
                         "tier": "pro",
                         "stripe_customer_id": "cus_paid",
                         "stripe_price_id": "price_monthly",
-                        "storage_overage_enabled": True,
                     },
                     {
                         "user_id": "u_free",
                         "tier": "free",
                         "stripe_customer_id": "cus_free",
                         "stripe_price_id": None,
-                        "storage_overage_enabled": True,
                     },
-                ],
-                "usage_counters": [
-                    {"user_id": "u_paid", "total_storage_bytes": 2 * one_gb},
-                    {"user_id": "u_free", "total_storage_bytes": 50 * one_gb},
                 ],
                 "credit_wallets": [
                     {
@@ -361,229 +354,47 @@ class TestSweepPaidOnly:
                         "owner_type": "user",
                         "owner_id": "u_paid",
                         "period_end": "2099-01-01T00:00:00+00:00",
-                    }
+                    },
+                    {
+                        "id": "wallet-free",
+                        "owner_type": "user",
+                        "owner_id": "u_free",
+                        "period_end": "2099-01-01T00:00:00+00:00",
+                    },
                 ],
-                "credit_ledger": [],
+                "credit_ledger": [
+                    {
+                        "id": "l-paid",
+                        "wallet_id": "wallet-paid",
+                        "kind": "overage_debit",
+                        "delta": 0,
+                        "action": "oneclick_run",
+                        "metadata": {"credits_billed": 21},
+                    },
+                    {
+                        "id": "l-free",
+                        "wallet_id": "wallet-free",
+                        "kind": "overage_debit",
+                        "delta": 0,
+                        "action": "oneclick_run",
+                        "metadata": {"credits_billed": 21},
+                    },
+                ],
             }
         )
-        fake_stripe = _fake_stripe(item_id="ii_paid_storage")
+        fake_stripe = _fake_stripe(item_id="ii_paid_overage")
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 
-        assert result["storageBilled"] == 1
+        assert result["overageBilled"] == 1
         fake_stripe.InvoiceItem.create.assert_called_once()
         assert fake_stripe.InvoiceItem.create.call_args.kwargs["customer"] == "cus_paid"
         billed_customers = [c.kwargs["customer"] for c in fake_stripe.InvoiceItem.create.call_args_list]
         assert "cus_free" not in billed_customers
-
-
-# ---------------------------------------------------------------------------
-# Storage overage — insert-first ordering, once-per-period idempotency
-# ---------------------------------------------------------------------------
-
-
-def _storage_setup(user_id, storage_overage_enabled, total_storage_bytes, included_storage_bytes, ledger_rows=None):
-    sub_row = {
-        "user_id": user_id,
-        "tier": "pro",
-        "stripe_customer_id": f"cus_{user_id}",
-        "stripe_price_id": "price_monthly",
-        "storage_overage_enabled": storage_overage_enabled,
-    }
-    return _sweep_mock_supabase(
-        {
-            "tier_entitlements": [
-                {"tier": "pro", "monthly_credits": 3000, "included_storage_bytes": included_storage_bytes}
-            ],
-            "subscriptions": [sub_row],
-            "usage_counters": [{"user_id": user_id, "total_storage_bytes": total_storage_bytes}],
-            "credit_wallets": [
-                {
-                    "id": f"wallet-{user_id}",
-                    "owner_type": "user",
-                    "owner_id": user_id,
-                    "period_end": "2099-01-01T00:00:00+00:00",
-                }
-            ],
-            "credit_ledger": ledger_rows or [],
-        }
-    )
-
-
-class TestSweepStorage:
-    async def test_storage_billed_insert_first_then_backfills_item_id(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb, builders = _storage_setup(
-            "u2",
-            storage_overage_enabled=True,
-            total_storage_bytes=2_147_483_648,  # 2 GB
-            included_storage_bytes=1_073_741_824,  # 1 GB included -> 1 GB over
-        )
-        fake_stripe = _fake_stripe(item_id="ii_storage_1")
-
-        with (
-            patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
-        ):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["storageBilled"] == 1
-        fake_stripe.InvoiceItem.create.assert_called_once()
-        create_kwargs = fake_stripe.InvoiceItem.create.call_args.kwargs
-        assert create_kwargs["amount"] == 5  # 1 GB over * $0.05/GB * 100 cents
-        assert create_kwargs["customer"] == "cus_u2"
-
-        # Insert-first: the ledger row is written WITHOUT invoice_item_id...
-        insert_payload = builders["credit_ledger"].insert.call_args[0][0]
-        assert insert_payload["kind"] == "storage_bill"
-        assert "invoice_item_id" not in insert_payload["metadata"]
-        assert "id" in insert_payload  # client-generated so the backfill can target it
-        ledger_id = insert_payload["id"]
-
-        # ...then backfilled with the item id, keyed on the same client-generated id.
-        # (update().eq() runs on the shared credit_ledger builder whose eq accumulates
-        # every call, so assert the id target was among them rather than the last one.)
-        update_payload = builders["credit_ledger"].update.call_args[0][0]
-        assert update_payload["metadata"]["invoice_item_id"] == "ii_storage_1"
-        builders["credit_ledger"].update.return_value.eq.assert_any_call("id", ledger_id)
-
-    async def test_storage_not_rebilled_when_period_already_billed(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        # Existing storage_bill row for the SAME period_end as the wallet -> re-run no-ops.
-        sb, builders = _storage_setup(
-            "u2",
-            storage_overage_enabled=True,
-            total_storage_bytes=2_147_483_648,
-            included_storage_bytes=1_073_741_824,
-            ledger_rows=[
-                {
-                    "id": "l-existing",
-                    "kind": "storage_bill",
-                    "metadata": {"period_end": "2099-01-01T00:00:00+00:00", "invoice_item_id": "ii_prev_storage"},
-                }
-            ],
-        )
-        fake_stripe = _fake_stripe()
-
-        with (
-            patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
-        ):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["storageBilled"] == 0
-        fake_stripe.InvoiceItem.create.assert_not_called()
-        builders["credit_ledger"].insert.assert_not_called()
-
-    async def test_storage_skipped_when_not_opted_in(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb, builders = _storage_setup(
-            "u3",
-            storage_overage_enabled=False,
-            total_storage_bytes=5_000_000_000,
-            included_storage_bytes=1_073_741_824,
-        )
-        fake_stripe = _fake_stripe()
-
-        with (
-            patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
-        ):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["storageBilled"] == 0
-        fake_stripe.InvoiceItem.create.assert_not_called()
-
-    async def test_storage_skipped_when_usage_under_included(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb, builders = _storage_setup(
-            "u4",
-            storage_overage_enabled=True,
-            total_storage_bytes=1_000_000,
-            included_storage_bytes=107_374_182_400,
-        )
-        fake_stripe = _fake_stripe()
-
-        with (
-            patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
-        ):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["storageBilled"] == 0
-        fake_stripe.InvoiceItem.create.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Overage (step 3) positive path — bill_pending_overage actually bills
-# ---------------------------------------------------------------------------
-
-
-class TestSweepOverage:
-    async def test_overage_billed_for_paid_user(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        monkeypatch.setenv("CREDIT_OVERAGE_USD", "0.02")
-        from subscriptions.sweep import billing_sweep
-
-        # Monthly plan (step 4 skipped), storage disabled (step 1 skipped): only step 3 runs.
-        # Unbilled overage_debit row (no invoice_item_id) -> bill_pending_overage creates one.
-        sb, builders = _sweep_mock_supabase(
-            {
-                "tier_entitlements": [{"tier": "pro", "monthly_credits": 3000, "included_storage_bytes": -1}],
-                "subscriptions": [
-                    {
-                        "user_id": "u10",
-                        "tier": "pro",
-                        "stripe_customer_id": "cus_u10",
-                        "stripe_price_id": "price_monthly",
-                        "storage_overage_enabled": False,
-                    }
-                ],
-                "credit_wallets": [
-                    {
-                        "id": "wallet-u10",
-                        "owner_type": "user",
-                        "owner_id": "u10",
-                        "period_end": "2099-01-01T00:00:00+00:00",
-                    }
-                ],
-                "credit_ledger": [
-                    {"id": "l-ov", "metadata": {"credits_billed": 21}, "delta": 0, "action": "oneclick_run"}
-                ],
-            }
-        )
-        fake_stripe = _fake_stripe(item_id="ii_overage_1")
-
-        # bill_pending_overage -> bill_overage_row uses overage_billing's OWN stripe ref.
-        with (
-            patch("main.get_supabase_client", return_value=sb),
-            patch(
-                "subscriptions.overage_billing.stripe_client_module.get_stripe",
-                return_value=fake_stripe,
-            ),
-        ):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["overageBilled"] >= 1
-        fake_stripe.InvoiceItem.create.assert_called_once()
-        assert fake_stripe.InvoiceItem.create.call_args.kwargs["amount"] == 42  # 21 * $0.02 * 100
 
 
 # ---------------------------------------------------------------------------
@@ -597,7 +408,6 @@ def _annual_setup(user_id, price_id, ledger_rows, last_standalone_invoice_at=Non
         "tier": "pro_max",
         "stripe_customer_id": f"cus_{user_id}",
         "stripe_price_id": price_id,
-        "storage_overage_enabled": False,
     }
     sb, builders = _sweep_mock_supabase(
         {
@@ -695,9 +505,9 @@ class TestSweepAnnual:
         assert result["annualInvoiced"] == 1
         fake_stripe.Invoice.create.assert_called_once()
 
-    async def test_d_storage_bill_only_still_fires(self, monkeypatch):
-        """Critical 2 regression guard: an annual user with ONLY a storage_bill overage
-        (no credit overage) must still get a standalone invoice."""
+    async def test_d_single_floating_item_still_fires(self, monkeypatch):
+        """Critical 2 regression guard: an annual user with a single already-priced
+        floating item must still get a standalone invoice."""
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
@@ -705,7 +515,7 @@ class TestSweepAnnual:
         sb, builders = _annual_setup(
             "u8",
             "price_annual_xyz",
-            [{"id": "ledger-storage-1", "kind": "storage_bill", "metadata": {"invoice_item_id": "ii_storage_prev"}}],
+            [{"id": "ledger-ov-1", "kind": "overage_debit", "metadata": {"invoice_item_id": "ii_overage_prev"}}],
             last_standalone_invoice_at=None,
         )
         fake_stripe = _fake_stripe()
@@ -830,214 +640,10 @@ class TestSweepAnnual:
 
 
 # ---------------------------------------------------------------------------
-# Licensing Phase B, Task 10 — storage-billing grandfather (rule 13)
-#
-# amends the EXISTING step 1: any user holding ANY org_members row (any
-# status, including 'removed') is exempt from personal storage-overage
-# billing — block-don't-bill, never auto-billed for org-accrued storage that
-# followed them out of a seat.
-# ---------------------------------------------------------------------------
-
-
-class TestSweepStorageGrandfather:
-    async def test_grandfathered_user_with_removed_org_membership_not_billed(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb, builders = _sweep_mock_supabase(
-            {
-                "tier_entitlements": [
-                    {"tier": "pro", "monthly_credits": 3000, "included_storage_bytes": 1_073_741_824}
-                ],
-                "subscriptions": [
-                    {
-                        "user_id": "u_org",
-                        "tier": "pro",
-                        "stripe_customer_id": "cus_org",
-                        "stripe_price_id": "price_monthly",
-                        "storage_overage_enabled": True,
-                    }
-                ],
-                "usage_counters": [{"user_id": "u_org", "total_storage_bytes": 5 * 1_073_741_824}],
-                "credit_wallets": [
-                    {
-                        "id": "wallet-u_org",
-                        "owner_type": "user",
-                        "owner_id": "u_org",
-                        "period_end": "2099-01-01T00:00:00+00:00",
-                    }
-                ],
-                "credit_ledger": [],
-                # ANY status counts — 'removed' is the round-5 soft state.
-                "org_members": [{"user_id": "u_org", "org_id": "org1", "status": "removed"}],
-            }
-        )
-        fake_stripe = _fake_stripe()
-
-        with (
-            patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
-        ):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["storageBilled"] == 0
-        assert result["storageGrandfathered"] == 1
-        fake_stripe.InvoiceItem.create.assert_not_called()
-        builders["credit_ledger"].insert.assert_not_called()
-
-    async def test_same_scenario_without_org_history_billed_as_today(self, monkeypatch):
-        """Same over-included/opted-in paid user, but with ZERO org history —
-        must be billed exactly as before this task (no grandfather applies)."""
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb, builders = _sweep_mock_supabase(
-            {
-                "tier_entitlements": [
-                    {"tier": "pro", "monthly_credits": 3000, "included_storage_bytes": 1_073_741_824}
-                ],
-                "subscriptions": [
-                    {
-                        "user_id": "u_solo",
-                        "tier": "pro",
-                        "stripe_customer_id": "cus_solo",
-                        "stripe_price_id": "price_monthly",
-                        "storage_overage_enabled": True,
-                    }
-                ],
-                "usage_counters": [{"user_id": "u_solo", "total_storage_bytes": 5 * 1_073_741_824}],
-                "credit_wallets": [
-                    {
-                        "id": "wallet-u_solo",
-                        "owner_type": "user",
-                        "owner_id": "u_solo",
-                        "period_end": "2099-01-01T00:00:00+00:00",
-                    }
-                ],
-                "credit_ledger": [],
-                "org_members": [],  # zero org history
-            }
-        )
-        fake_stripe = _fake_stripe(item_id="ii_solo_storage")
-
-        with (
-            patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
-        ):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["storageBilled"] == 1
-        assert result["storageGrandfathered"] == 0
-        fake_stripe.InvoiceItem.create.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Licensing Phase B review finding 2 — the storage-grandfather org_members
-# scan is deliberately unconditional (not gated on licensing_enabled()) and
-# was the ONLY step-level DB access in this sweep with no try/except.
-# Deploys are automatic but the org_members migration
-# (20260721000001_licensing_core.sql) is applied manually, so a real deploy
-# can land before the table exists — that must fail OPEN (empty grandfather
-# set, storage billing proceeds ungrandfathered) rather than 500 the whole
-# sweep and silently stop wallet rollover / storage / overage billing.
-# ---------------------------------------------------------------------------
-
-
-class TestSweepOrgMembersScanResilience:
-    def _setup(self):
-        one_gb = 1_073_741_824
-        sb, builders = _sweep_mock_supabase(
-            {
-                "tier_entitlements": [{"tier": "pro", "monthly_credits": 3000, "included_storage_bytes": one_gb}],
-                "subscriptions": [
-                    {
-                        "user_id": "u_x",
-                        "tier": "pro",
-                        "stripe_customer_id": "cus_x",
-                        "stripe_price_id": "price_monthly",
-                        "storage_overage_enabled": True,
-                    }
-                ],
-                "usage_counters": [{"user_id": "u_x", "total_storage_bytes": 5 * one_gb}],
-                "credit_wallets": [
-                    {
-                        "id": "wallet-u_x",
-                        "owner_type": "user",
-                        "owner_id": "u_x",
-                        "period_end": "2099-01-01T00:00:00+00:00",
-                    }
-                ],
-                "credit_ledger": [],
-            }
-        )
-        # Pre-create the org_members builder and make it raise on `.execute()`
-        # — simulating the table not existing yet (pre-migration deploy).
-        org_members_builder = sb.table("org_members")
-        org_members_builder.execute.side_effect = Exception('relation "org_members" does not exist')
-        return sb, builders
-
-    async def test_org_members_scan_failure_does_not_abort_sweep(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb, builders = self._setup()
-        fake_stripe = _fake_stripe()
-
-        with (
-            patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
-        ):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        # Sweep completed normally — every step's key is present, none aborted.
-        assert set(result) >= {
-            "walletsRolled",
-            "storageBilled",
-            "storageGrandfathered",
-            "overageBilled",
-            "annualInvoiced",
-        }
-        # Storage billing proceeds UNGRANDFATHERED: the failed scan fails open
-        # to an EMPTY grandfather set (correct pre-migration — nobody can have
-        # org history yet), so the over-included, opted-in paid user is still
-        # billed exactly as if the org_members table never existed.
-        assert result["storageBilled"] == 1
-        assert result["storageGrandfathered"] == 0
-        fake_stripe.InvoiceItem.create.assert_called_once()
-
-    async def test_org_members_scan_failure_logs_warning_not_exception(self, monkeypatch, caplog):
-        """The failure is expected (pre-migration deploy skew), not a bug —
-        it must log at WARNING, never at ERROR/exception level (which would
-        page on-call for a false alarm on every pre-migration sweep run)."""
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb, builders = self._setup()
-        fake_stripe = _fake_stripe()
-
-        with (
-            caplog.at_level("WARNING", logger="subscriptions.sweep"),
-            patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
-        ):
-            await billing_sweep(x_sweep_token="s3cret")
-
-        warning_records = [r for r in caplog.records if r.levelname == "WARNING" and "org_members" in r.message]
-        assert warning_records, "expected a WARNING log for the org_members scan failure"
-        error_records = [r for r in caplog.records if r.levelname in ("ERROR", "CRITICAL")]
-        assert error_records == []
-
-
-# ---------------------------------------------------------------------------
-# Licensing Phase B, Task 10 — default seat allowance sweep step (rule 6:
-# full-or-skip). Uses the filter-aware mock throughout: the organizations/
-# org_members/credit_wallets predicates (status, archived_at IS NULL,
-# default_seat_allowance > 0, owner_type/owner_id) are load-bearing, so a
-# no-op filter mock would hide a broken query.
+# Licensing Phase B — default seat allowance top-up (spec §4, rule 6).
+# Filter-aware mock: the org_members/credit_wallets predicates (status,
+# archived_at IS NULL, default_seat_allowance > 0, owner_type/owner_id) are
+# load-bearing, so a no-op filter mock would hide a broken query.
 # ---------------------------------------------------------------------------
 
 
@@ -1362,6 +968,5 @@ class TestSweepAllowance:
 
         assert result["seatsToppedUp"] == 0
         assert result["poolLow"] == 0
-        assert result["storageGrandfathered"] == 0
         org_calls = [c for c in sb.table.call_args_list if c.args[0] == "organizations"]
         assert org_calls == []

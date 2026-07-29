@@ -104,9 +104,9 @@ def invoice_unswept_items(supabase, wallet_id: str, customer_id: str, *, idempot
     """Collect this wallet's floating pending InvoiceItems onto ONE standalone
     auto-advancing invoice, then stamp the rows `swept`.
 
-    Rows counted: overage_debit / storage_bill rows with a backfilled
-    invoice_item_id (proves a real pending Stripe item exists) and no `swept`
-    stamp. Returns {"invoiced": bool, "stamped": int}.
+    Rows counted: overage_debit rows with a backfilled invoice_item_id (proves a
+    real pending Stripe item exists) and no `swept` stamp.
+    Returns {"invoiced": bool, "stamped": int}.
 
     If Stripe reports nothing to invoice (invoice_no_customer_line_items — the
     items were already consumed by another invoice, e.g. attached to a renewal
@@ -118,7 +118,7 @@ def invoice_unswept_items(supabase, wallet_id: str, customer_id: str, *, idempot
         supabase.table("credit_ledger")
         .select("id, kind, metadata")
         .eq("wallet_id", wallet_id)
-        .in_("kind", ["overage_debit", "storage_bill"])
+        .eq("kind", "overage_debit")
         .execute()
     )
     unswept = [

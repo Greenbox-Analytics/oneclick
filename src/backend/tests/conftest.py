@@ -248,8 +248,18 @@ def _default_table_side_effect(name):
 
 @pytest.fixture(autouse=True)
 def _disable_credits_by_default(monkeypatch):
-    """CREDITS_ENABLED defaults off in tests; credits tests setenv('CREDITS_ENABLED','true')."""
+    """CREDITS_ENABLED / LICENSING_ENABLED default off in tests; the tests that
+    exercise them setenv('...', 'true') themselves (monkeypatch.setenv overrides
+    this delete).
+
+    LICENSING_ENABLED matters for the same reason BYPASS_PAYWALLS does below:
+    main.py load_dotenv()s at import, so a dev running with licensing on locally
+    otherwise gets ~16 failures in boards/registry tests whose supabase mocks are
+    sequence-based — org-context resolution adds table() calls and shifts the
+    sequence, which reads as an unrelated 500.
+    """
     monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+    monkeypatch.delenv("LICENSING_ENABLED", raising=False)
 
 
 @pytest.fixture(autouse=True)

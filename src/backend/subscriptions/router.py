@@ -114,7 +114,6 @@ class BillingPrefsPayload(BaseModel):
 
     overage_enabled: bool | None = None
     overage_cap_credits: int | None = Field(None, ge=0)
-    storage_overage_enabled: bool | None = None
 
 
 @router.post("/me/billing-prefs")
@@ -149,25 +148,20 @@ async def set_billing_prefs(
     # returns 200). The insert path needs no extra fields beyond user_id + the
     # provided prefs: the schema gives tier/status NOT NULL DEFAULTs
     # ('free'/'active', 20260509000001_subscription_foundation.sql) and the
-    # overage columns NOT NULL DEFAULT false / nullable cap
+    # overage column NOT NULL DEFAULT false / nullable cap
     # (20260713000002_credits_schema.sql).
     result = sb.table("subscriptions").upsert({**update, "user_id": user_id}, on_conflict="user_id").execute()
     # Respond with what was actually persisted, not an echo of the request —
     # with sparse updates the request alone can't describe the row's state.
     row = result.data[0] if result.data else {}
 
-    if body.overage_enabled is not None or body.storage_overage_enabled is not None:
+    if body.overage_enabled is not None:
         analytics_capture(
             user_id,
             "overage_optin_changed",
-            {
-                "enabled": body.overage_enabled,
-                "storage_enabled": body.storage_overage_enabled,
-                "cap": body.overage_cap_credits,
-            },
+            {"enabled": body.overage_enabled, "cap": body.overage_cap_credits},
         )
     return {
         "overageEnabled": row.get("overage_enabled"),
         "overageCapCredits": row.get("overage_cap_credits"),
-        "storageOverageEnabled": row.get("storage_overage_enabled"),
     }
