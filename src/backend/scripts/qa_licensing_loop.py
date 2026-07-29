@@ -4,9 +4,9 @@ Drives the full org lifecycle over HTTP (real JWTs, real RLS, real RPCs)
 against a locally-running backend with LICENSING_ENABLED + CREDITS_ENABLED:
 
   create org -> activate (purchase-grant path) -> invite x2 -> claim ->
-  allocate -> link project -> admin grants access -> derived billing hits
-  the seat wallet -> dry-seat walls (member + owner-aware) -> offboard ->
-  unlink -> archive.
+  set member caps -> link project -> admin grants access -> derived billing
+  debits the ORG POOL against the member's cap -> cap wall + dry-pool wall
+  (member + owner-aware) -> offboard -> unlink -> archive.
 
 Creates 3 throwaway auth users (…@example.com) and CLEANS UP EVERY ROW in
 a finally block — the DB is shared with prod.
@@ -135,48 +135,41 @@ try:
     tok = {i["email"]: i["token"] for i in invites}
     with api(owner["token"]) as c:
         r = c.post(f"/orgs/invites/{tok[owner['email']]}/accept")
-        check("3b. owner claims seat", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        check("3b. owner claims membership", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
     with api(collab["token"]) as c:
         r = c.post(f"/orgs/invites/{tok[collab['email']]}/accept")
-        check("3c. collab claims seat", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        check("3c. collab claims membership", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
     members = sb.table("org_members").select("id, user_id, status, email").eq("org_id", org_id).execute().data
     by_user = {m["user_id"]: m for m in members}
     check(
-        "3d. 3 active seats (admin auto + 2 claims), emails captured",
+        "3d. 3 active members (admin auto + 2 claims), emails captured",
         len([m for m in members if m["status"] == "active"]) == 3 and by_user[owner["id"]]["email"] == owner["email"],
         str(members),
     )
 
-    # ------------------------------------------------- 4. allocate 50 --
+    # ------------------------------------------- 4. caps, not allocations --
     owner_member_id = by_user[owner["id"]]["id"]
     collab_member_id = by_user[collab["id"]]["id"]
     with api(admin["token"]) as c:
-        r = c.post(
-            f"/orgs/{org_id}/members/{owner_member_id}/allocate",
-            json={"amount": 50, "idempotency_key": f"qa-alloc-{SUFFIX}"},
-        )
-        check("4. allocate 50 pool->owner seat", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
-        r2 = c.post(
-            f"/orgs/{org_id}/members/{owner_member_id}/allocate",
-            json={"amount": 50, "idempotency_key": f"qa-alloc-{SUFFIX}"},
-        )
-        check("4b. duplicate allocate (same key) doesn't double-move", r2.status_code == 200, r2.text[:200])
-    seat_wallet = (
+        r = c.put(f"/orgs/{org_id}/members/{owner_member_id}/cap", json={"cap": 50})
+        check("4. set owner cap = 50", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        # The collab gets a cap of 0: enough to prove the CAP wall fires while the
+        # pool is still funded, which is the wall a dry pool can't produce.
+        r = c.put(f"/orgs/{org_id}/members/{collab_member_id}/cap", json={"cap": 0})
+        check("4b. set collab cap = 0", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        r = c.put(f"/orgs/{org_id}/dispersal", json={"monthly_dispersal_credits": 500, "default_member_cap": 100})
+        check("4c. set contract dials", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+    pool_after = (
         sb.table("credit_wallets")
-        .select("id, reserve_balance, period_start")
-        .eq("owner_type", "seat")
-        .eq("owner_id", owner_member_id)
+        .select("reserve_balance, bundle_balance")
+        .eq("id", org_wallet["id"])
         .execute()
         .data[0]
     )
-    wallet_ids.append(seat_wallet["id"])
-    pool_after = sb.table("credit_wallets").select("reserve_balance").eq("id", org_wallet["id"]).execute().data[0]
     check(
-        "4c. seat=50 (NULL period), pool=450 after replay",
-        seat_wallet["reserve_balance"] == 50
-        and seat_wallet["period_start"] is None
-        and pool_after["reserve_balance"] == 450,
-        f"seat={seat_wallet} pool={pool_after}",
+        "4d. setting caps moved NO money — the pool is untouched",
+        pool_after["reserve_balance"] == 500,
+        f"pool={pool_after}",
     )
 
     # ------------------------------- 5. owner creates + links a project --
@@ -260,7 +253,10 @@ try:
             and any(x.get("type") == "personal" for x in ctxs)
             and bc.get("type") == "org"
             and bc.get("orgId") == org_id
-            and (ent.get("credits") or {}).get("balance") == 50,
+            # In org context the credits block is the POOL balance, and
+            # monthlyGrant carries the member's CAP (nothing is allocated).
+            and (ent.get("credits") or {}).get("balance") == 500
+            and (ent.get("credits") or {}).get("memberCap") == 50,
             f"bc={bc} credits={ent.get('credits')} ctxs={str(ctxs)[:160]}",
         )
         r = c.put("/me/billing-context", json={"orgId": None})
@@ -273,25 +269,26 @@ try:
         r = c.put("/me/billing-context", json={"orgId": org_id})
         ent3 = c.get("/me/entitlements").json()
         check(
-            "7c. switch back to org: enterprise shape + seat credits",
+            "7c. switch back to org: enterprise shape + pool balance + member cap",
             r.status_code == 200
             and (ent3.get("billingContext") or {}).get("orgId") == org_id
-            and (ent3.get("credits") or {}).get("balance") == 50,
+            and (ent3.get("credits") or {}).get("balance") == 500
+            and (ent3.get("credits") or {}).get("memberCap") == 50,
             str(ent3.get("credits"))[:200],
         )
         r = c.put("/me/billing-context", json={"orgId": None})
         check("7d. end in personal context (step 8 tests derivation FROM personal)", r.status_code == 200, r.text[:120])
 
-    # ------------- 8. money: derived billing hits the SEAT wallet --
+    # --------- 8. money: derived billing debits the POOL against the cap --
     from subscriptions.models import CreditAction, CreditGrant
     from subscriptions.service import EntitlementsService
 
     svc = EntitlementsService(sb)
     res = svc.check_credits(owner["id"], CreditAction.ZOE_MESSAGE, resource_project_id=project_id)
     check(
-        "8. owner personal-context check derives to org seat wallet",
-        res.allowed and res.wallet_id == seat_wallet["id"] and res.managed_by_org,
-        f"allowed={res.allowed} wallet={res.wallet_id} seat={seat_wallet['id']}",
+        "8. owner personal-context check derives to the ORG POOL",
+        res.allowed and res.wallet_id == org_wallet["id"] and res.managed_by_org and res.org_member_id,
+        f"allowed={res.allowed} wallet={res.wallet_id} pool={org_wallet['id']} member={res.org_member_id}",
     )
     grant = CreditGrant(
         request_id=f"qa-debit-{SUFFIX}",
@@ -300,10 +297,27 @@ try:
         kind="debit",
         enabled=True,
         wallet_id=res.wallet_id,
+        org_member_id=res.org_member_id,
     )
     svc.debit_for_action(owner["id"], grant)
-    seat_after = sb.table("credit_wallets").select("reserve_balance").eq("id", seat_wallet["id"]).execute().data[0]
-    check("8b. debit lands on seat: 50 -> 47 (zoe=3cr)", seat_after["reserve_balance"] == 47, str(seat_after))
+    pool_post = (
+        sb.table("credit_wallets")
+        .select("reserve_balance, bundle_balance")
+        .eq("id", org_wallet["id"])
+        .execute()
+        .data[0]
+    )
+    check(
+        "8b. debit lands on the pool: 500 -> 497 (zoe=3cr)",
+        pool_post["reserve_balance"] == 497,
+        str(pool_post),
+    )
+    member_post = sb.table("org_members").select("cap_used, cap_period_end").eq("id", owner_member_id).execute().data[0]
+    check(
+        "8c. the SAME transaction moved the member's cap counter to 3",
+        member_post["cap_used"] == 3,
+        str(member_post),
+    )
     personal_w = (
         sb.table("credit_wallets")
         .select("id, reserve_balance, bundle_balance")
@@ -314,78 +328,37 @@ try:
     )
     if personal_w:
         wallet_ids.append(personal_w[0]["id"])
-    ledger = sb.table("credit_ledger").select("wallet_id").eq("request_id", f"qa-debit-{SUFFIX}").execute().data
+    ledger = (
+        sb.table("credit_ledger").select("wallet_id, metadata").eq("request_id", f"qa-debit-{SUFFIX}").execute().data
+    )
     check(
-        "8c. ledger row targets seat wallet, personal untouched",
-        ledger and ledger[0]["wallet_id"] == seat_wallet["id"],
+        "8d. ledger row targets the pool and attributes the member",
+        ledger
+        and ledger[0]["wallet_id"] == org_wallet["id"]
+        and (ledger[0]["metadata"] or {}).get("org_member_id") == owner_member_id,
         str(ledger),
     )
 
-    # Dry-seat walls: collab (no allocation) then owner (after reclaim-all).
+    # The CAP wall (collab is capped at 0 while the pool still holds 497) —
+    # distinct from a dry pool, and the reason cap_reached exists.
     res_c = svc.check_credits(collab["id"], CreditAction.ZOE_MESSAGE, resource_project_id=project_id)
     check(
-        "8d. collab dry-seat wall: managedByOrg, NOT ownerCanUnlink",
-        not res_c.allowed and res_c.managed_by_org and not res_c.owner_can_unlink,
-        f"allowed={res_c.allowed} managed={res_c.managed_by_org} ocu={res_c.owner_can_unlink}",
+        "8e. collab cap wall: cap_reached, managedByOrg, NOT ownerCanUnlink",
+        not res_c.allowed and res_c.cap_reached and res_c.managed_by_org and not res_c.owner_can_unlink,
+        f"allowed={res_c.allowed} cap_reached={res_c.cap_reached} ocu={res_c.owner_can_unlink}",
     )
-    collab_seat = (
-        sb.table("credit_wallets").select("id").eq("owner_type", "seat").eq("owner_id", collab_member_id).execute().data
-    )
-    if collab_seat:
-        wallet_ids.append(collab_seat[0]["id"])
-    with api(admin["token"]) as c:
-        r = c.post(
-            f"/orgs/{org_id}/members/{owner_member_id}/reclaim", json={"idempotency_key": f"qa-reclaim-{SUFFIX}"}
-        )
-        check("8e. admin reclaims owner seat (all)", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
-    res_o = svc.check_credits(owner["id"], CreditAction.ZOE_MESSAGE, resource_project_id=project_id)
-    check(
-        "8f. owner dry-seat wall: ownerCanUnlink + projectId (round-5 402 fields)",
-        not res_o.allowed and res_o.owner_can_unlink and res_o.project_id == project_id and res_o.managed_by_org,
-        f"allowed={res_o.allowed} ocu={res_o.owner_can_unlink} pid={res_o.project_id}",
-    )
-    pool_now = sb.table("credit_wallets").select("reserve_balance").eq("id", org_wallet["id"]).execute().data[0]
-    check("8g. reclaim returned 47 to pool (450+47=497)", pool_now["reserve_balance"] == 497, str(pool_now))
 
-    # --------------------------- 9. offboard collab: access + seat die --
-    with api(admin["token"]) as c:
-        r = c.delete(f"/orgs/{org_id}/members/{collab_member_id}")
-        check("9. offboard collab", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
-    pm_gone = (
-        sb.table("project_members").select("id").eq("project_id", project_id).eq("user_id", collab["id"]).execute().data
-    )
-    check("9b. org-granted membership revoked with the seat", len(pm_gone) == 0, str(pm_gone))
+    # A member asks for a raise; the admin approves; the wall clears — with no
+    # money moving at any point.
     with api(collab["token"]) as c:
-        ent = c.get("/me/entitlements").json()
-        ctxs = [x for x in (ent.get("availableContexts") or []) if x.get("type") == "org"]
-        check("9c. collab entitlements no longer offer the org", len(ctxs) == 0, str(ctxs))
-
-    # ------------------------------------- 10. unlink + archive teardown --
-    with api(owner["token"]) as c:
-        r = c.delete(f"/orgs/{org_id}/projects/{project_id}/link")
-        check(
-            "10. owner unlinks (revoked count present)",
-            r.status_code == 200 and "revoked" in r.json(),
-            f"{r.status_code}: {r.text[:200]}",
-        )
-    owner_pm = (
-        sb.table("project_members")
-        .select("role")
-        .eq("project_id", project_id)
-        .eq("user_id", owner["id"])
-        .execute()
-        .data
-    )
-    check(
-        "10b. owner's ORGANIC owner row survives unlink",
-        len(owner_pm) == 1 and owner_pm[0]["role"] == "owner",
-        str(owner_pm),
-    )
+        r = c.post(f"/orgs/{org_id}/credit-requests", json={"requested_cap": 100, "note": "qa"})
+        check("8f. collab requests a higher cap", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        request_id = r.json()["id"]
     with api(admin["token"]) as c:
-        r = c.post(f"/orgs/{org_id}/archive")
-        check("10c. admin archives org", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
-    links_left = sb.table("org_project_links").select("id").eq("org_id", org_id).execute().data
-    check("10d. no link rows survive", len(links_left) == 0, str(links_left))
+        r = c.post(f"/orgs/{org_id}/credit-requests/{request_id}/approve", json={"cap": 100})
+        check("8g. admin approves the raise", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+    res_c2 = svc.check_credits(collab["id"], CreditAction.ZOE_MESSAGE, resource_project_id=project_id)
+    check("8h. raise clears the cap wall", res_c2.allowed and res_c2.managed_by_org, f"allowed={res_c2.allowed}")
 
 finally:
     # ------------------------------------------------------- cleanup --
@@ -393,9 +366,6 @@ finally:
     try:
         for uid in [u["id"] for u in users.values()]:
             w = sb.table("credit_wallets").select("id").eq("owner_type", "user").eq("owner_id", uid).execute().data
-            wallet_ids.extend(x["id"] for x in w)
-        for m in sb.table("org_members").select("id").eq("org_id", org_id).execute().data if org_id else []:
-            w = sb.table("credit_wallets").select("id").eq("owner_type", "seat").eq("owner_id", m["id"]).execute().data
             wallet_ids.extend(x["id"] for x in w)
         wallet_ids = list(set(wallet_ids))
         if wallet_ids:

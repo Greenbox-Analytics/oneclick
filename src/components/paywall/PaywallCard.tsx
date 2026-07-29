@@ -14,14 +14,18 @@ interface PaywallCardProps {
   reason?: string;
   onUpgrade?: () => void;
   variant?: "page" | "inline" | "modal";
-  /** Licensing Phase B (spec §5, rule 8, plan Task 13): true when the denial
-   * came from a seat wallet in ORG billing context. There's no upgrade or
-   * overage path on a seat — the member asks their org admin instead, so
-   * this branch REPLACES the upgrade CTA with a "Request credits" one. */
+  /** Licensing Phase B (spec §5, rule 8): true when the denial came from an ORG
+   * billing context. There's no upgrade or overage path on a pool — the member
+   * asks their org admin instead, so this branch REPLACES the upgrade CTA. */
   managedByOrg?: boolean;
-  /** Where the "Request credits" CTA navigates — defaults to /organization
-   * (the member view's request form, plan Task 13) when the 402 detail
-   * didn't carry one. */
+  /** True when the MEMBER hit their own monthly limit rather than the pool
+   * running dry. Both are org walls; only the first has an action the member can
+   * take (ask for a raise), so a dry pool must not show that CTA — it would send
+   * them to a form that can't fix anything. */
+  capReached?: boolean;
+  /** Where the "Ask for a higher limit" CTA navigates — defaults to
+   * /organization (the member view's request form) when the 402 didn't carry
+   * one. */
   requestUrl?: string;
   /** Licensing Phase C (spec §6/§11 rule 11c, plan Task 8): true when this
    * wall is a dry ORG seat on a project the CALLER OWNS and can unlink — the
@@ -58,6 +62,7 @@ export const PaywallCard = ({
   onUpgrade,
   variant = "page",
   managedByOrg,
+  capReached,
   requestUrl,
   ownerCanUnlink,
   projectId,
@@ -79,7 +84,9 @@ export const PaywallCard = ({
   };
   const handleRequestCredits = () => navigate(requestUrl || "/organization");
 
-  const title = managedByOrg
+  const title = capReached
+    ? "You've reached your monthly limit"
+    : managedByOrg
     ? "Your organization is out of credits"
     : feature
     ? `${FEATURE_LABELS[feature]} is a Pro feature`
@@ -87,8 +94,10 @@ export const PaywallCard = ({
     ? "You've reached your Free tier limit"
     : "Upgrade to Pro";
 
-  const body = managedByOrg
-    ? reason ?? "You've used the credits your organization allocated. Ask your admin for more."
+  const body = capReached
+    ? reason ?? "You've used your monthly credit limit. Ask your organization's admin to raise it."
+    : managedByOrg
+    ? reason ?? "Your organization is out of credits. Ask your admin to top up."
     : reason ??
       (feature
         ? `${FEATURE_LABELS[feature]} is included in Pro. Upgrade to access it.`
@@ -110,9 +119,13 @@ export const PaywallCard = ({
         <p className="text-muted-foreground text-sm max-w-sm">{body}</p>
         {managedByOrg ? (
           <>
-            <Button onClick={handleRequestCredits} className="mt-2">
-              Request credits
-            </Button>
+            {/* A dry pool has no member-side remedy — only an admin buying
+                credits fixes it, so the request CTA would be a dead end. */}
+            {capReached && (
+              <Button onClick={handleRequestCredits} className="mt-2">
+                Ask for a higher limit
+              </Button>
+            )}
             {ownerCanUnlink && (
               <UnlinkProjectHint projectId={projectId} projectName={projectName} />
             )}

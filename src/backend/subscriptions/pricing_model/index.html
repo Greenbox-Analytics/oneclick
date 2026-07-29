@@ -295,8 +295,8 @@
         <svg viewBox="0 0 980 560" role="img" aria-label="Organization credit balance, admins, per-user caps and permissions on the left; Msanii bundles, pay-as-you-go and subscription actions on the right">
           <!-- contract wrapper -->
           <rect class="dg-box gap" x="196" y="8" width="580" height="26" rx="8"/>
-          <text class="dg-t" x="218" y="26" style="font-size:12px">12-month contract · monthly payments · monthly credit dispersal</text>
-          <text class="dg-gapt" x="690" y="26">NOT BUILT</text>
+          <text class="dg-t" x="218" y="26" style="font-size:12px">12-month contract · monthly payments</text>
+          <text class="dg-gapt" x="612" y="26">TERM/BILLING NOT BUILT</text>
 
           <!-- ORG container -->
           <rect class="dg-frame" x="14" y="48" width="592" height="498" rx="14"/>
@@ -317,14 +317,15 @@
           <rect class="dg-frame" x="32" y="256" width="556" height="272" rx="12"/>
           <text class="dg-cap" x="50" y="280">Users · per-user basis</text>
 
-          <rect class="dg-box gap" x="50" y="294" width="200" height="58" rx="10"/>
+          <rect class="dg-box accent" x="50" y="294" width="200" height="58" rx="10"/>
           <text class="dg-t" x="66" y="314">Credit usage cap</text>
           <text class="dg-s" x="66" y="332">ceiling on the pool, e.g. 300 cr/mo</text>
-          <text class="dg-gapt" x="66" y="348">BUILT AS A SEAT WALLET INSTEAD</text>
+          <text class="dg-m" x="66" y="348">org_members.monthly_cap</text>
 
           <rect class="dg-box" x="286" y="294" width="200" height="58" rx="10"/>
           <text class="dg-t" x="302" y="314">Usage this month</text>
-          <text class="dg-s" x="302" y="332">counter, not a balance</text>
+          <text class="dg-s" x="302" y="330">counter, not a balance</text>
+          <text class="dg-m" x="302" y="346">moved inside debit_credits</text>
           <path class="dg-line flow" d="M250 322 L278 322" marker-end="url(#ar)"/>
 
           <path class="dg-line flow" d="M180 232 L180 268 L150 268 L150 288" marker-end="url(#ar)"/>
@@ -345,11 +346,11 @@
           <rect class="dg-frame" x="640" y="48" width="326" height="498" rx="14"/>
           <text class="dg-cap" x="658" y="72">Msanii (our org)</text>
 
-          <rect class="dg-box gap" x="658" y="86" width="290" height="66" rx="10"/>
-          <text class="dg-t" x="674" y="108">Monthly dispersal</text>
-          <text class="dg-s" x="674" y="126">negotiated lump sum, paid and</text>
-          <text class="dg-s" x="674" y="142">delivered 1/12 per month</text>
-          <text class="dg-gapt" x="866" y="104">NOT BUILT</text>
+          <rect class="dg-box accent" x="658" y="86" width="290" height="66" rx="10"/>
+          <text class="dg-t" x="674" y="106">Monthly dispersal</text>
+          <text class="dg-s" x="674" y="124">negotiated volume, delivered</text>
+          <text class="dg-s" x="674" y="140">monthly · expires each period</text>
+          <text class="dg-m" x="674" y="152">sweep → rollover_wallet</text>
           <path class="dg-line flow" d="M648 112 L580 112" marker-end="url(#ar)"/>
           <text class="dg-s" x="592" y="104" style="font-size:10.5px">tops up the pool</text>
 
@@ -388,18 +389,19 @@
       </div>
       <div class="grid2" style="margin-top:16px">
         <div class="card">
-          <h3><span class="tag live">built</span> What the code already does</h3>
+          <h3><span class="tag live">built</span> What the code does now</h3>
           <ul>
-            <li><b>Org pool → seat wallets.</b> One pool (<code>owner_type='org'</code>, non-expiring), per-seat wallets, admin-driven <code>transfer_credits</code> both ways.</li>
-            <li><b>Request → approve.</b> A member asks, an admin approves, credits move from the pool. Duplicate open requests are blocked by a partial unique index.</li>
-            <li><b>Monthly fill-to-allowance.</b> The daily sweep tops every active seat up <em>to</em> <code>default_seat_allowance</code> — full amount or skip, once per month, idempotent, never overdrawing the pool.</li>
-            <li><b>Reclaim on offboard</b> is money-first and idempotent on the stored <code>revoked_at</code>, so a retry can't double-move credits.</li>
+            <li><b>One pool, per-member caps.</b> Members hold no wallet; they spend from the org pool bounded by <code>monthly_cap</code> (falling back to the org default, then uncapped).</li>
+            <li><b>The cap moves inside the debit.</b> <code>debit_credits</code> takes the pool lock and the member row together, so two concurrent actions can't both slip under the ceiling. An over-cap debit is recorded and flagged, never rejected — charge-on-success means the work already happened.</li>
+            <li><b>Monthly dispersal expires.</b> The sweep rolls the pool each period: this month's volume lands in the expiring bucket, purchased packs sit in reserve and survive.</li>
+            <li><b>Request → approve raises a cap.</b> No credits move, so approving is idempotent by nature and costs the pool nothing until someone spends.</li>
+            <li><b>Offboarding reclaims nothing</b> — there was never a balance to take back, just a ceiling.</li>
           </ul>
         </div>
         <div class="card">
-          <h3><span class="tag watch">gap</span> Cap vs seat wallet — the real difference</h3>
-          <p>Your model is a <b>cap</b>: one pool, and each user is cut off at their own monthly ceiling. The code <b>moves</b> credits into a per-member wallet and tops it up to an allowance.</p>
-          <p>The cap is the better design and it deletes machinery: no seat wallets, no pool↔seat transfers, no reclaim-on-offboard, no allowance sweep. It also lets caps <b>overcommit</b> — 12 users capped at 2,000 against a 10,000/mo pool is fine, because most never reach the cap. Allocations can't overcommit; the pool has to cover every allowance in full or a seat gets skipped.</p>
+          <h3><span class="tag watch">still open</span> What the contract wrapper needs</h3>
+          <p>The credit mechanics are built; the <b>commercial</b> terms are not. There is no org subscription object, so the 12-month term, the monthly payment, the cancellation grace period and the "remaining months still owed" rule live in the contract you sign, not in the app — an admin buys credits or an operator sets the dispersal.</p>
+          <p>Also unbuilt: time-gated permissions (only invites expire, after 7 days), and role-gated payment drafting (payouts carry <code>draft</code>/<code>paid</code> but nothing restricts who confirms).</p>
         </div>
       </div>
     </section>

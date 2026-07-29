@@ -2,8 +2,7 @@
 Task 2) and invites/roles/offboarding (Task 3). Mirrors
 tests/test_teams_service.py + tests/test_teams_invites.py's idioms."""
 
-from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -198,7 +197,7 @@ async def test_get_org_computes_remaining_to_activate_with_partial_purchase(monk
     db = MagicMock()
     db.table.side_effect = _side
     result = await service.get_org(db, U1, ORG)
-    assert result["cumulative_purchased"] == 4000
+    assert result["cumulative_paid_in"] == 4000
     assert result["pool_balance"] == 4000
     # No env override in this test → platform default of 10,000.
     assert result["remaining_to_activate"] == 6000
@@ -246,7 +245,7 @@ async def test_get_org_uses_org_specific_minimum_over_env_default(monkeypatch):
     db.table.side_effect = _side
     result = await service.get_org(db, U1, ORG)
     assert result["pool_balance"] == 0
-    assert result["cumulative_purchased"] == 0
+    assert result["cumulative_paid_in"] == 0
     assert result["remaining_to_activate"] == 2000
 
 
@@ -269,7 +268,7 @@ async def test_get_org_zero_balance_when_no_wallet(monkeypatch):
     db.table.side_effect = _side
     result = await service.get_org(db, U1, ORG)
     assert result["pool_balance"] == 0
-    assert result["cumulative_purchased"] == 0
+    assert result["cumulative_paid_in"] == 0
     assert result["my_role"] is None
 
 
@@ -380,25 +379,6 @@ async def test_archive_org_requires_admin_403(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await service.archive_org(db, U2, ORG)
     assert exc_info.value.status_code == 403
-
-
-async def test_archive_org_409_when_a_seat_balance_is_nonzero(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-
-    def _side(name):
-        b = MockQueryBuilder()
-        if name == "org_members":
-            b.execute.return_value = MagicMock(data=[{"id": "m1"}, {"id": "m2"}], count=2)
-        elif name == "credit_wallets":
-            b.execute.return_value = MagicMock(
-                data=[{"id": "w1", "owner_id": "m1", "bundle_balance": 0, "reserve_balance": 50}], count=1
-            )
-        return b
-
-    db = MagicMock()
-    db.table.side_effect = _side
-    with pytest.raises(service.SeatBalanceNotZeroError):
-        await service.archive_org(db, U1, ORG)
 
 
 async def test_archive_org_success_when_all_seat_balances_zero(monkeypatch):
@@ -1053,217 +1033,6 @@ async def test_offboard_negative_balance_skips_rpc_entirely(monkeypatch):
     db.rpc.assert_not_called()
 
 
-async def test_offboard_nonzero_balance_calls_transfer_with_stored_epoch_key(monkeypatch):
-    """KEY TEST: the reclaim's request_id is derived from the STORED
-    (reread) revoked_at, exactly `offboard:{member_id}:{epoch}`."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    revoked_at = "2026-07-20T12:00:00+00:00"
-    expected_epoch = int(datetime.fromisoformat(revoked_at).timestamp())
-    db = _db_seq(
-        {
-            "org_members": [
-                MagicMock(data=_member_row(), count=1),
-                MagicMock(data=[_member_row(status="suspended", revoked_at=revoked_at)], count=1),
-                MagicMock(data=_member_row(status="suspended", revoked_at=revoked_at), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 500}], count=1),
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),
-            ],
-        }
-    )
-    db.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False})
-    result = await service.suspend_member(db, U1, ORG, MEMBER)
-    assert result["status"] == "suspended"
-    name, params = db.rpc.call_args[0]
-    assert name == "transfer_credits"
-    assert params["p_from_wallet"] == SEAT_WALLET
-    assert params["p_to_wallet"] == POOL_WALLET
-    assert params["p_amount"] == 500
-    assert params["p_kind"] == "reclaim"
-    assert params["p_request_id"] == f"offboard:{MEMBER}:{expected_epoch}"
-
-
-async def test_offboard_retry_single_call_reuses_stored_key():
-    """KEY TEST: if org_members is ALREADY at final_status with revoked_at
-    set (simulating a retry landing after a prior attempt's status write
-    succeeded), the UPDATE/reread branch is skipped entirely and the STORED
-    revoked_at from the initial SELECT is reused for the request_id."""
-    from unittest.mock import patch
-
-    with patch.object(service.authz, "is_org_admin", lambda *a: True):
-        revoked_at = "2026-07-20T12:00:00+00:00"
-        expected_epoch = int(datetime.fromisoformat(revoked_at).timestamp())
-        db = _db_seq(
-            {
-                "org_members": [MagicMock(data=_member_row(status="suspended", revoked_at=revoked_at), count=1)],
-                "credit_wallets": [
-                    MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 500}], count=1),
-                    MagicMock(data=[{"id": POOL_WALLET}], count=1),
-                ],
-            }
-        )
-        db.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True})
-        await service.suspend_member(db, U1, ORG, MEMBER)
-        params = db.rpc.call_args[0][1]
-        assert params["p_request_id"] == f"offboard:{MEMBER}:{expected_epoch}"
-        # Only the initial current-state SELECT — no UPDATE/reread.
-        org_members_calls = [c for c in db.table.call_args_list if c.args[0] == "org_members"]
-        assert len(org_members_calls) == 1
-
-
-async def test_offboard_full_retry_produces_identical_request_id(monkeypatch):
-    """KEY TEST: a fresh offboard attempt (transfer fails downstream) and a
-    subsequent retry (org_members already reflects the transitioned status)
-    must derive the IDENTICAL request_id."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    revoked_at = "2026-07-20T12:00:00+00:00"
-
-    db1 = _db_seq(
-        {
-            "org_members": [
-                MagicMock(data=_member_row(), count=1),
-                MagicMock(data=[_member_row(status="suspended", revoked_at=revoked_at)], count=1),
-                MagicMock(data=_member_row(status="suspended", revoked_at=revoked_at), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 500}], count=1),
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),
-            ],
-        }
-    )
-    db1.rpc.return_value.execute.side_effect = RuntimeError("insufficient balance on source wallet")
-    with pytest.raises(service.ReclaimFailedError):
-        await service.suspend_member(db1, U1, ORG, MEMBER)
-    first_request_id = db1.rpc.call_args[0][1]["p_request_id"]
-
-    db2 = _db_seq(
-        {
-            "org_members": [MagicMock(data=_member_row(status="suspended", revoked_at=revoked_at), count=1)],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 500}], count=1),
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),
-            ],
-        }
-    )
-    db2.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True})
-    await service.suspend_member(db2, U1, ORG, MEMBER)
-    second_request_id = db2.rpc.call_args[0][1]["p_request_id"]
-
-    assert first_request_id == second_request_id
-
-
-async def test_suspend_reactivate_suspend_produces_distinct_keys(monkeypatch):
-    """KEY TEST: a second suspension cycle (after a reactivation cleared
-    revoked_at) must mint a DIFFERENT request_id than the first cycle."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    revoked_at_1 = "2026-07-20T12:00:00+00:00"
-    revoked_at_2 = "2026-07-21T09:30:00+00:00"
-
-    db1 = _db_seq(
-        {
-            "org_members": [
-                MagicMock(data=_member_row(), count=1),
-                MagicMock(data=[_member_row(status="suspended", revoked_at=revoked_at_1)], count=1),
-                MagicMock(data=_member_row(status="suspended", revoked_at=revoked_at_1), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 500}], count=1),
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),
-            ],
-        }
-    )
-    db1.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False})
-    await service.suspend_member(db1, U1, ORG, MEMBER)
-    key1 = db1.rpc.call_args[0][1]["p_request_id"]
-
-    # Second cycle: org_members' current state reflects a reactivation
-    # (active, revoked_at cleared) that happened between the two suspends.
-    db2 = _db_seq(
-        {
-            "org_members": [
-                MagicMock(data=_member_row(status="active", revoked_at=None), count=1),
-                MagicMock(data=[_member_row(status="suspended", revoked_at=revoked_at_2)], count=1),
-                MagicMock(data=_member_row(status="suspended", revoked_at=revoked_at_2), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 300}], count=1),
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),
-            ],
-        }
-    )
-    db2.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False})
-    await service.suspend_member(db2, U1, ORG, MEMBER)
-    key2 = db2.rpc.call_args[0][1]["p_request_id"]
-
-    assert key1 != key2
-
-
-async def test_offboard_transfer_failure_raises_and_leaves_status_transitioned(monkeypatch):
-    """KEY TEST: a raising transfer_credits call surfaces as ReclaimFailedError
-    (no silent success) and does NOT trigger any corrective/revert write —
-    the status transition (money-first) stands."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    revoked_at = "2026-07-20T12:00:00+00:00"
-    db = _db_seq(
-        {
-            "org_members": [
-                MagicMock(data=_member_row(), count=1),
-                MagicMock(data=[_member_row(status="removed", revoked_at=revoked_at)], count=1),
-                MagicMock(data=_member_row(status="removed", revoked_at=revoked_at), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 200}], count=1),
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),
-            ],
-        }
-    )
-    db.rpc.return_value.execute.side_effect = RuntimeError("boom")
-    with pytest.raises(service.ReclaimFailedError):
-        await service.remove_member(db, U1, ORG, MEMBER)
-    org_members_calls = [c for c in db.table.call_args_list if c.args[0] == "org_members"]
-    assert len(org_members_calls) == 3  # select, update, reread — no corrective revert
-
-
-async def test_offboard_creates_pool_wallet_on_miss(monkeypatch):
-    """Task 4 AC: _offboard's pool-wallet lookup now goes through
-    wallets.read_or_create_org_wallet (create-on-miss) — the Task 3 stopgap
-    that raised RuntimeError on a missing pool wallet is gone. A missing pool
-    wallet no longer blocks the reclaim: it's created (NULL periods, zero
-    balance) and the transfer proceeds against the freshly created wallet's
-    id."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    revoked_at = "2026-07-20T12:00:00+00:00"
-    db = _db_seq(
-        {
-            "org_members": [
-                MagicMock(data=_member_row(), count=1),
-                MagicMock(data=[_member_row(status="suspended", revoked_at=revoked_at)], count=1),
-                MagicMock(data=_member_row(status="suspended", revoked_at=revoked_at), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 100}], count=1),
-                MagicMock(data=[], count=0),  # pool wallet SELECT miss
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),  # pool wallet INSERT creates it
-            ],
-        }
-    )
-    db.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False})
-    result = await service.suspend_member(db, U1, ORG, MEMBER)
-    assert result["status"] == "suspended"
-    name, params = db.rpc.call_args[0]
-    assert name == "transfer_credits"
-    assert params["p_from_wallet"] == SEAT_WALLET
-    assert params["p_to_wallet"] == POOL_WALLET
-    assert params["p_amount"] == 100
-
-
-# ---------------------------------------------------------------------------
-# _offboard also revokes org-granted project access (Task 4, rule 3 extended
-# to seat offboarding) — best-effort, AFTER the reclaim step succeeds.
-# ---------------------------------------------------------------------------
-
-
 async def test_offboard_zero_balance_still_revokes_org_granted_access(monkeypatch):
     """Access revocation isn't gated on money having moved — a zero-balance
     seat being suspended must still lose its org-granted project access."""
@@ -1286,72 +1055,6 @@ async def test_offboard_zero_balance_still_revokes_org_granted_access(monkeypatc
 
     assert result["status"] == "suspended"
     fake_revoke.assert_called_once_with(db, ORG, user_id=U2)
-
-
-async def test_offboard_nonzero_balance_revokes_after_reclaim_succeeds(monkeypatch):
-    """The revoke call happens AFTER the transfer_credits RPC succeeds — the
-    money step still runs first."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    revoked_at = "2026-07-20T12:00:00+00:00"
-    db = _db_seq(
-        {
-            "org_members": [
-                MagicMock(data=_member_row(), count=1),
-                MagicMock(data=[_member_row(status="removed", revoked_at=revoked_at)], count=1),
-                MagicMock(data=_member_row(status="removed", revoked_at=revoked_at), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 500}], count=1),
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),
-            ],
-        }
-    )
-    db.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False})
-    order = []
-    fake_revoke = MagicMock(side_effect=lambda *a, **k: order.append("revoke") or 2)
-    monkeypatch.setattr(org_projects, "revoke_org_granted_memberships", fake_revoke)
-    original_rpc = db.rpc
-
-    def _tracked_rpc(*a, **k):
-        order.append("rpc")
-        return original_rpc(*a, **k)
-
-    db.rpc = MagicMock(side_effect=_tracked_rpc)
-
-    result = await service.remove_member(db, U1, ORG, MEMBER)
-
-    assert result["status"] == "removed"
-    fake_revoke.assert_called_once_with(db, ORG, user_id=U2)
-    assert order == ["rpc", "revoke"]
-
-
-async def test_offboard_reclaim_failure_skips_revocation(monkeypatch):
-    """Money-first: if the reclaim RPC raises, _offboard surfaces
-    ReclaimFailedError and revocation is never attempted — a retry will
-    reach it once the reclaim itself succeeds."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    revoked_at = "2026-07-20T12:00:00+00:00"
-    db = _db_seq(
-        {
-            "org_members": [
-                MagicMock(data=_member_row(), count=1),
-                MagicMock(data=[_member_row(status="removed", revoked_at=revoked_at)], count=1),
-                MagicMock(data=_member_row(status="removed", revoked_at=revoked_at), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 200}], count=1),
-                MagicMock(data=[{"id": POOL_WALLET}], count=1),
-            ],
-        }
-    )
-    db.rpc.return_value.execute.side_effect = RuntimeError("boom")
-    fake_revoke = MagicMock(return_value=0)
-    monkeypatch.setattr(org_projects, "revoke_org_granted_memberships", fake_revoke)
-
-    with pytest.raises(service.ReclaimFailedError):
-        await service.remove_member(db, U1, ORG, MEMBER)
-
-    fake_revoke.assert_not_called()
 
 
 async def test_offboard_revocation_failure_does_not_undo_offboard(monkeypatch):
@@ -1474,3 +1177,82 @@ async def test_reactivate_member_from_removed_clears_revoked_at(monkeypatch):
     )
     result = await service.reactivate_member(db, U1, ORG, MEMBER)
     assert result["status"] == "active"
+
+
+# ---------------------------------------------------------------------------
+# Offboarding: a status transition, nothing more. Members hold no credits, so
+# there is no balance to reclaim and no money RPC to fail — which is exactly
+# why suspend/remove can no longer 502.
+# ---------------------------------------------------------------------------
+
+
+async def test_offboard_transitions_status_and_moves_no_money(monkeypatch):
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    member = {"id": MEMBER, "org_id": ORG, "user_id": U1, "status": "active", "revoked_at": None}
+    db = _db_seq(
+        {
+            "org_members": [
+                MagicMock(data=member),  # initial maybe_single read
+                MagicMock(data=[{**member, "status": "suspended"}]),  # UPDATE echo
+                MagicMock(data={**member, "status": "suspended", "revoked_at": "2026-07-29T00:00:00+00:00"}),  # reread
+            ]
+        }
+    )
+
+    with patch("orgs.service._revoke_offboarded_member_access"):
+        row = await service.suspend_member(db, U1, ORG, MEMBER)
+
+    assert row["status"] == "suspended"
+    assert row["revoked_at"]  # audit timestamp, not a reclaim key
+    db.rpc.assert_not_called()  # nothing to move
+
+
+async def test_offboard_already_at_final_status_reuses_the_row(monkeypatch):
+    """A retry of a prior offboard: the row is already suspended with a
+    revoked_at, so it is reused rather than re-stamped."""
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    member = {
+        "id": MEMBER,
+        "org_id": ORG,
+        "user_id": U1,
+        "status": "suspended",
+        "revoked_at": "2026-07-20T00:00:00+00:00",
+    }
+    db = _db_seq({"org_members": [MagicMock(data=member)]})
+
+    with patch("orgs.service._revoke_offboarded_member_access"):
+        row = await service.suspend_member(db, U1, ORG, MEMBER)
+
+    assert row["revoked_at"] == "2026-07-20T00:00:00+00:00"
+    db.rpc.assert_not_called()
+
+
+async def test_archive_org_needs_no_balance_precondition(monkeypatch):
+    """Whatever the POOL holds survives archiving — disposing of it is a support
+    decision (admin clawback), so archiving can no longer 409."""
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    captured = {}
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data=[{"id": ORG, "archived_at": "2026-07-29T00:00:00+00:00"}], count=1)
+            original_update = b.update
+
+            def _update(payload):
+                captured["payload"] = payload
+                return original_update(payload)
+
+            b.update = _update
+        return b
+
+    db = MagicMock()
+    db.table.side_effect = _side
+
+    with patch("orgs.service._teardown_archived_org_grants"):
+        result = await service.archive_org(db, U1, ORG)
+
+    assert "archived_at" in captured["payload"]
+    assert result["archived_at"]
+    # No credit_wallets read at all — there are no member balances to verify.
+    assert not any(c.args[0] == "credit_wallets" for c in db.table.call_args_list)

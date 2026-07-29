@@ -8,8 +8,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from analytics import capture as analytics_capture
-from orgs import wallets as org_wallets
-from orgs.service import _epoch, _now_iso
+from orgs.service import _now_iso
 from subscriptions.admin_auth import env_admin_emails, is_user_admin
 from subscriptions.stripe_client import get_stripe
 
@@ -147,57 +146,12 @@ def _emit(user_id: str, event: str, props: dict | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seat_wallet_balance(row: dict) -> int:
-    return (row.get("bundle_balance") or 0) + (row.get("reserve_balance") or 0)
-
-
-def _reclaim_seat_to_pool(supabase: Client, *, member_id: str, org_id: str, request_id: str, reason: str) -> None:
-    """Best-effort seat -> pool reclaim. Never raises — logs and returns.
-
-    Mirrors _offboard's money-movement step: read the seat wallet; skip on
-    missing/zero balance (nothing to reclaim, no RPC call — money RPCs raise
-    on non-positive amounts); resolve the org pool wallet via the Task-4
-    create-on-miss helper; transfer_credits with kind='reclaim'.
-    """
-    try:
-        seat_rows = (
-            supabase.table("credit_wallets")
-            .select("id, bundle_balance, reserve_balance")
-            .eq("owner_type", "seat")
-            .eq("owner_id", member_id)
-            .execute()
-            .data
-            or []
-        )
-        if not seat_rows:
-            return
-        seat_wallet = seat_rows[0]
-        balance = _seat_wallet_balance(seat_wallet)
-        if balance <= 0:
-            return
-        pool_wallet = org_wallets.read_or_create_org_wallet(supabase, org_id)
-        supabase.rpc(
-            "transfer_credits",
-            {
-                "p_from_wallet": seat_wallet["id"],
-                "p_to_wallet": pool_wallet["id"],
-                "p_amount": balance,
-                "p_kind": "reclaim",
-                "p_request_id": request_id,
-                "p_metadata": {"org_id": org_id, "reason": reason},
-            },
-        ).execute()
-    except Exception:
-        logger.exception(
-            "account deletion: seat reclaim failed member=%s org=%s request_id=%s", member_id, org_id, request_id
-        )
-
-
-def _reclaim_own_seats(supabase: Client, user_id: str, own_rows: list[dict], archived_org_ids: set[str]) -> None:
-    """Reclaim-then-remove every org_members row this user holds, EXCEPT
-    orgs already handled by `_archive_sole_admin_orgs` (see the skip below),
-    BEFORE the user row is deleted. Best-effort per seat: a reclaim failure
-    is logged (via `_reclaim_seat_to_pool`) and never blocks deletion; the
+def _remove_own_memberships(supabase: Client, user_id: str, own_rows: list[dict], archived_org_ids: set[str]) -> None:
+    """Soft-remove every org_members row this user holds, EXCEPT orgs already
+    handled by `_archive_sole_admin_orgs` (see the skip below), BEFORE the user
+    row is deleted. Nothing is reclaimed — a member never held credits, only a
+    monthly cap on the org pool. Best-effort per membership: a failure is logged
+    and never blocks deletion; the
     status transition below is deliberately not rolled back either —
     money-first, same stance as `_offboard` (a retry re-derives the
     identical request_id and converges).
@@ -227,31 +181,14 @@ def _reclaim_own_seats(supabase: Client, user_id: str, own_rows: list[dict], arc
             # every sole-admin deletion, even though the org is already
             # correctly torn down. Skip outright — nothing left to do here.
             continue
+        if row.get("status") == "removed" and row.get("revoked_at"):
+            continue  # already removed by a prior attempt — nothing left to do
         try:
-            if row.get("status") == "removed" and row.get("revoked_at"):
-                # Retry of a prior attempt whose reclaim failed after the
-                # status write landed — reuse the stored revoked_at rather
-                # than re-stamping (a fresh stamp would mint a new
-                # request_id and could reclaim the same money twice).
-                revoked_at = row["revoked_at"]
-            else:
-                supabase.table("org_members").update({"status": "removed", "revoked_at": _now_iso()}).eq(
-                    "id", member_id
-                ).execute()
-                reread = supabase.table("org_members").select("revoked_at").eq("id", member_id).maybe_single().execute()
-                revoked_at = (reread.data or {}).get("revoked_at") if reread else None
-                if not revoked_at:
-                    # Some client/mocking configurations don't echo the row
-                    # back — fall back to a fresh timestamp rather than fail
-                    # the whole reclaim over a read-back quirk.
-                    revoked_at = _now_iso()
+            supabase.table("org_members").update({"status": "removed", "revoked_at": _now_iso()}).eq(
+                "id", member_id
+            ).execute()
         except Exception:
-            logger.exception("account deletion: seat removal status update failed member=%s", member_id)
-            continue
-        request_id = f"offboard:{member_id}:{_epoch(revoked_at)}"
-        _reclaim_seat_to_pool(
-            supabase, member_id=member_id, org_id=org_id, request_id=request_id, reason="account_deleted"
-        )
+            logger.exception("account deletion: membership removal failed member=%s org=%s", member_id, org_id)
 
 
 def _teardown_archived_org_grants(supabase: Client, org_id: str) -> None:
@@ -296,13 +233,13 @@ def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict
     credits in seat wallets of an org whose admin endpoints just died with
     it.
 
-    Deliberately runs BEFORE `_reclaim_own_seats` (see the call site in
+    Deliberately runs BEFORE `_remove_own_memberships` (see the call site in
     `delete_user_account`) and deliberately NEVER writes to org_members: the
     archived org confers nothing once `archived_at` is set, so there is no
     need to soft-remove any membership row — and critically, a direct
     status flip on the sole active admin's OWN row here would trip
     `org_members_admin_guard` and RAISE (see the skip comment in
-    `_reclaim_own_seats`). Other members' org_members rows are likewise left
+    `_remove_own_memberships`). Other members' org_members rows are likewise left
     untouched (status, revoked_at unchanged) — archived_at alone already
     zeroes their entitlement resolution, per spec.
 
@@ -314,7 +251,7 @@ def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict
     crashed before this cleanup ran; re-running it is idempotent).
 
     Returns the set of org_ids archived (whether archived just now or on a
-    prior retry) so `_reclaim_own_seats` knows which orgs to skip.
+    prior retry) so `_remove_own_memberships` knows which orgs to skip.
     """
     admin_org_ids = {r["org_id"] for r in own_rows if r.get("role") == "admin" and r.get("status") == "active"}
     archived_org_ids: set[str] = set()
@@ -335,31 +272,13 @@ def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict
                 continue  # not the sole admin — no teardown
 
             org_res = supabase.table("organizations").select("archived_at").eq("id", org_id).maybe_single().execute()
-            existing_archived_at = (org_res.data or {}).get("archived_at") if org_res else None
-            if existing_archived_at:
-                # Already archived (retry of a prior attempt) — reuse the
-                # STABLE timestamp so the reclaim keys derived below stay
-                # identical across retries.
-                archived_at = existing_archived_at
-            else:
+            if not ((org_res.data or {}).get("archived_at") if org_res else None):
                 supabase.table("organizations").update({"archived_at": _now_iso()}).eq("id", org_id).execute()
-                reread = supabase.table("organizations").select("archived_at").eq("id", org_id).maybe_single().execute()
-                archived_at = (reread.data or {}).get("archived_at") if reread else None
-                if not archived_at:
-                    archived_at = _now_iso()
 
             archived_org_ids.add(org_id)
-            epoch = _epoch(archived_at)
-            # NO .neq("user_id", user_id) here (finding 1 fix) — every
-            # member's seat balance is reclaimed, INCLUDING the deleting
-            # admin's own. This is the only place that reclaims it, since
-            # `_reclaim_own_seats` skips any org_id in the set we return.
-            all_members = supabase.table("org_members").select("id").eq("org_id", org_id).execute().data or []
-            for member in all_members:
-                request_id = f"orgteardown:{member['id']}:{epoch}"
-                _reclaim_seat_to_pool(
-                    supabase, member_id=member["id"], org_id=org_id, request_id=request_id, reason="org_teardown"
-                )
+            # No per-member reclaim: members hold no credits. Whatever the POOL
+            # still holds stays there for support to dispose of (the admin
+            # clawback endpoint), exactly as with an in-app archive.
             _teardown_archived_org_grants(supabase, org_id)
         except Exception:
             logger.exception("account deletion: sole-admin org teardown failed org=%s", org_id)
@@ -384,10 +303,10 @@ def delete_user_account(supabase: Client, user_id: str, user_email: str | None) 
     CASCADE is a safe fallback for whatever this step didn't reach.
 
     Within that step, `_archive_sole_admin_orgs` MUST run before
-    `_reclaim_own_seats` (Phase B review finding 1): archiving reclaims
+    `_remove_own_memberships` (Phase B review finding 1): archiving reclaims
     every member's seat balance — including this user's own — without ever
     writing to org_members, so those orgs become a pure skip for
-    `_reclaim_own_seats`. Reversed, `_reclaim_own_seats` would flip this
+    `_remove_own_memberships`. Reversed, `_remove_own_memberships` would flip this
     user's own row to 'removed' BEFORE the org is archived; for a sole
     ACTIVE admin that direct status flip trips `org_members_admin_guard`
     (supabase/migrations/20260721000001_licensing_core.sql) — is_cascade is
@@ -415,7 +334,7 @@ def delete_user_account(supabase: Client, user_id: str, user_email: str | None) 
     try:
         own_org_rows = supabase.table("org_members").select("*").eq("user_id", user_id).execute().data or []
         archived_org_ids = _archive_sole_admin_orgs(supabase, user_id, own_org_rows)
-        _reclaim_own_seats(supabase, user_id, own_org_rows, archived_org_ids)
+        _remove_own_memberships(supabase, user_id, own_org_rows, archived_org_ids)
     except Exception:
         logger.exception("account deletion: org seat reclaim/teardown failed user=%s", user_id)
 

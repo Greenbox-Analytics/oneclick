@@ -296,7 +296,7 @@ def _handle_org_topup_grant(
     retries — every step here is idempotent (request-id'd grant, a re-run of
     the SUM, and a status flip that's a no-op once already 'active').
     """
-    from orgs.wallets import cumulative_purchased, read_or_create_org_wallet
+    from orgs.wallets import cumulative_paid_in, read_or_create_org_wallet
 
     wallet = read_or_create_org_wallet(supabase, org_id)
     wallet_id = wallet["id"]
@@ -327,11 +327,11 @@ def _handle_org_topup_grant(
     # Shared with admin_service.get_org_pool (orgs/wallets.py) — "did this org
     # cross the minimum" must be the SAME sum in both places (follow-ups plan
     # Task 2, review round 2).
-    total_purchased = cumulative_purchased(supabase, wallet_id)
+    total_paid_in = cumulative_paid_in(supabase, wallet_id)
     effective_min = org_row.get("min_initial_purchase_credits") or int(
         os.getenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000")
     )
-    if total_purchased >= effective_min:
+    if total_paid_in >= effective_min:
         supabase.table("organizations").update({"status": "active"}).eq("id", org_id).execute()
 
 

@@ -78,11 +78,11 @@ def send_credit_request_email(
     recipient_emails: list[str],
     org_name: str,
     requester_name: str,
-    requested_credits: int | None,
+    requested_cap: int | None,
     note: str | None = None,
 ):
-    """Notify every ACTIVE org admin that a member has asked for more
-    credits (Licensing Phase B, Task 9). Clones send_org_invite_email's
+    """Notify every ACTIVE org admin that a member has asked for a higher
+    monthly credit limit. Clones send_org_invite_email's
     shape/env guards; `recipient_emails` is pre-resolved by the caller
     (orgs/router.py's background task, via the auth admin API — org_members
     only carries user_id, not email)."""
@@ -93,7 +93,9 @@ def send_credit_request_email(
     frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
     safe_org = html.escape(org_name)
     safe_requester = html.escape(requester_name)
-    amount_label = f"{requested_credits:,} credits" if requested_credits else "more credits (amount up to you)"
+    amount_label = (
+        f"a limit of {requested_cap:,} credits / month" if requested_cap else "a higher limit (amount up to you)"
+    )
     safe_amount = html.escape(amount_label)
     note_html = (
         f'<p style="font-size: 14px; color: #555; font-style: italic;">&ldquo;{html.escape(note)}&rdquo;</p>'
@@ -107,10 +109,11 @@ def send_credit_request_email(
       <div style="text-align: center; margin-bottom: 24px;">
         <h1 style="color: #1a3a2a; font-size: 24px; margin: 0;">Msanii</h1>
       </div>
-      <p style="font-size: 16px; color: #333;">A member has requested more credits.</p>
+      <p style="font-size: 16px; color: #333;">A member has asked for a higher credit limit.</p>
       <p style="font-size: 15px; color: #555;">
         <strong>{safe_requester}</strong> has requested <strong>{safe_amount}</strong>
-        on the organization <strong>&ldquo;{safe_org}&rdquo;</strong>.
+        on the organization <strong>&ldquo;{safe_org}&rdquo;</strong>. Raising a limit
+        doesn&rsquo;t move any credits — they simply draw more from the shared pool.
       </p>
       {note_html}
       <div style="text-align: center; margin: 32px 0;">
@@ -127,7 +130,7 @@ def send_credit_request_email(
     """
 
     return _send(
-        subject=f'{safe_requester} requested more credits on "{safe_org}"',
+        subject=f'{safe_requester} requested a higher credit limit on "{safe_org}"',
         html_body=html_body,
         recipients=recipient_emails,
     )

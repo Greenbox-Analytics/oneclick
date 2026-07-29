@@ -75,6 +75,11 @@ export interface EntitlementCredits {
   /** USD per overage credit — quote this, never a hardcoded rate. */
   overageUsdPerCredit: number;
   overageCapCredits: number | null;
+  /** Org context only: this member's monthly ceiling on the shared pool, and
+   * what they've spent against it this period. null/0 in personal context,
+   * where the wallet balance IS the limit. */
+  memberCap?: number | null;
+  memberCapUsed?: number;
   /** ISO timestamp when the credit period resets. */
   periodEnd: string | null;
   prices: CreditPrices;

@@ -95,11 +95,13 @@ def _user_wallet(bundle=3000, reserve=0, period_end=STALE):
     }
 
 
-def _seat_wallet(reserve=500, bundle=0):
+def _pool_wallet(reserve=500, bundle=0):
+    """The org's ONE pool wallet. Members hold none — they spend from here
+    against a monthly cap."""
     return {
-        "id": "wallet-seat",
-        "owner_type": "seat",
-        "owner_id": MEMBER,
+        "id": "wallet-pool",
+        "owner_type": "org",
+        "owner_id": ORG,
         "bundle_balance": bundle,
         "reserve_balance": reserve,
         "overage_this_period": 0,
@@ -112,12 +114,27 @@ def _profile(context_org=None, is_admin=False):
     return {"id": USER, "billing_context_org_id": context_org, "is_admin": is_admin}
 
 
-def _member(status="active", role="member"):
-    return {"id": MEMBER, "org_id": ORG, "user_id": USER, "role": role, "status": status}
+def _member(status="active", role="member", monthly_cap=None, cap_used=0, cap_period_end=None):
+    return {
+        "id": MEMBER,
+        "org_id": ORG,
+        "user_id": USER,
+        "role": role,
+        "status": status,
+        "monthly_cap": monthly_cap,
+        "cap_used": cap_used,
+        "cap_period_end": cap_period_end,
+    }
 
 
-def _org(status="active", archived_at=None, name="Acme Records"):
-    return {"id": ORG, "name": name, "status": status, "archived_at": archived_at}
+def _org(status="active", archived_at=None, name="Acme Records", default_member_cap=None):
+    return {
+        "id": ORG,
+        "name": name,
+        "status": status,
+        "archived_at": archived_at,
+        "default_member_cap": default_member_cap,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +246,7 @@ def _ctx_supabase(data):
     return sb
 
 
-def _org_context_data(*, tier="pro", org_status="active", seat=_seat_wallet, user_wallet=_user_wallet, usage=0):
+def _org_context_data(*, tier="pro", org_status="active", seat=_pool_wallet, user_wallet=_user_wallet, usage=0):
     return {
         "profiles": [_profile(context_org=ORG)],
         "subscriptions": [_sub_row(tier=tier)],
@@ -270,7 +287,7 @@ class TestRule11PersonalWalletUntouched:
         wallet_queries = sb._log.get("credit_wallets", [])
         assert wallet_queries, "expected the seat wallet to be read"
         for preds in wallet_queries:
-            assert ("eq", "owner_type", "seat") in preds
+            assert ("eq", "owner_type", "org") in preds
             assert ("eq", "owner_type", "user") not in preds
 
         # Personal wallet row is byte-for-byte unchanged (bundle still 3000).
@@ -551,7 +568,7 @@ class TestBillingContextFieldMatrix:
         billingContext still identifies the org (managed_by_org is set
         unconditionally); and — the key regression guard for round-3 directive
         2 — the seat wallet is NEVER read or created: no credit_wallets query
-        fires at all (read_or_create_seat_wallet's only DB access is
+        fires at all (read_or_create_pool_wallet's only DB access is
         `.table("credit_wallets")`, so its absence from the query log proves
         the read+create never happened)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
@@ -698,6 +715,9 @@ class TestToDictRegressionSnapshot:
                 # rate overage_billing.py charges instead of hardcoding one.
                 "overageUsdPerCredit": 0.02,
                 "overageCapCredits": None,
+                # Org-context only — absent in personal context as None/0.
+                "memberCap": None,
+                "memberCapUsed": 0,
                 "periodEnd": None,
                 "prices": {"zoeMessage": 3, "oneclickRun": 21, "registryParse": 12},
             },

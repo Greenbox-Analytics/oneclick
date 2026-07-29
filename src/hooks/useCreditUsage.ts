@@ -21,6 +21,9 @@ export interface CreditUsage {
   bundleBalance?: number;
   reserveBalance?: number;
   overageThisPeriod?: number;
+  /** Org context only — the member's ceiling and usage against it. */
+  memberCap?: number | null;
+  memberCapUsed?: number;
   tools?: CreditToolUsage[];
 }
 

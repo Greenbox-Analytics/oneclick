@@ -597,21 +597,16 @@ def adjust_org_pool(supabase, org_id: str, amount: int, reason: str, adjusted_by
     the ledger exists to guarantee — see adjust_user_credits above, which
     this mirrors for the org-wallet case.
 
-    TRIPWIRE — org pool balance == reserve, so the reserve-only clawback
-    branch below is TOTAL for org wallets, not merely "compatible with them":
-    org wallets are NULL-period, reserve-only BY CONSTRUCTION
-    (orgs/wallets.py module docstring, rule 1) and are never action-debited —
-    `check_credits`/`debit_for_action` only ever spend a per-member 'seat'
-    wallet, never the org 'pool' wallet directly. The pool wallet is only
-    ever GRANTED into (Stripe topups, via `stripe_events._handle_org_topup_grant`)
-    or TRANSFERRED reserve-to-reserve (seat funding/reclaim, via
-    `transfer_credits`). So `bundle_balance` is always 0 on an org wallet, and
-    `debit_credits`'s reserve-only/clamped clawback branch removes the WHOLE
-    story, not just part of it. If a future change ever debits an org pool's
-    bundle bucket directly (some new pool-level action-spend), this
-    reserve-only assumption breaks and a clawback here would silently leave
-    bundle money behind — audit every `debit_credits` call site against org
-    wallets before adding one, and revisit this docstring.
+    BUCKETS — an org pool holds BOTH, with different provenance:
+    `reserve_balance` is purchased packs, `bundle_balance` is the current
+    period's contract dispersal (granted by the sweep's rollover, spent by
+    members, expired at each period end). `debit_credits`'s clawback branch is
+    deliberately RESERVE-ONLY, so this recovers purchased credits and never the
+    dispersal — correct in both directions: a refund is against money the org
+    actually paid for a pack, and clawing back dispersed credits would be undone
+    by the next rollover anyway. A shortfall means the purchased remnant had
+    already been spent; the RPC returns it so support can see the refund exceeded
+    what was recoverable.
 
     Raises ValueError (-> 404 at the router) when the org has no pool
     wallet yet — there is nothing to claw back. Raises RuntimeError on a
@@ -631,9 +626,9 @@ def get_org_pool(supabase, org_id: str) -> dict:
     """Support-visibility snapshot of an org's pool, read BEFORE deciding how
     to dispose of it via `adjust_org_pool` (see that function's runbook).
 
-    Returns {orgId, status, archivedAt, poolBalance, cumulativePurchased,
-    ledger}. `cumulativePurchased` is computed via the SAME
-    `orgs.wallets.cumulative_purchased` helper the Phase B activation check
+    Returns {orgId, status, archivedAt, poolBalance, cumulativePaidIn,
+    ledger}. `cumulativePaidIn` is computed via the SAME
+    `orgs.wallets.cumulative_paid_in` helper the Phase B activation check
     (`stripe_events._handle_org_topup_grant`) uses — support's "did this org
     cross the minimum" must be definitionally identical to what activation
     summed, not a second reimplementation that can drift.
@@ -643,7 +638,7 @@ def get_org_pool(supabase, org_id: str) -> dict:
     a normal state for a fresh 'pending' org) is NOT an error: it reports
     zero balance/cumulative and an empty ledger.
     """
-    from orgs.wallets import cumulative_purchased
+    from orgs.wallets import cumulative_paid_in
 
     org_res = supabase.table("organizations").select("id, status, archived_at").eq("id", org_id).execute()
     org_rows = org_res.data or []
@@ -659,7 +654,7 @@ def get_org_pool(supabase, org_id: str) -> dict:
             "status": org.get("status"),
             "archivedAt": org.get("archived_at"),
             "poolBalance": 0,
-            "cumulativePurchased": 0,
+            "cumulativePaidIn": 0,
             "ledger": [],
         }
     wallet = wallet_rows[0]
@@ -680,7 +675,7 @@ def get_org_pool(supabase, org_id: str) -> dict:
         "status": org.get("status"),
         "archivedAt": org.get("archived_at"),
         "poolBalance": pool_balance,
-        "cumulativePurchased": cumulative_purchased(supabase, wallet_id),
+        "cumulativePaidIn": cumulative_paid_in(supabase, wallet_id),
         "ledger": ledger_res.data or [],
     }
 

@@ -1,9 +1,12 @@
 // src/components/orgs/OrgSeatsTable.tsx
-// Admin console: per-seat balance/spend/status + storage-vs-cap (round 5 —
-// the finite per-seat storage ceiling must be visible before an upload
-// fails), with allocate/reclaim/role/suspend/reactivate/remove actions.
+// Admin console: per-member monthly cap, spend against it, status, and
+// storage-vs-cap (the finite per-seat storage ceiling must be visible before an
+// upload fails), with cap/role/suspend/reactivate/remove actions.
+//
+// Members hold no credit balance — they spend from the org pool up to their cap
+// — so the money column is "used of cap", and setting a cap moves nothing.
 import { useState } from "react";
-import { MoreHorizontal, Loader2, Coins, Undo2, ShieldOff, RotateCcw, UserX } from "lucide-react";
+import { MoreHorizontal, Loader2, Gauge, ShieldOff, RotateCcw, UserX } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,8 +39,7 @@ import {
   useSuspendOrgMember,
   useReactivateOrgMember,
   useRemoveOrgMember,
-  useAllocateCredits,
-  useReclaimCredits,
+  useSetMemberCap,
   type OrgSeatUsage,
   type OrgRole,
 } from "@/hooks/useOrgs";
@@ -49,139 +51,89 @@ const STATUS_STYLE: Record<string, string> = {
   removed: "border-border text-muted-foreground bg-muted",
 };
 
-function AllocateDialog({
+function CapDialog({
   seat,
   orgId,
+  defaultCap,
   open,
   onOpenChange,
 }: {
   seat: OrgSeatUsage | null;
   orgId: string;
+  defaultCap: number | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [amount, setAmount] = useState("");
-  const allocate = useAllocateCredits();
-  const amountValue = Number(amount);
+  const [value, setValue] = useState("");
+  const [useDefault, setUseDefault] = useState(false);
+  const setCap = useSetMemberCap();
 
-  const handleClose = (next: boolean) => {
-    onOpenChange(next);
-    if (!next) setAmount("");
-  };
+  // Re-seed whenever a different member's dialog opens.
+  const seatKey = seat?.orgMemberId ?? "";
+  const [seededFor, setSeededFor] = useState("");
+  if (open && seatKey && seededFor !== seatKey) {
+    setSeededFor(seatKey);
+    setUseDefault(seat?.monthlyCap == null);
+    setValue(seat?.monthlyCap != null ? String(seat.monthlyCap) : "");
+  }
 
-  const handleSubmit = () => {
-    if (!seat || !amountValue || amountValue <= 0) return;
-    allocate.mutate({ orgId, memberId: seat.orgMemberId, amount: amountValue }, { onSuccess: () => handleClose(false) });
-  };
+  const parsed = Number(value);
+  const valid = useDefault || (value !== "" && Number.isFinite(parsed) && parsed >= 0);
 
-  return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Allocate credits</DialogTitle>
-          <DialogDescription>
-            Move credits from the pool into {seat?.email ?? "this member"}&apos;s seat.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2">
-          <Label htmlFor="allocate-amount">Amount</Label>
-          <Input
-            id="allocate-amount"
-            type="number"
-            min={1}
-            placeholder="e.g. 500"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => handleClose(false)}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={!amountValue || amountValue <= 0 || allocate.isPending}>
-            {allocate.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            Allocate
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function ReclaimDialog({
-  seat,
-  orgId,
-  open,
-  onOpenChange,
-}: {
-  seat: OrgSeatUsage | null;
-  orgId: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const [reclaimAll, setReclaimAll] = useState(true);
-  const [amount, setAmount] = useState("");
-  const reclaim = useReclaimCredits();
-  const amountValue = Number(amount);
-
-  const handleClose = (next: boolean) => {
-    onOpenChange(next);
-    if (!next) {
-      setAmount("");
-      setReclaimAll(true);
-    }
-  };
-
-  const handleSubmit = () => {
-    if (!seat) return;
-    if (!reclaimAll && (!amountValue || amountValue <= 0)) return;
-    reclaim.mutate(
-      { orgId, memberId: seat.orgMemberId, amount: reclaimAll ? null : amountValue },
-      { onSuccess: () => handleClose(false) },
+  const submit = () => {
+    if (!seat || !valid) return;
+    setCap.mutate(
+      { orgId, memberId: seat.orgMemberId, cap: useDefault ? null : parsed },
+      { onSuccess: () => onOpenChange(false) },
     );
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-sm">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
         <DialogHeader>
-          <DialogTitle>Reclaim credits</DialogTitle>
+          <DialogTitle>Monthly credit limit</DialogTitle>
           <DialogDescription>
-            Move credits from {seat?.email ?? "this member"}&apos;s seat back into the pool. Seat balance:{" "}
-            {(seat?.seatBalance ?? 0).toLocaleString()} credits.
+            How much of the shared pool {seat?.email ?? "this member"} can use each month. Nothing is set aside — the
+            limit just stops them spending more than this.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <Checkbox id="reclaim-all" checked={reclaimAll} onCheckedChange={(v) => setReclaimAll(v === true)} />
-            <Label htmlFor="reclaim-all" className="font-normal">
-              Reclaim the entire balance
+            <Checkbox
+              id="cap-default"
+              checked={useDefault}
+              onCheckedChange={(v) => setUseDefault(v === true)}
+            />
+            <Label htmlFor="cap-default" className="font-normal">
+              Use the organization default
+              {defaultCap != null ? ` (${defaultCap.toLocaleString()} credits)` : " (no limit)"}
             </Label>
           </div>
-          {!reclaimAll && (
-            <div className="space-y-2">
-              <Label htmlFor="reclaim-amount">Amount</Label>
+          {!useDefault && (
+            <div className="space-y-1.5">
+              <Label htmlFor="cap-amount">Credits per month</Label>
               <Input
-                id="reclaim-amount"
+                id="cap-amount"
                 type="number"
-                min={1}
-                placeholder="e.g. 200"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                min={0}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="2000"
               />
+              <p className="text-xs text-muted-foreground">
+                Used {(seat?.capUsed ?? 0).toLocaleString()} so far this month.
+              </p>
             </div>
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => handleClose(false)}>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={(!reclaimAll && (!amountValue || amountValue <= 0)) || reclaim.isPending}
-          >
-            {reclaim.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            Reclaim
+          <Button onClick={submit} disabled={!valid || setCap.isPending}>
+            {setCap.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+            Save limit
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -196,8 +148,7 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
   const reactivate = useReactivateOrgMember();
   const remove = useRemoveOrgMember();
 
-  const [allocateSeat, setAllocateSeat] = useState<OrgSeatUsage | null>(null);
-  const [reclaimSeat, setReclaimSeat] = useState<OrgSeatUsage | null>(null);
+  const [capSeat, setCapSeat] = useState<OrgSeatUsage | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ type: "suspend" | "remove"; seat: OrgSeatUsage } | null>(null);
 
   if (isLoading) {
@@ -217,22 +168,22 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
 
   const seats = usage.seats;
   const confirmDescription = confirmAction
-    ? `${confirmAction.seat.email ?? "This member"} will lose access and their remaining credits will be reclaimed to the pool. ${
+    ? `${confirmAction.seat.email ?? "This member"} will lose access to this organization. Nothing is deducted — they never held credits, only a limit. ${
         confirmAction.type === "suspend" ? "You can reactivate them later." : "You can re-invite them later."
       }`
     : "";
 
   return (
     <Card className="p-6">
-      <div className="text-[15px] font-semibold">Seats</div>
+      <div className="text-[15px] font-semibold">Members</div>
       <div className="text-[13.5px] text-muted-foreground mt-0.5">
-        Everyone with access to this organization, and what they&apos;ve used
+        Everyone with access, what they&apos;ve used from the pool this month, and their limit
       </div>
 
       <div className="mt-4">
         {seats.length === 0 ? (
           <div className="text-sm text-muted-foreground text-center py-10">
-            No seats yet — invite someone to get started.
+            No members yet — invite someone to get started.
           </div>
         ) : (
           <Table>
@@ -241,8 +192,8 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
                 <TableHead>Member</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="text-right">Seat balance</TableHead>
-                <TableHead className="text-right">Spent</TableHead>
+                <TableHead className="text-right">Used this month</TableHead>
+                <TableHead className="text-right">Limit</TableHead>
                 <TableHead>Storage</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
@@ -286,9 +237,18 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
                         {seat.status}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{seat.seatBalance.toLocaleString()}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {seat.spentThisPeriod.toLocaleString()}
+                      {seat.effectiveCap != null && (
+                        <span className="text-muted-foreground"> / {seat.effectiveCap.toLocaleString()}</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {seat.spentAllTime.toLocaleString()}
+                      {seat.effectiveCap == null
+                        ? "No limit"
+                        : seat.monthlyCap == null
+                          ? `${seat.effectiveCap.toLocaleString()} (default)`
+                          : seat.effectiveCap.toLocaleString()}
                     </TableCell>
                     <TableCell>
                       <div
@@ -311,11 +271,8 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => setAllocateSeat(seat)}>
-                            <Coins className="w-3.5 h-3.5 mr-2" /> Allocate credits…
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setReclaimSeat(seat)} disabled={seat.seatBalance <= 0}>
-                            <Undo2 className="w-3.5 h-3.5 mr-2" /> Reclaim credits…
+                          <DropdownMenuItem onClick={() => setCapSeat(seat)}>
+                            <Gauge className="w-3.5 h-3.5 mr-2" /> Set monthly limit…
                           </DropdownMenuItem>
                           {!isSelf && (
                             <>
@@ -353,17 +310,12 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
         )}
       </div>
 
-      <AllocateDialog
-        seat={allocateSeat}
+      <CapDialog
+        seat={capSeat}
         orgId={orgId}
-        open={!!allocateSeat}
-        onOpenChange={(o) => !o && setAllocateSeat(null)}
-      />
-      <ReclaimDialog
-        seat={reclaimSeat}
-        orgId={orgId}
-        open={!!reclaimSeat}
-        onOpenChange={(o) => !o && setReclaimSeat(null)}
+        defaultCap={usage.defaultMemberCap}
+        open={!!capSeat}
+        onOpenChange={(o) => !o && setCapSeat(null)}
       />
 
       <AlertDialog open={!!confirmAction} onOpenChange={(o) => !o && setConfirmAction(null)}>

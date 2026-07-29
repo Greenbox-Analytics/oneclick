@@ -1,7 +1,7 @@
 // src/pages/Organization.tsx
 // Licensing Phase B (spec §7, plan Tasks 12-13) — the /organization console:
 // the admin view (Task 12) and the member view (Task 13, MemberPanel below —
-// seat balance/usage, "Request more credits" form, own request history).
+// their limit + usage, "Request a higher limit" form, own request history).
 // Reachable regardless of LICENSING_ENABLED: it self-handles the flag-off
 // state (GET /orgs 404s for everyone while the flag is off) by showing the
 // same "create an organization" empty state a flag-on user with zero orgs
@@ -147,9 +147,9 @@ function AdminConsole({ orgId }: { orgId: string }) {
   );
 }
 
-/** Member (non-admin) view (plan Task 13): seat balance + usage (when this
- * org is the caller's active billing context), a "Request more credits" form,
- * and the member's own request history. `GET /orgs/{id}/credit-requests`
+/** Member (non-admin) view: their monthly limit and what they've used of it
+ * (when this org is the caller's active billing context), a "Request a higher
+ * limit" form, and the member's own request history. `GET /orgs/{id}/credit-requests`
  * scopes itself to the caller's own rows for non-admins (backend), so
  * `useOrgCreditRequests` is reused as-is here — no separate "my requests"
  * endpoint needed. */
@@ -170,11 +170,11 @@ function MemberRequestForm({ orgId, hasPending }: { orgId: string; hasPending: b
     const trimmed = amount.trim();
     const parsed = trimmed ? Number(trimmed) : undefined;
     if (trimmed && (!Number.isFinite(parsed) || (parsed as number) <= 0)) {
-      toast.error("Enter a positive number of credits, or leave it blank.");
+      toast.error("Enter a positive monthly limit, or leave it blank to let your admin decide.");
       return;
     }
     submitRequest.mutate(
-      { orgId, requestedCredits: parsed, note: note.trim() || undefined },
+      { orgId, requestedCap: parsed, note: note.trim() || undefined },
       { onSuccess: () => { setAmount(""); setNote(""); } },
     );
   };
@@ -183,7 +183,7 @@ function MemberRequestForm({ orgId, hasPending }: { orgId: string; hasPending: b
     <div className="mt-4 space-y-3">
       <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
         <div className="space-y-1.5">
-          <Label htmlFor="request-amount">Amount (optional)</Label>
+          <Label htmlFor="request-amount">New monthly limit (optional)</Label>
           <Input
             id="request-amount"
             type="number"
@@ -240,19 +240,31 @@ function MemberPanel({ org }: { org: OrgSummary }) {
     <div className="flex flex-col gap-[22px]">
       <OrgHeader org={org} />
       <Card className="p-6">
-        <div className="text-[15px] font-semibold">Your seat</div>
+        <div className="text-[15px] font-semibold">Your access</div>
         <div className="text-[13.5px] text-muted-foreground mt-0.5">
-          You&apos;re a member of {org.name} — an admin manages invites and credits
+          You&apos;re a member of {org.name} — an admin manages invites and credit limits
         </div>
 
         <div className="mt-4 bg-background border border-border rounded-xl px-[18px] py-4">
           {isActiveContext ? (
             <>
-              <div className="text-[12.5px] text-muted-foreground">Seat balance</div>
+              <div className="text-[12.5px] text-muted-foreground">
+                {ent?.credits?.memberCap != null ? "Left of your monthly limit" : "In the shared pool"}
+              </div>
               <div className="text-[28px] font-bold tracking-tight mt-1 tabular-nums">
-                {(ent?.credits?.balance ?? 0).toLocaleString()}{" "}
+                {(ent?.credits?.memberCap != null
+                  ? Math.max(0, ent.credits.memberCap - (ent.credits.memberCapUsed ?? 0))
+                  : (ent?.credits?.balance ?? 0)
+                ).toLocaleString()}{" "}
                 <span className="text-sm font-normal text-muted-foreground">credits</span>
               </div>
+              {ent?.credits?.memberCap != null && (
+                <div className="text-[12px] text-muted-foreground mt-1">
+                  {(ent.credits.memberCapUsed ?? 0).toLocaleString()} of{" "}
+                  {ent.credits.memberCap.toLocaleString()} used · organization pool holds{" "}
+                  {(ent.credits.balance ?? 0).toLocaleString()}
+                </div>
+              )}
 
               {usedTools.length > 0 && (
                 <div className="mt-4 pt-3.5 border-t border-border/60">
@@ -278,16 +290,16 @@ function MemberPanel({ org }: { org: OrgSummary }) {
               <a href="/profile" className="underline underline-offset-2">
                 Profile
               </a>{" "}
-              page to see your live seat balance here.
+              page to see your live limit and usage here.
             </p>
           )}
         </div>
       </Card>
 
       <Card className="p-6">
-        <div className="text-[15px] font-semibold">Request more credits</div>
+        <div className="text-[15px] font-semibold">Request a higher limit</div>
         <div className="text-[13.5px] text-muted-foreground mt-0.5">
-          Running low? Ask your admin to send more from the organization&apos;s pool.
+          Hit your monthly limit? Ask your admin to raise it — nothing moves until you spend.
         </div>
 
         <MemberRequestForm orgId={org.id} hasPending={hasPending} />
@@ -306,8 +318,8 @@ function MemberPanel({ org }: { org: OrgSummary }) {
                 {(myRequests ?? []).map((r) => (
                   <div key={r.id} className="flex items-center justify-between gap-3 text-sm py-1.5">
                     <div className="min-w-0 text-muted-foreground">
-                      {r.requested_credits != null
-                        ? `Asked for ${r.requested_credits.toLocaleString()}`
+                      {r.requested_cap != null
+                        ? `Asked for a ${r.requested_cap.toLocaleString()} / mo limit`
                         : "Asked for more — amount up to admin"}
                       {" · "}
                       {fmtDate(r.created_at)}
@@ -315,7 +327,7 @@ function MemberPanel({ org }: { org: OrgSummary }) {
                     <div className="flex items-center gap-2 flex-none">
                       {r.status === "approved" && (
                         <span className="text-xs text-muted-foreground tabular-nums">
-                          +{(r.resolved_credits ?? 0).toLocaleString()}
+                          {(r.resolved_cap ?? 0).toLocaleString()} / mo
                         </span>
                       )}
                       <Badge variant="outline" className={statusBadgeClass(r.status)}>

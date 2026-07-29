@@ -8,8 +8,12 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 export interface CreditWallInfo {
-  /** Denial came from a seat wallet in ORG billing context. */
+  /** Denial came from an org billing context (the shared pool). */
   managedByOrg: boolean;
+  /** True when the MEMBER hit their own monthly limit (remedy: ask for a
+   * raise). False on a dry pool, where only an admin buying credits helps —
+   * two different walls that must not offer the same CTA. */
+  capReached: boolean;
   /** Where "Request credits" navigates (member request form) when present. */
   requestUrl?: string;
   /** The dry seat is on a project the CALLER OWNS and can unlink. */
@@ -30,6 +34,7 @@ export function parseCreditWallDetail(detail: unknown): CreditWallInfo {
   const ownerCanUnlink = managedByOrg && d.ownerCanUnlink === true;
   return {
     managedByOrg,
+    capReached: managedByOrg && d.capReached === true,
     requestUrl: managedByOrg && typeof d.requestUrl === "string" ? d.requestUrl : undefined,
     ownerCanUnlink,
     projectId: ownerCanUnlink && typeof d.projectId === "string" ? d.projectId : undefined,

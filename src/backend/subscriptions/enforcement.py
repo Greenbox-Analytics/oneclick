@@ -196,6 +196,7 @@ def gated_credits(
                 "reason": result.reason,
                 "degraded": result.degraded,
                 "managed_by_org": result.managed_by_org,
+                "cap_reached": result.cap_reached,
             },
         )
         detail = {
@@ -206,11 +207,15 @@ def gated_credits(
             "overageAvailable": result.overage_available,
         }
         if result.managed_by_org:
-            # Seat wall (Licensing Phase B, rule 8): there is no upgrade / overage
+            # Org wall (Licensing Phase B, rule 8): there is no upgrade / overage
             # path — the member asks their org admin. `requestUrl` points the wall
-            # at the org member view where the credit-request form lives (Task 9).
+            # at the org member view where the request form lives. `capReached`
+            # splits the two org walls, which have different remedies: the member's
+            # own monthly ceiling (ask for a raise) versus a dry pool (only an admin
+            # buying credits fixes that, so a member sees no actionable CTA).
             detail["managedByOrg"] = True
             detail["requestUrl"] = "/organization"
+            detail["capReached"] = result.cap_reached
         if result.owner_can_unlink:
             # Owner-aware dry-seat wall (Licensing Phase C, rule 11): the caller
             # OWNS the linked project, so offer a second CTA — unlink it to fall
@@ -229,9 +234,12 @@ def gated_credits(
         price=result.price,
         kind="overage_debit" if result.use_overage else "debit",
         enabled=result.price > 0,
-        # Rule 9: the debit targets the exact wallet the check cleared (seat wallet
-        # in org context, personal wallet otherwise). None on legacy / zero-price.
+        # Rule 9: the debit targets the exact wallet the check cleared (the org
+        # pool in org context, personal wallet otherwise). None on legacy /
+        # zero-price. `org_member_id` rides along so the debit moves that member's
+        # cap counter under the same lock.
         wallet_id=result.wallet_id,
+        org_member_id=result.org_member_id,
     )
 
 

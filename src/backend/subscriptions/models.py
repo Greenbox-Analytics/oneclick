@@ -112,6 +112,10 @@ class Entitlements:
                 # match what overage_billing.py actually charges).
                 "overageUsdPerCredit": overage_usd_per_credit(),
                 "overageCapCredits": self.credits.overage_cap_credits,
+                # Org context: the member's ceiling on the shared pool and their
+                # spend against it. Absent (None/0) in personal context.
+                "memberCap": self.credits.member_cap,
+                "memberCapUsed": self.credits.member_cap_used,
                 "periodEnd": self.credits.period_end.isoformat() if self.credits.period_end else None,
                 "prices": {
                     "zoeMessage": self.credits.prices.get("zoe_message", 0),
@@ -252,6 +256,11 @@ class CreditsInfo:
     overage_cap_credits: int | None
     period_end: datetime | None
     prices: dict[str, int]
+    # Org context only: the member's monthly ceiling on the shared pool and what
+    # they have spent against it this period. None/0 in personal context, where
+    # the wallet balance IS the limit.
+    member_cap: int | None = None
+    member_cap_used: int = 0
 
     @property
     def balance(self) -> int:
@@ -271,15 +280,22 @@ class CreditCheckResult:
     reset_date: datetime | None = None
     degraded: bool = False
     # Licensing Phase B (spec §5, rules 8/9). `wallet_id` is the id of the wallet
-    # the check passed against (personal wallet id in personal context, SEAT wallet
-    # id in org context); gated_credits copies it into the CreditGrant so the debit
+    # the check passed against (personal wallet in personal context, the ORG POOL
+    # in org context); gated_credits copies it into the CreditGrant so the debit
     # targets the SAME wallet the check cleared — a context switch mid-action can
     # never move the charge. None on a zero-price or degraded (uncharged) result.
-    # `managed_by_org` marks an org-context (seat-wallet) outcome: on denial the
-    # enforcement 402 gains managedByOrg/requestUrl and the seat wall carries NO
-    # overage/upgrade path (the member asks their admin instead).
+    # `managed_by_org` marks an org-context outcome: on denial the enforcement 402
+    # gains managedByOrg/requestUrl and carries NO overage/upgrade path (the member
+    # asks their admin instead).
+    #
+    # `org_member_id` rides along so the debit can move that member's cap counter
+    # atomically; `cap_reached` distinguishes the two org walls, which have
+    # DIFFERENT remedies — the member's own ceiling (ask for a raise) versus a dry
+    # pool (the admin must buy credits). The wall copy and the CTA both key off it.
     wallet_id: str | None = None
+    org_member_id: str | None = None
     managed_by_org: bool = False
+    cap_reached: bool = False
     # Licensing Phase C (spec §6/§11, rule 11) — owner-aware dry-seat wall. Set
     # ONLY on a DERIVED-resource org DENY where the caller OWNS the linked
     # project (a lazy, deny-path-only ownership check in `_check_credits_org`).
@@ -307,12 +323,16 @@ class CreditGrant:
     kind: Literal["debit", "overage_debit"]
     enabled: bool
     # Licensing Phase B (rule 9): the wallet the debit MUST target — the exact
-    # wallet the credit check passed against (seat wallet in org context, personal
-    # wallet otherwise). When set, debit_for_action charges it DIRECTLY, resolving
-    # nothing, so a billing-context switch between check and debit cannot relocate
-    # the charge. None for legacy / free / zero-price grants → debit_for_action
-    # falls back to today's personal-wallet resolve (a no-op when disabled anyway).
+    # wallet the credit check passed against (the ORG POOL in org context, the
+    # personal wallet otherwise). When set, debit_for_action charges it DIRECTLY,
+    # resolving nothing, so a billing-context switch between check and debit cannot
+    # relocate the charge. None for legacy / free / zero-price grants →
+    # debit_for_action falls back to today's personal-wallet resolve (a no-op when
+    # disabled anyway).
     wallet_id: str | None = None
+    # Org-pool spend only: whose cap counter the debit moves. None on personal
+    # wallets, so the RPC's org_members lock never fires for them.
+    org_member_id: str | None = None
 
 
 class OverridePayload(BaseModel):

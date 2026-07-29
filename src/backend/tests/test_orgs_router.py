@@ -150,12 +150,12 @@ def test_update_org_ok_and_forwards_only_set_fields(client):
     assert forwarded_fields == {"name": "New"}
 
 
-def test_update_org_forwards_explicit_null_for_default_seat_allowance(client):
+def test_update_org_forwards_explicit_null_for_default_member_cap(client):
     with patch("orgs.router.service.update_org", new=AsyncMock(return_value={"id": ORG_ID})) as mock_update:
-        resp = client.put(f"/orgs/{ORG_ID}", json={"default_seat_allowance": None})
+        resp = client.put(f"/orgs/{ORG_ID}", json={"default_member_cap": None})
     assert resp.status_code == 200
     forwarded_fields = mock_update.call_args.args[-1]
-    assert forwarded_fields == {"default_seat_allowance": None}
+    assert forwarded_fields == {"default_member_cap": None}
 
 
 def test_update_org_denied_for_non_admin_403(client):
@@ -179,17 +179,6 @@ def test_archive_org_ok(client):
     assert resp.json()["archived_at"] == "now"
 
 
-def test_archive_org_409_when_seat_balance_nonzero(client):
-    from orgs.service import SeatBalanceNotZeroError
-
-    with patch(
-        "orgs.router.service.archive_org",
-        new=AsyncMock(side_effect=SeatBalanceNotZeroError("Reclaim all seat credits first")),
-    ):
-        resp = client.post(f"/orgs/{ORG_ID}/archive")
-    assert resp.status_code == 409
-
-
 def test_archive_org_denied_for_non_admin_403(client):
     with patch(
         "orgs.router.service.archive_org",
@@ -209,8 +198,10 @@ def test_archive_org_denied_for_non_admin_403(client):
 def test_get_org_usage_ok(client):
     payload = {
         "poolBalance": 4000,
-        "cumulativePurchased": 5000,
-        "seats": [{"orgMemberId": MEMBER_ID, "seatBalance": 300}],
+        "cumulativePaidIn": 15000,
+        "monthlyDispersalCredits": 10000,
+        "defaultMemberCap": 2000,
+        "seats": [{"orgMemberId": MEMBER_ID, "effectiveCap": 2000, "spentThisPeriod": 24}],
     }
     with patch("orgs.router.service.get_org_usage", new=AsyncMock(return_value=payload)):
         resp = client.get(f"/orgs/{ORG_ID}/usage")
@@ -459,14 +450,6 @@ def test_suspend_member_last_admin_409(client):
     assert resp.status_code == 409
 
 
-def test_suspend_member_reclaim_failed_502(client):
-    from orgs.service import ReclaimFailedError
-
-    with patch("orgs.router.service.suspend_member", new=AsyncMock(side_effect=ReclaimFailedError("reclaim failed"))):
-        resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/suspend")
-    assert resp.status_code == 502
-
-
 def test_suspend_member_not_found_404(client):
     with patch("orgs.router.service.suspend_member", new=AsyncMock(side_effect=ValueError("Member not found"))):
         resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/suspend")
@@ -491,14 +474,6 @@ def test_remove_member_last_admin_409(client):
     with patch("orgs.router.service.remove_member", new=AsyncMock(side_effect=LastAdminError("only admin"))):
         resp = client.delete(f"/orgs/{ORG_ID}/members/{MEMBER_ID}")
     assert resp.status_code == 409
-
-
-def test_remove_member_reclaim_failed_502(client):
-    from orgs.service import ReclaimFailedError
-
-    with patch("orgs.router.service.remove_member", new=AsyncMock(side_effect=ReclaimFailedError("boom"))):
-        resp = client.delete(f"/orgs/{ORG_ID}/members/{MEMBER_ID}")
-    assert resp.status_code == 502
 
 
 def test_reactivate_member_ok(client):
@@ -551,21 +526,44 @@ class TestGetOrgUsageService:
 
     def _members(self):
         return [
-            {"id": self.ADMIN_MEMBER, "user_id": self.U_ADMIN, "role": "admin", "status": "active"},
-            {"id": self.MEMBER_2, "user_id": self.U_MEMBER_2, "role": "member", "status": "active"},
+            {
+                "id": self.ADMIN_MEMBER,
+                "user_id": self.U_ADMIN,
+                "role": "admin",
+                "status": "active",
+                "monthly_cap": 4000,
+                "cap_used": 24,
+            },
+            {
+                "id": self.MEMBER_2,
+                "user_id": self.U_MEMBER_2,
+                "role": "member",
+                "status": "active",
+                "monthly_cap": None,  # falls through to the org default
+                "cap_used": 0,
+            },
             {
                 "id": self.REMOVED_WITH_BALANCE,
                 "user_id": self.U_REMOVED_BALANCE,
                 "role": "member",
                 "status": "removed",
+                "monthly_cap": 500,
+                "cap_used": 12,
             },
-            # No matching credit_wallets row at all for this one — proves the
-            # "missing wallet" path also defaults balance to 0 (and is
-            # therefore excluded, same as an explicit zero balance).
-            {"id": self.REMOVED_AT_ZERO, "user_id": self.U_REMOVED_ZERO, "role": "member", "status": "removed"},
+            # No ledger rows for this one — a removed member who spent nothing
+            # this period is excluded from the console.
+            {
+                "id": self.REMOVED_AT_ZERO,
+                "user_id": self.U_REMOVED_ZERO,
+                "role": "member",
+                "status": "removed",
+                "monthly_cap": None,
+                "cap_used": 0,
+            },
         ]
 
     def _wallets(self):
+        """ONE pool wallet — members hold none."""
         return [
             {
                 "id": self.POOL_WALLET,
@@ -573,39 +571,22 @@ class TestGetOrgUsageService:
                 "owner_id": self.ORG,
                 "bundle_balance": 0,
                 "reserve_balance": 4000,
-            },
-            {
-                "id": self.SEAT_WALLET_ADMIN,
-                "owner_type": "seat",
-                "owner_id": self.ADMIN_MEMBER,
-                "bundle_balance": 0,
-                "reserve_balance": 300,
-            },
-            {
-                "id": self.SEAT_WALLET_MEMBER_2,
-                "owner_type": "seat",
-                "owner_id": self.MEMBER_2,
-                "bundle_balance": 0,
-                "reserve_balance": 0,
-            },
-            {
-                "id": self.SEAT_WALLET_REMOVED_BALANCE,
-                "owner_type": "seat",
-                "owner_id": self.REMOVED_WITH_BALANCE,
-                "bundle_balance": 0,
-                "reserve_balance": 40,
+                "period_start": "2026-07-01T00:00:00+00:00",
+                "period_end": "2026-08-01T00:00:00+00:00",
             },
         ]
 
     def _ledger(self):
+        """All rows are on the POOL; who spent what comes from
+        metadata.org_member_id, which debit_credits writes."""
         return [
-            {"wallet_id": self.POOL_WALLET, "delta": 5000, "kind": "purchase"},
-            {"wallet_id": self.SEAT_WALLET_ADMIN, "delta": -21, "kind": "debit"},
-            {"wallet_id": self.SEAT_WALLET_ADMIN, "delta": -3, "kind": "debit"},
-            # An allocation INTO the seat is not spend — must not count toward
-            # spentAllTime (only kind='debit' rows do).
-            {"wallet_id": self.SEAT_WALLET_ADMIN, "delta": 300, "kind": "allocation"},
-            {"wallet_id": self.SEAT_WALLET_REMOVED_BALANCE, "delta": -12, "kind": "debit"},
+            {"delta": 5000, "kind": "purchase", "metadata": {}},
+            {"delta": 10000, "kind": "dispersal", "metadata": {}},
+            {"delta": -21, "kind": "debit", "metadata": {"org_member_id": self.ADMIN_MEMBER}},
+            {"delta": -3, "kind": "debit", "metadata": {"org_member_id": self.ADMIN_MEMBER}},
+            {"delta": -12, "kind": "debit", "metadata": {"org_member_id": self.REMOVED_WITH_BALANCE}},
+            # A grant into the pool is not spend — only kind='debit' counts.
+            {"delta": 500, "kind": "admin_grant", "metadata": {}},
         ]
 
     def _storage(self):
@@ -628,6 +609,10 @@ class TestGetOrgUsageService:
                 b.execute.return_value = MagicMock(data=wallets, count=len(wallets))
             elif name == "credit_ledger":
                 b.execute.return_value = MagicMock(data=ledger, count=len(ledger))
+            elif name == "organizations":
+                b.execute.return_value = MagicMock(
+                    data=[{"default_member_cap": 2000, "monthly_dispersal_credits": 10000}], count=1
+                )
             elif name == "usage_counters":
                 b.execute.return_value = MagicMock(data=storage, count=len(storage))
             return b
@@ -644,32 +629,41 @@ class TestGetOrgUsageService:
             await service.get_org_usage(db, self.U_MEMBER_2, self.ORG)
         assert exc_info.value.status_code == 403
 
-    async def test_pool_balance_and_cumulative_purchased_computed_independently(self, monkeypatch):
+    async def test_pool_balance_and_cumulative_paid_in_computed_independently(self, monkeypatch):
         """poolBalance comes straight off the wallet row's current balance;
-        cumulativePurchased is a separate ledger sum — they must not be
-        conflated (the wallet balance reflects spend/allocations too)."""
+        cumulativePaidIn is a separate ledger sum over purchases AND dispersals
+        — they must not be conflated (the balance reflects spend too)."""
         monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
         db = self._db()
+        # cumulativePaidIn is delegated to the shared orgs.wallets helper (whose
+        # kind filter has its own test); here we pin that it IS delegated and
+        # plumbed through, rather than recomputing a filter-blind mock's sum.
+        monkeypatch.setattr(service.wallets, "cumulative_paid_in", lambda db, wallet_id: 15000)
         result = await service.get_org_usage(db, self.U_ADMIN, self.ORG)
         assert result["poolBalance"] == 4000
-        assert result["cumulativePurchased"] == 5000
+        assert result["cumulativePaidIn"] == 15000
+        assert result["monthlyDispersalCredits"] == 10000
+        assert result["defaultMemberCap"] == 2000
 
-    async def test_seat_balance_and_spent_all_time_math(self, monkeypatch):
+    async def test_cap_and_spend_math(self, monkeypatch):
         monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
         db = self._db()
         result = await service.get_org_usage(db, self.U_ADMIN, self.ORG)
         seats = {s["orgMemberId"]: s for s in result["seats"]}
         admin_seat = seats[self.ADMIN_MEMBER]
-        assert admin_seat["seatBalance"] == 300
-        assert admin_seat["spentAllTime"] == 24  # 21 + 3 debits; the +300 allocation is not spend
+        assert admin_seat["monthlyCap"] == 4000
+        assert admin_seat["effectiveCap"] == 4000
+        assert admin_seat["spentThisPeriod"] == 24  # 21 + 3 debits; grants are not spend
         assert admin_seat["email"] == f"{self.U_ADMIN}@example.com"
         assert admin_seat["role"] == "admin"
         assert admin_seat["status"] == "active"
         assert admin_seat["userId"] == self.U_ADMIN
 
         member_2_seat = seats[self.MEMBER_2]
-        assert member_2_seat["seatBalance"] == 0
-        assert member_2_seat["spentAllTime"] == 0
+        # NULL own cap -> inherits the org default; spent nothing this period.
+        assert member_2_seat["monthlyCap"] is None
+        assert member_2_seat["effectiveCap"] == 2000
+        assert member_2_seat["spentThisPeriod"] == 0
 
     async def test_storage_bytes_and_cap_from_env(self, monkeypatch):
         monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
@@ -682,23 +676,24 @@ class TestGetOrgUsageService:
         assert seats[self.MEMBER_2]["storageBytes"] == 0
         assert seats[self.MEMBER_2]["storageCapBytes"] == 999
 
-    async def test_removed_member_with_stranded_balance_is_included(self, monkeypatch):
+    async def test_removed_member_who_spent_this_period_is_included(self, monkeypatch):
+        """An admin reading the console wants this month's spend attributed —
+        including to someone who has since left."""
         monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
         db = self._db()
         result = await service.get_org_usage(db, self.U_ADMIN, self.ORG)
         seats = {s["orgMemberId"]: s for s in result["seats"]}
         assert self.REMOVED_WITH_BALANCE in seats
-        assert seats[self.REMOVED_WITH_BALANCE]["seatBalance"] == 40
-        assert seats[self.REMOVED_WITH_BALANCE]["spentAllTime"] == 12
+        assert seats[self.REMOVED_WITH_BALANCE]["spentThisPeriod"] == 12
         assert seats[self.REMOVED_WITH_BALANCE]["status"] == "removed"
 
-    async def test_removed_member_at_zero_balance_is_excluded(self, monkeypatch):
+    async def test_removed_member_who_spent_nothing_is_excluded(self, monkeypatch):
         monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
         db = self._db()
         result = await service.get_org_usage(db, self.U_ADMIN, self.ORG)
         member_ids = {s["orgMemberId"] for s in result["seats"]}
         assert self.REMOVED_AT_ZERO not in member_ids
-        # The other three (active x2 + removed-with-balance) ARE present.
+        # The other three (active x2 + the removed member who spent) ARE present.
         assert len(result["seats"]) == 3
 
     # -----------------------------------------------------------------------

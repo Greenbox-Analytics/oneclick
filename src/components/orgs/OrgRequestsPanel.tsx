@@ -39,7 +39,7 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
 
   const openApprove = (r: OrgCreditRequest) => {
     setApproveTarget(r);
-    setApproveAmount(r.requested_credits != null ? String(r.requested_credits) : "");
+    setApproveAmount(r.requested_cap != null ? String(r.requested_cap) : "");
   };
   const closeApprove = (open: boolean) => {
     if (!open) {
@@ -51,7 +51,7 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
   const submitApprove = () => {
     if (!approveTarget || !approveAmountValue || approveAmountValue <= 0) return;
     approve.mutate(
-      { orgId, requestId: approveTarget.id, credits: approveAmountValue },
+      { orgId, requestId: approveTarget.id, cap: approveAmountValue },
       { onSuccess: () => closeApprove(false) },
     );
   };
@@ -74,7 +74,7 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
     <Card className="p-6">
       <div className="text-[15px] font-semibold">Credit requests</div>
       <div className="text-[13.5px] text-muted-foreground mt-0.5">
-        Members ask for more credits when their seat runs low
+        Members ask for a higher monthly limit when they hit theirs
       </div>
 
       <div className="mt-4">
@@ -94,8 +94,8 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
                 <div className="min-w-0">
                   <div className="text-sm font-medium truncate">{requesterLabel(r)}</div>
                   <div className="text-xs text-muted-foreground mt-0.5">
-                    {r.requested_credits != null
-                      ? `Asked for ${r.requested_credits.toLocaleString()} credits`
+                    {r.requested_cap != null
+                      ? `Asked for a ${r.requested_cap.toLocaleString()} credit / month limit`
                       : "Asked for more — amount up to you"}
                     {" · "}
                     {fmtDate(r.created_at)}
@@ -128,7 +128,7 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
                 <div className="flex items-center gap-2 flex-none">
                   {r.status === "approved" && (
                     <span className="text-xs text-muted-foreground tabular-nums">
-                      +{(r.resolved_credits ?? 0).toLocaleString()}
+                      {(r.resolved_cap ?? 0).toLocaleString()} / mo
                     </span>
                   )}
                   <Badge
@@ -148,7 +148,7 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
         </div>
       )}
 
-      {/* Approve — amount pre-filled from requested_credits when the member gave one. */}
+      {/* Approve — pre-filled from requested_cap when the member named one. */}
       <Dialog open={!!approveTarget} onOpenChange={closeApprove}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>

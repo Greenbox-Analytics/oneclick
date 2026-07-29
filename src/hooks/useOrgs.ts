@@ -31,7 +31,8 @@ export interface OrgSummary {
   name: string;
   created_by?: string | null;
   min_initial_purchase_credits?: number | null;
-  default_seat_allowance?: number | null;
+  default_member_cap?: number | null;
+  monthly_dispersal_credits?: number;
   status: OrgStatus;
   archived_at?: string | null;
   created_at?: string;
@@ -45,28 +46,41 @@ export interface OrgSummary {
  * (require_member only counts ACTIVE rows). */
 export interface OrgDetail extends OrgSummary {
   pool_balance: number;
-  cumulative_purchased: number;
+  /** Purchases AND monthly dispersals — everything the org has paid us. */
+  cumulative_paid_in: number;
   remaining_to_activate: number;
   member_count: number;
 }
 
-/** One row of GET /orgs/{id}/usage's `seats` array (admin-only). */
+/** One row of GET /orgs/{id}/usage's `seats` array (admin-only).
+ * Members hold no balance — they spend from the pool against a monthly cap, so
+ * what matters per member is their ceiling and what they've used of it. */
 export interface OrgSeatUsage {
   orgMemberId: string;
   userId: string;
   email: string | null;
   role: OrgRole;
   status: OrgMemberStatus;
-  seatBalance: number;
-  spentAllTime: number;
+  /** This member's own cap; null = inherits the org default. */
+  monthlyCap: number | null;
+  /** Cap actually in force after the org-default fallback; null = uncapped. */
+  effectiveCap: number | null;
+  /** Counter maintained by debit_credits, reset each period. */
+  capUsed: number;
+  /** Ledger-derived spend for the pool's current period. */
+  spentThisPeriod: number;
   storageBytes: number;
   storageCapBytes: number;
 }
 
-/** GET /orgs/{id}/usage — admin-only per-seat rollup. */
+/** GET /orgs/{id}/usage — admin-only per-member rollup. */
 export interface OrgUsage {
   poolBalance: number;
-  cumulativePurchased: number;
+  cumulativePaidIn: number;
+  monthlyDispersalCredits: number;
+  defaultMemberCap: number | null;
+  periodStart: string | null;
+  periodEnd: string | null;
   seats: OrgSeatUsage[];
 }
 
@@ -86,23 +100,24 @@ export interface OrgCreditRequest {
   id: string;
   org_id: string;
   org_member_id: string;
-  requested_credits: number | null;
+  /** The cap the member asked for; null = "raise it, admin decides". */
+  requested_cap: number | null;
   note: string | null;
   status: CreditRequestStatus;
   resolved_by?: string | null;
-  resolved_credits?: number | null;
+  resolved_cap?: number | null;
   created_at?: string;
   resolved_at?: string | null;
 }
 
-/** transfer_credits RPC's JSONB return, surfaced verbatim by allocate/reclaim.
- * `removed` is present only on reclaim's amount=null no-op (`{"removed": 0}`,
- * never calls the RPC). */
-export interface TransferResult {
-  duplicate?: boolean;
-  from_balance?: number;
-  to_balance?: number;
-  removed?: number;
+/** An org_members row echoed back by the cap endpoints. */
+export interface OrgMemberRow {
+  id: string;
+  org_id: string;
+  user_id: string;
+  role: OrgRole;
+  status: OrgMemberStatus;
+  monthly_cap?: number | null;
 }
 
 const errMessage = (e: unknown, fallback: string): string => (e instanceof Error ? e.message : fallback);
@@ -258,7 +273,7 @@ export function useSuspendOrgMember() {
       apiFetch(`${API_URL}/orgs/${orgId}/members/${memberId}/suspend`, { method: "POST" }),
     onSuccess: (_d, { orgId }) => {
       invalidateOrgUsage(qc, orgId);
-      toast.success("Member suspended — their credits were reclaimed to the pool");
+      toast.success("Member suspended");
     },
     onError: (e) => toast.error(errMessage(e, "Couldn't suspend member.")),
   });
@@ -284,53 +299,59 @@ export function useRemoveOrgMember() {
       apiFetch(`${API_URL}/orgs/${orgId}/members/${memberId}`, { method: "DELETE" }),
     onSuccess: (_d, { orgId }) => {
       invalidateOrgUsage(qc, orgId);
-      toast.success("Member removed — their credits were reclaimed to the pool");
+      toast.success("Member removed");
     },
     onError: (e) => toast.error(errMessage(e, "Couldn't remove member.")),
   });
 }
 
 // ---------------------------------------------------------------------------
-// Allocate / reclaim — pool <-> seat money movement via transfer_credits.
-// Each submission gets its OWN fresh idempotency key (generated inside
-// mutationFn, so a fresh key is minted per .mutate() call): a STABLE/reused
-// key across distinct admin actions would make the second, unrelated
-// allocation silently no-op as a "duplicate" of the first.
+// Caps — the enforcement mechanism. Nothing moves, so there is no idempotency
+// key to mint and no duplicate-transfer case to handle: writing a ceiling twice
+// lands the same ceiling.
 // ---------------------------------------------------------------------------
 
-export function useAllocateCredits() {
+export function useSetMemberCap() {
   const qc = useQueryClient();
   const { user } = useAuth();
-  return useMutation<TransferResult, Error, { orgId: string; memberId: string; amount: number }>({
-    mutationFn: ({ orgId, memberId, amount }) =>
-      apiFetch<TransferResult>(`${API_URL}/orgs/${orgId}/members/${memberId}/allocate`, {
-        method: "POST",
-        body: JSON.stringify({ amount, idempotency_key: crypto.randomUUID() }),
+  return useMutation<OrgMemberRow, Error, { orgId: string; memberId: string; cap: number | null }>({
+    mutationFn: ({ orgId, memberId, cap }) =>
+      apiFetch<OrgMemberRow>(`${API_URL}/orgs/${orgId}/members/${memberId}/cap`, {
+        method: "PUT",
+        body: JSON.stringify({ cap }),
       }),
-    onSuccess: (_d, { orgId }) => {
+    onSuccess: (_d, { orgId, cap }) => {
       invalidateOrgUsage(qc, orgId);
       qc.invalidateQueries({ queryKey: ["entitlements", user?.id] });
-      toast.success("Credits allocated");
+      toast.success(cap === null ? "Using the organization default" : `Limit set to ${cap.toLocaleString()} credits`);
     },
-    onError: (e) => toast.error(errMessage(e, "Couldn't allocate credits.")),
+    onError: (e) => toast.error(errMessage(e, "Couldn't update the limit.")),
   });
 }
 
-export function useReclaimCredits() {
+export function useSetOrgDispersal() {
   const qc = useQueryClient();
-  const { user } = useAuth();
-  return useMutation<TransferResult, Error, { orgId: string; memberId: string; amount: number | null }>({
-    mutationFn: ({ orgId, memberId, amount }) =>
-      apiFetch<TransferResult>(`${API_URL}/orgs/${orgId}/members/${memberId}/reclaim`, {
-        method: "POST",
-        body: JSON.stringify({ amount, idempotency_key: crypto.randomUUID() }),
+  return useMutation<
+    OrgSummary,
+    Error,
+    { orgId: string; monthlyDispersalCredits: number; defaultMemberCap: number | null }
+  >({
+    mutationFn: ({ orgId, monthlyDispersalCredits, defaultMemberCap }) =>
+      apiFetch<OrgSummary>(`${API_URL}/orgs/${orgId}/dispersal`, {
+        method: "PUT",
+        body: JSON.stringify({
+          monthly_dispersal_credits: monthlyDispersalCredits,
+          default_member_cap: defaultMemberCap,
+        }),
       }),
     onSuccess: (_d, { orgId }) => {
       invalidateOrgUsage(qc, orgId);
-      qc.invalidateQueries({ queryKey: ["entitlements", user?.id] });
-      toast.success("Credits reclaimed to the pool");
+      qc.invalidateQueries({ queryKey: ["orgs", orgId] });
+      // The next top-up lands at the period boundary, not now — say so, or an
+      // admin will refresh looking for credits that aren't due yet.
+      toast.success("Contract updated — the next top-up applies at the period reset");
     },
-    onError: (e) => toast.error(errMessage(e, "Couldn't reclaim credits.")),
+    onError: (e) => toast.error(errMessage(e, "Couldn't update the contract.")),
   });
 }
 
@@ -398,17 +419,17 @@ function invalidateCreditRequests(qc: ReturnType<typeof useQueryClient>, orgId: 
 }
 
 /** POST /orgs/{id}/credit-requests — any ACTIVE member (src/pages/Organization.tsx's
- * member view, plan Task 13). `requestedCredits` omitted = "more, admin decides"
- * (matches the nullable `requested_credits` column). The DB's one-open-request-
- * per-seat index turns a second submit into a 409 — surfaced with dedicated
- * copy rather than the generic error toast. */
+ * member view). `requestedCap` omitted = "raise it, admin decides" (matches the
+ * nullable `requested_cap` column). The DB's one-open-request-per-member index
+ * turns a second submit into a 409 — surfaced with dedicated copy rather than
+ * the generic error toast. */
 export function useSubmitCreditRequest() {
   const qc = useQueryClient();
-  return useMutation<OrgCreditRequest, Error, { orgId: string; requestedCredits?: number; note?: string }>({
-    mutationFn: ({ orgId, requestedCredits, note }) =>
+  return useMutation<OrgCreditRequest, Error, { orgId: string; requestedCap?: number; note?: string }>({
+    mutationFn: ({ orgId, requestedCap, note }) =>
       apiFetch<OrgCreditRequest>(`${API_URL}/orgs/${orgId}/credit-requests`, {
         method: "POST",
-        body: JSON.stringify({ requested_credits: requestedCredits ?? null, note: note?.trim() || null }),
+        body: JSON.stringify({ requested_cap: requestedCap ?? null, note: note?.trim() || null }),
       }),
     onSuccess: (_d, { orgId }) => {
       invalidateCreditRequests(qc, orgId);
@@ -427,11 +448,11 @@ export function useSubmitCreditRequest() {
 export function useApproveCreditRequest() {
   const qc = useQueryClient();
   const { user } = useAuth();
-  return useMutation<OrgCreditRequest, Error, { orgId: string; requestId: string; credits: number }>({
-    mutationFn: ({ orgId, requestId, credits }) =>
+  return useMutation<OrgCreditRequest, Error, { orgId: string; requestId: string; cap: number }>({
+    mutationFn: ({ orgId, requestId, cap }) =>
       apiFetch<OrgCreditRequest>(`${API_URL}/orgs/${orgId}/credit-requests/${requestId}/approve`, {
         method: "POST",
-        body: JSON.stringify({ credits }),
+        body: JSON.stringify({ cap }),
       }),
     onSuccess: (_d, { orgId }) => {
       invalidateCreditRequests(qc, orgId);

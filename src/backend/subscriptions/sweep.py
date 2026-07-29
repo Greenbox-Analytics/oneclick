@@ -1,5 +1,5 @@
 # src/backend/subscriptions/sweep.py
-"""Daily billing sweep (spec §3 clock, §7 annual overage).
+"""Daily billing sweep (spec §3 clock, §7 annual overage, org dispersal).
 
 Cloud Scheduler hits POST /internal/billing-sweep once a day with the
 X-Sweep-Token header. Idempotent: every step no-ops on re-run. Lazy per-request
@@ -68,8 +68,7 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     # client) if the user base or per-user work grows.
     sb = get_supabase_client()
     now = datetime.now(UTC)
-    rolled = overage_billed = annual_invoiced = 0
-    seats_topped_up = pool_low = 0
+    rolled = overage_billed = annual_invoiced = dispersed = 0
 
     tier_data = _capped(
         sb.table("tier_entitlements").select("tier, monthly_credits"),
@@ -189,116 +188,82 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         except Exception:
             logger.exception("sweep annual invoicing failed user=%s", sub.get("user_id"))
 
-    # --- 4. Default seat allowance (licensing Phase B, spec §4 flow, rule 6):
-    # for every ACTIVE, non-archived org with default_seat_allowance > 0, top
-    # each ACTIVE seat up to the allowance — FULL amount or SKIP. LICENSING_
-    # ENABLED only; the credits-disabled early-return above already covers
-    # the credits gate, so this step only needs its own flag check.
+    # --- 4. Monthly credit dispersal (licensing Phase B): for every ACTIVE,
+    # non-archived org on a contract, roll the POOL wallet — which zeroes last
+    # month's unspent dispersal and grants this month's. LICENSING_ENABLED only;
+    # the credits-disabled early-return above already covers the credits gate.
+    #
+    # rollover_wallet is the whole implementation, and deliberately so: it is
+    # already the tested primitive for "expire the bundle, grant the new period,
+    # write the compensating ledger rows", and it no-ops when the period hasn't
+    # ended — which IS the once-per-month idempotency. A bespoke dispersal
+    # grant would need to reimplement all of that, including the expiry row that
+    # keeps sum(delta) reconciling to the balance.
+    #
+    # Only the BUNDLE bucket is touched, so purchased packs (reserve) survive
+    # untouched: a contract that lapses doesn't confiscate credits the org bought.
     if licensing_enabled():
-        month_key = now.strftime("%Y-%m")
         orgs = _capped(
             sb.table("organizations")
-            .select("id, default_seat_allowance")
+            .select("id, monthly_dispersal_credits")
             .eq("status", "active")
             .is_("archived_at", "null")
-            .gt("default_seat_allowance", 0),
-            "organizations(allowance)",
+            .gt("monthly_dispersal_credits", 0),
+            "organizations(dispersal)",
         )
         for org in orgs:
             org_id = org["id"]
-            allowance = org.get("default_seat_allowance") or 0
-            if allowance <= 0:
-                continue  # manual-only org (NULL/0) — defensive, query already filters this
-
+            dispersal = org.get("monthly_dispersal_credits") or 0
+            if dispersal <= 0:
+                continue  # defensive — the query already filters this
             try:
                 pool_rows = (
                     sb.table("credit_wallets")
-                    .select("id, reserve_balance")
+                    .select("id, period_end")
                     .eq("owner_type", "org")
                     .eq("owner_id", org_id)
                     .execute()
                     .data
                     or []
                 )
-            except Exception:
-                logger.exception("sweep allowance: pool wallet read failed org=%s", org_id)
-                continue
-            if not pool_rows:
-                # No purchases yet -> no pool wallet. Not an error; there is
-                # nothing to allocate from.
-                logger.info("sweep allowance: org %s has no pool wallet yet — skipping", org_id)
-                continue
-            pool_wallet_id = pool_rows[0]["id"]
-            # Tracked LOCALLY and decremented after each successful transfer so
-            # one sweep run can't overdraw the pool off a stale read across
-            # several seats (rule: track in-loop pool balance locally).
-            pool_reserve = pool_rows[0].get("reserve_balance") or 0
-
-            members = _capped(
-                sb.table("org_members").select("id").eq("org_id", org_id).eq("status", "active"),
-                "org_members(allowance)",
-            )
-            for member in members:
-                member_id = member["id"]
-                try:
-                    seat_rows = (
-                        sb.table("credit_wallets")
-                        .select("id, bundle_balance, reserve_balance")
-                        .eq("owner_type", "seat")
-                        .eq("owner_id", member_id)
-                        .execute()
-                        .data
-                        or []
+                if not pool_rows:
+                    # No pool wallet yet: the app layer creates it on the first
+                    # org-context read or purchase. Nothing to roll into.
+                    logger.info("sweep dispersal: org %s has no pool wallet yet — skipping", org_id)
+                    continue
+                pool = pool_rows[0]
+                # First-ever dispersal: a NULL period_end means the pool has
+                # never been on a cycle, so anchor it to the start of this month
+                # rather than "now", keeping every org's period aligned to
+                # calendar months (which is what member caps reset against).
+                current_end = _parse_iso(pool.get("period_end"))
+                if current_end is None:
+                    new_end = (now.replace(day=1) + relativedelta(months=1)).replace(
+                        hour=0, minute=0, second=0, microsecond=0
                     )
-                    if not seat_rows:
-                        # Wallet creation is the app layer's job (lazy on first
-                        # org-context read/allocation), not the sweep's — the
-                        # next org-context read creates it and next month's
-                        # sweep tops it up.
-                        logger.info(
-                            "sweep allowance: seat wallet missing for member %s — skipping this month", member_id
-                        )
-                        continue
-                    seat_wallet = seat_rows[0]
-                    seat_balance = (seat_wallet.get("bundle_balance") or 0) + (seat_wallet.get("reserve_balance") or 0)
-                    top_up = allowance - seat_balance
-                    if top_up <= 0:
-                        continue  # already at/above allowance — no RPC call (money RPCs raise on non-positive)
-
-                    if pool_reserve < top_up:
-                        pool_low += 1
-                        logger.info(
-                            "sweep allowance: pool for org %s can't cover top-up for member %s (have %d, need %d)",
-                            org_id,
-                            member_id,
-                            pool_reserve,
-                            top_up,
-                        )
-                        continue  # skip WITHOUT consuming the month key (rule 6)
-
-                    request_id = f"allowance:{member_id}:{month_key}"
-                    res = sb.rpc(
-                        "transfer_credits",
-                        {
-                            "p_from_wallet": pool_wallet_id,
-                            "p_to_wallet": seat_wallet["id"],
-                            "p_amount": top_up,
-                            "p_kind": "allocation",
-                            "p_request_id": request_id,
-                            "p_metadata": {"org_id": org_id, "source": "allowance"},
-                        },
-                    ).execute()
-                    if (res.data or {}).get("duplicate"):
-                        continue  # already topped up this month — no-op
-                    seats_topped_up += 1
-                    pool_reserve -= top_up
-                except Exception:
-                    logger.exception("sweep allowance failed org=%s member=%s", org_id, member_id)
+                else:
+                    if current_end > now:
+                        continue  # period still open — nothing due
+                    new_end = current_end
+                    while new_end < now:
+                        new_end = new_end + relativedelta(months=1)
+                res = sb.rpc(
+                    "rollover_wallet",
+                    {
+                        "p_wallet_id": pool["id"],
+                        "p_monthly_grant": dispersal,
+                        "p_new_period_start": (new_end - relativedelta(months=1)).isoformat(),
+                        "p_new_period_end": new_end.isoformat(),
+                    },
+                ).execute()
+                if res.data:
+                    dispersed += 1
+            except Exception:
+                logger.exception("sweep dispersal failed org=%s", org_id)
 
     return {
         "walletsRolled": rolled,
         "overageBilled": overage_billed,
         "annualInvoiced": annual_invoiced,
-        "seatsToppedUp": seats_topped_up,
-        "poolLow": pool_low,
+        "orgsDispersed": dispersed,
     }

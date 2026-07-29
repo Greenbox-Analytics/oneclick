@@ -41,11 +41,18 @@ export function OrgPoolCard({ org }: { org: OrgDetail }) {
           </div>
         </div>
         <div className="bg-background border border-border rounded-xl px-[18px] py-4">
-          <div className="text-[12.5px] text-muted-foreground">Total purchased</div>
+          <div className="text-[12.5px] text-muted-foreground">
+            {org.monthly_dispersal_credits ? "Credits each month" : "Total paid in"}
+          </div>
           <div className="text-[28px] font-bold tracking-tight mt-1 tabular-nums">
-            {org.cumulative_purchased.toLocaleString()}{" "}
+            {(org.monthly_dispersal_credits || org.cumulative_paid_in).toLocaleString()}{" "}
             <span className="text-sm font-normal text-muted-foreground">credits</span>
           </div>
+          {!!org.monthly_dispersal_credits && (
+            <div className="text-[11.5px] text-muted-foreground/80 mt-1">
+              {org.cumulative_paid_in.toLocaleString()} paid in to date
+            </div>
+          )}
         </div>
       </div>
 
@@ -56,8 +63,8 @@ export function OrgPoolCard({ org }: { org: OrgDetail }) {
             {org.remaining_to_activate === 1 ? "" : "s"} to activate
           </div>
           <p className="text-[12.5px] text-amber-800/80 dark:text-amber-400/80 mt-0.5 max-w-[520px]">
-            Seats and enterprise features turn on automatically once your total purchases reach the
-            minimum — no separate step needed.
+            Seats and enterprise features turn on automatically once your total paid-in credits reach
+            the minimum — no separate step needed.
           </p>
         </div>
       )}

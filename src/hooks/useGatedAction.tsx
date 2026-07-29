@@ -45,7 +45,11 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
   // gated_credits) — threaded through to the modal so it can swap the
   // upgrade CTA for a "Request credits" one instead of losing that signal
   // down to just `reason`'s plain text.
-  const [paywallDetail, setPaywallDetail] = useState<{ managedByOrg?: boolean; requestUrl?: string }>({});
+  const [paywallDetail, setPaywallDetail] = useState<{
+    managedByOrg?: boolean;
+    capReached?: boolean;
+    requestUrl?: string;
+  }>({});
 
   const mutation = useMutation<TData, Error, TVars, TContext>({
     mutationFn: opts.mutationFn,
@@ -74,9 +78,12 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
 
       if (err instanceof ApiError && err.status === 402) {
         setPaywallReason(err.message);
-        const detail = err.detail as { managedByOrg?: boolean; requestUrl?: string } | undefined;
+        const detail = err.detail as
+          | { managedByOrg?: boolean; capReached?: boolean; requestUrl?: string }
+          | undefined;
         setPaywallDetail({
           managedByOrg: detail?.managedByOrg === true,
+          capReached: detail?.capReached === true,
           requestUrl: typeof detail?.requestUrl === "string" ? detail.requestUrl : undefined,
         });
         setPaywallOpen(true);
@@ -103,6 +110,7 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
       feature={opts.feature}
       resource={opts.resource}
       managedByOrg={paywallDetail.managedByOrg}
+      capReached={paywallDetail.capReached}
       requestUrl={paywallDetail.requestUrl}
     />
   );

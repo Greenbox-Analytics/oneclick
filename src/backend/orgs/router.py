@@ -19,16 +19,16 @@ from auth import get_current_user_email, get_current_user_id
 from orgs import projects as org_projects
 from orgs import service
 from orgs.models import (
-    AllocateCredits,
     CreditRequestApprove,
     CreditRequestCreate,
     CreditRequestDeny,
     InviteCreate,
+    MemberCapUpdate,
     MemberRoleUpdate,
     OrgCreate,
+    OrgDispersalUpdate,
     OrgUpdate,
     ProjectMemberRoleUpdate,
-    ReclaimCredits,
 )
 from orgs.service import (
     CreditRequestAlreadyResolvedError,
@@ -37,10 +37,6 @@ from orgs.service import (
     DuplicatePendingRequestError,
     InviteInvalidError,
     LastAdminError,
-    PoolBalanceInsufficientError,
-    ReclaimFailedError,
-    SeatBalanceChangedError,
-    SeatBalanceNotZeroError,
 )
 from subscriptions.service import licensing_enabled
 
@@ -95,7 +91,7 @@ def _send_credit_request_email_background(
     org_id: str,
     request_id: str,
     requester_user_id: str,
-    requested_credits: int | None,
+    requested_cap: int | None,
     note: str | None,
 ):
     """Runs on a FastAPI BackgroundTask — its own service-role client, not
@@ -139,7 +135,7 @@ def _send_credit_request_email_background(
             recipient_emails=admin_emails,
             org_name=org.data["name"] if org.data else "your organization",
             requester_name=requester_name,
-            requested_credits=requested_credits,
+            requested_cap=requested_cap,
             note=note,
         )
     except Exception as exc:
@@ -211,16 +207,16 @@ async def update_org(org_id: str, body: OrgUpdate, user_id: str = Depends(get_cu
 
 @router.post("/{org_id}/archive")
 async def archive_org(org_id: str, user_id: str = Depends(get_current_user_id)):
-    try:
-        return await service.archive_org(_get_supabase(), user_id, org_id)
-    except SeatBalanceNotZeroError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    """Whatever the POOL still holds survives archiving — disposing of it is a
+    support decision (admin clawback), so there is no balance precondition and
+    nothing here can 409."""
+    return await service.archive_org(_get_supabase(), user_id, org_id)
 
 
 @router.get("/{org_id}/usage")
 async def get_org_usage(org_id: str, user_id: str = Depends(get_current_user_id)):
-    """Admin-only per-seat usage rollup (Task 7) — pool balance, cumulative
-    purchased, and every seat's balance/spend/storage-vs-cap. Authz denial
+    """Admin-only per-member usage rollup — pool balance, cumulative paid-in,
+    and every member's cap / spend-against-cap / storage-vs-cap. Authz denial
     (403) is raised directly from orgs.authz.require_admin inside the
     service, same as every other admin-gated endpoint in this router."""
     return await service.get_org_usage(_get_supabase(), user_id, org_id)
@@ -247,8 +243,6 @@ async def suspend_member(org_id: str, member_id: str, user_id: str = Depends(get
         result = await service.suspend_member(_get_supabase(), user_id, org_id, member_id)
     except LastAdminError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    except ReclaimFailedError as e:
-        raise HTTPException(status_code=502, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     analytics_capture(user_id, "org_license_revoked", {"org_id": org_id, "member_id": member_id, "action": "suspend"})
@@ -261,8 +255,6 @@ async def remove_member(org_id: str, member_id: str, user_id: str = Depends(get_
         result = await service.remove_member(_get_supabase(), user_id, org_id, member_id)
     except LastAdminError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    except ReclaimFailedError as e:
-        raise HTTPException(status_code=502, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     analytics_capture(user_id, "org_license_revoked", {"org_id": org_id, "member_id": member_id, "action": "remove"})
@@ -277,48 +269,40 @@ async def reactivate_member(org_id: str, member_id: str, user_id: str = Depends(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# --- Allocate / reclaim (Task 4) ---
+# --- Caps: per-member ceilings and the org's contract dials ---
 
 
-def _is_completed_transfer(result: dict) -> bool:
-    """True only for a FRESH (non-duplicate) transfer_credits result —
-    `{"duplicate": False, ...}`. False for a duplicate replay
-    (`{"duplicate": True}`) and false for the reclaim-all no-op
-    (`{"removed": 0}`, which never called the RPC at all). Analytics for
-    both endpoints below is gated on this, same duplicate-gating discipline
-    as Phase A's topup_purchased."""
-    return result.get("duplicate") is False
-
-
-@router.post("/{org_id}/members/{member_id}/allocate")
-async def allocate_credits(
-    org_id: str, member_id: str, body: AllocateCredits, user_id: str = Depends(get_current_user_id)
+@router.put("/{org_id}/members/{member_id}/cap")
+async def set_member_cap(
+    org_id: str, member_id: str, body: MemberCapUpdate, user_id: str = Depends(get_current_user_id)
 ):
+    """Set one member's monthly ceiling on the pool. Nothing moves, so there is
+    no duplicate-transfer case to gate analytics on."""
     try:
-        result = await service.allocate_credits(
-            _get_supabase(), user_id, org_id, member_id, body.amount, body.idempotency_key
-        )
-    except PoolBalanceInsufficientError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    if _is_completed_transfer(result):
-        analytics_capture(
-            user_id, "org_credits_allocated", {"org_id": org_id, "member_id": member_id, "amount": body.amount}
-        )
+        result = await service.set_member_cap(_get_supabase(), user_id, org_id, member_id, body.cap)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    analytics_capture(user_id, "org_member_cap_set", {"org_id": org_id, "member_id": member_id, "cap": body.cap})
     return result
 
 
-@router.post("/{org_id}/members/{member_id}/reclaim")
-async def reclaim_credits(
-    org_id: str, member_id: str, body: ReclaimCredits, user_id: str = Depends(get_current_user_id)
-):
+@router.put("/{org_id}/dispersal")
+async def set_org_dispersal(org_id: str, body: OrgDispersalUpdate, user_id: str = Depends(get_current_user_id)):
+    """The contract dials: monthly dispersal into the pool, and the cap new
+    members inherit. A raise takes effect at the next period boundary — the
+    sweep is the only writer of dispersal credits, which is what keeps its
+    once-per-month idempotency honest."""
     try:
-        result = await service.reclaim_credits(
-            _get_supabase(), user_id, org_id, member_id, body.amount, body.idempotency_key
+        result = await service.set_org_dispersal(
+            _get_supabase(), user_id, org_id, body.monthly_dispersal_credits, body.default_member_cap
         )
-    except SeatBalanceChangedError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    if _is_completed_transfer(result):
-        analytics_capture(user_id, "org_credits_reclaimed", {"org_id": org_id, "member_id": member_id})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    analytics_capture(
+        user_id,
+        "org_dispersal_set",
+        {"org_id": org_id, "monthly_dispersal_credits": body.monthly_dispersal_credits},
+    )
     return result
 
 
@@ -374,14 +358,12 @@ async def submit_credit_request(
 ):
     db = _get_supabase()
     try:
-        result = await service.submit_credit_request(db, user_id, org_id, body.requested_credits, body.note)
+        result = await service.submit_credit_request(db, user_id, org_id, body.requested_cap, body.note)
     except DuplicatePendingRequestError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
     request = result["request"]
-    analytics_capture(
-        user_id, "credit_request_submitted", {"org_id": org_id, "requested_credits": body.requested_credits}
-    )
+    analytics_capture(user_id, "credit_request_submitted", {"org_id": org_id, "requested_cap": body.requested_cap})
     background_tasks.add_task(
         _send_credit_request_email_background,
         db_url=os.getenv("VITE_SUPABASE_URL"),
@@ -389,7 +371,7 @@ async def submit_credit_request(
         org_id=org_id,
         request_id=request["id"],
         requester_user_id=user_id,
-        requested_credits=body.requested_credits,
+        requested_cap=body.requested_cap,
         note=body.note,
     )
     return request
@@ -405,18 +387,18 @@ async def approve_credit_request(
     org_id: str, request_id: str, body: CreditRequestApprove, user_id: str = Depends(get_current_user_id)
 ):
     try:
-        result = await service.approve_credit_request(_get_supabase(), user_id, org_id, request_id, body.credits)
+        result = await service.approve_credit_request(_get_supabase(), user_id, org_id, request_id, body.cap)
     except CreditRequestNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except CreditRequestAlreadyResolvedError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    except PoolBalanceInsufficientError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     analytics_capture(
         user_id,
         "credit_request_resolved",
-        {"org_id": org_id, "request_id": request_id, "status": "approved", "credits": result.get("resolved_credits")},
+        {"org_id": org_id, "request_id": request_id, "status": "approved", "cap": result.get("resolved_cap")},
     )
     return result
 

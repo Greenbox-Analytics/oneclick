@@ -62,13 +62,16 @@ export function CreditsUsageCard() {
   const managedByOrg =
     ent?.billingContext?.type === "org" ? ent.billingContext : ent?.credits?.managedByOrg;
 
-  // Org billing context (Licensing Phase B, spec §5): credits are a seat
-  // allocation from the org's pool, not a personal monthly grant — no pack
-  // picker, no pay-per-use toggle. Seat balance comes straight off
-  // entitlements (context-aware) rather than the per-tool usage breakdown,
-  // which is a personal-wallet concept.
+  // Org billing context (Licensing Phase B, spec §5): what a member has is
+  // a monthly LIMIT on the org's shared pool, not a personal grant and not an
+  // allocation they hold — no pack picker, no pay-per-use toggle. Both numbers
+  // come straight off entitlements (context-aware) rather than the per-tool
+  // usage breakdown, which is a personal-wallet concept.
   if (managedByOrg) {
-    const seatBalance = ent?.credits?.balance ?? 0;
+    const cap = ent?.credits?.memberCap ?? null;
+    const capUsed = ent?.credits?.memberCapUsed ?? 0;
+    const poolBalance = ent?.credits?.balance ?? 0;
+    const remaining = cap != null ? Math.max(0, cap - capUsed) : poolBalance;
     return (
       <Card className="overflow-hidden">
         <div className="flex items-start justify-between gap-4 px-6 pt-[22px] pb-1.5">
@@ -87,11 +90,22 @@ export function CreditsUsageCard() {
         <div className="flex items-center justify-between gap-4 flex-wrap px-6 pt-3.5 pb-[22px]">
           <div>
             <div className="text-[32px] font-bold tracking-tight tabular-nums">
-              {seatBalance.toLocaleString()}{" "}
-              <span className="text-sm font-normal text-muted-foreground">credits available</span>
+              {remaining.toLocaleString()}{" "}
+              <span className="text-sm font-normal text-muted-foreground">credits left this month</span>
             </div>
-            <p className="text-[12.5px] text-muted-foreground mt-1 max-w-[420px]">
-              Allocated by your organization. Running low? Ask your admin for more.
+            <p className="text-[12.5px] text-muted-foreground mt-1 max-w-[440px]">
+              {cap != null ? (
+                <>
+                  You&apos;ve used {capUsed.toLocaleString()} of your {cap.toLocaleString()} monthly limit. Your
+                  organization has {poolBalance.toLocaleString()} in the shared pool. Need more? Ask your admin to
+                  raise your limit.
+                </>
+              ) : (
+                <>
+                  You draw from your organization&apos;s shared pool with no personal limit. Running low? Ask your
+                  admin to top the pool up.
+                </>
+              )}
             </p>
           </div>
           <Button
@@ -101,7 +115,7 @@ export function CreditsUsageCard() {
             onClick={() => navigate("/organization")}
           >
             <Send className="w-3.5 h-3.5" />
-            Request more credits
+            Request a higher limit
           </Button>
         </div>
       </Card>

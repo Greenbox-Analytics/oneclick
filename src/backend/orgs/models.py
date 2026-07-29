@@ -10,11 +10,11 @@ class OrgCreate(BaseModel):
 class OrgUpdate(BaseModel):
     """PUT /orgs/{org_id} body. Fields not present in the request are left
     untouched by the service (router calls `model_dump(exclude_unset=True)`);
-    an explicit `null` for default_seat_allowance clears it back to
+    an explicit `null` for default_member_cap clears it back to
     manual-only allocation (NULL/0 = manual-only, spec §4)."""
 
     name: str | None = Field(default=None, min_length=1)
-    default_seat_allowance: int | None = Field(default=None, ge=0)
+    default_member_cap: int | None = Field(default=None, ge=0)
 
 
 class InviteCreate(BaseModel):
@@ -30,43 +30,44 @@ class MemberRoleUpdate(BaseModel):
     role: str  # 'admin' | 'member'
 
 
-class AllocateCredits(BaseModel):
-    """POST /orgs/{org_id}/members/{member_id}/allocate body (admin-only
-    pool -> seat transfer). `idempotency_key` becomes the RPC's BASE
-    request_id (`alloc:{idempotency_key}`) — transfer_credits appends its own
-    :from/:to suffixes."""
+class MemberCapUpdate(BaseModel):
+    """PUT /orgs/{org_id}/members/{member_id}/cap body (admin-only).
 
-    amount: int = Field(gt=0, le=1_000_000)
-    idempotency_key: str = Field(min_length=1)
+    `cap=null` clears this member's own cap so they inherit the org's
+    `default_member_cap` (uncapped if that is NULL too). No idempotency key:
+    writing a ceiling is idempotent by nature — there is no money to move twice.
+    """
+
+    cap: int | None = Field(default=None, ge=0, le=10_000_000)
 
 
-class ReclaimCredits(BaseModel):
-    """POST /orgs/{org_id}/members/{member_id}/reclaim body (admin-only
-    seat -> pool transfer). `amount=null` means reclaim-all: the service
-    reads the seat's current balance and uses that as the transfer amount (or
-    no-ops at `{"removed": 0}` if the balance isn't positive — see
-    orgs.service.reclaim_credits)."""
+class OrgDispersalUpdate(BaseModel):
+    """PUT /orgs/{org_id}/dispersal body (admin-only) — the contract dials.
 
-    amount: int | None = Field(default=None, gt=0, le=1_000_000)
-    idempotency_key: str = Field(min_length=1)
+    `monthly_dispersal_credits` is what the sweep adds to the pool each period;
+    `default_member_cap` is the ceiling new members inherit.
+    """
+
+    monthly_dispersal_credits: int = Field(ge=0, le=100_000_000)
+    default_member_cap: int | None = Field(default=None, ge=0, le=10_000_000)
 
 
 class CreditRequestCreate(BaseModel):
-    """POST /orgs/{org_id}/credit-requests body (any ACTIVE member).
-    `requested_credits=None` means "more, admin decides" (matches the
-    nullable CHECK on credit_requests.requested_credits — the column allows
-    NULL, but any provided value must be > 0)."""
+    """POST /orgs/{org_id}/credit-requests body (any ACTIVE member) — a request
+    to RAISE this member's monthly cap. `requested_cap=None` means "raise it,
+    admin decides" (matches the nullable CHECK on credit_requests.requested_cap
+    — the column allows NULL, but any provided value must be > 0)."""
 
-    requested_credits: int | None = Field(default=None, gt=0, le=1_000_000)
+    requested_cap: int | None = Field(default=None, gt=0, le=10_000_000)
     note: str | None = None
 
 
 class CreditRequestApprove(BaseModel):
     """POST /orgs/{org_id}/credit-requests/{request_id}/approve body
-    (admin-only). The admin decides the amount — it may differ from
-    requested_credits."""
+    (admin-only). The admin decides the new cap — it may differ from what was
+    requested."""
 
-    credits: int = Field(gt=0, le=1_000_000)
+    cap: int = Field(ge=0, le=10_000_000)
 
 
 class CreditRequestDeny(BaseModel):

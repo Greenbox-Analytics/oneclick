@@ -6,7 +6,7 @@ endpoint-contract tests) and tests/test_orgs_service.py's `_db_seq` /
 MockQueryBuilder idiom for direct-table service tests.
 
 Round-4 duplicate-replay rule under test throughout the approve section:
-resolved_credits is read back from the ledger's `credreq:{id}:from` row on a
+resolved_cap is read back from the ledger's `credreq:{id}:from` row on a
 duplicate transfer_credits reply — NEVER trusted from the retry's own
 `credits` argument.
 """
@@ -60,11 +60,11 @@ def _pending_request(**overrides):
         "id": REQUEST_ID,
         "org_id": ORG_ID,
         "org_member_id": MEMBER_ID,
-        "requested_credits": 100,
+        "requested_cap": 100,
         "note": None,
         "status": "pending",
         "resolved_by": None,
-        "resolved_credits": None,
+        "resolved_cap": None,
         "resolved_at": None,
     }
     base.update(overrides)
@@ -111,7 +111,7 @@ async def test_submit_credit_request_inserts_with_caller_member_id(monkeypatch):
     assert captured["payload"] == {
         "org_id": ORG_ID,
         "org_member_id": MEMBER_ID,
-        "requested_credits": 100,
+        "requested_cap": 100,
         "note": "please",
     }
     assert result["request"]["id"] == REQUEST_ID
@@ -119,7 +119,7 @@ async def test_submit_credit_request_inserts_with_caller_member_id(monkeypatch):
 
 
 async def test_submit_credit_request_omits_optional_fields_when_not_provided(monkeypatch):
-    """requested_credits=None / note=None must NOT be written into the
+    """requested_cap=None / note=None must NOT be written into the
     payload at all (the column default / NULL applies)."""
     monkeypatch.setattr(service.authz, "is_org_member", lambda *a: True)
     captured = {}
@@ -135,7 +135,7 @@ async def test_submit_credit_request_omits_optional_fields_when_not_provided(mon
                 return b
 
             b.insert = _insert
-            b.execute.return_value = MagicMock(data=[_pending_request(requested_credits=None, note=None)], count=1)
+            b.execute.return_value = MagicMock(data=[_pending_request(requested_cap=None, note=None)], count=1)
         return b
 
     db = MagicMock()
@@ -268,22 +268,33 @@ async def test_approve_credit_request_already_resolved_409(monkeypatch):
         await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 100)
 
 
-async def test_approve_credit_request_transfer_called_before_status_update(monkeypatch):
-    """KEY TEST: transfer-first ordering — the RPC is invoked, and only
-    AFTER it returns non-duplicate do we write status='approved'. We assert
-    this by making the RPC raise and confirming NO update call landed."""
+async def test_approve_credit_request_writes_the_member_cap(monkeypatch):
+    """Approving a request raises the member's ceiling. No money moves, so there
+    is no transfer to order against the status write and no pool-insufficient
+    failure mode to map."""
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
-    update_calls = []
+    updates = {}
 
     def _side(name):
         b = MockQueryBuilder()
         if name == "credit_requests":
+            # One builder serves the maybe_single read (a dict) and the UPDATE
+            # echo (a list) — switch shape once the update lands.
             b.execute.return_value = MagicMock(data=_pending_request(), count=1)
             original_update = b.update
 
             def _update(payload, *a, **kw):
-                update_calls.append(payload)
+                updates.setdefault("credit_requests", []).append(payload)
+                b.execute.return_value = MagicMock(data=[{**_pending_request(), **payload}], count=1)
+                return original_update(payload, *a, **kw)
+
+            b.update = _update
+        elif name == "org_members":
+            b.execute.return_value = MagicMock(data=[{"id": MEMBER_ID}], count=1)
+            original_update = b.update
+
+            def _update(payload, *a, **kw):
+                updates.setdefault("org_members", []).append(payload)
                 return original_update(payload, *a, **kw)
 
             b.update = _update
@@ -291,129 +302,81 @@ async def test_approve_credit_request_transfer_called_before_status_update(monke
 
     db = MagicMock()
     db.table.side_effect = _side
-    db.rpc.return_value.execute.side_effect = RuntimeError("insufficient balance on source wallet (have 10, need 100)")
 
-    with pytest.raises(service.PoolBalanceInsufficientError):
-        await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 100)
+    await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 2500)
 
-    db.rpc.assert_called_once()
-    assert update_calls == []  # rule 10: pool-insufficient must leave the request pending, no update call
+    assert updates["org_members"] == [{"monthly_cap": 2500}]
+    assert updates["credit_requests"][0]["status"] == "approved"
+    assert updates["credit_requests"][0]["resolved_cap"] == 2500
+    db.rpc.assert_not_called()
 
 
-async def test_approve_credit_request_pool_insufficient_maps_to_409_and_stays_pending(monkeypatch):
+async def test_approve_credit_request_records_admin_chosen_cap(monkeypatch):
+    """The admin's chosen cap is what's recorded — not what the member asked
+    for."""
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
-    db = _db_seq({"credit_requests": [MagicMock(data=_pending_request(), count=1)]})
-    db.rpc.return_value.execute.side_effect = RuntimeError("insufficient balance on source wallet (have 10, need 100)")
-
-    with pytest.raises(service.PoolBalanceInsufficientError):
-        await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 100)
-
-
-async def test_approve_credit_request_happy_path_records_admin_chosen_amount(monkeypatch):
-    """A fresh (non-duplicate) transfer records the ADMIN's chosen `credits`
-    argument as resolved_credits — not requested_credits."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
     db = _db_seq(
         {
             "credit_requests": [
-                MagicMock(data=_pending_request(requested_credits=100), count=1),
+                MagicMock(data=_pending_request(requested_cap=100), count=1),
                 MagicMock(
-                    data=[
-                        {
-                            **_pending_request(),
-                            "status": "approved",
-                            "resolved_credits": 250,
-                            "resolved_by": U1,
-                        }
-                    ],
+                    data=[{**_pending_request(), "status": "approved", "resolved_cap": 2500, "resolved_by": U1}],
                     count=1,
                 ),
             ]
         }
     )
-    db.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False, "from_balance": 750})
 
-    # Admin chooses 250, even though the member only asked for 100.
-    result = await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 250)
+    # Admin chooses 2500, even though the member only asked for 100.
+    result = await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 2500)
 
-    name, params = db.rpc.call_args[0]
-    assert name == "transfer_credits"
-    assert params["p_from_wallet"] == POOL_WALLET
-    assert params["p_to_wallet"] == SEAT_WALLET
-    assert params["p_amount"] == 250
-    assert params["p_kind"] == "allocation"
-    assert params["p_request_id"] == f"credreq:{REQUEST_ID}"
-    assert params["p_metadata"] == {"org_id": ORG_ID, "credit_request_id": REQUEST_ID, "actor": U1}
-    assert result["resolved_credits"] == 250
     assert result["status"] == "approved"
+    assert result["resolved_cap"] == 2500
 
 
-async def test_approve_credit_request_duplicate_replay_reads_back_ledger_delta_not_retry_amount(monkeypatch):
-    """KEY TEST (round-4 duplicate-replay rule, rule 10): approve-100 lands
-    a transfer, then the status write fails (simulated by a fresh call in
-    this test going straight to a duplicate reply — as if the first attempt
-    committed the transfer but never got to update the row). A retry that
-    asks for a DIFFERENT amount (999, to prove it's ignored) must record
-    resolved_credits=100 read back from the credreq:{id}:from ledger row,
-    and must NOT move money again (single rpc call)."""
+async def test_approve_credit_request_is_idempotent_on_retry(monkeypatch):
+    """Setting a ceiling twice lands the same ceiling — which is why this path
+    needs none of the duplicate-replay read-back the allocation version had."""
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
-    db = _db_seq(
-        {
-            "credit_requests": [
-                MagicMock(data=_pending_request(requested_credits=100), count=1),
-                MagicMock(
-                    data=[{**_pending_request(), "status": "approved", "resolved_credits": 100, "resolved_by": U1}],
-                    count=1,
-                ),
-            ],
-            "credit_ledger": [MagicMock(data={"delta": -100}, count=1)],
-        }
-    )
-    db.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True})
+    caps = []
 
-    result = await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 999)
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "credit_requests":
+            # maybe_single read returns the dict; the UPDATE echo needs a list.
+            b.execute.return_value = MagicMock(data=_pending_request(), count=1)
+            original_update = b.update
 
-    assert result["resolved_credits"] == 100  # read back from the ledger, NOT the retry's 999
-    db.rpc.assert_called_once()  # transfer not re-attempted
+            def _update_req(payload, *a, **kw):
+                b.execute.return_value = MagicMock(data=[{**_pending_request(), **payload}], count=1)
+                return original_update(payload, *a, **kw)
 
-    ledger_calls = [c for c in db.table.call_args_list if c.args[0] == "credit_ledger"]
-    assert len(ledger_calls) == 1
+            b.update = _update_req
+        elif name == "org_members":
+            b.execute.return_value = MagicMock(data=[{"id": MEMBER_ID}], count=1)
+            original_update = b.update
+
+            def _update(payload, *a, **kw):
+                caps.append(payload["monthly_cap"])
+                return original_update(payload, *a, **kw)
+
+            b.update = _update
+        return b
+
+    db = MagicMock()
+    db.table.side_effect = _side
+
+    await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 2500)
+    await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 2500)
+
+    assert caps == [2500, 2500]
 
 
-async def test_approve_credit_request_duplicate_replay_missing_ledger_row_raises(monkeypatch):
-    """Defensive: if transfer_credits claims duplicate but the :from ledger
-    row genuinely doesn't exist, this is a data-integrity anomaly, not a
-    value to guess at — raise loudly rather than silently recording 0/None."""
+async def test_approve_credit_request_rejects_negative_cap(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
-    db = _db_seq(
-        {
-            "credit_requests": [MagicMock(data=_pending_request(), count=1)],
-            "credit_ledger": [MagicMock(data=None, count=0)],
-        }
-    )
-    db.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True})
-
-    with pytest.raises(RuntimeError):
-        await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 100)
-
-
-async def test_approve_credit_request_other_rpc_errors_propagate_unmapped(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
     db = _db_seq({"credit_requests": [MagicMock(data=_pending_request(), count=1)]})
-    db.rpc.return_value.execute.side_effect = RuntimeError("boom")
-
-    with pytest.raises(RuntimeError):
-        await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, 100)
-
-
-# ---------------------------------------------------------------------------
-# orgs.service.deny_credit_request
-# ---------------------------------------------------------------------------
+    with pytest.raises(ValueError, match="cap must be >= 0"):
+        await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, -1)
 
 
 async def test_deny_credit_request_requires_admin_403(monkeypatch):
@@ -531,7 +494,7 @@ class TestFlagGate:
     these route names to the flag-gate pattern."""
 
     ROUTES = [
-        ("POST", f"/orgs/{ORG_ID}/credit-requests", {"requested_credits": 100}),
+        ("POST", f"/orgs/{ORG_ID}/credit-requests", {"requested_cap": 100}),
         ("GET", f"/orgs/{ORG_ID}/credit-requests", None),
         ("POST", f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", {"credits": 100}),
         ("POST", f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/deny", {"note": "hi"}),
@@ -563,7 +526,7 @@ def test_submit_router_ok_fires_analytics_and_schedules_email(client):
         patch("orgs.router._send_credit_request_email_background") as mock_bg,
         patch("orgs.router.analytics_capture") as mock_capture,
     ):
-        resp = client.post(f"/orgs/{ORG_ID}/credit-requests", json={"requested_credits": 100, "note": "please"})
+        resp = client.post(f"/orgs/{ORG_ID}/credit-requests", json={"requested_cap": 100, "note": "please"})
 
     assert resp.status_code == 200
     assert resp.json()["id"] == REQUEST_ID
@@ -572,7 +535,7 @@ def test_submit_router_ok_fires_analytics_and_schedules_email(client):
     mock_bg.assert_called_once()
     assert mock_bg.call_args.kwargs["org_id"] == ORG_ID
     assert mock_bg.call_args.kwargs["request_id"] == REQUEST_ID
-    assert mock_bg.call_args.kwargs["requested_credits"] == 100
+    assert mock_bg.call_args.kwargs["requested_cap"] == 100
 
 
 def test_submit_router_duplicate_pending_409(client):
@@ -582,22 +545,22 @@ def test_submit_router_duplicate_pending_409(client):
         "orgs.router.service.submit_credit_request",
         new=AsyncMock(side_effect=DuplicatePendingRequestError("You already have a pending request.")),
     ):
-        resp = client.post(f"/orgs/{ORG_ID}/credit-requests", json={"requested_credits": 100})
+        resp = client.post(f"/orgs/{ORG_ID}/credit-requests", json={"requested_cap": 100})
     assert resp.status_code == 409
     assert resp.json()["detail"] == "You already have a pending request."
 
 
-def test_submit_router_rejects_zero_requested_credits_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/credit-requests", json={"requested_credits": 0})
+def test_submit_router_rejects_zero_requested_cap_422(client):
+    resp = client.post(f"/orgs/{ORG_ID}/credit-requests", json={"requested_cap": 0})
     assert resp.status_code == 422
 
 
 def test_submit_router_rejects_over_limit_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/credit-requests", json={"requested_credits": 1_000_001})
+    resp = client.post(f"/orgs/{ORG_ID}/credit-requests", json={"requested_cap": 10_000_001})
     assert resp.status_code == 422
 
 
-def test_submit_router_allows_omitted_requested_credits(client):
+def test_submit_router_allows_omitted_requested_cap(client):
     with (
         patch(
             "orgs.router.service.submit_credit_request",
@@ -617,23 +580,23 @@ def test_list_router_ok(client):
     assert resp.json() == {"requests": [{"id": REQUEST_ID}]}
 
 
-def test_approve_router_ok_fires_analytics_with_resolved_credits(client):
+def test_approve_router_ok_fires_analytics_with_resolved_cap(client):
     with (
         patch(
             "orgs.router.service.approve_credit_request",
-            new=AsyncMock(return_value={"id": REQUEST_ID, "status": "approved", "resolved_credits": 250}),
+            new=AsyncMock(return_value={"id": REQUEST_ID, "status": "approved", "resolved_cap": 250}),
         ),
         patch("orgs.router.analytics_capture") as mock_capture,
     ):
-        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"credits": 250})
+        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"cap": 2500})
 
     assert resp.status_code == 200
-    assert resp.json()["resolved_credits"] == 250
+    assert resp.json()["resolved_cap"] == 250
     mock_capture.assert_called_once()
     assert mock_capture.call_args.args[1] == "credit_request_resolved"
     props = mock_capture.call_args.args[2]
     assert props["status"] == "approved"
-    assert props["credits"] == 250
+    assert props["cap"] == 250
 
 
 def test_approve_router_not_found_404(client):
@@ -643,7 +606,7 @@ def test_approve_router_not_found_404(client):
         "orgs.router.service.approve_credit_request",
         new=AsyncMock(side_effect=CreditRequestNotFoundError("Credit request not found")),
     ):
-        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"credits": 100})
+        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"cap": 2500})
     assert resp.status_code == 404
 
 
@@ -654,24 +617,12 @@ def test_approve_router_already_resolved_409(client):
         "orgs.router.service.approve_credit_request",
         new=AsyncMock(side_effect=CreditRequestAlreadyResolvedError("This request has already been resolved")),
     ):
-        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"credits": 100})
+        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"cap": 2500})
     assert resp.status_code == 409
 
 
-def test_approve_router_pool_insufficient_409(client):
-    from orgs.service import PoolBalanceInsufficientError
-
-    with patch(
-        "orgs.router.service.approve_credit_request",
-        new=AsyncMock(side_effect=PoolBalanceInsufficientError("The pool doesn't have enough credits.")),
-    ):
-        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"credits": 100})
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "The pool doesn't have enough credits."
-
-
-def test_approve_router_rejects_zero_credits_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"credits": 0})
+def test_approve_router_rejects_negative_cap_422(client):
+    resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"cap": -1})
     assert resp.status_code == 422
 
 
@@ -776,7 +727,7 @@ def test_credit_request_email_background_sends_to_active_admins_only():
             org_id=ORG_ID,
             request_id=REQUEST_ID,
             requester_user_id=U1,
-            requested_credits=100,
+            requested_cap=100,
             note="please",
         )
 
@@ -785,7 +736,7 @@ def test_credit_request_email_background_sends_to_active_admins_only():
     assert sorted(kwargs["recipient_emails"]) == ["admin1@example.com", "admin2@example.com"]
     assert kwargs["org_name"] == "Acme"
     assert kwargs["requester_name"] == "Requester Name"
-    assert kwargs["requested_credits"] == 100
+    assert kwargs["requested_cap"] == 100
     assert kwargs["note"] == "please"
 
 
@@ -815,7 +766,7 @@ def test_credit_request_email_background_no_admins_skips_send():
             org_id=ORG_ID,
             request_id=REQUEST_ID,
             requester_user_id=U1,
-            requested_credits=100,
+            requested_cap=100,
             note=None,
         )
 

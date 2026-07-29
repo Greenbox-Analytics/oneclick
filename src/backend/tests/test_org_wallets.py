@@ -1,8 +1,13 @@
-"""Tests for orgs.wallets (create-on-miss seat/org wallet helpers) and the
-allocate/reclaim service functions + router endpoints (Licensing Phase B,
-Task 4). Mirrors tests/test_orgs_service.py's `_db_seq`-style mock idiom for
-the service-level tests and tests/test_orgs_router.py's `client`-fixture
-idiom for the endpoint-contract tests."""
+"""Tests for orgs.wallets (the create-on-miss org POOL helper and the paid-in
+sum) plus the cap-management service functions and router endpoints.
+
+There are no seat wallets: members spend from the one org pool against a monthly
+cap, so what used to be allocate/reclaim transfer tests are now cap-writing tests
+— the interesting property being that setting a ceiling moves no money and so has
+no failure mode to map. Mirrors tests/test_orgs_service.py's mock idiom for the
+service-level tests and tests/test_orgs_router.py's `client` fixture for the
+endpoint contracts.
+"""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,12 +20,11 @@ from tests.conftest import MockQueryBuilder
 U1 = "00000000-0000-0000-0000-000000000001"
 ORG_ID = "20000000-0000-0000-0000-000000000001"
 MEMBER_ID = "40000000-0000-0000-0000-000000000001"
-SEAT_WALLET = "50000000-0000-0000-0000-000000000001"
 POOL_WALLET = "50000000-0000-0000-0000-000000000002"
 
 
 # ---------------------------------------------------------------------------
-# orgs.wallets — read_or_create_org_wallet / read_or_create_seat_wallet
+# orgs.wallets — read_or_create_org_wallet
 # ---------------------------------------------------------------------------
 
 
@@ -31,36 +35,15 @@ def test_org_wallet_returns_existing_row_without_insert():
     db = MagicMock()
     db.table.return_value = b
 
-    result = wallets.read_or_create_org_wallet(db, ORG_ID)
-
-    assert result == existing
-    b.insert.assert_not_called()
-
-
-def test_seat_wallet_returns_existing_row_without_insert():
-    existing = {
-        "id": SEAT_WALLET,
-        "owner_type": "seat",
-        "owner_id": MEMBER_ID,
-        "bundle_balance": 0,
-        "reserve_balance": 200,
-    }
-    b = MockQueryBuilder()
-    b.execute.return_value = MagicMock(data=[existing], count=1)
-    db = MagicMock()
-    db.table.return_value = b
-
-    result = wallets.read_or_create_seat_wallet(db, MEMBER_ID)
-
-    assert result == existing
+    assert wallets.read_or_create_org_wallet(db, ORG_ID) == existing
     b.insert.assert_not_called()
 
 
 def test_org_wallet_insert_payload_has_exactly_owner_type_and_owner_id():
-    """KEY TEST: the INSERT payload must be EXACTLY {owner_type, owner_id} —
-    no period_start/period_end/anything else. NULL periods forever is the
-    structural rollover exemption (rule 1). Uses INSERT (not upsert) —
-    verified separately by the duplicate-race tests below."""
+    """KEY TEST: the INSERT payload must be EXACTLY {owner_type, owner_id} — no
+    period fields. The pool's first period is written by the dispersal sweep's
+    rollover, and seeding one here would arm an expiry nobody asked for. Uses
+    INSERT (not upsert) — verified by the duplicate-race tests below."""
     captured = {}
     call_count = {"n": 0}
 
@@ -90,40 +73,10 @@ def test_org_wallet_insert_payload_has_exactly_owner_type_and_owner_id():
     assert captured["payload"] == {"owner_type": "org", "owner_id": ORG_ID}
 
 
-def test_seat_wallet_insert_payload_has_exactly_owner_type_and_owner_id():
-    captured = {}
-    call_count = {"n": 0}
-
-    def _side(name):
-        b = MockQueryBuilder()
-        if name == "credit_wallets":
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                b.execute.return_value = MagicMock(data=[], count=0)  # SELECT miss
-            else:
-                original_insert = b.insert
-
-                def _insert(payload):
-                    captured["payload"] = payload
-                    return original_insert(payload)
-
-                b.insert = _insert
-                b.execute.return_value = MagicMock(data=[{"id": SEAT_WALLET}], count=1)
-        return b
-
-    db = MagicMock()
-    db.table.side_effect = _side
-
-    result = wallets.read_or_create_seat_wallet(db, MEMBER_ID)
-
-    assert result["id"] == SEAT_WALLET
-    assert captured["payload"] == {"owner_type": "seat", "owner_id": MEMBER_ID}
-
-
 def test_org_wallet_duplicate_race_falls_back_to_reselect():
     """KEY TEST: the INSERT raising (unique_violation from a concurrent
-    create-on-miss winner) must NOT propagate — it's caught and the wallet
-    the racer created is re-selected instead."""
+    create-on-miss winner) must NOT propagate — it's caught and the wallet the
+    racer created is re-selected instead."""
     call_count = {"n": 0}
 
     def _side(name):
@@ -135,300 +88,233 @@ def test_org_wallet_duplicate_race_falls_back_to_reselect():
             elif call_count["n"] == 2:
                 b.execute.side_effect = Exception("duplicate key value violates unique constraint")
             else:
-                b.execute.return_value = MagicMock(data=[{"id": POOL_WALLET}], count=1)  # re-SELECT after race
+                b.execute.return_value = MagicMock(data=[{"id": POOL_WALLET}], count=1)  # re-SELECT
         return b
 
     db = MagicMock()
     db.table.side_effect = _side
 
-    result = wallets.read_or_create_org_wallet(db, ORG_ID)
-
-    assert result == {"id": POOL_WALLET}
+    assert wallets.read_or_create_org_wallet(db, ORG_ID) == {"id": POOL_WALLET}
     assert call_count["n"] == 3
 
 
-def test_seat_wallet_duplicate_race_falls_back_to_reselect():
+def test_org_wallet_duplicate_race_reselect_also_empty_reraises():
     call_count = {"n": 0}
 
     def _side(name):
         b = MockQueryBuilder()
         if name == "credit_wallets":
             call_count["n"] += 1
-            if call_count["n"] == 1:
-                b.execute.return_value = MagicMock(data=[], count=0)
-            elif call_count["n"] == 2:
+            if call_count["n"] == 2:
                 b.execute.side_effect = Exception("duplicate key value violates unique constraint")
             else:
-                b.execute.return_value = MagicMock(data=[{"id": SEAT_WALLET}], count=1)
-        return b
-
-    db = MagicMock()
-    db.table.side_effect = _side
-
-    result = wallets.read_or_create_seat_wallet(db, MEMBER_ID)
-
-    assert result == {"id": SEAT_WALLET}
-
-
-def test_org_wallet_duplicate_race_reselect_also_empty_reraises():
-    """If the INSERT raised AND the re-select still finds nothing, the
-    original exception propagates rather than being swallowed silently."""
-    call_count = {"n": 0}
-
-    def _side(name):
-        b = MockQueryBuilder()
-        if name == "credit_wallets":
-            call_count["n"] += 1
-            if call_count["n"] == 1:
                 b.execute.return_value = MagicMock(data=[], count=0)
-            elif call_count["n"] == 2:
-                b.execute.side_effect = RuntimeError("duplicate key value violates unique constraint")
-            else:
-                b.execute.return_value = MagicMock(data=[], count=0)  # still missing
         return b
 
     db = MagicMock()
     db.table.side_effect = _side
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(Exception, match="duplicate key"):
         wallets.read_or_create_org_wallet(db, ORG_ID)
 
 
 def test_org_wallet_insert_with_no_data_falls_back_to_reselect():
-    """Some client/mock configurations echo no `data` on a successful INSERT
-    even though the row landed — the helper falls back to a re-select before
-    giving up (distinct from the duplicate-race/exception path above)."""
+    """Some client/mocking configurations don't echo the inserted row — the
+    helper re-selects rather than raising."""
     call_count = {"n": 0}
 
     def _side(name):
         b = MockQueryBuilder()
         if name == "credit_wallets":
             call_count["n"] += 1
-            if call_count["n"] == 1:
-                b.execute.return_value = MagicMock(data=[], count=0)
-            elif call_count["n"] == 2:
-                b.execute.return_value = MagicMock(data=[], count=0)  # INSERT echoes nothing
+            if call_count["n"] == 3:
+                b.execute.return_value = MagicMock(data=[{"id": POOL_WALLET}], count=1)
             else:
-                b.execute.return_value = MagicMock(data=[{"id": POOL_WALLET}], count=1)  # re-SELECT succeeds
+                b.execute.return_value = MagicMock(data=[], count=0)
         return b
 
     db = MagicMock()
     db.table.side_effect = _side
 
-    result = wallets.read_or_create_org_wallet(db, ORG_ID)
-
-    assert result == {"id": POOL_WALLET}
+    assert wallets.read_or_create_org_wallet(db, ORG_ID) == {"id": POOL_WALLET}
 
 
-def test_seat_wallet_insert_no_data_and_reselect_empty_raises_runtime_error():
-    call_count = {"n": 0}
+def test_org_wallet_insert_no_data_and_reselect_empty_raises_runtime_error():
+    b = MockQueryBuilder()
+    b.execute.return_value = MagicMock(data=[], count=0)
+    db = MagicMock()
+    db.table.return_value = b
+
+    with pytest.raises(RuntimeError, match="failed to read or create org wallet"):
+        wallets.read_or_create_org_wallet(db, ORG_ID)
+
+
+# ---------------------------------------------------------------------------
+# cumulative_paid_in — purchases AND dispersals both count as money in
+# ---------------------------------------------------------------------------
+
+
+def test_cumulative_paid_in_sums_purchase_and_dispersal_kinds():
+    """Load-bearing: an org whose only funding is its monthly contract dispersal
+    must still clear the activation floor. If this summed 'purchase' alone, a
+    contract-only org would sit pending forever with its seats conferring
+    nothing."""
+    captured = {}
+    b = MockQueryBuilder()
+    original_in = b.in_
+
+    def _in(col, vals):
+        captured["col"] = col
+        captured["vals"] = list(vals)
+        return original_in(col, vals)
+
+    b.in_ = _in
+    b.execute.return_value = MagicMock(
+        data=[{"delta": 10000, "kind": "purchase"}, {"delta": 5000, "kind": "dispersal"}], count=2
+    )
+    db = MagicMock()
+    db.table.return_value = b
+
+    assert wallets.cumulative_paid_in(db, POOL_WALLET) == 15000
+    assert captured["col"] == "kind"
+    assert set(captured["vals"]) == {"purchase", "dispersal"}
+
+
+# ---------------------------------------------------------------------------
+# set_member_cap / set_org_dispersal — service level
+# ---------------------------------------------------------------------------
+
+
+async def test_set_member_cap_requires_admin_403(monkeypatch):
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: False)
+    with pytest.raises(HTTPException) as exc_info:
+        await service.set_member_cap(MagicMock(), U1, ORG_ID, MEMBER_ID, 2000)
+    assert exc_info.value.status_code == 403
+
+
+async def test_set_member_cap_cross_org_member_404_without_writing(monkeypatch):
+    """IDOR guard: the caller is an admin of THIS org, but member_id resolves to
+    no org_members row scoped to it. Must 404 before writing anything —
+    otherwise an admin of a free self-created org could raise a member's cap in
+    someone else's org."""
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+        data=None
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await service.set_member_cap(db, U1, ORG_ID, MEMBER_ID, 2000)
+    assert exc_info.value.status_code == 404
+    db.table.return_value.update.assert_not_called()
+
+
+async def test_set_member_cap_writes_monthly_cap_and_moves_no_money(monkeypatch):
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    captured = {}
 
     def _side(name):
         b = MockQueryBuilder()
-        if name == "credit_wallets":
-            call_count["n"] += 1
-            b.execute.return_value = MagicMock(data=[], count=0)  # every call comes up empty
+        if name == "org_members":
+            b.execute.return_value = MagicMock(data=[{"id": MEMBER_ID, "monthly_cap": 2000}], count=1)
+            original_update = b.update
+
+            def _update(payload):
+                captured["payload"] = payload
+                return original_update(payload)
+
+            b.update = _update
         return b
 
     db = MagicMock()
     db.table.side_effect = _side
 
-    with pytest.raises(RuntimeError):
-        wallets.read_or_create_seat_wallet(db, MEMBER_ID)
+    result = await service.set_member_cap(db, U1, ORG_ID, MEMBER_ID, 2000)
+
+    assert captured["payload"] == {"monthly_cap": 2000}
+    assert result["monthly_cap"] == 2000
+    db.rpc.assert_not_called()  # a ceiling is not a transfer
 
 
-# ---------------------------------------------------------------------------
-# orgs.service.allocate_credits
-# ---------------------------------------------------------------------------
+async def test_set_member_cap_none_clears_to_org_default(monkeypatch):
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    captured = {}
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "org_members":
+            b.execute.return_value = MagicMock(data=[{"id": MEMBER_ID, "monthly_cap": None}], count=1)
+            original_update = b.update
+
+            def _update(payload):
+                captured["payload"] = payload
+                return original_update(payload)
+
+            b.update = _update
+        return b
+
+    db = MagicMock()
+    db.table.side_effect = _side
+
+    await service.set_member_cap(db, U1, ORG_ID, MEMBER_ID, None)
+
+    assert captured["payload"] == {"monthly_cap": None}
 
 
-def _patch_wallets(monkeypatch, seat=None, pool=None):
-    seat = seat or {"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 0}
-    pool = pool or {"id": POOL_WALLET, "bundle_balance": 0, "reserve_balance": 0}
-    monkeypatch.setattr(service.wallets, "read_or_create_seat_wallet", lambda db, member_id: seat)
-    monkeypatch.setattr(service.wallets, "read_or_create_org_wallet", lambda db, org_id: pool)
-    return seat, pool
-
-
-async def test_allocate_credits_requires_admin_403(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: False)
-    with pytest.raises(HTTPException) as exc_info:
-        await service.allocate_credits(MagicMock(), U1, ORG_ID, MEMBER_ID, 100, "key-1")
-    assert exc_info.value.status_code == 403
-
-
-async def test_allocate_credits_cross_org_member_404_no_transfer(monkeypatch):
-    """IDOR guard: caller is admin of THIS org, but member_id resolves to no
-    org_members row scoped to it (belongs to another org / doesn't exist). Must
-    404 before resolving any wallet or calling transfer_credits — otherwise an
-    admin of a free self-created org could siphon another org's seat credits."""
+async def test_set_member_cap_rejects_negative(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
     db = MagicMock()
     db.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
-        data=None
+        data={"id": MEMBER_ID}
     )
-    with pytest.raises(HTTPException) as exc_info:
-        await service.allocate_credits(db, U1, ORG_ID, MEMBER_ID, 100, "key-1")
-    assert exc_info.value.status_code == 404
-    db.rpc.assert_not_called()
+    with pytest.raises(ValueError, match="cap must be >= 0"):
+        await service.set_member_cap(db, U1, ORG_ID, MEMBER_ID, -1)
 
 
-async def test_reclaim_credits_cross_org_member_404_no_transfer(monkeypatch):
-    """IDOR guard (reclaim direction): same missing-scope check — a foreign
-    member_id must 404 before any seat->pool transfer moves credits out."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    db = MagicMock()
-    db.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
-        data=None
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await service.reclaim_credits(db, U1, ORG_ID, MEMBER_ID, None, "key-1")
-    assert exc_info.value.status_code == 404
-    db.rpc.assert_not_called()
-
-
-async def test_allocate_credits_rpc_call_shape_uses_base_request_id(monkeypatch):
-    """KEY TEST: pool -> seat direction, 'allocation' kind, the BASE
-    `alloc:{key}` request_id (transfer_credits appends :from/:to itself —
-    never suffix in Python), and the {org_id, member_id, actor} metadata."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
-    db = MagicMock()
-    db.rpc.return_value.execute.return_value = MagicMock(
-        data={"duplicate": False, "from_balance": 900, "to_balance": 100}
-    )
-
-    result = await service.allocate_credits(db, U1, ORG_ID, MEMBER_ID, 100, "key-1")
-
-    name, params = db.rpc.call_args[0]
-    assert name == "transfer_credits"
-    assert params["p_from_wallet"] == POOL_WALLET
-    assert params["p_to_wallet"] == SEAT_WALLET
-    assert params["p_amount"] == 100
-    assert params["p_kind"] == "allocation"
-    assert params["p_request_id"] == "alloc:key-1"
-    assert params["p_metadata"] == {"org_id": ORG_ID, "member_id": MEMBER_ID, "actor": U1}
-    assert result == {"duplicate": False, "from_balance": 900, "to_balance": 100}
-
-
-async def test_allocate_credits_insufficient_pool_balance_maps_to_409_error(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
-    db = MagicMock()
-    db.rpc.return_value.execute.side_effect = RuntimeError("insufficient balance on source wallet (have 10, need 100)")
-
-    with pytest.raises(service.PoolBalanceInsufficientError):
-        await service.allocate_credits(db, U1, ORG_ID, MEMBER_ID, 100, "key-1")
-
-
-async def test_allocate_credits_other_rpc_errors_propagate_unmapped(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch)
-    db = MagicMock()
-    db.rpc.return_value.execute.side_effect = RuntimeError("boom")
-
-    with pytest.raises(RuntimeError):
-        await service.allocate_credits(db, U1, ORG_ID, MEMBER_ID, 100, "key-1")
-
-
-# ---------------------------------------------------------------------------
-# orgs.service.reclaim_credits
-# ---------------------------------------------------------------------------
-
-
-async def test_reclaim_credits_requires_admin_403(monkeypatch):
+async def test_set_org_dispersal_requires_admin_403(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: False)
     with pytest.raises(HTTPException) as exc_info:
-        await service.reclaim_credits(MagicMock(), U1, ORG_ID, MEMBER_ID, 100, "key-1")
+        await service.set_org_dispersal(MagicMock(), U1, ORG_ID, 10000, 2000)
     assert exc_info.value.status_code == 403
 
 
-async def test_reclaim_credits_explicit_amount_rpc_call_shape(monkeypatch):
+async def test_set_org_dispersal_writes_both_dials(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch, seat={"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 900})
+    captured = {}
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data=[{"id": ORG_ID}], count=1)
+            original_update = b.update
+
+            def _update(payload):
+                captured["payload"] = payload
+                return original_update(payload)
+
+            b.update = _update
+        return b
+
     db = MagicMock()
-    db.rpc.return_value.execute.return_value = MagicMock(
-        data={"duplicate": False, "from_balance": 800, "to_balance": 100}
-    )
+    db.table.side_effect = _side
 
-    result = await service.reclaim_credits(db, U1, ORG_ID, MEMBER_ID, 100, "key-2")
+    await service.set_org_dispersal(db, U1, ORG_ID, 10000, 2000)
 
-    name, params = db.rpc.call_args[0]
-    assert name == "transfer_credits"
-    assert params["p_from_wallet"] == SEAT_WALLET
-    assert params["p_to_wallet"] == POOL_WALLET
-    assert params["p_amount"] == 100
-    assert params["p_kind"] == "reclaim"
-    assert params["p_request_id"] == "reclaim:key-2"
-    assert params["p_metadata"] == {"org_id": ORG_ID, "member_id": MEMBER_ID, "actor": U1}
-    assert result["from_balance"] == 800
-
-
-async def test_reclaim_all_reads_balance_and_passes_it_as_amount(monkeypatch):
-    """KEY TEST: amount=None reads the seat's current balance
-    (bundle + reserve) from the SAME create-on-miss lookup used to resolve
-    its wallet id, and uses THAT as the RPC's p_amount."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch, seat={"id": SEAT_WALLET, "bundle_balance": 30, "reserve_balance": 270})
-    db = MagicMock()
-    db.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False})
-
-    await service.reclaim_credits(db, U1, ORG_ID, MEMBER_ID, None, "key-3")
-
-    params = db.rpc.call_args[0][1]
-    assert params["p_amount"] == 300
-    assert params["p_request_id"] == "reclaim:key-3"
-
-
-async def test_reclaim_all_zero_balance_returns_removed_zero_without_rpc(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch, seat={"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 0})
-    db = MagicMock()
-
-    result = await service.reclaim_credits(db, U1, ORG_ID, MEMBER_ID, None, "key-4")
-
-    assert result == {"removed": 0}
+    assert captured["payload"] == {"monthly_dispersal_credits": 10000, "default_member_cap": 2000}
+    # Raising the dispersal must NOT top the pool up here — the sweep is the only
+    # writer of dispersal credits, which is what keeps its monthly idempotency honest.
     db.rpc.assert_not_called()
 
 
-async def test_reclaim_all_negative_balance_returns_removed_zero_without_rpc(monkeypatch):
-    """KEY TEST (round 5 guard): accepted debit drift can push a seat's
-    bundle negative. Reclaim-all must no-op rather than pass a negative
-    amount to transfer_credits, which would raise on p_amount <= 0 — an
-    unmapped 500 instead of a quiet no-op."""
+async def test_set_org_dispersal_rejects_negative_values(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch, seat={"id": SEAT_WALLET, "bundle_balance": -50, "reserve_balance": 20})
-    db = MagicMock()
-
-    result = await service.reclaim_credits(db, U1, ORG_ID, MEMBER_ID, None, "key-5")
-
-    assert result == {"removed": 0}
-    db.rpc.assert_not_called()
-
-
-async def test_reclaim_credits_stale_balance_race_maps_to_409_error(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch, seat={"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 100})
-    db = MagicMock()
-    db.rpc.return_value.execute.side_effect = RuntimeError("insufficient balance on source wallet (have 0, need 100)")
-
-    with pytest.raises(service.SeatBalanceChangedError):
-        await service.reclaim_credits(db, U1, ORG_ID, MEMBER_ID, 100, "key-6")
-
-
-async def test_reclaim_credits_other_rpc_errors_propagate_unmapped(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    _patch_wallets(monkeypatch, seat={"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 100})
-    db = MagicMock()
-    db.rpc.return_value.execute.side_effect = RuntimeError("boom")
-
-    with pytest.raises(RuntimeError):
-        await service.reclaim_credits(db, U1, ORG_ID, MEMBER_ID, 100, "key-6")
+    with pytest.raises(ValueError, match="monthly_dispersal_credits must be >= 0"):
+        await service.set_org_dispersal(MagicMock(), U1, ORG_ID, -1, None)
+    with pytest.raises(ValueError, match="default_member_cap must be >= 0"):
+        await service.set_org_dispersal(MagicMock(), U1, ORG_ID, 100, -5)
 
 
 # ---------------------------------------------------------------------------
-# Router: POST /orgs/{org_id}/members/{member_id}/allocate
-#         POST /orgs/{org_id}/members/{member_id}/reclaim
+# Router contracts
 # ---------------------------------------------------------------------------
 
 
@@ -437,163 +323,61 @@ def _licensing_on_by_default(monkeypatch):
     monkeypatch.setenv("LICENSING_ENABLED", "true")
 
 
-def test_allocate_router_ok_relays_rpc_result_and_fires_analytics(client):
+def test_cap_router_ok_relays_result_and_fires_analytics(client):
     with (
-        patch(
-            "orgs.router.service.allocate_credits",
-            new=AsyncMock(return_value={"duplicate": False, "from_balance": 900, "to_balance": 100}),
-        ),
+        patch("orgs.router.service.set_member_cap", new=AsyncMock(return_value={"id": MEMBER_ID, "monthly_cap": 2000})),
         patch("orgs.router.analytics_capture") as mock_capture,
     ):
-        resp = client.post(
-            f"/orgs/{ORG_ID}/members/{MEMBER_ID}/allocate", json={"amount": 100, "idempotency_key": "k1"}
-        )
+        resp = client.put(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/cap", json={"cap": 2000})
     assert resp.status_code == 200
-    assert resp.json() == {"duplicate": False, "from_balance": 900, "to_balance": 100}
+    assert resp.json()["monthly_cap"] == 2000
     mock_capture.assert_called_once()
-    assert mock_capture.call_args.args[1] == "org_credits_allocated"
+    assert mock_capture.call_args.args[1] == "org_member_cap_set"
 
 
-def test_allocate_router_duplicate_replay_skips_analytics(client):
+def test_cap_router_accepts_null_to_clear(client):
     with (
-        patch("orgs.router.service.allocate_credits", new=AsyncMock(return_value={"duplicate": True})),
-        patch("orgs.router.analytics_capture") as mock_capture,
+        patch("orgs.router.service.set_member_cap", new=AsyncMock(return_value={"id": MEMBER_ID})) as mock_set,
+        patch("orgs.router.analytics_capture"),
     ):
-        resp = client.post(
-            f"/orgs/{ORG_ID}/members/{MEMBER_ID}/allocate", json={"amount": 100, "idempotency_key": "k1"}
-        )
+        resp = client.put(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/cap", json={"cap": None})
     assert resp.status_code == 200
-    assert resp.json() == {"duplicate": True}
-    mock_capture.assert_not_called()
+    assert mock_set.await_args.args[-1] is None
 
 
-def test_allocate_router_insufficient_pool_409(client):
-    from orgs.service import PoolBalanceInsufficientError
-
-    with patch(
-        "orgs.router.service.allocate_credits",
-        new=AsyncMock(side_effect=PoolBalanceInsufficientError("The pool doesn't have enough credits.")),
-    ):
-        resp = client.post(
-            f"/orgs/{ORG_ID}/members/{MEMBER_ID}/allocate", json={"amount": 100, "idempotency_key": "k1"}
-        )
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "The pool doesn't have enough credits."
-
-
-def test_allocate_router_rejects_zero_amount_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/allocate", json={"amount": 0, "idempotency_key": "k1"})
+def test_cap_router_rejects_negative_422(client):
+    resp = client.put(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/cap", json={"cap": -1})
     assert resp.status_code == 422
 
 
-def test_allocate_router_rejects_amount_over_limit_422(client):
-    resp = client.post(
-        f"/orgs/{ORG_ID}/members/{MEMBER_ID}/allocate", json={"amount": 1_000_001, "idempotency_key": "k1"}
-    )
-    assert resp.status_code == 422
-
-
-def test_allocate_router_rejects_empty_idempotency_key_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/allocate", json={"amount": 100, "idempotency_key": ""})
-    assert resp.status_code == 422
-
-
-def test_allocate_router_requires_idempotency_key_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/allocate", json={"amount": 100})
-    assert resp.status_code == 422
-
-
-def test_allocate_router_404_when_licensing_off(client, monkeypatch):
+def test_cap_router_404_when_licensing_off(client, monkeypatch):
     monkeypatch.delenv("LICENSING_ENABLED", raising=False)
-    resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/allocate", json={"amount": 100, "idempotency_key": "k1"})
+    resp = client.put(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/cap", json={"cap": 100})
     assert resp.status_code == 404
 
 
-def test_reclaim_router_ok_relays_rpc_result_and_fires_analytics(client):
+def test_dispersal_router_ok_fires_analytics(client):
     with (
         patch(
-            "orgs.router.service.reclaim_credits",
-            new=AsyncMock(return_value={"duplicate": False, "from_balance": 0, "to_balance": 1000}),
+            "orgs.router.service.set_org_dispersal",
+            new=AsyncMock(return_value={"id": ORG_ID, "monthly_dispersal_credits": 10000}),
         ),
         patch("orgs.router.analytics_capture") as mock_capture,
     ):
-        resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": 100, "idempotency_key": "k1"})
+        resp = client.put(
+            f"/orgs/{ORG_ID}/dispersal", json={"monthly_dispersal_credits": 10000, "default_member_cap": 2000}
+        )
     assert resp.status_code == 200
-    assert resp.json() == {"duplicate": False, "from_balance": 0, "to_balance": 1000}
     mock_capture.assert_called_once()
-    assert mock_capture.call_args.args[1] == "org_credits_reclaimed"
+    assert mock_capture.call_args.args[1] == "org_dispersal_set"
 
 
-def test_reclaim_router_duplicate_replay_skips_analytics(client):
-    with (
-        patch("orgs.router.service.reclaim_credits", new=AsyncMock(return_value={"duplicate": True})),
-        patch("orgs.router.analytics_capture") as mock_capture,
-    ):
-        resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": 100, "idempotency_key": "k1"})
-    assert resp.status_code == 200
-    mock_capture.assert_not_called()
-
-
-def test_reclaim_router_no_op_response_relayed_and_skips_analytics(client):
-    """KEY TEST: the {"removed": 0} no-op path (reclaim-all against a
-    non-positive balance) must relay verbatim and must NOT fire analytics —
-    nothing moved, there is nothing to log."""
-    with (
-        patch("orgs.router.service.reclaim_credits", new=AsyncMock(return_value={"removed": 0})),
-        patch("orgs.router.analytics_capture") as mock_capture,
-    ):
-        resp = client.post(
-            f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": None, "idempotency_key": "k1"}
-        )
-    assert resp.status_code == 200
-    assert resp.json() == {"removed": 0}
-    mock_capture.assert_not_called()
-
-
-def test_reclaim_router_stale_balance_409(client):
-    from orgs.service import SeatBalanceChangedError
-
-    with patch(
-        "orgs.router.service.reclaim_credits",
-        new=AsyncMock(side_effect=SeatBalanceChangedError("Balance changed — refresh and retry.")),
-    ):
-        resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": 100, "idempotency_key": "k1"})
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "Balance changed — refresh and retry."
-
-
-def test_reclaim_router_accepts_null_amount_and_forwards_none(client):
-    with patch("orgs.router.service.reclaim_credits", new=AsyncMock(return_value={"removed": 0})) as mock_reclaim:
-        resp = client.post(
-            f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": None, "idempotency_key": "k1"}
-        )
-    assert resp.status_code == 200
-    assert mock_reclaim.call_args.args[-2] is None  # amount forwarded as None (reclaim-all)
-
-
-def test_reclaim_router_rejects_zero_amount_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": 0, "idempotency_key": "k1"})
+def test_dispersal_router_requires_the_dispersal_field_422(client):
+    resp = client.put(f"/orgs/{ORG_ID}/dispersal", json={"default_member_cap": 2000})
     assert resp.status_code == 422
 
 
-def test_reclaim_router_rejects_negative_amount_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": -5, "idempotency_key": "k1"})
-    assert resp.status_code == 422
-
-
-def test_reclaim_router_rejects_amount_over_limit_422(client):
-    resp = client.post(
-        f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": 1_000_001, "idempotency_key": "k1"}
-    )
-    assert resp.status_code == 422
-
-
-def test_reclaim_router_requires_idempotency_key_422(client):
-    resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": 100})
-    assert resp.status_code == 422
-
-
-def test_reclaim_router_404_when_licensing_off(client, monkeypatch):
+def test_dispersal_router_404_when_licensing_off(client, monkeypatch):
     monkeypatch.delenv("LICENSING_ENABLED", raising=False)
-    resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/reclaim", json={"amount": 100, "idempotency_key": "k1"})
+    resp = client.put(f"/orgs/{ORG_ID}/dispersal", json={"monthly_dispersal_credits": 100})
     assert resp.status_code == 404

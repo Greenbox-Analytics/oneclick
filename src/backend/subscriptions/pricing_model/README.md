@@ -48,11 +48,14 @@ No server and no dependencies — `index.html` is fully standalone (inline CSS +
   (`ENTERPRISE_MIN_INITIAL_CREDITS`).
 - **Modeled**: token counts per call. `ai_usage_log` now records real spend via the
   `TrackedOpenAI` proxy — reconcile against it before locking prices in.
-- **Not built** (drawn dashed in the licensing tab): the 12-month contract with monthly
-  payments and monthly dispersal, per-user caps on a shared pool (the code moves credits
-  into per-member seat wallets instead), org-level pay-as-you-go (overage is personal-plan
-  only; a dry seat 402s), any org subscription object to upgrade or cancel, cancellation
-  grace/migration terms, time-gated permissions, and role-gated payment drafting.
+- **Built since this page was written**: the monthly dispersal into one org pool (expiring
+  each period) and per-member caps on that pool, enforced inside `debit_credits`.
+- **Not built** (drawn dashed in the licensing tab): the commercial wrapper — no org
+  subscription object, so the 12-month term, the monthly payment, the cancellation grace
+  period and the "remaining months owed" rule live in the signed contract rather than the
+  app. Also unbuilt: org-level pay-as-you-go (overage is personal-plan only; a member past
+  their cap asks for a raise and a dry pool needs an admin to buy credits), time-gated
+  permissions, and role-gated payment drafting.
 
 ## Checks
 

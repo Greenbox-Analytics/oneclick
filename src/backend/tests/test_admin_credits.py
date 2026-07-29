@@ -423,7 +423,7 @@ def _cached_table_builder(table_data: dict):
     repeated calls for the SAME table name return the SAME MagicMock builder
     (mirrors test_credits_stripe.py's `_mock_supabase` helper). Needed here
     because get_org_pool issues two separate queries against `credit_ledger`
-    (the last-50 listing AND cumulative_purchased's SUM) that must see the
+    (the last-50 listing AND cumulative_paid_in's SUM) that must see the
     same configured rows.
     """
     builders: dict = {}
@@ -446,20 +446,20 @@ class TestGetOrgPool:
 
     ORG_ID = "org-1"
 
-    def test_shape_and_cumulative_purchased_matches_shared_helper(self):
+    def test_shape_and_cumulative_paid_in_matches_shared_helper(self):
         """NOTE: the `credit_ledger` fixture below is all `purchase`-kind
         rows deliberately — the shared MagicMock builder can't distinguish
         the ledger-listing query (unfiltered by kind) from
-        cumulative_purchased's `kind='purchase'`-filtered SUM (both are
+        cumulative_paid_in's purchase+dispersal-filtered SUM (both are
         `.eq()` no-ops against the same mock), so mixing kinds here would
         make the sum reflect the mock's inability to filter, not the
         service's real behavior. The real per-kind filtering is exercised
         against the actual RPC/SQL in the launch-gate list (spec §10); this
-        test's job is only to prove get_org_pool's cumulativePurchased comes
+        test's job is only to prove get_org_pool's cumulativePaidIn comes
         from the SAME helper function stripe_events uses, not a duplicate
         reimplementation that can drift.
         """
-        from orgs.wallets import cumulative_purchased
+        from orgs.wallets import cumulative_paid_in
         from subscriptions.admin_service import get_org_pool
 
         side_effect, builders = _cached_table_builder(
@@ -490,7 +490,7 @@ class TestGetOrgPool:
         assert result["poolBalance"] == 4500
         # No drift: this must equal the SAME helper the stripe activation
         # check uses, computed independently against the same fixture rows.
-        assert result["cumulativePurchased"] == cumulative_purchased(sb, "org-w1") == 5000
+        assert result["cumulativePaidIn"] == cumulative_paid_in(sb, "org-w1") == 5000
         assert result["ledger"] == builders["credit_ledger"].execute.return_value.data
 
     def test_no_wallet_yet_reports_zeroes_not_an_error(self):
@@ -509,7 +509,7 @@ class TestGetOrgPool:
 
         result = get_org_pool(sb, self.ORG_ID)
         assert result["poolBalance"] == 0
-        assert result["cumulativePurchased"] == 0
+        assert result["cumulativePaidIn"] == 0
         assert result["ledger"] == []
 
     def test_unknown_org_raises_value_error(self):
@@ -642,7 +642,7 @@ class TestOrgPoolEndpoints:
             "status": "active",
             "archivedAt": None,
             "poolBalance": 2500,
-            "cumulativePurchased": 5000,
+            "cumulativePaidIn": 5000,
             "ledger": [{"id": "l1", "delta": 5000, "kind": "purchase", "created_at": "2026-07-01T00:00:00+00:00"}],
         }
 

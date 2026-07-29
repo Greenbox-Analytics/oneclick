@@ -640,19 +640,122 @@ class TestSweepAnnual:
 
 
 # ---------------------------------------------------------------------------
-# Licensing Phase B — default seat allowance top-up (spec §4, rule 6).
-# Filter-aware mock: the org_members/credit_wallets predicates (status,
-# archived_at IS NULL, default_seat_allowance > 0, owner_type/owner_id) are
-# load-bearing, so a no-op filter mock would hide a broken query.
+# Licensing Phase B — the monthly credit dispersal. Filter-aware mock: the
+# organizations predicates (status, archived_at IS NULL,
+# monthly_dispersal_credits > 0) are load-bearing, so a no-op filter mock would
+# hide a broken query.
 # ---------------------------------------------------------------------------
 
 
-def _allowance_month_key():
-    return datetime.now(UTC).strftime("%Y-%m")
+class TestSweepDispersal:
+    def _sb(self, *, dispersal=10000, period_end=None, status="active", archived_at=None):
+        return _filter_aware_supabase(
+            {
+                "organizations": [
+                    {
+                        "id": "org1",
+                        "status": status,
+                        "archived_at": archived_at,
+                        "monthly_dispersal_credits": dispersal,
+                    }
+                ],
+                "credit_wallets": [
+                    {"id": "pool-org1", "owner_type": "org", "owner_id": "org1", "period_end": period_end}
+                ],
+            }
+        )
 
+    async def test_first_dispersal_anchors_period_to_the_month(self, monkeypatch):
+        """A pool that has never been on a cycle (period_end NULL) gets its
+        period anchored to the start of NEXT month, not now()+1mo — member cap
+        counters reset against this boundary, so every org has to share the same
+        calendar-month alignment or "this month's spend" means nothing."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
 
-class TestSweepAllowance:
-    async def test_seat_at_allowance_skips_without_rpc(self, monkeypatch):
+        sb = self._sb(period_end=None)
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orgsDispersed"] == 1
+        calls = [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"]
+        assert len(calls) == 1
+        payload = calls[0].args[1]
+        assert payload["p_wallet_id"] == "pool-org1"
+        assert payload["p_monthly_grant"] == 10000
+        end = datetime.fromisoformat(payload["p_new_period_end"])
+        assert (end.day, end.hour, end.minute, end.second) == (1, 0, 0, 0)
+
+    async def test_open_period_is_not_dispersed_again(self, monkeypatch):
+        """Idempotency: the pool's period is still open, so nothing is due. This
+        is why the sweep can run daily without topping an org up 30 times."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        future = (datetime.now(UTC) + timedelta(days=20)).isoformat()
+        sb = self._sb(period_end=future)
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orgsDispersed"] == 0
+        assert [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"] == []
+
+    async def test_lapsed_period_steps_forward_from_the_stored_end(self, monkeypatch):
+        """The new period steps from the STORED period_end, not from now(), so a
+        sweep that runs late doesn't silently shorten or shift the cycle."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        stored_end = datetime(2020, 3, 1, tzinfo=UTC)
+        sb = self._sb(period_end=stored_end.isoformat())
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orgsDispersed"] == 1
+        payload = [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"][0].args[1]
+        end = datetime.fromisoformat(payload["p_new_period_end"])
+        assert end > datetime.now(UTC)
+        assert end.day == stored_end.day  # cycle day preserved
+
+    async def test_no_contract_org_is_skipped(self, monkeypatch):
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb = self._sb(dispersal=0)
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orgsDispersed"] == 0
+        assert [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"] == []
+
+    async def test_pending_and_archived_orgs_are_skipped(self, monkeypatch):
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        for kwargs in ({"status": "pending"}, {"archived_at": "2026-01-01T00:00:00+00:00"}):
+            sb = self._sb(**kwargs)
+            with patch("main.get_supabase_client", return_value=sb):
+                result = await billing_sweep(x_sweep_token="s3cret")
+            assert result["orgsDispersed"] == 0, kwargs
+            assert [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"] == [], kwargs
+
+    async def test_missing_pool_wallet_skips_the_org(self, monkeypatch):
+        """Wallet creation is the app layer's job (lazy on the first org-context
+        read or purchase), not the sweep's."""
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         monkeypatch.setenv("LICENSING_ENABLED", "true")
@@ -660,302 +763,20 @@ class TestSweepAllowance:
 
         sb = _filter_aware_supabase(
             {
-                "org_members": [{"id": "m1", "org_id": "org1", "status": "active", "user_id": "u1"}],
                 "organizations": [
-                    {"id": "org1", "status": "active", "archived_at": None, "default_seat_allowance": 100}
+                    {"id": "org1", "status": "active", "archived_at": None, "monthly_dispersal_credits": 10000}
                 ],
-                "credit_wallets": [
-                    {"id": "pool-org1", "owner_type": "org", "owner_id": "org1", "reserve_balance": 500},
-                    {
-                        "id": "seat-m1",
-                        "owner_type": "seat",
-                        "owner_id": "m1",
-                        "bundle_balance": 0,
-                        "reserve_balance": 100,
-                    },
-                ],
+                "credit_wallets": [],
             }
         )
 
         with patch("main.get_supabase_client", return_value=sb):
             result = await billing_sweep(x_sweep_token="s3cret")
 
-        assert result["seatsToppedUp"] == 0
-        assert result["poolLow"] == 0
-        assert [c for c in sb.rpc.call_args_list if c.args[0] == "transfer_credits"] == []
+        assert result["orgsDispersed"] == 0
+        assert [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"] == []
 
-    async def test_tops_up_seat_below_allowance(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb = _filter_aware_supabase(
-            {
-                "org_members": [{"id": "m1", "org_id": "org1", "status": "active", "user_id": "u1"}],
-                "organizations": [
-                    {"id": "org1", "status": "active", "archived_at": None, "default_seat_allowance": 100}
-                ],
-                "credit_wallets": [
-                    {"id": "pool-org1", "owner_type": "org", "owner_id": "org1", "reserve_balance": 500},
-                    {
-                        "id": "seat-m1",
-                        "owner_type": "seat",
-                        "owner_id": "m1",
-                        "bundle_balance": 0,
-                        "reserve_balance": 20,
-                    },
-                ],
-            }
-        )
-        sb.rpc.return_value.execute.return_value = MagicMock(
-            data={"duplicate": False, "from_balance": 420, "to_balance": 100}
-        )
-
-        with patch("main.get_supabase_client", return_value=sb):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["seatsToppedUp"] == 1
-        assert result["poolLow"] == 0
-        transfer_calls = [c for c in sb.rpc.call_args_list if c.args[0] == "transfer_credits"]
-        assert len(transfer_calls) == 1
-        payload = transfer_calls[0].args[1]
-        assert payload["p_from_wallet"] == "pool-org1"
-        assert payload["p_to_wallet"] == "seat-m1"
-        assert payload["p_amount"] == 80  # 100 allowance - 20 seat balance
-        assert payload["p_kind"] == "allocation"
-        # Prefix-only check on the month segment: re-deriving "today" here would
-        # flake if the test straddles a UTC month boundary mid-run.
-        assert payload["p_request_id"] == f"allowance:m1:{_allowance_month_key()}"
-        assert payload["p_metadata"] == {"org_id": "org1", "source": "allowance"}
-
-    async def test_pool_low_skips_without_consuming_month_key(self, monkeypatch):
-        """Rule 6: pool 100, allowance 500 -> NO transfer at all (the month
-        key is never burned). A subsequent run after a pool refill derives the
-        IDENTICAL month key and succeeds — the skip never poisoned it."""
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        def _sb(pool_reserve):
-            return _filter_aware_supabase(
-                {
-                    "org_members": [{"id": "m1", "org_id": "org1", "status": "active", "user_id": "u1"}],
-                    "organizations": [
-                        {"id": "org1", "status": "active", "archived_at": None, "default_seat_allowance": 500}
-                    ],
-                    "credit_wallets": [
-                        {"id": "pool-org1", "owner_type": "org", "owner_id": "org1", "reserve_balance": pool_reserve},
-                        {
-                            "id": "seat-m1",
-                            "owner_type": "seat",
-                            "owner_id": "m1",
-                            "bundle_balance": 0,
-                            "reserve_balance": 0,
-                        },
-                    ],
-                }
-            )
-
-        sb_low = _sb(100)
-        with patch("main.get_supabase_client", return_value=sb_low):
-            result_low = await billing_sweep(x_sweep_token="s3cret")
-        assert result_low["seatsToppedUp"] == 0
-        assert result_low["poolLow"] == 1
-        assert [c for c in sb_low.rpc.call_args_list if c.args[0] == "transfer_credits"] == []
-
-        sb_refilled = _sb(1000)
-        sb_refilled.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False})
-        with patch("main.get_supabase_client", return_value=sb_refilled):
-            result_refilled = await billing_sweep(x_sweep_token="s3cret")
-        assert result_refilled["seatsToppedUp"] == 1
-        transfer_calls = [c for c in sb_refilled.rpc.call_args_list if c.args[0] == "transfer_credits"]
-        assert transfer_calls[0].args[1]["p_request_id"] == f"allowance:m1:{_allowance_month_key()}"
-
-    async def test_duplicate_transfer_counts_as_noop(self, monkeypatch):
-        """Same key, second run: transfer_credits reports {duplicate: true} —
-        already topped up this month. The RPC IS called (unlike the pool-low
-        skip above), but it doesn't count as a fresh top-up."""
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb = _filter_aware_supabase(
-            {
-                "org_members": [{"id": "m1", "org_id": "org1", "status": "active", "user_id": "u1"}],
-                "organizations": [
-                    {"id": "org1", "status": "active", "archived_at": None, "default_seat_allowance": 100}
-                ],
-                "credit_wallets": [
-                    {"id": "pool-org1", "owner_type": "org", "owner_id": "org1", "reserve_balance": 500},
-                    {
-                        "id": "seat-m1",
-                        "owner_type": "seat",
-                        "owner_id": "m1",
-                        "bundle_balance": 0,
-                        "reserve_balance": 0,
-                    },
-                ],
-            }
-        )
-        sb.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True})
-
-        with patch("main.get_supabase_client", return_value=sb):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["seatsToppedUp"] == 0
-        assert result["poolLow"] == 0
-        transfer_calls = [c for c in sb.rpc.call_args_list if c.args[0] == "transfer_credits"]
-        assert len(transfer_calls) == 1  # RPC WAS called — the duplicate check happened inside it
-
-    async def test_manual_only_org_skipped(self, monkeypatch):
-        """default_seat_allowance NULL -> excluded by the .gt() filter at the query
-        layer; the org is never scanned for members at all."""
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb = _filter_aware_supabase(
-            {
-                "org_members": [{"id": "m1", "org_id": "org1", "status": "active", "user_id": "u1"}],
-                "organizations": [
-                    {"id": "org1", "status": "active", "archived_at": None, "default_seat_allowance": None}
-                ],
-                "credit_wallets": [
-                    {"id": "pool-org1", "owner_type": "org", "owner_id": "org1", "reserve_balance": 500},
-                    {
-                        "id": "seat-m1",
-                        "owner_type": "seat",
-                        "owner_id": "m1",
-                        "bundle_balance": 0,
-                        "reserve_balance": 0,
-                    },
-                ],
-            }
-        )
-
-        with patch("main.get_supabase_client", return_value=sb):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["seatsToppedUp"] == 0
-        assert result["poolLow"] == 0
-        sb.rpc.assert_not_called()
-
-    async def test_missing_seat_wallet_skips_without_creating_it(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb = _filter_aware_supabase(
-            {
-                "org_members": [{"id": "m1", "org_id": "org1", "status": "active", "user_id": "u1"}],
-                "organizations": [
-                    {"id": "org1", "status": "active", "archived_at": None, "default_seat_allowance": 100}
-                ],
-                "credit_wallets": [
-                    {"id": "pool-org1", "owner_type": "org", "owner_id": "org1", "reserve_balance": 500},
-                    # no seat wallet row for m1 at all
-                ],
-            }
-        )
-
-        with patch("main.get_supabase_client", return_value=sb):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["seatsToppedUp"] == 0
-        assert result["poolLow"] == 0
-        sb.rpc.assert_not_called()
-        insert_calls = [c for c in sb.table("credit_wallets").insert.call_args_list]
-        assert insert_calls == []  # the sweep never creates the missing seat wallet
-
-    async def test_missing_pool_wallet_skips_whole_org(self, monkeypatch):
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb = _filter_aware_supabase(
-            {
-                "org_members": [{"id": "m1", "org_id": "org1", "status": "active", "user_id": "u1"}],
-                "organizations": [
-                    {"id": "org1", "status": "active", "archived_at": None, "default_seat_allowance": 100}
-                ],
-                "credit_wallets": [
-                    {
-                        "id": "seat-m1",
-                        "owner_type": "seat",
-                        "owner_id": "m1",
-                        "bundle_balance": 0,
-                        "reserve_balance": 0,
-                    },
-                    # no pool wallet row for org1
-                ],
-            }
-        )
-
-        with patch("main.get_supabase_client", return_value=sb):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["seatsToppedUp"] == 0
-        assert result["poolLow"] == 0
-        sb.rpc.assert_not_called()
-
-    async def test_in_loop_pool_balance_prevents_overdraw_within_one_sweep(self, monkeypatch):
-        """Pool covers only ONE of two seats' top-ups. A stale read (checking
-        both seats against the original 150 balance) would wrongly approve
-        both; the running local balance must catch the second."""
-        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        from subscriptions.sweep import billing_sweep
-
-        sb = _filter_aware_supabase(
-            {
-                "org_members": [
-                    {"id": "m1", "org_id": "org1", "status": "active", "user_id": "u1"},
-                    {"id": "m2", "org_id": "org1", "status": "active", "user_id": "u2"},
-                ],
-                "organizations": [
-                    {"id": "org1", "status": "active", "archived_at": None, "default_seat_allowance": 100}
-                ],
-                "credit_wallets": [
-                    {"id": "pool-org1", "owner_type": "org", "owner_id": "org1", "reserve_balance": 150},
-                    {
-                        "id": "seat-m1",
-                        "owner_type": "seat",
-                        "owner_id": "m1",
-                        "bundle_balance": 0,
-                        "reserve_balance": 0,
-                    },
-                    {
-                        "id": "seat-m2",
-                        "owner_type": "seat",
-                        "owner_id": "m2",
-                        "bundle_balance": 0,
-                        "reserve_balance": 0,
-                    },
-                ],
-            }
-        )
-        sb.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False})
-
-        with patch("main.get_supabase_client", return_value=sb):
-            result = await billing_sweep(x_sweep_token="s3cret")
-
-        assert result["seatsToppedUp"] == 1
-        assert result["poolLow"] == 1
-        transfer_calls = [c for c in sb.rpc.call_args_list if c.args[0] == "transfer_credits"]
-        assert len(transfer_calls) == 1
-        assert transfer_calls[0].args[1]["p_to_wallet"] == "seat-m1"
-
-    async def test_licensing_off_response_shape_has_zeroed_new_keys(self, monkeypatch):
-        """LICENSING_ENABLED off (or unset): the organizations table is never
-        queried, and the response still carries the new keys, zeroed — the
-        sweep's overall shape is stable regardless of the flag."""
+    async def test_licensing_off_never_queries_organizations(self, monkeypatch):
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         monkeypatch.delenv("LICENSING_ENABLED", raising=False)
@@ -966,7 +787,5 @@ class TestSweepAllowance:
         with patch("main.get_supabase_client", return_value=sb):
             result = await billing_sweep(x_sweep_token="s3cret")
 
-        assert result["seatsToppedUp"] == 0
-        assert result["poolLow"] == 0
-        org_calls = [c for c in sb.table.call_args_list if c.args[0] == "organizations"]
-        assert org_calls == []
+        assert result["orgsDispersed"] == 0
+        assert [c for c in sb.table.call_args_list if c.args[0] == "organizations"] == []

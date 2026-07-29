@@ -24,10 +24,6 @@ from supabase import Client
 from orgs import authz, wallets
 
 
-class SeatBalanceNotZeroError(Exception):
-    """Archive blocked — a seat wallet of this org still holds a nonzero balance."""
-
-
 class DuplicateInviteError(Exception):
     """Already an active member, or a duplicate pending invite for (org, email)."""
 
@@ -40,33 +36,6 @@ class LastAdminError(Exception):
 
 class InviteInvalidError(Exception):
     """Invite is expired, declined, or otherwise no longer actionable."""
-
-
-class ReclaimFailedError(Exception):
-    """The seat -> pool transfer_credits RPC raised during offboarding.
-
-    The org_members status/revoked_at transition (rule 5 — money-first) has
-    ALREADY landed by the time this is raised, and is deliberately NOT rolled
-    back: a retry of the same offboard recomputes the identical request_id
-    from the stored revoked_at, so transfer_credits' own idempotency either
-    no-ops (the first attempt actually succeeded downstream of where we
-    observed the error) or raises again (genuinely still short) — either way
-    safe to retry.
-    """
-
-
-class PoolBalanceInsufficientError(Exception):
-    """transfer_credits reported the org pool wallet doesn't have enough
-    reserve balance to cover a requested allocation (spec rule 2 — transfers
-    never overdraw). Mapped by the router to 409 "The pool doesn't have
-    enough credits."."""
-
-
-class SeatBalanceChangedError(Exception):
-    """transfer_credits reported the seat wallet's balance changed between
-    being read and the reclaim transfer landing (a concurrent debit/reclaim
-    raced this one) — a stale-balance race, not a caller error. Mapped by
-    the router to 409 "Balance changed — refresh and retry."."""
 
 
 class DuplicatePendingRequestError(Exception):
@@ -215,10 +184,10 @@ async def get_org(db: Client, user_id: str, org_id: str) -> dict:
     wallet = wallet_rows[0] if wallet_rows else None
     pool_balance = (wallet.get("bundle_balance", 0) + wallet.get("reserve_balance", 0)) if wallet else 0
 
-    cumulative_purchased = wallets.cumulative_purchased(db, wallet["id"]) if wallet else 0
+    cumulative_paid_in = wallets.cumulative_paid_in(db, wallet["id"]) if wallet else 0
 
     effective_min = org.get("min_initial_purchase_credits") or _default_min_initial_purchase_credits()
-    remaining_to_activate = max(0, effective_min - cumulative_purchased)
+    remaining_to_activate = max(0, effective_min - cumulative_paid_in)
 
     member_count_res = (
         db.table("org_members").select("id", count="exact").eq("org_id", org_id).eq("status", "active").execute()
@@ -229,19 +198,20 @@ async def get_org(db: Client, user_id: str, org_id: str) -> dict:
         **org,
         "my_role": my_role,
         "pool_balance": pool_balance,
-        "cumulative_purchased": cumulative_purchased,
+        "cumulative_paid_in": cumulative_paid_in,
         "remaining_to_activate": remaining_to_activate,
         "member_count": member_count,
     }
 
 
 async def update_org(db: Client, user_id: str, org_id: str, fields: dict) -> dict:
-    """Update org name/default_seat_allowance. Admin only.
+    """Update org name / default_member_cap. Admin only.
 
     `fields` is expected to come from `OrgUpdate.model_dump(exclude_unset=True)`
     at the router — keys explicitly present in the request (including an
-    explicit `None` for default_seat_allowance, clearing it to manual-only)
-    are written; omitted keys are left untouched."""
+    explicit `None` for default_member_cap, clearing members to uncapped) are
+    written; omitted keys are left untouched. The dispersal has its own endpoint
+    (set_org_dispersal) because it is the contract, not a display preference."""
     authz.require_admin(db, user_id, org_id)
     if not fields:
         res = db.table("organizations").select("*").eq("id", org_id).maybe_single().execute()
@@ -287,29 +257,16 @@ def _teardown_archived_org_grants(db: Client, org_id: str) -> None:
 
 
 async def archive_org(db: Client, user_id: str, org_id: str) -> dict:
-    """Archive an org. Admin only. 409s unless EVERY seat wallet belonging to
-    this org's members (any status — active/suspended/removed; offboarding
-    should already have zeroed removed/suspended seats, and archiving must
-    re-verify rather than trust that) has balance 0. Sets archived_at, then
-    tears down every access grant and link this org ever created (Task 4,
-    rule 12) — see `_teardown_archived_org_grants`."""
-    authz.require_admin(db, user_id, org_id)
+    """Archive an org. Admin only. Sets archived_at, then tears down every access
+    grant and link this org ever created (Task 4, rule 12) — see
+    `_teardown_archived_org_grants`.
 
-    members = db.table("org_members").select("id").eq("org_id", org_id).execute()
-    member_ids = [m["id"] for m in (members.data or [])]
-    if member_ids:
-        wallets = (
-            db.table("credit_wallets")
-            .select("id, owner_id, bundle_balance, reserve_balance")
-            .eq("owner_type", "seat")
-            .in_("owner_id", member_ids)
-            .execute()
-        )
-        for w in wallets.data or []:
-            if (w.get("bundle_balance", 0) + w.get("reserve_balance", 0)) != 0:
-                raise SeatBalanceNotZeroError(
-                    "Reclaim all seat credits first — every seat must be at zero before archiving."
-                )
+    No balance precondition: members hold no credits, so there is nothing
+    stranded to reclaim first. Whatever is left in the POOL stays in the pool —
+    an archived org's money is a support/refund decision (see the admin
+    clawback endpoint), never something archiving silently disposes of.
+    """
+    authz.require_admin(db, user_id, org_id)
 
     res = db.table("organizations").update({"archived_at": _now_iso()}).eq("id", org_id).execute()
     _teardown_archived_org_grants(db, org_id)
@@ -317,74 +274,77 @@ async def archive_org(db: Client, user_id: str, org_id: str) -> dict:
 
 
 async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
-    """Admin-only per-seat usage rollup for the org admin console (Task 7,
-    round-5 requirement: the finite ENTERPRISE_SEAT_STORAGE_BYTES ceiling must
-    be visible in the console BEFORE an upload fails, not just at the wall).
+    """Admin-only per-member usage rollup for the org admin console.
 
-    Round-trip shape (deliberately ONE query per table): `organizations.id`
-    and `org_members.id` values never collide, so a single `credit_wallets`
-    `.in_("owner_id", [org_id, *member_ids])` read returns BOTH the org's pool
-    wallet (owner_type='org') AND every member's seat wallet (owner_type=
-    'seat') in one round trip; the wallet ids that query yields then drive one
-    follow-up `credit_ledger` read the same way (pool 'purchase' rows feed
-    cumulativePurchased, seat 'debit' rows feed each seat's spentAllTime).
+    One pool, so one wallet read. Per-member spend comes from the pool's ledger
+    grouped by `metadata.org_member_id` (written by debit_credits) rather than
+    from per-member wallets, which no longer exist. The scan is floored on the
+    pool's `period_start` so "spent" means THIS period — the same window a
+    member's cap resets on, which is the only comparison an admin can act on.
 
-    Member visibility (round 5): every non-removed member is included. A
-    REMOVED member is included ONLY if their seat wallet still holds a
-    nonzero balance — offboarding reclaims first (spec rule 5), so this
-    should be rare, but an admin needs to see stranded money on an ex-seat's
-    wallet rather than have it silently disappear from the console.
+    Also surfaces the storage ceiling: the finite ENTERPRISE_SEAT_STORAGE_BYTES
+    must be visible in the console BEFORE an upload fails, not just at the wall.
 
-    Email resolution (licensing follow-ups Task 4): `org_members.email` is
-    captured going forward at invite-accept (see accept_invite), so the
-    common case reads it straight off the row with zero auth-admin calls.
-    A NULL email (a pre-migration row, or a creator row — the
-    auto_create_org_admin trigger never goes through accept_invite) falls
-    back to the existing `_resolve_user_email` auth lookup, ONCE, and the
-    resolved value is written back onto the row so every subsequent read of
-    that same row is free. The write-back is best-effort and deliberately
-    non-raising — a failed UPDATE must never take down the usage read; the
-    row just gets re-resolved next time.
+    Member visibility: every non-removed member is included. A removed member is
+    included only if they spent something this period — an admin reading the
+    console wants the month's spend attributed, including to someone who has
+    since left.
+
+    Email resolution: `org_members.email` is captured going forward at
+    invite-accept, so the common case reads it straight off the row with zero
+    auth-admin calls. A NULL email (a pre-migration row, or a creator row — the
+    auto_create_org_admin trigger never goes through accept_invite) falls back to
+    `_resolve_user_email` ONCE and is written back onto the row, best-effort and
+    deliberately non-raising: a failed heal must never break the usage read.
     """
     authz.require_admin(db, user_id, org_id)
 
-    members_res = db.table("org_members").select("id, user_id, role, status, email").eq("org_id", org_id).execute()
-    members = members_res.data or []
-    member_ids = [m["id"] for m in members]
-
-    wallets_res = (
-        db.table("credit_wallets")
-        .select("id, owner_type, owner_id, bundle_balance, reserve_balance")
-        .in_("owner_id", [org_id, *member_ids])
+    members_res = (
+        db.table("org_members")
+        .select("id, user_id, role, status, email, monthly_cap, cap_used, cap_period_end")
+        .eq("org_id", org_id)
         .execute()
     )
-    wallet_rows = wallets_res.data or []
-    pool_wallet = next((w for w in wallet_rows if w.get("owner_type") == "org"), None)
-    seat_wallet_by_member_id = {w["owner_id"]: w for w in wallet_rows if w.get("owner_type") == "seat"}
+    members = members_res.data or []
+
+    org_res = (
+        db.table("organizations").select("default_member_cap, monthly_dispersal_credits").eq("id", org_id).execute()
+    )
+    org_row = (org_res.data or [{}])[0]
+    default_cap = org_row.get("default_member_cap")
+
+    pool_rows = (
+        db.table("credit_wallets")
+        .select("id, bundle_balance, reserve_balance, period_start, period_end")
+        .eq("owner_type", "org")
+        .eq("owner_id", org_id)
+        .execute()
+        .data
+        or []
+    )
+    pool_wallet = pool_rows[0] if pool_rows else None
     pool_balance = (pool_wallet.get("bundle_balance", 0) + pool_wallet.get("reserve_balance", 0)) if pool_wallet else 0
 
-    wallet_ids = [w["id"] for w in wallet_rows]
     ledger_rows: list[dict] = []
-    if wallet_ids:
-        ledger_res = db.table("credit_ledger").select("wallet_id, delta, kind").in_("wallet_id", wallet_ids).execute()
-        ledger_rows = ledger_res.data or []
+    if pool_wallet:
+        query = db.table("credit_ledger").select("delta, kind, metadata").eq("wallet_id", pool_wallet["id"])
+        if pool_wallet.get("period_start"):
+            query = query.gte("created_at", pool_wallet["period_start"])
+        ledger_rows = query.execute().data or []
 
-    cumulative_purchased = sum(
-        r.get("delta", 0)
-        for r in ledger_rows
-        if pool_wallet and r.get("wallet_id") == pool_wallet["id"] and r.get("kind") == "purchase"
-    )
+    cumulative_paid_in = wallets.cumulative_paid_in(db, pool_wallet["id"]) if pool_wallet else 0
 
-    # spentAllTime is sum(|delta|) over kind='debit' rows only — seat wallets
-    # have no overage path (rule 8: no personal fallback, no overage for
-    # seats), so 'overage_debit' rows never exist here; unlike the personal
-    # usage view, there is no second kind to fold in.
-    spent_by_wallet_id: dict[str, int] = {}
+    # spentThisPeriod is sum(|delta|) over kind='debit' rows grouped by the
+    # member who spent them. Pools have no overage path (rule 8), so there is
+    # no 'overage_debit' kind to fold in as there is on the personal view.
+    spent_by_member: dict[str, int] = {}
     for r in ledger_rows:
         if r.get("kind") != "debit":
             continue
-        wid = r.get("wallet_id")
-        spent_by_wallet_id[wid] = spent_by_wallet_id.get(wid, 0) + abs(r.get("delta", 0))
+        member_id = (r.get("metadata") or {}).get("org_member_id")
+        if not member_id:
+            continue
+        spent_by_member[member_id] = spent_by_member.get(member_id, 0) + abs(r.get("delta", 0))
 
     user_ids = [m["user_id"] for m in members]
     storage_by_user: dict[str, int] = {}
@@ -402,13 +362,9 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
 
     seats = []
     for m in members:
-        seat_wallet = seat_wallet_by_member_id.get(m["id"])
-        seat_balance = (
-            (seat_wallet.get("bundle_balance", 0) + seat_wallet.get("reserve_balance", 0)) if seat_wallet else 0
-        )
-        if m.get("status") == "removed" and seat_balance == 0:
+        spent = spent_by_member.get(m["id"], 0)
+        if m.get("status") == "removed" and spent == 0:
             continue
-        spent_all_time = spent_by_wallet_id.get(seat_wallet["id"], 0) if seat_wallet else 0
 
         email = m.get("email")
         if not email:
@@ -421,6 +377,9 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
                     # failure must never break the usage read.
                     print(f"Failed to heal org_members.email for id={m['id']}: {exc}")
 
+        effective_cap = m.get("monthly_cap")
+        if effective_cap is None:
+            effective_cap = default_cap
         seats.append(
             {
                 "orgMemberId": m["id"],
@@ -428,8 +387,10 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
                 "email": email,
                 "role": m.get("role"),
                 "status": m.get("status"),
-                "seatBalance": seat_balance,
-                "spentAllTime": spent_all_time,
+                "monthlyCap": m.get("monthly_cap"),
+                "effectiveCap": effective_cap,
+                "capUsed": m.get("cap_used") or 0,
+                "spentThisPeriod": spent,
                 "storageBytes": storage_by_user.get(m["user_id"], 0),
                 "storageCapBytes": storage_cap,
             }
@@ -437,7 +398,11 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
 
     return {
         "poolBalance": pool_balance,
-        "cumulativePurchased": cumulative_purchased,
+        "cumulativePaidIn": cumulative_paid_in,
+        "monthlyDispersalCredits": org_row.get("monthly_dispersal_credits") or 0,
+        "defaultMemberCap": default_cap,
+        "periodStart": pool_wallet.get("period_start") if pool_wallet else None,
+        "periodEnd": pool_wallet.get("period_end") if pool_wallet else None,
         "seats": seats,
     }
 
@@ -677,41 +642,15 @@ def _revoke_offboarded_member_access(db: Client, org_id: str, member_user_id: st
 
 async def _offboard(db: Client, user_id: str, org_id: str, member_id: str, final_status: str) -> dict:
     """Shared reclaim-then-transition for suspend/remove (spec rule 5 + 13).
-    Admin only. NEVER a hard DELETE — `final_status` lands as a SOFT status
-    on the surviving org_members row, which is both the seat wallet's audit
-    anchor and the storage-billing exemption marker for an ex-seat member
-    (rule 13).
+    Admin only. NEVER a hard DELETE — `final_status` lands as a SOFT status on
+    the surviving org_members row, which is both the audit anchor for everything
+    this member spent from the pool and the storage-billing exemption marker for
+    an ex-member (rule 13).
 
-    Money-first ordering:
-      1. Transition org_members to `final_status`, stamping `revoked_at` —
-         UNLESS the row is ALREADY at `final_status` with a `revoked_at` set
-         already (a retry of a prior attempt whose reclaim failed AFTER the
-         status write landed): reuse that row as-is rather than re-stamping
-         revoked_at, which would mint a fresh request_id and could reclaim
-         the same money twice. Otherwise, write revoked_at=now() and REREAD
-         the row — revoked_at is the SOURCE OF TRUTH the reclaim key derives
-         from, not the locally-computed value, so it's read back from
-         storage rather than trusted from the UPDATE call's echo.
-      2. Read the seat wallet (owner_type='seat', owner_id=member_id). No
-         wallet, or balance (bundle + reserve) <= 0 -> done, no RPC call at
-         all (money RPCs raise on non-positive amounts, and there's nothing
-         to reclaim).
-      3. Nonzero balance -> resolve the org POOL wallet via Task 4's
-         `wallets.read_or_create_org_wallet` (create-on-miss). Earlier
-         (Task 3) this read the existing row only and raised RuntimeError on
-         a miss, reasoning that a funded seat implies a completed pool
-         purchase and therefore an existing pool wallet. Task 4 removes that
-         stopgap: create-on-miss is now the single load-bearing pool-wallet
-         accessor shared with allocate/reclaim, so offboarding gets the same
-         forgiving behavior instead of a distinct failure mode for what is,
-         in practice, an unreachable edge (a pool wallet with zero purchases
-         can't have funded a seat) — and a genuine anomaly here now
-         self-heals instead of 500ing.
-      4. `transfer_credits(seat -> pool, 'reclaim',
-         f"offboard:{member_id}:{epoch(stored revoked_at)}")`. A raise here
-         is surfaced as ReclaimFailedError; the status transition from step
-         1 is deliberately NOT rolled back (money-first — a retry re-derives
-         the identical request_id and converges).
+    Nothing is reclaimed. A member never held credits — only a monthly ceiling on
+    the shared pool — so offboarding is one status transition plus revoking the
+    access their membership granted. `revoked_at` is still stamped: it is the
+    offboarding audit timestamp, and re-invite clears it.
     """
     if final_status not in ("suspended", "removed"):
         raise ValueError(f"invalid final_status {final_status!r}")
@@ -744,53 +683,20 @@ async def _offboard(db: Client, user_id: str, org_id: str, member_id: str, final
         reread = db.table("org_members").select("*").eq("id", member_id).eq("org_id", org_id).maybe_single().execute()
         row = reread.data if (reread and reread.data) else updated.data[0]
 
-    wallet_res = (
-        db.table("credit_wallets")
-        .select("id, bundle_balance, reserve_balance")
-        .eq("owner_type", "seat")
-        .eq("owner_id", member_id)
-        .execute()
-    )
-    wallet_rows = wallet_res.data or []
-    seat_wallet = wallet_rows[0] if wallet_rows else None
-    balance = (seat_wallet.get("bundle_balance", 0) + seat_wallet.get("reserve_balance", 0)) if seat_wallet else 0
-    if not seat_wallet or balance <= 0:
-        _revoke_offboarded_member_access(db, org_id, row.get("user_id"))
-        return row
-
-    pool_wallet = wallets.read_or_create_org_wallet(db, org_id)
-    pool_wallet_id = pool_wallet["id"]
-
-    request_id = f"offboard:{member_id}:{_epoch(row['revoked_at'])}"
-    try:
-        db.rpc(
-            "transfer_credits",
-            {
-                "p_from_wallet": seat_wallet["id"],
-                "p_to_wallet": pool_wallet_id,
-                "p_amount": balance,
-                "p_kind": "reclaim",
-                "p_request_id": request_id,
-                "p_metadata": {"org_id": org_id, "reason": final_status},
-            },
-        ).execute()
-    except Exception as exc:
-        raise ReclaimFailedError(f"Failed to reclaim seat credits for member {member_id}") from exc
-
     _revoke_offboarded_member_access(db, org_id, row.get("user_id"))
     return row
 
 
 async def suspend_member(db: Client, user_id: str, org_id: str, member_id: str) -> dict:
-    """Suspend a seat: reclaim-then-transition to status='suspended'. Admin
-    only (via _offboard's authz.require_admin)."""
+    """Suspend a member: status='suspended'. Admin only (via _offboard's
+    authz.require_admin). Their cap stops mattering because the membership no
+    longer resolves an org billing context at all."""
     return await _offboard(db, user_id, org_id, member_id, "suspended")
 
 
 async def remove_member(db: Client, user_id: str, org_id: str, member_id: str) -> dict:
-    """Remove a seat: reclaim-then-transition to status='removed' — SOFT,
-    NEVER a hard DELETE (rule 13). Admin only (via _offboard's
-    authz.require_admin)."""
+    """Remove a member: status='removed' — SOFT, NEVER a hard DELETE (rule 13).
+    Admin only (via _offboard's authz.require_admin)."""
     return await _offboard(db, user_id, org_id, member_id, "removed")
 
 
@@ -815,20 +721,10 @@ async def reactivate_member(db: Client, user_id: str, org_id: str, member_id: st
 
 
 # ============================================================================
-# Allocate / reclaim (spec rule 2, Task 4) — admin-initiated pool<->seat money
-# movement via the transfer_credits RPC. Both wallets are resolved through
-# Task 4's create-on-miss helpers (orgs.wallets): an admin may allocate to a
-# brand-new seat, or reclaim from one, before either wallet has been lazily
-# created by any other path.
+# Caps (the enforcement mechanism) — admins set a ceiling per member and the
+# contract dials on the org. No money moves through any of this; debit_credits
+# is what actually holds members to their cap, under the pool's lock.
 # ============================================================================
-
-
-def _is_insufficient_balance_error(exc: Exception) -> bool:
-    """transfer_credits' own message is 'insufficient balance on source
-    wallet (have %, need %)' — same substring-detection idiom as
-    _is_last_admin_error above; the RPC doesn't raise a typed exception the
-    Python client can catch structurally."""
-    return "insufficient balance" in str(exc).lower()
 
 
 def _require_org_member(db: Client, org_id: str, member_id: str) -> None:
@@ -847,104 +743,75 @@ def _require_org_member(db: Client, org_id: str, member_id: str) -> None:
         raise HTTPException(status_code=404, detail="Member not found")
 
 
-async def allocate_credits(
-    db: Client, user_id: str, org_id: str, member_id: str, amount: int, idempotency_key: str
-) -> dict:
-    """Admin-only pool -> seat allocation. `transfer_credits` never overdraws
-    the pool (spec rule 2): an underfunded pool raises, caught here and
-    re-raised as PoolBalanceInsufficientError (409 at the router). The
-    request_id passed to the RPC is the BASE `alloc:{idempotency_key}` key —
-    transfer_credits appends its own :from/:to suffixes; never suffix here.
+async def set_member_cap(db: Client, user_id: str, org_id: str, member_id: str, cap: int | None) -> dict:
+    """Admin-only: set a member's monthly ceiling on the shared pool.
+
+    Nothing moves. A cap is a limit the debit RPC enforces, so raising one costs
+    the pool nothing until the member actually spends, and lowering one below
+    what they've already used this period simply means they're done until it
+    resets — no clawback, no negative balance, nothing to reconcile.
+
+    `cap=None` clears the member's own cap so they fall through to the org's
+    `default_member_cap` (and to uncapped if that is NULL too). Caps may sum to
+    more than the monthly dispersal on purpose: most members never reach theirs,
+    and the pool is the real ceiling.
     """
     authz.require_admin(db, user_id, org_id)
     _require_org_member(db, org_id, member_id)
-    seat_wallet = wallets.read_or_create_seat_wallet(db, member_id)
-    pool_wallet = wallets.read_or_create_org_wallet(db, org_id)
+    if cap is not None and cap < 0:
+        raise ValueError("cap must be >= 0")
 
-    try:
-        res = db.rpc(
-            "transfer_credits",
-            {
-                "p_from_wallet": pool_wallet["id"],
-                "p_to_wallet": seat_wallet["id"],
-                "p_amount": amount,
-                "p_kind": "allocation",
-                "p_request_id": f"alloc:{idempotency_key}",
-                "p_metadata": {"org_id": org_id, "member_id": member_id, "actor": user_id},
-            },
-        ).execute()
-    except Exception as exc:
-        if _is_insufficient_balance_error(exc):
-            raise PoolBalanceInsufficientError("The pool doesn't have enough credits.") from exc
-        raise
-    return res.data
+    res = db.table("org_members").update({"monthly_cap": cap}).eq("id", member_id).eq("org_id", org_id).execute()
+    if not res.data:
+        raise ValueError("Member not found")
+    return res.data[0]
 
 
-async def reclaim_credits(
-    db: Client, user_id: str, org_id: str, member_id: str, amount: int | None, idempotency_key: str
+async def set_org_dispersal(
+    db: Client, user_id: str, org_id: str, monthly_dispersal_credits: int, default_member_cap: int | None
 ) -> dict:
-    """Admin-only seat -> pool reclaim.
+    """Admin-only: the contract dials — how many credits land in the pool each
+    month, and the cap new members inherit.
 
-    `amount=None` means reclaim-all: the seat wallet's current balance
-    (bundle + reserve) is read from the same create-on-miss lookup used to
-    resolve its wallet id. A balance <= 0 is a genuine no-op, returned as
-    `{"removed": 0}` WITHOUT calling transfer_credits at all (round 5 guard:
-    accepted debit drift can push a seat's bundle negative, and the RPC
-    raises on a non-positive amount — surfacing that as an unmapped 500
-    instead of a quiet no-op would be a regression, not a fix).
-
-    A stale-balance race (the seat's balance changed between this read and
-    the transfer landing — e.g. a concurrent allowance top-up or another
-    reclaim) surfaces from the RPC as the same "insufficient balance on
-    source" message allocate_credits maps differently — here it becomes
-    SeatBalanceChangedError, "Balance changed — refresh and retry."."""
+    Changing the dispersal does NOT top the pool up immediately: the sweep
+    delivers it once per period, so a mid-month raise takes effect at the next
+    period boundary. That keeps one path writing dispersal credits, which is
+    what makes the once-per-month idempotency hold.
+    """
     authz.require_admin(db, user_id, org_id)
-    _require_org_member(db, org_id, member_id)
-    seat_wallet = wallets.read_or_create_seat_wallet(db, member_id)
-    pool_wallet = wallets.read_or_create_org_wallet(db, org_id)
+    if monthly_dispersal_credits < 0:
+        raise ValueError("monthly_dispersal_credits must be >= 0")
+    if default_member_cap is not None and default_member_cap < 0:
+        raise ValueError("default_member_cap must be >= 0")
 
-    if amount is None:
-        balance = seat_wallet.get("bundle_balance", 0) + seat_wallet.get("reserve_balance", 0)
-        if balance <= 0:
-            return {"removed": 0}
-        transfer_amount = balance
-    else:
-        transfer_amount = amount
-
-    try:
-        res = db.rpc(
-            "transfer_credits",
+    res = (
+        db.table("organizations")
+        .update(
             {
-                "p_from_wallet": seat_wallet["id"],
-                "p_to_wallet": pool_wallet["id"],
-                "p_amount": transfer_amount,
-                "p_kind": "reclaim",
-                "p_request_id": f"reclaim:{idempotency_key}",
-                "p_metadata": {"org_id": org_id, "member_id": member_id, "actor": user_id},
-            },
-        ).execute()
-    except Exception as exc:
-        if _is_insufficient_balance_error(exc):
-            raise SeatBalanceChangedError("Balance changed — refresh and retry.") from exc
-        raise
-    return res.data
+                "monthly_dispersal_credits": monthly_dispersal_credits,
+                "default_member_cap": default_member_cap,
+            }
+        )
+        .eq("id", org_id)
+        .execute()
+    )
+    return res.data[0] if res.data else {"id": org_id}
 
 
 # ============================================================================
-# Credit requests (Task 9) — member ask -> admin approve, replacing overage
-# for seats. Money movement mirrors allocate_credits (pool -> seat via
-# transfer_credits, both wallets resolved through Task 4's create-on-miss
-# helpers) with one addition: the round-4 duplicate-replay read-back (see
-# approve_credit_request's docstring).
+# Cap-raise requests — member asks, admin approves. This replaces overage for
+# org members: there is no pay-as-you-go on a pool, so the escape hatch is a
+# higher ceiling. Approving one moves NO money, which is why it needs none of
+# the transfer machinery it used to: it writes org_members.monthly_cap.
 # ============================================================================
 
 
 async def submit_credit_request(
-    db: Client, user_id: str, org_id: str, requested_credits: int | None, note: str | None
+    db: Client, user_id: str, org_id: str, requested_cap: int | None, note: str | None
 ) -> dict:
-    """Any ACTIVE member may ask for more credits. Member-level authz (NOT
-    admin) — authz.require_member 404s for a non-member OR a
-    suspended/removed seat, since is_org_member only counts status='active'
+    """Any ACTIVE member may ask for a higher monthly cap. Member-level authz
+    (NOT admin) — authz.require_member 404s for a non-member OR a
+    suspended/removed member, since is_org_member only counts status='active'
     rows (same gate get_org uses).
 
     The DB partial unique index (org_member_id, WHERE status='pending') is
@@ -971,8 +838,8 @@ async def submit_credit_request(
         raise ValueError("Member not found")
 
     payload: dict = {"org_id": org_id, "org_member_id": member["id"]}
-    if requested_credits is not None:
-        payload["requested_credits"] = requested_credits
+    if requested_cap is not None:
+        payload["requested_cap"] = requested_cap
     if note is not None:
         payload["note"] = note
 
@@ -1011,49 +878,17 @@ async def list_credit_requests(db: Client, user_id: str, org_id: str) -> list[di
     return res.data or []
 
 
-def _read_back_resolved_credits(db: Client, base_request_id: str) -> int:
-    """Round-4 duplicate-replay read-back (plan Task 9, rule 10): when
-    transfer_credits reports `{"duplicate": true}`, the amount that ACTUALLY
-    moved must be read from the ledger's `:from` leg — never trusted from the
-    retry's requested `credits` body, which may legitimately differ from what
-    landed on the transfer that succeeded before a later step (the
-    credit_requests status UPDATE) failed.
-
-    Example the plan spells out: approve-100 -> transfer_credits lands ->
-    the status UPDATE then raises (500) -> the client retries approve with
-    credits=100 (or any other value) -> transfer_credits sees the `:from` key
-    already exists and returns duplicate=True -> this function reads the
-    ORIGINAL -100 delta off that ledger row and returns 100, regardless of
-    what the retry asked for.
-    """
-    res = db.table("credit_ledger").select("delta").eq("request_id", f"{base_request_id}:from").maybe_single().execute()
-    row = res.data if res else None
-    if not row:
-        raise RuntimeError(
-            f"transfer_credits reported a duplicate for {base_request_id!r} but no "
-            f"ledger row exists at '{base_request_id}:from' to read the amount back from"
-        )
-    return abs(row["delta"])
-
-
-async def approve_credit_request(db: Client, user_id: str, org_id: str, request_id: str, credits: int) -> dict:
-    """Admin-only. TRANSFER FIRST, then mark resolved (spec rule 10):
+async def approve_credit_request(db: Client, user_id: str, org_id: str, request_id: str, cap: int) -> dict:
+    """Admin-only: approve a cap-raise request by writing the member's new cap.
 
     1. Fetch the request; 404 if unknown, 409 if already resolved.
-    2. transfer_credits(pool -> seat, 'allocation', request_id=f"credreq:{request_id}")
-       for `credits` (the admin-chosen amount — may differ from what the
-       member asked for). An underfunded pool raises here, mapped to
-       PoolBalanceInsufficientError (409) by the caller of the RPC — and
-       because this happens BEFORE any write to credit_requests, the
-       request row is left untouched at status='pending' (rule 10: a
-       pool-insufficient error must not resolve the request).
-    3. Resolve `resolved_credits`: a FRESH transfer (duplicate=False) used
-       exactly `credits`; a duplicate replay reads the actually-moved
-       amount back from the ledger (_read_back_resolved_credits) instead of
-       trusting this call's `credits` argument, which is the retry's own
-       input and may not match what landed the first time.
-    4. Mark the row status='approved', resolved_credits, resolved_by,
-       resolved_at.
+    2. Write `org_members.monthly_cap = cap` for the requesting member.
+    3. Mark the row approved with `resolved_cap`.
+
+    No money moves, so this needs none of the transfer-replay machinery the
+    allocation version carried: setting a cap is idempotent by nature. A retry
+    after a partial failure writes the same cap and resolves the same row, and
+    the worst case of a double-apply is the cap the admin chose, twice.
     """
     authz.require_admin(db, user_id, org_id)
 
@@ -1063,40 +898,19 @@ async def approve_credit_request(db: Client, user_id: str, org_id: str, request_
         raise CreditRequestNotFoundError("Credit request not found")
     if request["status"] != "pending":
         raise CreditRequestAlreadyResolvedError("This request has already been resolved")
+    if cap < 0:
+        raise ValueError("cap must be >= 0")
 
-    seat_wallet = wallets.read_or_create_seat_wallet(db, request["org_member_id"])
-    pool_wallet = wallets.read_or_create_org_wallet(db, org_id)
-
-    rpc_request_id = f"credreq:{request_id}"
-    try:
-        result = db.rpc(
-            "transfer_credits",
-            {
-                "p_from_wallet": pool_wallet["id"],
-                "p_to_wallet": seat_wallet["id"],
-                "p_amount": credits,
-                "p_kind": "allocation",
-                "p_request_id": rpc_request_id,
-                "p_metadata": {"org_id": org_id, "credit_request_id": request_id, "actor": user_id},
-            },
-        ).execute()
-    except Exception as exc:
-        if _is_insufficient_balance_error(exc):
-            raise PoolBalanceInsufficientError("The pool doesn't have enough credits.") from exc
-        raise
-
-    transfer_data = result.data or {}
-    if transfer_data.get("duplicate"):
-        resolved_credits = _read_back_resolved_credits(db, rpc_request_id)
-    else:
-        resolved_credits = credits
+    db.table("org_members").update({"monthly_cap": cap}).eq("id", request["org_member_id"]).eq(
+        "org_id", org_id
+    ).execute()
 
     updated = (
         db.table("credit_requests")
         .update(
             {
                 "status": "approved",
-                "resolved_credits": resolved_credits,
+                "resolved_cap": cap,
                 "resolved_by": user_id,
                 "resolved_at": _now_iso(),
             }
@@ -1106,7 +920,7 @@ async def approve_credit_request(db: Client, user_id: str, org_id: str, request_
     )
     if updated.data:
         return updated.data[0]
-    return {**request, "status": "approved", "resolved_credits": resolved_credits, "resolved_by": user_id}
+    return {**request, "status": "approved", "resolved_cap": cap, "resolved_by": user_id}
 
 
 async def deny_credit_request(db: Client, user_id: str, org_id: str, request_id: str, note: str | None) -> dict:

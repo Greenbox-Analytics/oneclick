@@ -15,6 +15,7 @@ from tests.conftest import (
 # Licensing Phase B (Task 6) reuses test_billing_context's filter-aware org mock.
 from tests.test_billing_context import (
     FAR_FUTURE,
+    MEMBER,
     ORG,
     PRICES,
     PRO_TIER_ROW,
@@ -22,8 +23,8 @@ from tests.test_billing_context import (
     _ctx_supabase,
     _member,
     _org,
+    _pool_wallet,
     _profile,
-    _seat_wallet,
     _user_wallet,
 )
 from tests.test_billing_context import _sub_row as _ctx_sub_row  # avoid shadowing this file's _sub_row(user_id)
@@ -692,16 +693,29 @@ class TestWalletOwnerScoping:
 CTX_USER = TEST_USER_ID
 
 
-def _org_check_data(seat_wallets, *, org_status="active", member_status="active"):
-    """Data for an org-context check_credits: profiles preference + active seat +
-    org + prices + the given seat wallet row(s). Deliberately OMITS the personal
-    wallet / subscription / tier tables — the org seat path must never read them."""
+def _org_check_data(
+    pool_wallets, *, org_status="active", member_status="active", monthly_cap=None, cap_used=0, default_member_cap=None
+):
+    """Data for an org-context check_credits: profiles preference + active
+    membership + org + prices + the org's pool wallet. Deliberately OMITS the
+    personal wallet / subscription / tier tables — the org path must never read
+    them. `monthly_cap`/`cap_used` drive the member-cap pre-check."""
+    from datetime import UTC, datetime, timedelta
+
+    future = (datetime.now(UTC) + timedelta(days=10)).isoformat()
     return {
         "profiles": [_profile(context_org=ORG)],
-        "org_members": [_member(status=member_status)],
-        "organizations": [_org(status=org_status)],
+        "org_members": [
+            _member(
+                status=member_status,
+                monthly_cap=monthly_cap,
+                cap_used=cap_used,
+                cap_period_end=future if cap_used else None,
+            )
+        ],
+        "organizations": [_org(status=org_status, default_member_cap=default_member_cap)],
         "credit_prices": list(PRICES),
-        "credit_wallets": list(seat_wallets),
+        "credit_wallets": list(pool_wallets),
     }
 
 
@@ -721,39 +735,39 @@ def _personal_via_dead_org_data(*, org_status="suspended", member_status="active
 
 
 class TestCheckCreditsOrgContext:
-    def test_seat_pays_allowed_with_seat_wallet_id(self, monkeypatch):
+    def test_seat_pays_allowed_with_pool_wallet_id(self, monkeypatch):
         """Funded seat → allowed, price from the shared prices table, wallet_id is
         the SEAT wallet, managed_by_org True, and NONE of the personal-context
         fields (overage / upgrade / reset_date) are set (rule 8)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(_org_check_data([_seat_wallet(reserve=500)]))
+        sb = _ctx_supabase(_org_check_data([_pool_wallet(reserve=500)]))
 
         r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")
 
         assert r.allowed and r.managed_by_org is True
-        assert r.wallet_id == "wallet-seat"
+        assert r.wallet_id == "wallet-pool"
         assert r.price == 3
         assert r.use_overage is False and r.overage_available is False
         assert r.upgrade_required is False
         assert r.reset_date is None
-        # Every seat-wallet select filtered owner_type='seat'; the personal wallet
+        # Every pool select filtered owner_type='org'; the personal wallet
         # (owner_type='user') is NEVER read.
         wallet_queries = sb._log.get("credit_wallets", [])
         assert wallet_queries
         for preds in wallet_queries:
-            assert ("eq", "owner_type", "seat") in preds
+            assert ("eq", "owner_type", "org") in preds
             assert ("eq", "owner_type", "user") not in preds
         # The org seat path consulted NO personal subscription row.
         assert "subscriptions" not in sb._log
 
-    def test_seat_pays_then_debit_targets_seat_wallet(self, monkeypatch):
+    def test_seat_pays_then_debit_targets_pool_wallet(self, monkeypatch):
         """The end-to-end money path: check → build grant from the result → debit.
         The debit RPC receives the SEAT wallet id, and the debit path adds no
         personal-wallet select (rule 9)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(_org_check_data([_seat_wallet(reserve=500)]))
+        sb = _ctx_supabase(_org_check_data([_pool_wallet(reserve=500)]))
         svc = EntitlementsService(sb)
 
         r = svc.check_credits(CTX_USER, "zoe_message")
@@ -769,7 +783,7 @@ class TestCheckCreditsOrgContext:
 
         debit_calls = [c for c in sb.rpc.call_args_list if c.args and c.args[0] == "debit_credits"]
         assert len(debit_calls) == 1
-        assert debit_calls[0].args[1]["p_wallet_id"] == "wallet-seat"
+        assert debit_calls[0].args[1]["p_wallet_id"] == "wallet-pool"
         # No personal-wallet ('user') select anywhere across check + debit.
         for preds in sb._log.get("credit_wallets", []):
             assert ("eq", "owner_type", "user") not in preds
@@ -779,18 +793,18 @@ class TestCheckCreditsOrgContext:
         reason, and NO overage / upgrade / reset_date fields (rule 8)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(_org_check_data([_seat_wallet(reserve=0, bundle=0)]))
+        sb = _ctx_supabase(_org_check_data([_pool_wallet(reserve=0, bundle=0)]))
 
         r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")
 
         assert r.allowed is False and r.managed_by_org is True
-        assert r.reason == "You've used the credits your organization allocated. Ask your admin for more."
+        assert r.reason == "Your organization is out of credits. Ask your admin to top up."
         assert r.overage_available is False and r.use_overage is False
         assert r.upgrade_required is False
         assert r.reset_date is None
         assert r.degraded is False  # a dry seat is a legitimate wall, not an outage
 
-    def test_missing_seat_wallet_lazy_creates_zero_then_402(self, monkeypatch):
+    def test_missing_pool_wallet_lazy_creates_zero_then_402(self, monkeypatch):
         """No seat wallet ROW at all → lazy-create at zero → 402 (rule 8's carve-out:
         a missing row is NOT the READ-ERROR fail-open case)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
@@ -801,14 +815,14 @@ class TestCheckCreditsOrgContext:
 
         assert r.allowed is False and r.managed_by_org is True
         assert r.degraded is False
-        assert r.reason == "You've used the credits your organization allocated. Ask your admin for more."
+        assert r.reason == "Your organization is out of credits. Ask your admin to top up."
 
-    def test_seat_wallet_read_error_fails_open_uncharged(self, monkeypatch):
+    def test_pool_wallet_read_error_fails_open_uncharged(self, monkeypatch):
         """A seat-wallet READ EXCEPTION fails OPEN uncharged (price 0, degraded),
         like the paid personal tier (spec §12)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        table_fn, _log, _updates, _store = _ctx_store(_org_check_data([_seat_wallet(reserve=500)]))
+        table_fn, _log, _updates, _store = _ctx_store(_org_check_data([_pool_wallet(reserve=500)]))
         sb = MagicMock()
 
         def _table(name):
@@ -862,14 +876,14 @@ class TestDebitFollowsCheck:
             price=3,
             kind="debit",
             enabled=True,
-            wallet_id="wallet-seat",
+            wallet_id="wallet-pool",
         )
 
         EntitlementsService(sb).debit_for_action(CTX_USER, grant)
 
         debit_calls = [c for c in sb.rpc.call_args_list if c.args and c.args[0] == "debit_credits"]
         assert len(debit_calls) == 1
-        assert debit_calls[0].args[1]["p_wallet_id"] == "wallet-seat"
+        assert debit_calls[0].args[1]["p_wallet_id"] == "wallet-pool"
         # No re-resolution: the wallet_id-bearing grant reads NO table at all.
         sb.table.assert_not_called()
 
@@ -932,7 +946,7 @@ def _org_row(org_id, status="active", name="Org", archived_at=None):
     return {"id": org_id, "name": name, "status": status, "archived_at": archived_at}
 
 
-def _seat_wallet_for(member_id, wallet_id, *, reserve=500, bundle=0):
+def _pool_wallet_for(member_id, wallet_id, *, reserve=500, bundle=0):
     return {
         "id": wallet_id,
         "owner_type": "seat",
@@ -983,13 +997,13 @@ class TestCheckCreditsResourceDerivation:
         and the debit RPC targets the seat wallet id (rule 6)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(_derived_single_org_data([_seat_wallet(reserve=500)]))
+        sb = _ctx_supabase(_derived_single_org_data([_pool_wallet(reserve=500)]))
         svc = EntitlementsService(sb)
 
         r = svc.check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
 
         assert r.allowed and r.managed_by_org is True
-        assert r.wallet_id == "wallet-seat" and r.price == 3
+        assert r.wallet_id == "wallet-pool" and r.price == 3
         # The personal (owner_type='user') wallet is NEVER read — seat wins.
         for preds in sb._log.get("credit_wallets", []):
             assert ("eq", "owner_type", "user") not in preds
@@ -1001,7 +1015,7 @@ class TestCheckCreditsResourceDerivation:
         svc.debit_for_action(CTX_USER, grant)
         debit_calls = [c for c in sb.rpc.call_args_list if c.args and c.args[0] == "debit_credits"]
         assert len(debit_calls) == 1
-        assert debit_calls[0].args[1]["p_wallet_id"] == "wallet-seat"
+        assert debit_calls[0].args[1]["p_wallet_id"] == "wallet-pool"
 
     def test_ambient_org_a_resource_linked_org_b_pays_org_b(self, monkeypatch):
         """Ambient = org A (seat held), resource linked to org B (seat also
@@ -1014,7 +1028,7 @@ class TestCheckCreditsResourceDerivation:
             "organizations": [_org_row(ORG_A), _org_row(ORG_B)],
             "org_members": [_member_row(MEMBER_A, ORG_A), _member_row(MEMBER_B, ORG_B)],
             "credit_prices": list(PRICES),
-            "credit_wallets": [_seat_wallet_for(MEMBER_B, "wallet-seat-b", reserve=500)],
+            "credit_wallets": [_pool_wallet_for(MEMBER_B, "wallet-seat-b", reserve=500)],
         }
         sb = _ctx_supabase(data)
 
@@ -1124,7 +1138,7 @@ class TestOwnerAwareDrySeatWall:
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _ctx_supabase(
-            _derived_single_org_data([_seat_wallet(reserve=0, bundle=0)], project_members=[_owner_pm_row("owner")])
+            _derived_single_org_data([_pool_wallet(reserve=0, bundle=0)], project_members=[_owner_pm_row("owner")])
         )
 
         r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
@@ -1141,14 +1155,14 @@ class TestOwnerAwareDrySeatWall:
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _ctx_supabase(
-            _derived_single_org_data([_seat_wallet(reserve=0, bundle=0)], project_members=[_owner_pm_row("editor")])
+            _derived_single_org_data([_pool_wallet(reserve=0, bundle=0)], project_members=[_owner_pm_row("editor")])
         )
 
         r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
 
         assert r.allowed is False and r.managed_by_org is True
         assert r.owner_can_unlink is False and r.project_id is None
-        assert r.reason == "You've used the credits your organization allocated. Ask your admin for more."
+        assert r.reason == "Your organization is out of credits. Ask your admin to top up."
 
     def test_ambient_org_deny_never_gains_owner_fields(self, monkeypatch):
         """An AMBIENT org dry-seat deny (no resource → ctx has no project_id)
@@ -1160,7 +1174,7 @@ class TestOwnerAwareDrySeatWall:
             "org_members": [_member(status="active")],
             "organizations": [_org(status="active")],
             "credit_prices": list(PRICES),
-            "credit_wallets": [_seat_wallet(reserve=0, bundle=0)],  # dry seat
+            "credit_wallets": [_pool_wallet(reserve=0, bundle=0)],  # dry seat
         }
         sb = _ctx_supabase(data)
 
@@ -1178,7 +1192,7 @@ class TestOwnerAwareDrySeatWall:
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _ctx_supabase(
-            _derived_single_org_data([_seat_wallet(reserve=500)], project_members=[_owner_pm_row("owner")])
+            _derived_single_org_data([_pool_wallet(reserve=500)], project_members=[_owner_pm_row("owner")])
         )
 
         r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
@@ -1251,3 +1265,112 @@ class TestFreeTierToolsOpenUnderCredits:
             False,
         )
         assert ent.caps.max_oneclick_runs_per_month == 1
+
+
+class TestMemberCapGate:
+    """The org path has TWO ceilings with DIFFERENT remedies: the member's own
+    monthly cap (ask the admin to raise it) and the pool balance (only the admin
+    buying credits fixes that). `cap_reached` is what lets the 402 say which."""
+
+    def test_under_cap_and_funded_pool_allows(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(_org_check_data([_pool_wallet(reserve=500)], monthly_cap=100, cap_used=10))
+
+        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")  # price 3
+
+        assert r.allowed and r.managed_by_org is True
+        assert r.cap_reached is False
+        assert r.wallet_id == "wallet-pool"
+        # The member id rides along so the debit can move the cap counter under
+        # the same lock the debit takes.
+        assert r.org_member_id == MEMBER
+
+    def test_cap_reached_denies_even_with_a_full_pool(self, monkeypatch):
+        """The pool has plenty; the member is at their ceiling. The wall must say
+        so — pointing them at "the org is out of credits" would send them to the
+        wrong remedy."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(_org_check_data([_pool_wallet(reserve=100_000)], monthly_cap=100, cap_used=98))
+
+        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")  # price 3 > 100-98
+
+        assert r.allowed is False
+        assert r.cap_reached is True
+        assert "monthly credit limit" in r.reason
+        assert r.use_overage is False and r.upgrade_required is False
+
+    def test_dry_pool_denies_without_claiming_the_cap(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(_org_check_data([_pool_wallet(reserve=0)], monthly_cap=1000, cap_used=0))
+
+        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")
+
+        assert r.allowed is False
+        assert r.cap_reached is False
+        assert "out of credits" in r.reason
+
+    def test_null_member_cap_falls_through_to_the_org_default(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(
+            _org_check_data([_pool_wallet(reserve=500)], monthly_cap=None, cap_used=2, default_member_cap=3)
+        )
+
+        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")  # price 3, used 2 of 3
+
+        assert r.allowed is False and r.cap_reached is True
+
+    def test_uncapped_member_is_bounded_only_by_the_pool(self, monkeypatch):
+        """No member cap and no org default = uncapped. The pool is the limit,
+        which is the whole point of allowing caps to overcommit."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(
+            _org_check_data([_pool_wallet(reserve=500)], monthly_cap=None, cap_used=0, default_member_cap=None)
+        )
+
+        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")
+
+        assert r.allowed is True and r.cap_reached is False
+
+    def test_debit_threads_the_member_id_into_the_rpc(self, monkeypatch):
+        """End-to-end: the grant carries org_member_id, so the RPC gets
+        p_member_id and moves the cap counter transactionally."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(_org_check_data([_pool_wallet(reserve=500)], monthly_cap=1000))
+        svc = EntitlementsService(sb)
+
+        r = svc.check_credits(CTX_USER, "zoe_message")
+        grant = CreditGrant(
+            request_id="req-cap",
+            action="zoe_message",
+            price=r.price,
+            kind="debit",
+            enabled=True,
+            wallet_id=r.wallet_id,
+            org_member_id=r.org_member_id,
+        )
+        svc.debit_for_action(CTX_USER, grant)
+
+        debit = [c for c in sb.rpc.call_args_list if c.args and c.args[0] == "debit_credits"][0]
+        assert debit.args[1]["p_wallet_id"] == "wallet-pool"
+        assert debit.args[1]["p_member_id"] == MEMBER
+
+    def test_personal_debit_never_sends_a_member_id(self, monkeypatch):
+        """p_member_id must be ABSENT for personal spend, so the RPC's
+        org_members lock never fires for a personal wallet."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100)
+        svc = EntitlementsService(sb)
+
+        grant = CreditGrant(
+            request_id="req-personal", action="zoe_message", price=3, kind="debit", enabled=True, wallet_id="w-personal"
+        )
+        svc.debit_for_action(TEST_USER_ID, grant)
+
+        debit = [c for c in sb.rpc.call_args_list if c.args and c.args[0] == "debit_credits"][0]
+        assert "p_member_id" not in debit.args[1]

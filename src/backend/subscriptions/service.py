@@ -202,31 +202,34 @@ class EntitlementsService:
             has_overrides = False
             managed_by_org = ManagedByOrg(org_id=ctx["org_id"], org_name=ctx["org_name"], role=ctx["role"])
 
-            # The credits block is the SEAT wallet (NULL-period, reserve-only,
-            # NEVER rolled — no _maybe_rollover_wallet), built ONLY when
-            # credits_enabled() — mirrors the personal branch below. Gating the
-            # seat-wallet READ+CREATE together with the CreditsInfo construction
-            # (Task 3 follow-up) means a credits-off org read never lazily creates
-            # a seat wallet row nobody will use — check_credits creates it on
-            # demand when credits actually gate an action.
+            # The credits block is the ORG POOL, never rolled from here (the
+            # dispersal sweep owns the pool's period). Built ONLY when
+            # credits_enabled(), mirroring the personal branch below, so a
+            # credits-off org read never lazily creates a pool nobody will use.
+            #
+            # `monthly_grant` is the member's CAP, not a grant: nothing is
+            # allocated to them, so what the UI must show is "your ceiling on
+            # the shared pool". `balance` stays the pool balance — the real
+            # constraint when the pool is emptier than the cap.
             if credits_enabled():
-                from orgs.wallets import read_or_create_seat_wallet
+                from orgs.wallets import read_or_create_org_wallet
                 from subscriptions.models import CreditsInfo
 
-                seat_wallet = read_or_create_seat_wallet(self.supabase, ctx["org_member_id"])
+                pool = read_or_create_org_wallet(self.supabase, ctx["org_id"])
+                cap, cap_used = self._member_cap(ctx["org_id"], ctx["org_member_id"])
                 credits_info = CreditsInfo(
-                    bundle_balance=seat_wallet.get("bundle_balance", 0),
-                    reserve_balance=seat_wallet.get("reserve_balance", 0),
-                    # Seats draw org ALLOCATIONS, not a personal grant — 0, and it
-                    # never reaches _maybe_rollover_wallet against the personal
-                    # wallet (rule 11).
-                    monthly_grant=0,
-                    overage_this_period=seat_wallet.get("overage_this_period", 0),
-                    # NO seat overage (spec §5) — the request/approve loop replaces it.
+                    bundle_balance=pool.get("bundle_balance", 0),
+                    reserve_balance=pool.get("reserve_balance", 0),
+                    monthly_grant=cap if cap is not None else 0,
+                    overage_this_period=pool.get("overage_this_period", 0),
+                    # NO pay-as-you-go on a pool — a member past their cap asks
+                    # for a raise; a dry pool is the admin's to top up.
                     overage_enabled=False,
-                    overage_cap_credits=None,
-                    period_end=None,  # seat wallets are NULL-period by construction.
+                    overage_cap_credits=cap,
+                    period_end=_parse_iso(pool.get("period_end")),
                     prices=self._get_credit_prices(),
+                    member_cap=cap,
+                    member_cap_used=cap_used,
                 )
         else:
             # ---- PERSONAL CONTEXT (byte-identical to pre-licensing) ------------
@@ -1318,14 +1321,19 @@ class EntitlementsService:
         their admin, wired in enforcement.gated_credits). Seat wallets are
         NULL-period, so `reset_date` is always None.
 
+        TWO ceilings apply, and they wall differently because the fix differs:
+        the member's monthly CAP (they ask their admin for a raise) and the ORG
+        POOL balance (the admin has to buy credits). `cap_reached` distinguishes
+        them for the 402.
+
         Degraded policy mirrors the paid personal tier — a READ EXCEPTION (prices
-        or the seat wallet) fails OPEN uncharged (spec §12). A MISSING seat wallet
-        ROW is NOT an exception: the Task-4 helper lazy-creates it at zero, which
-        correctly walls (402) rather than failing open (rule 8's carve-out).
+        or the pool) fails OPEN uncharged (spec §12). A MISSING pool ROW is NOT an
+        exception: the helper lazy-creates it at zero, which correctly walls (402)
+        rather than failing open (rule 8's carve-out).
         """
         import logging
 
-        from orgs.wallets import read_or_create_seat_wallet
+        from orgs.wallets import read_or_create_org_wallet
         from subscriptions.models import CreditCheckResult
 
         # Price lookup — IDENTICAL to the personal path (incl. the missing-action
@@ -1355,24 +1363,37 @@ class EntitlementsService:
 
             # Lazy-create at zero (rule 8): a missing row is a legitimate 402, not
             # an outage. Only a genuine READ EXCEPTION escapes into the except.
-            seat_wallet = read_or_create_seat_wallet(self.supabase, ctx["org_member_id"])
-            balance = seat_wallet.get("bundle_balance", 0) + seat_wallet.get("reserve_balance", 0)
+            pool = read_or_create_org_wallet(self.supabase, ctx["org_id"])
+            balance = pool.get("bundle_balance", 0) + pool.get("reserve_balance", 0)
+            cap, cap_used = self._member_cap(ctx["org_id"], ctx["org_member_id"])
 
-            if balance >= price:
+            # The CAP is checked first: it is the member's own ceiling, and the
+            # remedy (ask for a raise) is different from a dry pool (the admin
+            # buys credits). This is the advisory pre-check — debit_credits holds
+            # the authoritative counter under the wallet lock.
+            cap_reached = cap is not None and cap_used + price > cap
+            if not cap_reached and balance >= price:
                 return CreditCheckResult(
                     allowed=True,
                     price=price,
-                    wallet_id=seat_wallet.get("id"),
+                    wallet_id=pool.get("id"),
+                    org_member_id=ctx["org_member_id"],
                     managed_by_org=True,
                 )
 
-            # Insufficient seat balance — NO overage, NO personal fallback, NO
-            # upgrade (rule 8). The member requests more from their admin (Task 9).
-            reason = "You've used the credits your organization allocated. Ask your admin for more."
+            # NO overage, NO personal fallback, NO upgrade (rule 8).
+            if cap_reached:
+                reason = (
+                    f"You've reached your monthly credit limit ({cap:,} credits). "
+                    "Ask your organization's admin to raise it."
+                )
+            else:
+                reason = "Your organization is out of credits. Ask your admin to top up."
             result = CreditCheckResult(
                 allowed=False,
                 price=price,
                 managed_by_org=True,
+                cap_reached=cap_reached,
                 reason=reason,
             )
             # Owner-aware dry-seat wall (Licensing Phase C, spec §11, rule 11).
@@ -1394,7 +1415,7 @@ class EntitlementsService:
                 result.reason = reason + " Or unlink this project in its settings to use your own plan here."
             return result
         except Exception:
-            # Seat-path READ ERROR → fail open uncharged, like the paid personal
+            # Org-path READ ERROR → fail open uncharged, like the paid personal
             # tier (spec §12). price=0 → the grant is disabled, so the debit no-ops.
             logging.exception("check_credits(org) degraded user=%s action=%s", user_id, action)
             return CreditCheckResult(allowed=True, price=0, managed_by_org=True, degraded=True)
@@ -1452,17 +1473,35 @@ class EntitlementsService:
                 wallet_id = wallet.get("id")
             if wallet_id is None:
                 return
-            self.supabase.rpc(
-                "debit_credits",
-                {
-                    "p_wallet_id": wallet_id,
-                    "p_amount": grant.price,
-                    "p_action": grant.action,
-                    "p_request_id": grant.request_id,
-                    "p_kind": grant.kind,
-                    "p_metadata": {},
-                },
-            ).execute()
+            # p_member_id is set ONLY for org-pool spend: it makes the RPC move
+            # the member's cap counter in the same transaction as the debit, and
+            # tags the ledger row with who spent it. None on personal wallets, so
+            # the org_members read inside the RPC never happens for them.
+            payload = {
+                "p_wallet_id": wallet_id,
+                "p_amount": grant.price,
+                "p_action": grant.action,
+                "p_request_id": grant.request_id,
+                "p_kind": grant.kind,
+                "p_metadata": {},
+            }
+            member_id = getattr(grant, "org_member_id", None)
+            if member_id is not None:
+                payload["p_member_id"] = member_id
+            res = self.supabase.rpc("debit_credits", payload).execute()
+            # A cap overshoot means the pre-check in check_credits was raced by
+            # this member's own concurrent action. The work is already done and
+            # paid for, so the debit stands — but it is worth knowing about.
+            data = res.data if isinstance(getattr(res, "data", None), dict) else {}
+            if data.get("cap_exceeded"):
+                logging.warning(
+                    "debit exceeded member cap (raced pre-check) user=%s member=%s action=%s cap=%s used=%s",
+                    user_id,
+                    member_id,
+                    grant.action,
+                    data.get("cap"),
+                    data.get("cap_used"),
+                )
         except Exception:
             logging.exception(
                 "debit_for_action failed user=%s action=%s request=%s",
@@ -1561,34 +1600,70 @@ class EntitlementsService:
             "tools": tools,
         }
 
-    def _get_credit_usage_org(self, ctx: dict) -> dict:
-        """Org-context credit usage (Task 7): the SEAT wallet's ledger, ALL-TIME.
+    def _member_cap(self, org_id: str, org_member_id: str) -> tuple[int | None, int]:
+        """(effective cap, credits used this cap period) for one member.
 
-        Seat wallets are NULL-period by construction (rule 1), so there is no
-        period_start to floor the ledger scan on — this aggregates every debit
-        ever posted to the seat. A "since last allocation" window would be a
-        tighter, more useful view, but it's a NAMED FOLLOW-UP (plan Task 7),
-        not built here: v1 ships all-time.
+        The cap falls through org_members.monthly_cap -> organizations.
+        default_member_cap -> None (uncapped, pool is the only limit). `cap_used`
+        is the counter debit_credits maintains; it reads as 0 once its period has
+        lapsed, because the RPC rolls it lazily on the next debit rather than
+        needing a sweep to reset every member.
 
-        The personal wallet/subscription/tier rows are NEVER read here (mirrors
-        get_for_user's rule 11) — only the seat wallet (lazy-created at zero via
-        Task 4's helper) and the shared credit_prices table are touched.
+        Never raises: an unreadable membership row degrades to uncapped, matching
+        the fail-open posture of every other read on this path.
         """
-        from orgs.wallets import read_or_create_seat_wallet
+        import logging
+        from datetime import UTC, datetime
 
-        seat_wallet = read_or_create_seat_wallet(self.supabase, ctx["org_member_id"])
+        try:
+            member = self._first_row(
+                self.supabase.table("org_members")
+                .select("monthly_cap, cap_used, cap_period_end")
+                .eq("id", org_member_id)
+                .execute()
+            )
+            if member is None:
+                return None, 0
+            cap = member.get("monthly_cap")
+            if cap is None:
+                org = self._first_row(
+                    self.supabase.table("organizations").select("default_member_cap").eq("id", org_id).execute()
+                )
+                cap = (org or {}).get("default_member_cap")
+            period_end = _parse_iso(member.get("cap_period_end"))
+            lapsed = period_end is None or period_end <= datetime.now(UTC)
+            return cap, 0 if lapsed else (member.get("cap_used") or 0)
+        except Exception:
+            logging.exception("_member_cap read failed org=%s member=%s", org_id, org_member_id)
+            return None, 0
+
+    def _get_credit_usage_org(self, ctx: dict) -> dict:
+        """Org-context credit usage: the POOL's ledger for the current period,
+        plus this member's cap and what they've spent against it.
+
+        The pool's period is the dispersal period, so flooring the ledger scan on
+        period_start gives "this month's spend" — the same window the member's cap
+        counter uses. `monthlyGrant` carries the member's CAP: nothing is
+        allocated to them, so the number that means something is their ceiling.
+        """
+        from orgs.wallets import read_or_create_org_wallet
+
+        pool = read_or_create_org_wallet(self.supabase, ctx["org_id"])
         prices = self._get_credit_prices()
-        tools = self._aggregate_tool_usage(seat_wallet.get("id"), prices, since=None)
+        period_start = pool.get("period_start")
+        tools = self._aggregate_tool_usage(pool.get("id"), prices, since=period_start)
+        cap, cap_used = self._member_cap(ctx["org_id"], ctx["org_member_id"])
 
-        bundle = seat_wallet.get("bundle_balance", 0)
-        reserve = seat_wallet.get("reserve_balance", 0)
+        bundle = pool.get("bundle_balance", 0)
+        reserve = pool.get("reserve_balance", 0)
         return {
             "enabled": True,
             "managedByOrg": {"orgId": ctx["org_id"], "orgName": ctx["org_name"], "role": ctx["role"]},
-            "periodStart": None,
-            "periodEnd": None,
-            # Seats draw org ALLOCATIONS, not a personal monthly grant (rule 11).
-            "monthlyGrant": 0,
+            "periodStart": period_start,
+            "periodEnd": pool.get("period_end"),
+            "monthlyGrant": cap or 0,
+            "memberCap": cap,
+            "memberCapUsed": cap_used,
             "bundleBalance": bundle,
             "reserveBalance": reserve,
             "balance": bundle + reserve,
