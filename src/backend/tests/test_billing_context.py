@@ -270,7 +270,7 @@ class TestRule11PersonalWalletUntouched:
     def test_org_context_never_reads_or_rolls_personal_wallet(self, monkeypatch):
         """THE rule-11 test: a Basic (pro) subscriber with a STALE personal period +
         3000 bundle reads entitlements in ACTIVE org context. The personal wallet
-        must never be SELECTed (every credit_wallets query filters owner_type='seat',
+        must never be SELECTed (every credit_wallets query filters owner_type='org',
         none 'user'), rollover_wallet must NEVER fire, the personal bundle stays 3000,
         and the credits block reflects the SEAT wallet (500)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")

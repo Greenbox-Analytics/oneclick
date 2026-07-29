@@ -17,7 +17,6 @@ ORG = "20000000-0000-0000-0000-000000000001"
 EXISTING = "00000000-0000-0000-0000-000000000099"
 MEMBER = "40000000-0000-0000-0000-000000000001"
 TOKEN = "30000000-0000-0000-0000-000000000001"
-SEAT_WALLET = "50000000-0000-0000-0000-000000000001"
 POOL_WALLET = "50000000-0000-0000-0000-000000000002"
 
 
@@ -326,7 +325,7 @@ async def test_update_org_updates_fields(monkeypatch):
     assert result["name"] == "New"
 
 
-async def test_update_org_clears_default_seat_allowance_with_explicit_null(monkeypatch):
+async def test_update_org_clears_default_member_cap_with_explicit_null(monkeypatch):
     """An explicit null in the request must WRITE null (manual-only), distinct
     from an omitted field (which the router never forwards, via
     model_dump(exclude_unset=True))."""
@@ -343,14 +342,14 @@ async def test_update_org_clears_default_seat_allowance_with_explicit_null(monke
                 return original_update(payload, *a, **kw)
 
             b.update = _capture
-            b.execute.return_value = MagicMock(data=[{"id": ORG, "default_seat_allowance": None}], count=1)
+            b.execute.return_value = MagicMock(data=[{"id": ORG, "default_member_cap": None}], count=1)
         return b
 
     db = MagicMock()
     db.table.side_effect = _side
-    result = await service.update_org(db, U1, ORG, {"default_seat_allowance": None})
-    assert captured["payload"] == {"default_seat_allowance": None}
-    assert result["default_seat_allowance"] is None
+    result = await service.update_org(db, U1, ORG, {"default_member_cap": None})
+    assert captured["payload"] == {"default_member_cap": None}
+    assert result["default_member_cap"] is None
 
 
 async def test_update_org_noop_returns_current_row_when_no_fields(monkeypatch):
@@ -993,9 +992,10 @@ async def test_offboard_maps_last_admin_db_error(monkeypatch):
         await service.remove_member(db, U1, ORG, MEMBER)
 
 
-async def test_offboard_zero_balance_skips_rpc_entirely(monkeypatch):
-    """KEY TEST: a zero (or missing) seat wallet balance must skip the
-    transfer_credits RPC entirely — nothing to reclaim."""
+async def test_offboard_never_calls_a_money_rpc(monkeypatch):
+    """KEY TEST: offboarding touches no money at all. A member only ever held a
+    ceiling on the shared pool, so there is nothing to reclaim and no RPC to
+    call — which is also why suspend/remove can no longer fail with a 502."""
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
     revoked_at = "2026-07-20T12:00:00+00:00"
     db = _db_seq(
@@ -1022,9 +1022,6 @@ async def test_offboard_negative_balance_skips_rpc_entirely(monkeypatch):
                 MagicMock(data=_member_row(), count=1),
                 MagicMock(data=[_member_row(status="suspended", revoked_at=revoked_at)], count=1),
                 MagicMock(data=_member_row(status="suspended", revoked_at=revoked_at), count=1),
-            ],
-            "credit_wallets": [
-                MagicMock(data=[{"id": SEAT_WALLET, "bundle_balance": -50, "reserve_balance": 0}], count=1)
             ],
         }
     )

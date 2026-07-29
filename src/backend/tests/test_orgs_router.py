@@ -145,7 +145,7 @@ def test_update_org_ok_and_forwards_only_set_fields(client):
         resp = client.put(f"/orgs/{ORG_ID}", json={"name": "New"})
     assert resp.status_code == 200
     assert resp.json()["name"] == "New"
-    # default_seat_allowance was NOT in the request body → must not be forwarded.
+    # default_member_cap was NOT in the request body → must not be forwarded.
     forwarded_fields = mock_update.call_args.args[-1]
     assert forwarded_fields == {"name": "New"}
 
@@ -515,9 +515,6 @@ class TestGetOrgUsageService:
     REMOVED_AT_ZERO = "40000000-0000-0000-0000-0000000000a4"
 
     POOL_WALLET = "50000000-0000-0000-0000-0000000000b1"
-    SEAT_WALLET_ADMIN = "50000000-0000-0000-0000-0000000000b2"
-    SEAT_WALLET_MEMBER_2 = "50000000-0000-0000-0000-0000000000b3"
-    SEAT_WALLET_REMOVED_BALANCE = "50000000-0000-0000-0000-0000000000b4"
 
     U_ADMIN = "00000000-0000-0000-0000-0000000000c1"
     U_MEMBER_2 = "00000000-0000-0000-0000-0000000000c2"

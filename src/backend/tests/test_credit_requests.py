@@ -1,14 +1,9 @@
-"""Tests for credit requests — the member-ask/admin-approve loop that
-replaces overage for seats (Licensing Phase B, Task 9). Mirrors
-tests/test_org_wallets.py's mock idioms (`_patch_wallets` for
-service.wallets, the `client` fixture + `orgs.router.service.*` patches for
-endpoint-contract tests) and tests/test_orgs_service.py's `_db_seq` /
-MockQueryBuilder idiom for direct-table service tests.
+"""Cap-raise requests: a member asks for a higher monthly limit, an admin
+approves it by writing org_members.monthly_cap.
 
-Round-4 duplicate-replay rule under test throughout the approve section:
-resolved_cap is read back from the ledger's `credreq:{id}:from` row on a
-duplicate transfer_credits reply — NEVER trusted from the retry's own
-`credits` argument.
+Nothing moves, which is what makes this simple: approving is idempotent by
+nature, there is no pool-insufficient failure to map, and no duplicate-transfer
+replay to read back from the ledger.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,7 +19,6 @@ U2 = "00000000-0000-0000-0000-000000000002"
 ORG_ID = "20000000-0000-0000-0000-000000000001"
 MEMBER_ID = "40000000-0000-0000-0000-000000000001"
 REQUEST_ID = "70000000-0000-0000-0000-000000000001"
-SEAT_WALLET = "50000000-0000-0000-0000-000000000001"
 POOL_WALLET = "50000000-0000-0000-0000-000000000002"
 
 
@@ -45,14 +39,6 @@ def _db_seq(seqs):
     db = MagicMock()
     db.table.side_effect = _side
     return db
-
-
-def _patch_wallets(monkeypatch, seat=None, pool=None):
-    seat = seat or {"id": SEAT_WALLET, "bundle_balance": 0, "reserve_balance": 1000}
-    pool = pool or {"id": POOL_WALLET, "bundle_balance": 0, "reserve_balance": 1000}
-    monkeypatch.setattr(service.wallets, "read_or_create_seat_wallet", lambda db, member_id: seat)
-    monkeypatch.setattr(service.wallets, "read_or_create_org_wallet", lambda db, org_id: pool)
-    return seat, pool
 
 
 def _pending_request(**overrides):

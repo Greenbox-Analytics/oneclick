@@ -199,8 +199,10 @@ export function useCreateOrg() {
 export interface UpdateOrgArgs {
   orgId: string;
   name?: string;
-  /** `undefined` = leave untouched; `null` clears back to manual-only. */
-  default_seat_allowance?: number | null;
+  /** `undefined` = leave untouched; `null` clears members back to uncapped.
+   * The monthly dispersal has its own endpoint (useSetOrgDispersal) — it's the
+   * contract, not a display preference. */
+  default_member_cap?: number | null;
 }
 
 export function useUpdateOrg() {

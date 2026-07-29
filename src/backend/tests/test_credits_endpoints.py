@@ -841,10 +841,10 @@ class TestGetCreditUsageOrgContext:
         "pending": False,
     }
 
-    SEAT_WALLET_ROW = {
-        "id": "wallet-seat-usage",
-        "owner_type": "seat",
-        "owner_id": "member-usage-0001",
+    POOL_WALLET_ROW = {
+        "id": "wallet-pool-usage",
+        "owner_type": "org",
+        "owner_id": "org-usage-0001",
         "bundle_balance": 0,
         "reserve_balance": 777,
         "overage_this_period": 0,
@@ -858,8 +858,8 @@ class TestGetCreditUsageOrgContext:
         {"action": "oneclick_run", "delta": -21, "kind": "debit", "metadata": {}},
     ]
 
-    def _org_supabase(self, *, seat_wallet=None, ledger_rows=None):
-        seat_wallet = self.SEAT_WALLET_ROW if seat_wallet is None else seat_wallet
+    def _org_supabase(self, *, pool_wallet=None, ledger_rows=None):
+        pool_wallet = self.POOL_WALLET_ROW if pool_wallet is None else pool_wallet
         ledger_rows = self.LEDGER_ROWS if ledger_rows is None else ledger_rows
         touched: list[str] = []
 
@@ -867,7 +867,7 @@ class TestGetCreditUsageOrgContext:
             touched.append(name)
             b = MockQueryBuilder()
             if name == "credit_wallets":
-                b.execute.return_value = MagicMock(data=[seat_wallet], count=1)
+                b.execute.return_value = MagicMock(data=[pool_wallet], count=1)
             elif name == "credit_prices":
                 b.execute.return_value = MagicMock(data=list(_DEFAULT_CREDIT_PRICES), count=3)
             elif name == "credit_ledger":
