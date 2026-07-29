@@ -39,14 +39,28 @@ def stale_rates(html_text: str) -> list[str]:
     return bad
 
 
+IN_LIST = re.compile(r"var IN=\[(.*?)\]\.map\(el\)", re.S)
+
+
+def dead_inputs(html_text: str) -> list[str]:
+    """Ids wired up in IN that no element carries — one of these kills the whole script."""
+    listed = re.findall(r"'([^']+)'", IN_LIST.search(html_text).group(1))
+    present = set(re.findall(r'\bid="([^"]+)"', html_text))
+    return [f"IN lists '{i}' but no element has that id" for i in listed if i not in present]
+
+
 html = pathlib.Path(__file__).with_name("index.html").resolve()
 if not html.exists():
     raise SystemExit(f"Dashboard not found at {html}")
 
-if problems := stale_rates(html.read_text()):
+text = html.read_text()
+if problems := stale_rates(text):
     raise SystemExit(
         "Dashboard rates are stale — fix the MODELS map in index.html, then reopen:\n  " + "\n  ".join(problems)
     )
+
+if problems := dead_inputs(text):
+    raise SystemExit("Dashboard wiring is broken — the page would render dead:\n  " + "\n  ".join(problems))
 
 webbrowser.open(html.as_uri())
 print(f"Opened {html} (rates match ai_pricing.py)")

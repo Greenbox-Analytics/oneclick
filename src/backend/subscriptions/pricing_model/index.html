@@ -716,7 +716,7 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
           'freeCredits','basicCredits','proCredits','basicPrice','proPrice',
           'utilFree','utilBasic','utilPro','fixedPerUser','targetMargin',
           'nFree','nBasic','nPro',
-          'seats','allowance','adminCap','utilEnt','termMonths','monthlyUsd',
+          'seats','allowance','adminCap','utilEnt','termMonths',
           'paygCredits','dispersal','lumpRate'].map(el);
 
   function n(id){return +el(id).value;}
@@ -928,8 +928,8 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
 
     // contract P&L rows
     var crows=[
-      {n:'Included credits',note:seats+' seats × '+allowance.toLocaleString()+' + '+adminCap.toLocaleString()+' admin',
-       credits:ct2.allocated,rev:monthlyUsd,cogs:ct2.creditCogs,perSeat:seats>0?(monthlyUsd-ct2.creditCogs)/seats:0},
+      {n:'Included credits',note:dispersal.toLocaleString()+' cr dispersed into the pool · '+Math.round(ct2.burned).toLocaleString()+' burned',
+       credits:ct2.dispersal,rev:monthlyUsd,cogs:ct2.creditCogs,perSeat:seats>0?(monthlyUsd-ct2.creditCogs)/seats:0},
       {n:'Pay-as-you-go',note:paygCr>0?'at $'+LIVE.overageUsd.toFixed(3)+'/cr — not implemented for seats':'none this month',
        credits:paygCr,rev:ct2.paygRev,cogs:ct2.paygCogs,perSeat:seats>0?(ct2.paygRev-ct2.paygCogs)/seats:0},
       {n:'Fixed infra',note:money(fixed)+' × '+(seats+1)+' users',credits:0,rev:0,cogs:ct2.fixed,
@@ -945,11 +945,11 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
         '<td class="num">'+pct(r.rev>0?m/r.rev:null)+'</td>'+
         '<td class="num">'+money(r.perSeat)+'</td></tr>';
     }).join('');
-    el('contractFoot').innerHTML='<tr><td>Per month</td><td class="num">'+ct2.allocated.toLocaleString()+'</td>'+
+    el('contractFoot').innerHTML='<tr><td>Per month</td><td class="num">'+ct2.dispersal.toLocaleString()+'</td>'+
       '<td class="num">'+money(ct2.revenue)+'</td><td class="num">'+money(ct2.cogs)+'</td>'+
       '<td class="num '+(ct2.margin>=0?'credits':'bad')+'">'+money(ct2.margin)+'</td>'+
       '<td class="num">'+pct(ct2.marginPct)+'</td><td class="num">'+money(ct2.perSeat)+'</td></tr>'+
-      '<tr><td>Over the '+term+'-month term</td><td class="num">'+(ct2.allocated*term).toLocaleString()+'</td>'+
+      '<tr><td>Over the '+term+'-month term</td><td class="num">'+(ct2.dispersal*term).toLocaleString()+'</td>'+
       '<td class="num">'+money(ct2.revenue*term)+'</td><td class="num">'+money(ct2.cogs*term)+'</td>'+
       '<td class="num '+(ct2.termMargin>=0?'credits':'bad')+'">'+money(ct2.termMargin)+'</td>'+
       '<td class="num">'+pct(ct2.marginPct)+'</td><td class="num">'+money(ct2.perSeat*term)+'</td></tr>';

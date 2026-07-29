@@ -23,13 +23,35 @@
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- 1. Drop the tier CHECKs (catalog-driven — a restored/edited DB may carry a
---    different generated name, and dropping by guessed name would silently
---    no-op, leaving a CHECK that rejects 'basic'). Same idiom as 20260713000002.
+-- ONE transaction, ONE guarded block. Both are load-bearing:
+--
+--   * Transaction: a half-applied rename leaves tier values the CHECK forbids
+--     and the backend can't read. All or nothing.
+--
+--   * Guard: this rename is NOT naturally idempotent and a second run is
+--     DESTRUCTIVE. On an already-renamed database `WHERE tier = 'pro'` matches
+--     the TOP tier (the ex-pro_max), so re-running would quietly map $50
+--     subscribers down to 'basic'. tier_entitlements would fail on its primary
+--     key, but `subscriptions` has no such protection — under `psql -f` without
+--     ON_ERROR_STOP, execution continues past the failure and corrupts paid
+--     rows. So the whole body early-returns when no 'pro_max' rows remain.
 -- ---------------------------------------------------------------------------
+BEGIN;
+
 DO $$
-DECLARE c RECORD;
+DECLARE
+  c RECORD;
+  stale INTEGER;
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM tier_entitlements WHERE tier = 'pro_max')
+     AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE tier = 'pro_max') THEN
+    RAISE NOTICE 'tier keys already renamed (no pro_max rows found) — skipping';
+    RETURN;
+  END IF;
+
+  -- 1. Drop the tier CHECKs (catalog-driven — a restored/edited DB may carry a
+  --    different generated name, and dropping by guessed name would silently
+  --    no-op, leaving a CHECK that rejects 'basic'). Same idiom as 20260713000002.
   FOR c IN
     SELECT conrelid::regclass AS tbl, conname FROM pg_constraint
     WHERE conrelid IN ('public.subscriptions'::regclass, 'public.tier_entitlements'::regclass)
@@ -38,32 +60,23 @@ BEGIN
   LOOP
     EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', c.tbl, c.conname);
   END LOOP;
-END $$;
 
--- ---------------------------------------------------------------------------
--- 2. Rename the values, in the only safe order.
--- ---------------------------------------------------------------------------
-UPDATE tier_entitlements SET tier = 'basic' WHERE tier = 'pro';
-UPDATE tier_entitlements SET tier = 'pro'   WHERE tier = 'pro_max';
+  -- 2. Rename the values, in the only safe order.
+  UPDATE tier_entitlements SET tier = 'basic' WHERE tier = 'pro';
+  UPDATE tier_entitlements SET tier = 'pro'   WHERE tier = 'pro_max';
 
-UPDATE subscriptions SET tier = 'basic' WHERE tier = 'pro';
-UPDATE subscriptions SET tier = 'pro'   WHERE tier = 'pro_max';
+  UPDATE subscriptions SET tier = 'basic' WHERE tier = 'pro';
+  UPDATE subscriptions SET tier = 'pro'   WHERE tier = 'pro_max';
 
--- ---------------------------------------------------------------------------
--- 3. Re-add the CHECKs under known names, with the new key set.
--- ---------------------------------------------------------------------------
-ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_tier_check
-  CHECK (tier IN ('free', 'basic', 'pro'));
-ALTER TABLE tier_entitlements ADD CONSTRAINT tier_entitlements_tier_check
-  CHECK (tier IN ('free', 'basic', 'pro'));
+  -- 3. Re-add the CHECKs under known names, with the new key set.
+  EXECUTE 'ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_tier_check '
+          'CHECK (tier IN (''free'', ''basic'', ''pro''))';
+  EXECUTE 'ALTER TABLE tier_entitlements ADD CONSTRAINT tier_entitlements_tier_check '
+          'CHECK (tier IN (''free'', ''basic'', ''pro''))';
 
--- ---------------------------------------------------------------------------
--- 4. Fail loudly if anything still carries an old key (e.g. a row written by a
---    backend instance that had not been redeployed yet).
--- ---------------------------------------------------------------------------
-DO $$
-DECLARE stale INTEGER;
-BEGIN
+  -- 4. Fail loudly if anything still carries an old key (e.g. a row written by a
+  --    backend instance that had not been redeployed yet) — rolls the whole
+  --    transaction back rather than leaving a mixed vocabulary behind.
   SELECT count(*) INTO stale FROM (
     SELECT tier FROM subscriptions
     UNION ALL
@@ -73,3 +86,5 @@ BEGIN
     RAISE EXCEPTION 'tier rename incomplete: % row(s) still on pro_max', stale;
   END IF;
 END $$;
+
+COMMIT;
