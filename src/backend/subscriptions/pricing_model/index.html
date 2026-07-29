@@ -215,7 +215,7 @@
         <div class="field"><label>Price per credit <span class="sub">what you sell 1 for</span></label><div class="prefix"><span>$</span><input type="number" id="creditPrice" min="0.001" max="1" step="0.001" value="0.02"></div><span class="sub" id="v_cpNote"></span></div>
         <div class="field"><label>Target markup on COGS <span class="val" id="v_markup">3.0×</span></label><input type="range" id="markup" min="1" max="10" step="0.25" value="3"><span class="sub">sets credits per action</span></div>
         <div class="field"><label>Contract length <span class="val" id="v_pages">15 pg</span></label><input type="range" id="pages" min="3" max="45" step="1" value="15"><span class="sub">≈ 650 tokens / page</span></div>
-        <div class="field"><label>Contracts / OneClick run <span class="val" id="v_contracts">3</span></label><input type="range" id="contracts" min="2" max="8" step="1" value="3"><span class="sub">multi-contract run</span></div>
+        <div class="field"><label>Contracts / OneClick run <span class="val" id="v_contracts">1</span></label><input type="range" id="contracts" min="1" max="8" step="1" value="1"><span class="sub">1 is the common case</span></div>
         <div class="field"><label>Parse-cache hit rate <span class="val" id="v_hit">70%</span></label><input type="range" id="hit" min="0" max="100" step="5" value="70"><span class="sub">cached extraction is free</span></div>
       </div>
       <div class="stats" id="dialStats"></div>
@@ -294,17 +294,18 @@
       <div class="diagram">
         <svg viewBox="0 0 980 560" role="img" aria-label="Organization credit balance, admins, per-user caps and permissions on the left; Msanii bundles, pay-as-you-go and subscription actions on the right">
           <!-- contract wrapper -->
-          <rect class="dg-box gap" x="250" y="8" width="470" height="26" rx="8"/>
-          <text class="dg-t" x="272" y="26" style="font-size:12px">12-month contract · monthly payments</text>
-          <text class="dg-gapt" x="640" y="26">NOT BUILT</text>
+          <rect class="dg-box gap" x="196" y="8" width="580" height="26" rx="8"/>
+          <text class="dg-t" x="218" y="26" style="font-size:12px">12-month contract · monthly payments · monthly credit dispersal</text>
+          <text class="dg-gapt" x="690" y="26">NOT BUILT</text>
 
           <!-- ORG container -->
           <rect class="dg-frame" x="14" y="48" width="592" height="498" rx="14"/>
           <text class="dg-cap" x="32" y="72">Organization (client)</text>
 
           <rect class="dg-box accent" x="32" y="86" width="238" height="52" rx="10"/>
-          <text class="dg-t" x="48" y="108">Credit balance · org-wide</text>
-          <text class="dg-m" x="48" y="126">credit_wallets · owner_type='org'</text>
+          <text class="dg-t" x="48" y="106">Credit balance · org-wide</text>
+          <text class="dg-m" x="48" y="124">credit_wallets · owner_type='org'</text>
+          <text class="dg-s" x="48" y="138" style="font-size:10px">every user spends from HERE</text>
 
           <rect class="dg-box" x="32" y="176" width="238" height="56" rx="10"/>
           <text class="dg-t" x="48" y="198">Admin(s)</text>
@@ -316,18 +317,20 @@
           <rect class="dg-frame" x="32" y="256" width="556" height="272" rx="12"/>
           <text class="dg-cap" x="50" y="280">Users · per-user basis</text>
 
-          <rect class="dg-box gap" x="50" y="294" width="178" height="58" rx="10"/>
-          <text class="dg-t" x="66" y="316">Credit usage cap</text>
-          <text class="dg-s" x="66" y="334">e.g. 300 cr / mo</text>
-          <text class="dg-gapt" x="66" y="348">CAP → BUILT AS FILL-TO-ALLOWANCE</text>
+          <rect class="dg-box gap" x="50" y="294" width="200" height="58" rx="10"/>
+          <text class="dg-t" x="66" y="314">Credit usage cap</text>
+          <text class="dg-s" x="66" y="332">ceiling on the pool, e.g. 300 cr/mo</text>
+          <text class="dg-gapt" x="66" y="348">BUILT AS A SEAT WALLET INSTEAD</text>
 
-          <rect class="dg-box accent" x="286" y="294" width="200" height="58" rx="10"/>
-          <text class="dg-t" x="302" y="316">Seat credit balance</text>
-          <text class="dg-m" x="302" y="334">owner_type='seat'</text>
-          <path class="dg-line flow" d="M228 322 L278 322" marker-end="url(#ar)"/>
+          <rect class="dg-box" x="286" y="294" width="200" height="58" rx="10"/>
+          <text class="dg-t" x="302" y="314">Usage this month</text>
+          <text class="dg-s" x="302" y="332">counter, not a balance</text>
+          <path class="dg-line flow" d="M250 322 L278 322" marker-end="url(#ar)"/>
 
-          <path class="dg-line flow" d="M180 232 L180 268 L340 268 L340 288" marker-end="url(#ar)"/>
-          <text class="dg-s" x="196" y="262" style="font-size:10.5px">top up on request — still draws the org balance</text>
+          <path class="dg-line flow" d="M180 232 L180 268 L150 268 L150 288" marker-end="url(#ar)"/>
+          <text class="dg-s" x="196" y="262" style="font-size:10.5px">admin raises the cap on request — pool unchanged</text>
+          <path class="dg-line flow" d="M498 322 L556 322 L556 130 L276 112" marker-end="url(#ar)"/>
+          <text class="dg-s" x="502" y="238" style="font-size:10.5px" transform="rotate(-90 502 238)">draws the org balance</text>
 
           <rect class="dg-box" x="50" y="376" width="518" height="138" rx="10"/>
           <text class="dg-t" x="66" y="398">Permissions</text>
@@ -342,17 +345,22 @@
           <rect class="dg-frame" x="640" y="48" width="326" height="498" rx="14"/>
           <text class="dg-cap" x="658" y="72">Msanii (our org)</text>
 
-          <rect class="dg-box accent" x="658" y="86" width="290" height="66" rx="10"/>
-          <text class="dg-t" x="674" y="110">Credit bundles</text>
-          <text class="dg-s" x="674" y="128">one-time packs → pool</text>
-          <text class="dg-m" x="674" y="145">/billing/create-topup-session</text>
-          <path class="dg-line flow" d="M270 112 L648 112" marker-end="url(#ar)"/>
-          <text class="dg-s" x="380" y="104" style="font-size:10.5px">org buys credits</text>
+          <rect class="dg-box gap" x="658" y="86" width="290" height="66" rx="10"/>
+          <text class="dg-t" x="674" y="108">Monthly dispersal</text>
+          <text class="dg-s" x="674" y="126">negotiated lump sum, paid and</text>
+          <text class="dg-s" x="674" y="142">delivered 1/12 per month</text>
+          <text class="dg-gapt" x="866" y="104">NOT BUILT</text>
+          <path class="dg-line flow" d="M648 112 L580 112" marker-end="url(#ar)"/>
+          <text class="dg-s" x="592" y="104" style="font-size:10.5px">tops up the pool</text>
 
-          <rect class="dg-box gap" x="658" y="180" width="290" height="76" rx="10"/>
-          <text class="dg-t" x="674" y="204">Base-rate pay-as-you-go</text>
-          <text class="dg-s" x="674" y="222">$0.02 / credit</text>
-          <text class="dg-gapt" x="674" y="242">PERSONAL PLANS ONLY — A SEAT 402s</text>
+          <rect class="dg-box accent" x="658" y="160" width="290" height="52" rx="10"/>
+          <text class="dg-t" x="674" y="182">One-time credit packs</text>
+          <text class="dg-m" x="674" y="200">/billing/create-topup-session — built</text>
+
+          <rect class="dg-box gap" x="658" y="222" width="290" height="58" rx="10"/>
+          <text class="dg-t" x="674" y="244">Base-rate pay-as-you-go</text>
+          <text class="dg-s" x="674" y="262">$0.02 / credit past the dispersal</text>
+          <text class="dg-gapt" x="674" y="276">PERSONAL PLANS ONLY — A SEAT 402s</text>
 
           <rect class="dg-box gap" x="658" y="286" width="290" height="60" rx="10"/>
           <text class="dg-t" x="674" y="310">Upgrade subscription</text>
@@ -389,9 +397,9 @@
           </ul>
         </div>
         <div class="card">
-          <h3><span class="tag watch">gap</span> Cap vs allowance — the real difference</h3>
-          <p>Your diagram has a <b>cap</b>: the user spends against the org balance, limited to 300 cr/mo. The code has an <b>allowance</b>: credits are <em>moved</em> into the seat's own wallet up to that level each month.</p>
-          <p>Same ceiling, different money location — which matters when someone leaves (a seat holds a real balance that must be reclaimed) and when the pool runs low (a cap degrades gracefully; an allowance top-up skips the seat entirely).</p>
+          <h3><span class="tag watch">gap</span> Cap vs seat wallet — the real difference</h3>
+          <p>Your model is a <b>cap</b>: one pool, and each user is cut off at their own monthly ceiling. The code <b>moves</b> credits into a per-member wallet and tops it up to an allowance.</p>
+          <p>The cap is the better design and it deletes machinery: no seat wallets, no pool↔seat transfers, no reclaim-on-offboard, no allowance sweep. It also lets caps <b>overcommit</b> — 12 users capped at 2,000 against a 10,000/mo pool is fine, because most never reach the cap. Allocations can't overcommit; the pool has to cover every allowance in full or a seat gets skipped.</p>
         </div>
       </div>
     </section>
@@ -404,10 +412,14 @@
         <div class="field"><label>Admin's own cap <span class="val" id="v_adm">4000</span></label><input type="range" id="adminCap" min="0" max="20000" step="100" value="4000"></div>
         <div class="field"><label>Seat utilization <span class="val" id="v_ue">70%</span></label><input type="range" id="utilEnt" min="0" max="100" step="5" value="70"><span class="sub">of the cap actually burned</span></div>
         <div class="field"><label>Contract length <span class="val" id="v_term">12 mo</span></label><input type="range" id="termMonths" min="1" max="36" step="1" value="12"></div>
-        <div class="field"><label>Monthly payment <span class="sub">$ / mo — what the org pays</span></label><div class="prefix"><span>$</span><input type="number" id="monthlyUsd" min="0" step="10" value="250"></div></div>
+        <div class="field"><label>Monthly dispersal <span class="sub">credits added to the pool / mo</span></label><input type="number" id="dispersal" min="0" step="500" value="10000"></div>
+        <div class="field"><label>Negotiated $ / credit <span class="sub">sets the monthly payment</span></label><div class="prefix"><span>$</span><input type="number" id="lumpRate" min="0.001" step="0.001" value="0.011"></div></div>
         <div class="field"><label>PAYG credits / mo <span class="val" id="v_payg">0</span></label><input type="range" id="paygCredits" min="0" max="20000" step="250" value="0"><span class="sub">billed at the base rate on top</span></div>
-        <div class="field"><label>Lump-sum bundle <span class="sub">credits, prepaid</span></label><input type="number" id="lumpCredits" min="500" step="500" value="100000"></div>
-        <div class="field"><label>Negotiated $ / credit <span class="sub">the discount you give</span></label><div class="prefix"><span>$</span><input type="number" id="lumpRate" min="0.001" step="0.001" value="0.011"></div></div>
+        <div class="field"><label>Unspent dispersal <span class="sub">at month end</span></label>
+          <div class="toggle" id="expiryToggle" role="group" aria-label="unspent credits">
+            <button type="button" data-x="expires" class="active">Expires</button>
+            <button type="button" data-x="rolls">Rolls over</button>
+          </div><span class="sub">rollover turns unspent credits into deferred cost</span></div>
       </div>
       <div class="stats" id="entStats"></div>
     </section>
@@ -437,9 +449,9 @@
     </section>
 
     <section>
-      <div class="sec-head"><h2>Pool burn-down</h2><span class="sec-note">How long a purchase lasts, and what it earns per month</span></div>
+      <div class="sec-head"><h2>Sensitivity to utilization</h2><span class="sec-note">The dial that moves the deal more than any discount — highlighted row is your current setting</span></div>
       <div class="tablecard"><div class="tscroll"><table>
-        <thead><tr><th>Pool</th><th class="num">Credits</th><th class="num">Burn / mo</th><th class="num">Months of runway</th><th class="num">Revenue / mo</th><th class="num">COGS / mo</th><th class="num">Margin / mo</th><th class="num">Per seat / mo</th></tr></thead>
+        <thead><tr><th>Utilization</th><th class="num">Wanted</th><th class="num">Burned</th><th class="num">Unspent</th><th class="num">Revenue / mo</th><th class="num">COGS / mo</th><th class="num">Margin / mo</th><th class="num">Margin %</th></tr></thead>
         <tbody id="burnRows"></tbody>
       </table></div></div>
     </section>
@@ -576,26 +588,49 @@ var PricingMath = (function(){
             vsList:LIVE.overageUsd>0?rate/LIVE.overageUsd-1:0};
   }
 
-  /** Enterprise CONTRACT: a monthly payment against a committed term, with
-   *  per-seat caps and optional pay-as-you-go on top. This is the commercial
-   *  shape in the hand-drawn model — NOT what the code implements today (there
-   *  is no org subscription object; orgs prepay credit packs). */
+  /** Enterprise CONTRACT — the dispersal model.
+   *
+   *  The org negotiates a monthly credit dispersal (e.g. 10,000 cr/mo) against a
+   *  committed term and pays monthly. Credits land in ONE org pool. Admins set a
+   *  per-user monthly CAP; users spend straight out of the pool and are cut off
+   *  at their own cap, at which point they ask for a raise.
+   *
+   *  The cap is a CEILING, not an allocation — so caps may sum to more than the
+   *  dispersal (deliberate overcommit: most users never reach their cap). What
+   *  actually bounds spend is the pool. `overcommit` is that ratio, and
+   *  `poolShortfall` is what happens when expected burn exceeds the dispersal.
+   *
+   *  NOT what the code implements today: it moves credits into per-seat wallets
+   *  and tops them up to an allowance, one wallet per member.
+   */
   function contract(o){
-    var allocated = o.seats*o.capPerSeat + o.adminCap;   // credits handed out per month
-    var burned = allocated*o.util;
+    var capped = o.seats*o.capPerSeat + o.adminCap;   // ceiling if EVERY user maxed out
+    var dispersal = o.dispersal;                      // credits added to the pool per month
+    var wantBurn = capped*o.util;                     // what users would spend, uncapped by pool
+    var burned = Math.min(wantBurn, dispersal + (o.carriedIn||0));
     var creditCogs = burned*o.costPerCredit;
-    var fixed = o.fixedPerSeat*(o.seats+1);              // admins hold a seat too
+    var fixed = o.fixedPerSeat*(o.seats+1);           // admins hold a seat too
     var paygRev = (o.paygCredits||0)*o.paygRate;
     var paygCogs = (o.paygCredits||0)*o.costPerCredit;
     var revenue = o.monthlyUsd + paygRev;
     var cogs = creditCogs + fixed + paygCogs;
     var margin = revenue - cogs;
-    return {allocated:allocated, burned:burned, creditCogs:creditCogs, fixed:fixed,
-            paygRev:paygRev, paygCogs:paygCogs, revenue:revenue, cogs:cogs, margin:margin,
+    var unspent = Math.max(0, dispersal - burned);
+    return {capped:capped, dispersal:dispersal, wantBurn:wantBurn, burned:burned,
+            creditCogs:creditCogs, fixed:fixed, paygRev:paygRev, paygCogs:paygCogs,
+            revenue:revenue, cogs:cogs, margin:margin,
             marginPct:revenue>0?margin/revenue:null,
             perSeat:o.seats>0?margin/o.seats:0,
-            // What the org effectively pays per credit it is entitled to.
-            effRate:allocated>0?o.monthlyUsd/allocated:0,
+            // What the org pays per credit dispersed, vs per credit actually used.
+            effRate:dispersal>0?o.monthlyUsd/dispersal:0,
+            realizedRate:burned>0?o.monthlyUsd/burned:0,
+            overcommit:dispersal>0?capped/dispersal:Infinity,
+            poolShortfall:Math.max(0, wantBurn-dispersal-(o.carriedIn||0)),
+            unspent:unspent,
+            // Unspent dispersal is only margin if it EXPIRES. If it rolls over it is
+            // deferred COGS: the org banks credits and can burn them all in one month.
+            deferredCogs:o.expires?0:unspent*o.costPerCredit,
+            bankedAfterTerm:o.expires?0:unspent*o.months,
             tcv:o.monthlyUsd*o.months, termMargin:margin*o.months,
             // Their rule: cancel early and the remaining months are still owed.
             remainingOwed:function(cancelAfter){return o.monthlyUsd*Math.max(0,o.months-cancelAfter);}};
@@ -640,16 +675,24 @@ var PricingMath = (function(){
        pool({credits:100000,usd:1100,seats:10,allowance:800,util:0.4,costPerCredit:0.004}).marginPerMonth
        > p.marginPerMonth);
     var cArgs={seats:10,capPerSeat:2000,adminCap:4000,util:0.7,costPerCredit:0.004,
-               fixedPerSeat:0.35,monthlyUsd:250,paygCredits:0,paygRate:0.02,months:12};
+               fixedPerSeat:0.35,monthlyUsd:250,dispersal:10000,paygCredits:0,
+               paygRate:0.02,months:12,expires:true};
     var c=contract(cArgs);
-    ok('contract allocates seats x cap + admin cap', c.allocated===24000);
+    ok('caps sum to seats x cap + admin cap', c.capped===24000);
+    ok('caps may overcommit the dispersal', c.overcommit===2.4);
+    ok('the pool bounds burn, not the caps', c.burned===10000 && c.wantBurn===16800);
+    ok('shortfall is what the caps wanted beyond the pool', c.poolShortfall===6800);
     ok('contract margin = revenue - cogs', Math.abs(c.margin-(c.revenue-c.cogs))<1e-9);
     ok('term value = monthly x months', c.tcv===3000);
     ok('early cancel still owes the remainder', c.remainingOwed(3)===250*9);
     ok('payg adds margin while its rate beats cost',
        contract(Object.assign({},cArgs,{paygCredits:1000})).margin > c.margin);
-    ok('lower utilization raises contract margin',
-       contract(Object.assign({},cArgs,{util:0.4})).margin > c.margin);
+    var light=contract(Object.assign({},cArgs,{util:0.2}));
+    ok('light usage leaves the pool unspent', light.unspent > 0 && light.burned < c.burned);
+    ok('expiring dispersal books no deferred cost', light.deferredCogs===0);
+    var rolls=contract(Object.assign({},cArgs,{util:0.2,expires:false}));
+    ok('rolled-over dispersal defers COGS instead', rolls.deferredCogs > 0);
+    ok('rollover banks credits across the term', rolls.bankedAfterTerm===rolls.unspent*12);
     return out.join('\n')+(out.failed?'\n\nSOME CHECKS FAILED':'\n\nAll checks passed');
   }
 
@@ -666,12 +709,13 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
 (function(){
   var M=PricingMath, LIVE=M.LIVE;
   function el(id){return document.getElementById(id);}
+  var expiry='expires';
   var IN=['creditPrice','markup','pages','contracts','hit',
           'freeCredits','basicCredits','proCredits','basicPrice','proPrice',
           'utilFree','utilBasic','utilPro','fixedPerUser','targetMargin',
           'nFree','nBasic','nPro',
           'seats','allowance','adminCap','utilEnt','termMonths','monthlyUsd',
-          'paygCredits','lumpCredits','lumpRate'].map(el);
+          'paygCredits','dispersal','lumpRate'].map(el);
 
   function n(id){return +el(id).value;}
   function fmtTok(v){if(v>=1000)return(v/1000).toFixed(v>=10000?0:1)+'k';return String(v);}
@@ -729,15 +773,20 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
     var blend=M.cost(coldS)*(1-a.hit)+M.cost(warmS)*a.hit;
     var scen=[
       {tool:'Zoe',scen:'chat message · 1 contract',sev:'low',calls:M.zoe1(ct)},
-      {tool:'Zoe',scen:'chat message · '+N+' contracts',sev:'med',calls:M.zoeN(ct,N)},
       {tool:'Registry',scen:'add work · new contract',sev:'low',calls:M.registry(ct)},
       {tool:'Any tool',scen:'contract seen before (parse-cache hit)',sev:'free',calls:[]},
       {tool:'OneClick',scen:'single · cold (extraction miss)',sev:'high',calls:coldS},
       {tool:'OneClick',scen:'single · warm (extraction cached)',sev:'med',calls:warmS},
       {tool:'OneClick',scen:'single · blended @ '+Math.round(a.hit*100)+'% hit',sev:'med',costOverride:blend,highlight:true,calls:[]},
-      {tool:'OneClick',scen:'result-cache hit (unchanged re-run)',sev:'free',calls:[]},
+      {tool:'OneClick',scen:'result-cache hit (unchanged re-run)',sev:'free',calls:[]}
+    ];
+    // Multi-contract rows only when the slider is above 1 — at N=1 they'd restate
+    // the single-contract rows, and Zoe's gpt-5 escalation only fires on 2+.
+    if(N>1) scen.push(
+      {tool:'Zoe',scen:'chat message · '+N+' contracts (escalates to gpt-5)',sev:'med',calls:M.zoeN(ct,N)},
       {tool:'OneClick',scen:N+' contracts · warm',sev:'med',calls:M.ocMulti(ct,N,true)}
-    ].map(function(s){var c=(s.costOverride!=null)?s.costOverride:M.cost(s.calls);
+    );
+    scen=scen.map(function(s){var c=(s.costOverride!=null)?s.costOverride:M.cost(s.calls);
       return {s:s,c:c,tk:M.tokens(s.calls),credits:M.toCredits(c,mk,cp)};});
     var maxC=Math.max.apply(null,scen.map(function(r){return r.c;}))||1;
     el('rows').innerHTML=scen.map(function(r){
@@ -817,59 +866,63 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
 
     // ---------- tab 3: licensing ----------
     var seats=n('seats'), allowance=n('allowance'), adminCap=n('adminCap'), utilE=n('utilEnt')/100;
-    var term=n('termMonths'), monthlyUsd=n('monthlyUsd'), paygCr=n('paygCredits');
-    var lumpCredits=Math.max(1,n('lumpCredits')), lumpRate=Math.max(0.0001,n('lumpRate'));
+    var term=n('termMonths'), dispersal=Math.max(0,n('dispersal')), paygCr=n('paygCredits');
+    var lumpRate=Math.max(0.0001,n('lumpRate'));
+    var monthlyUsd=dispersal*lumpRate;
     el('v_seats').textContent=seats; el('v_alw').textContent=allowance;
     el('v_adm').textContent=adminCap; el('v_ue').textContent=Math.round(utilE*100)+'%';
     el('v_term').textContent=term+' mo'; el('v_payg').textContent=paygCr.toLocaleString();
 
     var ct2=M.contract({seats:seats,capPerSeat:allowance,adminCap:adminCap,util:utilE,
-      costPerCredit:cpc,fixedPerSeat:fixed,monthlyUsd:monthlyUsd,paygCredits:paygCr,
-      paygRate:LIVE.overageUsd,months:term});
-    var lumpUsd=lumpCredits*lumpRate;
-    var pool=M.pool({credits:lumpCredits,usd:lumpUsd,seats:seats,allowance:allowance,util:utilE,costPerCredit:cpc});
-    var activated=lumpCredits>=LIVE.minOrgCredits;
+      costPerCredit:cpc,fixedPerSeat:fixed,monthlyUsd:monthlyUsd,dispersal:dispersal,
+      paygCredits:paygCr,paygRate:LIVE.overageUsd,months:term,expires:(expiry==='expires')});
+    var activated=dispersal>=LIVE.minOrgCredits;
     el('entStats').innerHTML=
-      stat('Contract value',money(ct2.tcv),term+' × '+money(monthlyUsd)+' — margin '+money(ct2.termMargin),ct2.termMargin>=0?'pos':'neg')+
+      stat('Monthly payment',money(monthlyUsd)+MO,dispersal.toLocaleString()+' cr at $'+lumpRate.toFixed(4)+'/cr',null)+
+      stat('Contract value',money(ct2.tcv),term+' months — margin '+money(ct2.termMargin),ct2.termMargin>=0?'pos':'neg')+
       stat('Margin / mo',money(ct2.margin)+MO,pct(ct2.marginPct)+' of '+money(ct2.revenue)+' revenue',ct2.margin>=0?'pos':'neg')+
-      stat('Margin / seat / mo',money(ct2.perSeat)+MO,seats+' seats at '+Math.round(utilE*100)+'% utilization',ct2.perSeat>=0?'pos':'neg')+
-      stat('Effective $ / credit',(ct2.effRate>0?'$'+ct2.effRate.toFixed(4):'—'),
-           'vs $'+LIVE.overageUsd.toFixed(3)+' list · cost '+usd(cpc),ct2.effRate>cpc?'pos':'neg')+
-      stat('Prepaid bundle',money(lumpUsd),lumpCredits.toLocaleString()+' cr at $'+lumpRate.toFixed(4)+' — '+
-           (isFinite(pool.runway)?pool.runway.toFixed(1):'∞')+' mo of runway',null)+
-      stat('Activation floor',activated?'Cleared':'Pending',activated?'bundle clears '+LIVE.minOrgCredits.toLocaleString()+' cr'
-           :'under '+LIVE.minOrgCredits.toLocaleString()+' cr — seats confer nothing',activated?'pos':'neg')+
+      stat('Margin / seat / mo',money(ct2.perSeat)+MO,seats+' seats at '+Math.round(utilE*100)+'% of cap',ct2.perSeat>=0?'pos':'neg')+
+      stat('Overcommit',(isFinite(ct2.overcommit)?ct2.overcommit.toFixed(1):'∞')+'×',
+           'caps total '+ct2.capped.toLocaleString()+' cr vs '+dispersal.toLocaleString()+' dispersed',
+           ct2.overcommit>1?null:'pos')+
+      stat('Realized $ / credit',(ct2.realizedRate>0?'$'+ct2.realizedRate.toFixed(4):'—'),
+           'on '+Math.round(ct2.burned).toLocaleString()+' cr actually burned · cost '+usd(cpc),
+           ct2.realizedRate>cpc?'pos':'neg')+
+      stat(expiry==='rolls'?'Banked credits by term end':'Unspent each month',
+           expiry==='rolls'?Math.round(ct2.bankedAfterTerm).toLocaleString()+' cr':Math.round(ct2.unspent).toLocaleString()+' cr',
+           expiry==='rolls'?'deferred cost of '+money(ct2.deferredCogs*term)+' — they can burn it all at once'
+                           :'expires — this is what carries the margin',
+           expiry==='rolls'?'neg':'pos')+
       stat('If they cancel at month 3',money(ct2.remainingOwed(3)),'contractually still owed (not enforced in code)','hero');
 
-    // manipulable org example — pool splitting into admin + seat caps
-    var demandPerMonth=ct2.allocated;
-    var covers=Math.floor(lumpCredits/Math.max(1,demandPerMonth));
+    // manipulable org example — one pool, per-user caps drawing from it
     var seatCards='';
-    var shown=Math.min(seats,8), running=adminCap;
+    var shown=Math.min(seats,8);
     for(var i=0;i<shown;i++){
-      running+=allowance;
-      var over=running>lumpCredits;
-      seatCards+='<div class="fseat'+(over?' over':'')+'"><div class="sn">User '+(i+1)+'</div>'+
-        '<div class="sc">'+allowance.toLocaleString()+' cr</div>'+
-        '<div class="sp">'+(over?'pool exhausted — sweep skips this seat':'permissions per project')+'</div></div>';
+      seatCards+='<div class="fseat"><div class="sn">User '+(i+1)+'</div>'+
+        '<div class="sc">'+allowance.toLocaleString()+' cr cap</div>'+
+        '<div class="sp">≈'+Math.round(allowance*utilE).toLocaleString()+' cr used · asks for a raise at the cap</div></div>';
     }
     if(seats>shown) seatCards+='<div class="fseat"><div class="sn">+'+(seats-shown)+' more</div>'+
-      '<div class="sc">'+(allowance*(seats-shown)).toLocaleString()+' cr</div><div class="sp">same shape</div></div>';
+      '<div class="sc">'+allowance.toLocaleString()+' cr cap each</div><div class="sp">same shape</div></div>';
     el('orgFlow').innerHTML=
-      '<div class="fnode pool"><div class="fl">Pool purchased</div><div class="fv">'+lumpCredits.toLocaleString()+' cr</div>'+
-        '<div class="fn">'+money(lumpUsd)+' at $'+lumpRate.toFixed(4)+'/cr</div></div>'+
+      '<div class="fnode pool"><div class="fl">Dispersed monthly</div><div class="fv">'+dispersal.toLocaleString()+' cr</div>'+
+        '<div class="fn">'+money(monthlyUsd)+'/mo at $'+lumpRate.toFixed(4)+'/cr</div></div>'+
       '<div class="farrow">→</div>'+
-      '<div class="fnode"><div class="fl">Admin(s)</div><div class="fv">'+adminCap.toLocaleString()+' cr</div>'+
-        '<div class="fn">own cap · allocates the rest</div></div>'+
-      '<div class="fnode" style="grid-column:1/-1"><div class="fl">Seats · '+seats+' × '+allowance.toLocaleString()+' cr / mo</div>'+
+      '<div class="fnode"><div class="fl">Admin(s) · own cap</div><div class="fv">'+adminCap.toLocaleString()+' cr</div>'+
+        '<div class="fn">sets everyone else\'s cap</div></div>'+
+      '<div class="fnode" style="grid-column:1/-1"><div class="fl">Caps on the shared pool · '+seats+' users × '+allowance.toLocaleString()+' cr/mo</div>'+
         '<div class="fseats">'+seatCards+'</div></div>';
-    el('flowNote').innerHTML='Handing out <b style="color:var(--ink-soft)">'+demandPerMonth.toLocaleString()+' cr/mo</b> '+
-      '('+adminCap.toLocaleString()+' admin + '+seats+'×'+allowance.toLocaleString()+') against a '+
-      lumpCredits.toLocaleString()+' cr pool covers <b style="color:'+(covers>=1?'var(--accent)':'var(--crit)')+'">'+
-      covers+' month'+(covers===1?'':'s')+'</b> of full allocation. '+
-      (covers<1?'The pool cannot cover even one month — the sweep tops seats up in row order and skips the rest (full amount or skip), so late seats get nothing. '
-              :'At '+Math.round(utilE*100)+'% utilization the credits actually burned are '+Math.round(ct2.burned).toLocaleString()+' cr/mo, so unspent allocation is what carries the margin. ')+
-      'Effective price per entitled credit: <b style="color:var(--ink-soft)">$'+ct2.effRate.toFixed(4)+'</b>.';
+    var short=ct2.poolShortfall>0;
+    el('flowNote').innerHTML='Caps total <b style="color:var(--ink-soft)">'+ct2.capped.toLocaleString()+' cr/mo</b> '+
+      '('+adminCap.toLocaleString()+' admin + '+seats+'×'+allowance.toLocaleString()+') against '+
+      dispersal.toLocaleString()+' cr dispersed — an overcommit of <b style="color:var(--ink-soft)">'+
+      (isFinite(ct2.overcommit)?ct2.overcommit.toFixed(1):'∞')+'×</b>, which is fine as long as usage stays below the pool. '+
+      'At '+Math.round(utilE*100)+'% of cap they want <b style="color:var(--ink-soft)">'+Math.round(ct2.wantBurn).toLocaleString()+' cr</b>'+
+      (short?', which is <b style="color:var(--crit)">'+Math.round(ct2.poolShortfall).toLocaleString()+' cr more than the pool holds</b> — whoever spends first wins and the rest hit an empty pool, not their cap. Raise the dispersal or lower the caps.'
+            :' and the pool holds '+dispersal.toLocaleString()+' — everyone stays inside their cap. Unspent: <b style="color:var(--ink-soft)">'+Math.round(ct2.unspent).toLocaleString()+' cr</b>.')+
+      ' Realized price per credit burned: <b style="color:var(--ink-soft)">$'+(ct2.realizedRate||0).toFixed(4)+'</b>'+
+      (activated?'':' · under the '+LIVE.minOrgCredits.toLocaleString()+' cr activation floor, so seats would confer nothing today')+'.';
 
     // contract P&L rows
     var crows=[
@@ -902,8 +955,8 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
     var entries=LIVE.packs.map(function(p){
       return {name:'Pack · '+p.credits.toLocaleString()+' cr',note:p.key,credits:p.credits,usd:p.usd,util:1};
     });
-    entries.push({name:'Negotiated lump sum',note:'enterprise pool purchase',credits:lumpCredits,usd:lumpUsd,util:1});
-    entries.push({name:'Negotiated · unspent adjusted',note:'at '+Math.round(utilE*100)+'% seat utilization',credits:lumpCredits,usd:lumpUsd,util:utilE});
+    entries.push({name:'Monthly dispersal',note:'enterprise contract, at full burn',credits:dispersal,usd:monthlyUsd,util:1});
+    entries.push({name:'Monthly dispersal · realized',note:'at '+Math.round(utilE*100)+'% of cap actually burned',credits:dispersal,usd:monthlyUsd,util:Math.min(1,ct2.burned/Math.max(1,dispersal))});
     entries.push({name:'Pay-per-use overage',note:'personal plans only — never a seat',credits:1000,usd:1000*LIVE.overageUsd,util:1});
     entries.push({name:'Included in Basic',note:'grant bundled into the $'+prices.basic+' plan',credits:grants.basic,usd:prices.basic,util:utils.basic});
     entries.push({name:'Included in Pro',note:'grant bundled into the $'+prices.pro+' plan',credits:grants.pro,usd:prices.pro,util:utils.pro});
@@ -928,22 +981,23 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
       '</tr>';
     }).join('');
 
-    var pools=[lumpCredits].concat(LIVE.packs.map(function(p){return p.credits;}))
-      .filter(function(v,i,arr){return arr.indexOf(v)===i;})
-      .sort(function(x,y){return x-y;});
-    el('burnRows').innerHTML=pools.map(function(c){
-      var rate=(c===lumpCredits)?lumpRate:(function(){
-        var p=LIVE.packs.filter(function(p){return p.credits===c;})[0];return p?p.usd/p.credits:lumpRate;})();
-      var r=M.pool({credits:c,usd:c*rate,seats:seats,allowance:allowance,util:utilE,costPerCredit:cpc});
-      return '<tr>'+
-        '<td><div class="tool">'+c.toLocaleString()+' cr</div><div class="scen">$'+rate.toFixed(4)+'/cr'+(c===lumpCredits?' · negotiated':'')+'</div></td>'+
-        '<td class="num cost">'+money(c*rate)+'</td>'+
-        '<td class="num">'+Math.round(r.monthlyBurn).toLocaleString()+'</td>'+
-        '<td class="num">'+(isFinite(r.runway)?r.runway.toFixed(1):'∞')+'</td>'+
-        '<td class="num cost">'+money(r.revPerMonth)+'</td>'+
-        '<td class="num">'+money(r.cogsPerMonth)+'</td>'+
-        '<td class="num '+(r.marginPerMonth>=0?'credits':'bad')+'">'+money(r.marginPerMonth)+'</td>'+
-        '<td class="num">'+money(r.perSeat)+'</td>'+
+    var scenarios=[0.25,0.5,0.75,1].map(function(u){
+      return {u:u,c:M.contract({seats:seats,capPerSeat:allowance,adminCap:adminCap,util:u,
+        costPerCredit:cpc,fixedPerSeat:fixed,monthlyUsd:monthlyUsd,dispersal:dispersal,
+        paygCredits:paygCr,paygRate:LIVE.overageUsd,months:term,expires:(expiry==='expires')})};
+    });
+    el('burnRows').innerHTML=scenarios.map(function(s){
+      var c=s.c, capped=c.poolShortfall>0;
+      return '<tr'+(Math.abs(s.u-utilE)<0.01?' style="background:var(--accent-soft)"':'')+'>'+
+        '<td><div class="tool">'+Math.round(s.u*100)+'% of cap</div><div class="scen">'+
+          (capped?'pool runs out — '+Math.round(c.poolShortfall).toLocaleString()+' cr of demand unmet':'inside the pool')+'</div></td>'+
+        '<td class="num">'+Math.round(c.wantBurn).toLocaleString()+'</td>'+
+        '<td class="num">'+Math.round(c.burned).toLocaleString()+'</td>'+
+        '<td class="num">'+Math.round(c.unspent).toLocaleString()+'</td>'+
+        '<td class="num cost">'+money(c.revenue)+'</td>'+
+        '<td class="num">'+money(c.cogs)+'</td>'+
+        '<td class="num '+(c.margin>=0?'credits':'bad')+'">'+money(c.margin)+'</td>'+
+        '<td class="num">'+pct(c.marginPct)+'</td>'+
       '</tr>';
     }).join('');
 
@@ -958,6 +1012,13 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
   }
 
   IN.forEach(function(i){i.addEventListener('input',render);});
+  Array.prototype.forEach.call(document.querySelectorAll('#expiryToggle button'),function(b){
+    b.addEventListener('click',function(){
+      expiry=b.getAttribute('data-x');
+      Array.prototype.forEach.call(document.querySelectorAll('#expiryToggle button'),function(x){x.classList.toggle('active',x===b);});
+      render();
+    });
+  });
   Array.prototype.forEach.call(document.querySelectorAll('#tabs button'),function(b){
     b.addEventListener('click',function(){
       var t=b.getAttribute('data-tab');

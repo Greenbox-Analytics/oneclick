@@ -28,9 +28,16 @@ No server and no dependencies — `index.html` is fully standalone (inline CSS +
    user, target margin → cost per free user, margin per user per plan, the price each plan
    would need at *full* grant consumption, and a blended P&L across a user-count mix.
 3. **Licensing (Enterprise).** The org structure diagram (solid = in the code, dashed amber
-   = drawn but not built), a manipulable pool → admin → seats example, and margin per entry
-   point: each credit pack, a negotiated lump sum, pay-per-use, and the grants bundled into
-   Basic/Pro. Plus contract P&L for a monthly-payment committed term.
+   = drawn but not built), a manipulable dispersal → caps example, margin per entry point
+   (each credit pack, the monthly dispersal, pay-per-use, and the grants bundled into
+   Basic/Pro), contract P&L across a committed term, and a utilization sensitivity table.
+
+   The model is a **monthly dispersal**: the org negotiates a credit volume per month
+   (e.g. 10,000 cr), pays monthly against a committed term, and the credits land in ONE
+   pool. Admins set a per-user monthly **cap**; users spend straight from the pool and are
+   cut off at their own cap, then ask for a raise. Because a cap is a ceiling rather than a
+   reservation, caps may deliberately **overcommit** the dispersal — the page shows that
+   ratio and flags the point where demand outruns the pool.
 4. **Model rates.** The OpenAI per-1M rates and where the modeled token counts come from.
 
 ## What's live vs modeled vs unbuilt
@@ -42,9 +49,10 @@ No server and no dependencies — `index.html` is fully standalone (inline CSS +
 - **Modeled**: token counts per call. `ai_usage_log` now records real spend via the
   `TrackedOpenAI` proxy — reconcile against it before locking prices in.
 - **Not built** (drawn dashed in the licensing tab): the 12-month contract with monthly
-  payments, org-level pay-as-you-go (overage is personal-plan only; a dry seat 402s),
-  any org subscription object to upgrade or cancel, cancellation grace/migration terms,
-  time-gated permissions, and role-gated payment drafting.
+  payments and monthly dispersal, per-user caps on a shared pool (the code moves credits
+  into per-member seat wallets instead), org-level pay-as-you-go (overage is personal-plan
+  only; a dry seat 402s), any org subscription object to upgrade or cancel, cancellation
+  grace/migration terms, time-gated permissions, and role-gated payment drafting.
 
 ## Checks
 
@@ -66,9 +74,13 @@ caught a real bug: `0.10 * 3 / 0.02` is `15.000000000000002` in floating point, 
 
 - **Modeled, not measured.** Token counts are estimated from prompt sizes and the call
   graph. Treat this as a planning tool and reconcile against the OpenAI invoice.
-- **Utilization is the biggest unknown.** Margins on both plans and enterprise pools move
-  more with the utilization sliders than with any price you set — unspent credits are pure
-  margin. Guessing high makes everything look profitable.
+- **Utilization is the biggest unknown.** Margins move more with the utilization sliders
+  than with any price you set — unspent credits are pure margin. Guessing high makes
+  everything look profitable.
+- **Rollover is a margin cliff.** Unspent dispersal that never expires is *deferred* COGS,
+  not profit: the org banks credits and can burn a year of them in one month, which removes
+  the margin floor the dispersal model otherwise gives you. The toggle in the licensing tab
+  shows both.
 - **Rates and model IDs are hard-coded** in `index.html` (the `MODELS` map), because a
   static page can't import Python. `open.py` diffs them against
   `subscriptions/ai_pricing.py` (`MODEL_RATES` — the authoritative table) and refuses to
