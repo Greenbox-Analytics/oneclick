@@ -1,8 +1,9 @@
-# LLM cost & credit model — pricing dashboard
+# Credit & licensing economics — pricing dashboard
 
-A self-contained, interactive page that models what each Msanii tool spends on OpenAI per
-use and how many credits to charge to cover it. Use it to reason about per-tool credit
-allocation for the subscriptions/credits work.
+A self-contained, interactive page for pricing decisions: turn one dial (the price of a
+credit) and see it fall through per-action COGS, plan grants, the price each plan must
+charge to hold its margin, the cost of carrying a free user, and what an enterprise pool
+earns per credit.
 
 ## Open it
 
@@ -14,41 +15,62 @@ python3 src/backend/subscriptions/pricing_model/open.py
 ```
 
 No server and no dependencies — `index.html` is fully standalone (inline CSS + JS).
+`open.py` refuses to open it if the model rates have drifted from `ai_pricing.py`.
 
-## What it shows
+## The four tabs
 
-Broken down per tool / integration:
+1. **Cost per action.** Price per credit, target markup, contract length, cache-hit rate →
+   modeled COGS per action, the credits each action *should* cost, and the margin the
+   *shipped* `credit_prices` values actually earn. Lower the credit price and the suggested
+   credits rise to hold the dollar margin; the live prices don't move until you change the
+   DB, which is what the Margin column shows you.
+2. **Plans & margins.** Grants and prices per tier, utilization per tier, fixed infra per
+   user, target margin → cost per free user, margin per user per plan, the price each plan
+   would need at *full* grant consumption, and a blended P&L across a user-count mix.
+3. **Licensing (Enterprise).** The org structure diagram (solid = in the code, dashed amber
+   = drawn but not built), a manipulable pool → admin → seats example, and margin per entry
+   point: each credit pack, a negotiated lump sum, pay-per-use, and the grants bundled into
+   Basic/Pro. Plus contract P&L for a monthly-payment committed term.
+4. **Model rates.** The OpenAI per-1M rates and where the modeled token counts come from.
 
-- **The two plans (live).** Free vs Pro with the exact caps the app enforces today, read
-  from the `tier_entitlements` table (3/3/50 artists/projects/tasks, 1 GB, 5 split-sheets,
-  1 OneClick run/mo on Free; unlimited + Zoe/Registry/Slack on Pro at $25/mo · $250/yr).
-- **Per-tool cards** — Free vs Pro behaviour for every tool and integration, tagged AI
-  (credit-metered) or plan-gated.
-- **AI credit cost per use** — the LLM call graph, model tiers and token estimates behind
-  Zoe / OneClick / Registry, with OneClick **cold vs warm** (warm = extraction served from
-  the shared `contract_parse_cache`) blended by a cache-hit-rate slider, expressed as
-  suggested credits.
-- **Credits instead of AI caps (proposed)** — models replacing the on/off flags + run caps
-  with a monthly credit balance: what each plan's allowance buys per AI tool, and the max
-  OpenAI COGS it exposes.
-- **Storage economics (proposed)** — Pro includes 100 GB (covered by the $25 base); above
-  it, per-GB overage or add-on bundles, priced against Supabase's ~$0.0213/GB so you can
-  see your margin.
+## What's live vs modeled vs unbuilt
 
-## Live vs proposed
+- **Live** (values shipped in the code): credit prices (`credit_prices`), plan grants
+  (`tier_entitlements`), plan prices (`lib/tiers.ts`), pack prices (`credit_packs`), the
+  pay-per-use rate (`CREDIT_OVERAGE_USD`), the org activation floor
+  (`ENTERPRISE_MIN_INITIAL_CREDITS`).
+- **Modeled**: token counts per call. `ai_usage_log` now records real spend via the
+  `TrackedOpenAI` proxy — reconcile against it before locking prices in.
+- **Not built** (drawn dashed in the licensing tab): the 12-month contract with monthly
+  payments, org-level pay-as-you-go (overage is personal-plan only; a dry seat 402s),
+  any org subscription object to upgrade or cancel, cancellation grace/migration terms,
+  time-gated permissions, and role-gated payment drafting.
 
-- **Live** (enforced today): the Free/Pro plan caps and gating.
-- **Modeled**: all AI token costs (the backend doesn't log `response.usage` yet).
-- **Proposed** (not built): the credit ledger/allowance and the storage overage/add-ons —
-  there is no `credits` column and no storage overage in the code today.
+## Checks
+
+The pure model lives in `<script id="pricing-math">` with no DOM access, so it can be
+exercised headlessly:
+
+```bash
+cd src/backend/subscriptions/pricing_model
+node -e "eval(require('fs').readFileSync('index.html','utf8').split('<script id=\"pricing-math\">')[1].split('</'+'script>')[0]); console.log(PricingMath.selfCheck())"
+```
+
+`selfCheck()` asserts the directional invariants the page rests on — halving the credit
+price doubles the credits per action, a cache hit costs less than a cold run, free-tier
+margin is negative, an early cancellation still owes the remaining term, and so on. It
+caught a real bug: `0.10 * 3 / 0.02` is `15.000000000000002` in floating point, so a naive
+`Math.ceil` was adding a phantom credit to every suggested price.
 
 ## Caveats
 
 - **Modeled, not measured.** Token counts are estimated from prompt sizes and the call
-  graph; the backend does not yet log `response.usage`. Treat this as a planning tool and
-  reconcile against the OpenAI invoice before locking prices.
-- **Rates and model IDs are hard-coded** in `index.html` (the `MODELS` map and the rates
-  footer), because a static page can't import Python. `open.py` diffs them against
+  graph. Treat this as a planning tool and reconcile against the OpenAI invoice.
+- **Utilization is the biggest unknown.** Margins on both plans and enterprise pools move
+  more with the utilization sliders than with any price you set — unspent credits are pure
+  margin. Guessing high makes everything look profitable.
+- **Rates and model IDs are hard-coded** in `index.html` (the `MODELS` map), because a
+  static page can't import Python. `open.py` diffs them against
   `subscriptions/ai_pricing.py` (`MODEL_RATES` — the authoritative table) and refuses to
   open the dashboard while they disagree, so update `index.html` when OpenAI pricing or
   the models change — e.g. the extractor (`OPENAI_LLM_MODEL_LARGE`, default `gpt-5.2`),
