@@ -847,6 +847,18 @@ class EntitlementsService:
             registry_enabled=pick("registry_enabled"),
             integrations_allowed=list(pick("integrations_allowed") or []),
         )
+        if credits_enabled():
+            # Credits ARE the gate for the metered AI tools, on every tier: the
+            # wallet decides, so the per-tool doors are open and the legacy
+            # per-period OneClick counter goes unlimited. Without this, Free is
+            # walled twice — "Zoe is a Pro feature" before the user ever sees what
+            # Zoe does, which paywalls the thing that sells the plan. The stored
+            # flags/caps are NOT mutated (spec §9 rollback): flag off restores
+            # legacy gating exactly. Split sheets are NOT credit-priced, so their
+            # per-period cap stays; storage and resource counts are a separate
+            # dimension and stay as configured.
+            features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
+            caps = replace(caps, max_oneclick_runs_per_month=-1)
         return caps, features, override is not None
 
     # -----------------------------------------------------------------------

@@ -445,7 +445,7 @@ class TestSweepAnnual:
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 
@@ -476,7 +476,7 @@ class TestSweepAnnual:
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 
@@ -498,7 +498,7 @@ class TestSweepAnnual:
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 
@@ -522,7 +522,7 @@ class TestSweepAnnual:
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 
@@ -549,7 +549,7 @@ class TestSweepAnnual:
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 
@@ -572,7 +572,7 @@ class TestSweepAnnual:
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 
@@ -600,7 +600,7 @@ class TestSweepAnnual:
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 
@@ -630,7 +630,7 @@ class TestSweepAnnual:
 
         with (
             patch("main.get_supabase_client", return_value=sb),
-            patch("subscriptions.sweep.stripe_client_module.get_stripe", return_value=fake_stripe),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
         ):
             result = await billing_sweep(x_sweep_token="s3cret")
 

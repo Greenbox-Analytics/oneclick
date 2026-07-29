@@ -53,7 +53,15 @@ ALTER TABLE tier_entitlements
   ADD COLUMN IF NOT EXISTS max_works INTEGER NOT NULL DEFAULT -1,
   ADD COLUMN IF NOT EXISTS included_storage_bytes BIGINT NOT NULL DEFAULT -1;
 
-UPDATE tier_entitlements SET monthly_credits = 50,   max_works = 10,
+-- Free gets 150 credits: enough for ONE complete pass through the product plus
+-- room to repeat the best part (at 21/12/3 that's ~2 OneClick runs + 2 contract
+-- parses + ~20 Zoe messages). The AI tools are open on Free under credits — the
+-- wallet is the only gate — so the grant has to cover a full workflow or the
+-- wall reads as "broken" instead of "your free allowance ran out". Free has no
+-- card on file (overage is paid-only), so every credit here is pure COGS:
+-- ~$0.60-1.65/signup/month at current model rates. Cache hits stay free and the
+-- grant expires at rollover, so it can't accumulate.
+UPDATE tier_entitlements SET monthly_credits = 150,  max_works = 10,
   included_storage_bytes = 1073741824       WHERE tier = 'free';   -- 1 GB
 UPDATE tier_entitlements SET monthly_credits = 3000, max_works = -1,
   included_storage_bytes = 107374182400     WHERE tier = 'pro';    -- 100 GB

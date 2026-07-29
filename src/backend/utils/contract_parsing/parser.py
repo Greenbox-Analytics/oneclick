@@ -234,6 +234,21 @@ class MusicContractParser:
         if not full_text:
             raise ValueError("full_text is required. The contract markdown must be provided.")
 
+        # Input cap. Credit prices are FLAT per action (registry_parse = 12 credits
+        # whatever the page count), so a 500-page upload costs us ~30x the LLM spend
+        # of a normal contract at the same price — and on the Free tier there is no
+        # card on file to bill the difference to. Guarded here because this is the
+        # one place every parse path routes through (Registry Add-Work, OneClick's
+        # calculator, and the shared contract_parse_cache). ~2600 chars/page is the
+        # pdf→markdown average the pricing dashboard models.
+        max_chars = int(os.getenv("CONTRACT_PARSE_MAX_CHARS", "250000"))
+        if len(full_text) > max_chars:
+            raise ValueError(
+                f"This contract is too long to analyze automatically "
+                f"(~{len(full_text) // 2600} pages; the limit is ~{max_chars // 2600}). "
+                "Upload just the royalty and splits sections, or contact support."
+            )
+
         start_time = time.time()
         logger.info(f"📄 Extracting contract data (unified single-call, model={LLM_MODEL_LARGE})")
         logger.info(f"   Document length: {len(full_text)} chars")

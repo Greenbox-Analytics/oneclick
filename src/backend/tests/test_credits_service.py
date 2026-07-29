@@ -1187,3 +1187,67 @@ class TestOwnerAwareDrySeatWall:
         assert r.owner_can_unlink is False
         # No ownership read on the happy path.
         assert "project_members" not in sb._log
+
+
+class TestFreeTierToolsOpenUnderCredits:
+    """Credits ARE the gate: under CREDITS_ENABLED the metered tools are open on
+    every tier and the legacy per-period OneClick counter goes unlimited, so a
+    Free user meets a credit wall (having used the tool) rather than a feature
+    wall (never having seen it). Flag OFF must restore the stored values exactly
+    — that's the spec §9 rollback property, and it's what these two pin."""
+
+    FREE_ROW = {
+        "tier": "free",
+        "max_artists": 3,
+        "max_projects": 3,
+        "max_tasks": 50,
+        "max_storage_bytes": 1073741824,
+        "max_split_sheets_per_month": 5,
+        "max_oneclick_runs_per_month": 1,
+        "zoe_enabled": False,
+        "oneclick_enabled": False,
+        "registry_enabled": False,
+        "integrations_allowed": ["google_drive"],
+        "monthly_credits": 150,
+        "max_works": 10,
+        "included_storage_bytes": 1073741824,
+    }
+
+    def _free_supabase(self):
+        sb = MagicMock()
+
+        def side_effect(name):
+            b = _default_table_side_effect(name)
+            if name == "subscriptions":
+                b.execute.return_value = MagicMock(
+                    data=[{"user_id": TEST_USER_ID, "tier": "free", "status": "active"}], count=1
+                )
+            elif name == "tier_entitlements":
+                b.execute.return_value = MagicMock(data=[self.FREE_ROW], count=1)
+            return b
+
+        sb.table.side_effect = side_effect
+        sb.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": False, "balance_after": 0})
+        return sb
+
+    def test_credits_on_opens_the_metered_tools(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ent = EntitlementsService(self._free_supabase()).get_for_user(TEST_USER_ID)
+        assert (ent.features.zoe_enabled, ent.features.oneclick_enabled, ent.features.registry_enabled) == (
+            True,
+            True,
+            True,
+        )
+        assert ent.caps.max_oneclick_runs_per_month == -1
+        # Split sheets are NOT credit-priced — that cap must survive untouched.
+        assert ent.caps.max_split_sheets_per_month == 5
+
+    def test_credits_off_keeps_stored_flags(self, monkeypatch):
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        ent = EntitlementsService(self._free_supabase()).get_for_user(TEST_USER_ID)
+        assert (ent.features.zoe_enabled, ent.features.oneclick_enabled, ent.features.registry_enabled) == (
+            False,
+            False,
+            False,
+        )
+        assert ent.caps.max_oneclick_runs_per_month == 1

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from utils.contract_parsing.cache import (
     deserialize_contract_data,
     serialize_contract_data,
@@ -211,3 +213,36 @@ class TestPeekCachedParse:
 
         assert peek_cached_parse(None, "# Contract") is None
         assert peek_cached_parse(MagicMock(), "") is None
+
+
+class TestParseInputCap:
+    """Flat per-action pricing means an oversized upload costs the same credits as
+    a normal contract at many times the LLM spend — and Free has no card on file.
+    The cap lives in parse_contract, the one place every parse path routes through.
+    """
+
+    def _oversized(self, chars: int) -> str:
+        return "x" * chars
+
+    def test_rejects_oversized_contract(self, monkeypatch):
+        from utils.contract_parsing.parser import MusicContractParser
+
+        monkeypatch.setenv("CONTRACT_PARSE_MAX_CHARS", "1000")
+        with pytest.raises(ValueError, match="too long to analyze"):
+            MusicContractParser(api_key="sk-test").parse_contract(self._oversized(1001))
+
+    def test_allows_contract_at_the_limit(self, monkeypatch):
+        """At exactly the limit the guard must not fire — it hands off to extraction
+        (mocked here, since a real call would hit OpenAI)."""
+        from unittest.mock import patch
+
+        from utils.contract_parsing.parser import MusicContractParser
+
+        monkeypatch.setenv("CONTRACT_PARSE_MAX_CHARS", "1000")
+        parser = MusicContractParser(api_key="sk-test")
+        # _extract_all_unified returns the raw dict parse_contract post-processes.
+        with patch.object(
+            parser, "_extract_all_unified", return_value={"parties": [], "works": [], "royalty_shares": []}
+        ) as extract:
+            parser.parse_contract(self._oversized(1000))
+        extract.assert_called_once()
