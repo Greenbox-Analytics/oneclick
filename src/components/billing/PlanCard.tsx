@@ -13,7 +13,7 @@ import { isPaidTier, tierLabel, usd, ENTERPRISE_LABEL, TIER_PRICES, type TierKey
 import { fmtDate } from "@/lib/utils";
 
 const priceLabel = (tier: string, period: string | null): { amount: string; unit: string } => {
-  const key: TierKey = tier === "pro" || tier === "pro_max" ? tier : "free";
+  const key: TierKey = tier === "basic" || tier === "pro" ? tier : "free";
   // Free has no annual price to state — it always reads "/ month".
   if (key !== "free" && period === "annual") return { amount: usd(TIER_PRICES[key].annual), unit: "/ year" };
   return { amount: usd(TIER_PRICES[key].monthly), unit: "/ month" };

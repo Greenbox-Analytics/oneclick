@@ -68,7 +68,7 @@ class ManagedByOrg:
 @dataclass
 class Entitlements:
     user_id: str
-    tier: Literal["free", "pro", "pro_max"]
+    tier: Literal["free", "basic", "pro"]
     status: Literal["active", "canceled", "past_due", "trialing"]
     caps: Caps
     features: Features

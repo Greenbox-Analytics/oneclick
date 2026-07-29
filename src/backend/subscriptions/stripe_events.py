@@ -29,16 +29,21 @@ def _ts(epoch: int | None) -> str | None:
     return datetime.fromtimestamp(epoch, UTC).isoformat()
 
 
-TIER_RANK = {"free": 0, "pro": 1, "pro_max": 2}
+TIER_RANK = {"free": 0, "basic": 1, "pro": 2}
 
 
 def _tier_for_price(price_id: str | None) -> str:
-    """Map a Stripe price id to a tier. Unknown/legacy prices default to 'pro'."""
-    pro_max_prices = {
+    """Map a Stripe price id to a tier. Unknown/legacy prices default to 'basic'.
+
+    The env var names still say PRO_MAX: they point at the $50 plan's Stripe
+    prices, which is the tier now KEYED 'pro'. Renaming them would mean rotating
+    deploy secrets for a cosmetic win, so the mapping is documented instead.
+    """
+    top_tier_prices = {
         os.getenv("STRIPE_PRICE_PRO_MAX_MONTHLY"),
         os.getenv("STRIPE_PRICE_PRO_MAX_ANNUAL"),
     }
-    return "pro_max" if price_id and price_id in pro_max_prices else "pro"
+    return "pro" if price_id and price_id in top_tier_prices else "basic"
 
 
 def _capped_topup(supabase, wallet: dict, grant: int) -> int:

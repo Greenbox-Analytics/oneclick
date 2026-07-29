@@ -21,7 +21,7 @@ from subscriptions.service import _parse_iso, credits_enabled, licensing_enabled
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["internal"])
 
-PAID_TIERS = ("pro", "pro_max")
+PAID_TIERS = ("basic", "pro")
 
 # v1 single-page cap on the unbounded scans below. Full pagination via the
 # repo's pagination helper (pagination.py) is a follow-up; at current scale one

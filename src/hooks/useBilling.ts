@@ -13,10 +13,11 @@ import { useAuth } from "@/contexts/AuthContext";
  * non-default page (e.g., onboarding). Backend whitelists to relative paths.
  *
  * `plan` values map to Stripe prices server-side (billing_router.py
- * PLAN_TO_ENV): "monthly"/"annual" is the "pro" DB tier (labeled Basic);
- * "pro_max_monthly"/"pro_max_annual" is the "pro_max" DB tier (labeled Pro).
+ * PLAN_TO_ENV): <tier>_<period>, i.e. basic = the $25 plan, pro = the $50 one.
+ * The backend still accepts the pre-rename aliases ("monthly"/"annual" and
+ * "pro_max_*") so older checkout links keep working.
  */
-export type CheckoutPlan = "monthly" | "annual" | "pro_max_monthly" | "pro_max_annual";
+export type CheckoutPlan = "basic_monthly" | "basic_annual" | "pro_monthly" | "pro_annual";
 
 export interface CheckoutArgs {
   plan: CheckoutPlan;

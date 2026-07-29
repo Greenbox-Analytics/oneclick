@@ -41,7 +41,7 @@ const PRO_BULLETS = [
  */
 export default function StepPlan({ onChooseFree, onChoosePro, onBack }: StepPlanProps) {
   const [billingCycle, setBillingCycle] = useState<"monthly" | "annual">("monthly");
-  const [busy, setBusy] = useState<null | "free" | "pro">(null);
+  const [busy, setBusy] = useState<null | "free" | "basic">(null);
 
   const handleFree = async () => {
     if (busy) return;
@@ -55,7 +55,7 @@ export default function StepPlan({ onChooseFree, onChoosePro, onBack }: StepPlan
 
   const handlePro = async () => {
     if (busy) return;
-    setBusy("pro");
+    setBusy("basic");
     try {
       await onChoosePro(billingCycle);
     } finally {
@@ -118,7 +118,7 @@ export default function StepPlan({ onChooseFree, onChoosePro, onBack }: StepPlan
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-base font-semibold flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-primary" />
-              {tierLabel("pro")}
+              {tierLabel("basic")}
             </h3>
             <Badge className="text-xs bg-primary/90">Recommended</Badge>
           </div>
@@ -147,7 +147,7 @@ export default function StepPlan({ onChooseFree, onChoosePro, onBack }: StepPlan
           {busy === "free" ? "..." : "Continue with Free"}
         </Button>
         <Button onClick={handlePro} disabled={busy !== null} className="min-w-[160px]">
-          {busy === "pro" ? "Redirecting..." : `Upgrade to ${tierLabel("pro")} (${billingCycle})`}
+          {busy === "basic" ? "Redirecting..." : `Upgrade to ${tierLabel("basic")} (${billingCycle})`}
         </Button>
       </div>
     </div>

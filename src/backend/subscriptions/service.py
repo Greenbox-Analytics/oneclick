@@ -1112,7 +1112,7 @@ class EntitlementsService:
     # Credits: decision + debit (spec §3, §4, §7)
     # -----------------------------------------------------------------------
 
-    PAID_TIERS = ("pro", "pro_max")
+    PAID_TIERS = ("basic", "pro")
 
     def check_credits(
         self,

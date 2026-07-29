@@ -112,7 +112,8 @@ async def grant_pro(
     _admin: str = Depends(require_admin),
 ) -> dict:
     try:
-        _get_admin_service().set_tier(user_id, "pro")
+        # Admin grants the ENTRY paid tier (keyed 'basic', labeled "Basic").
+        _get_admin_service().set_tier(user_id, "basic")
     except Exception as e:
         msg = str(e).lower()
         if "foreign key" in msg or "violates" in msg:

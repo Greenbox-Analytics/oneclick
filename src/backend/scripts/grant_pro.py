@@ -89,7 +89,7 @@ def _cmd_grant(args) -> int:
     supabase.table("subscriptions").upsert(
         {
             "user_id": user_id,
-            "tier": "pro",
+            "tier": "basic",  # entry paid tier (labeled "Basic")
             "status": "active",
             "updated_at": datetime.now(UTC).isoformat(),
         },
@@ -187,7 +187,7 @@ def _cmd_clear_override(args) -> int:
 
 def _cmd_list(args) -> int:
     supabase = _get_supabase()
-    pro_subs = supabase.table("subscriptions").select("user_id, tier, status").eq("tier", "pro").execute()
+    pro_subs = supabase.table("subscriptions").select("user_id, tier, status").in_("tier", ("basic", "pro")).execute()
     overrides = supabase.table("tier_overrides").select("*").execute()
 
     print("Pro subscriptions:")

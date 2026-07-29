@@ -396,7 +396,7 @@ class TestGrantRevoke:
         resp = admin_client.post(f"/admin/users/{TEST_USER_ID}/grant")
         assert resp.status_code == 200
         assert resp.json() == {"ok": True}
-        assert captured["payload"]["tier"] == "pro"
+        assert captured["payload"]["tier"] == "basic"
 
     def test_revoke_returns_ok(self, admin_client, mock_supabase):
         captured = {}

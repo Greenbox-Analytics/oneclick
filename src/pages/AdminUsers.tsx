@@ -573,7 +573,7 @@ const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
                 </Badge>
                 {!isPaidTier(data.entitlements.tier) ? (
                   <Button size="sm" onClick={handleGrant} disabled={grantPro.isPending}>
-                    Grant {tierLabel("pro")}
+                    Grant {tierLabel("basic")}
                   </Button>
                 ) : (
                   <Button size="sm" variant="outline" onClick={handleRevoke} disabled={revokePro.isPending}>
@@ -582,7 +582,7 @@ const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
                 )}
               </div>
               {/* No pro_max-specific grant control exists yet — the backend
-                  /grant endpoint always sets tier="pro" (Basic). Adding a
+                  /grant endpoint always sets tier="basic". Adding a
                   pro_max grant path is a backend change, out of scope here. */}
             </section>
 

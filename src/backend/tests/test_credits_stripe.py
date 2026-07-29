@@ -6,7 +6,7 @@ Covers:
   - handle_subscription_updated: tier sync + upgrade top-up (with farming guard)
   - overage_billing.bill_overage_row / bill_pending_overage
   - handle_invoice_created safety-net handler
-  - billing_router plan->env price mapping (pro_max_monthly / pro_max_annual)
+  - billing_router plan->env price mapping (canonical <tier>_<period> + legacy aliases)
 """
 
 from unittest.mock import MagicMock, patch
@@ -99,31 +99,31 @@ def _subscription_event(
 
 
 class TestTierForPrice:
-    def test_maps_pro_max_monthly_price(self, monkeypatch):
+    def test_maps_top_tier_monthly_price(self, monkeypatch):
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_pm_annual")
         from subscriptions.stripe_events import _tier_for_price
 
-        assert _tier_for_price("price_pm_monthly") == "pro_max"
+        assert _tier_for_price("price_pm_monthly") == "pro"
 
-    def test_maps_pro_max_annual_price(self, monkeypatch):
+    def test_maps_top_tier_annual_price(self, monkeypatch):
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_pm_annual")
         from subscriptions.stripe_events import _tier_for_price
 
-        assert _tier_for_price("price_pm_annual") == "pro_max"
+        assert _tier_for_price("price_pm_annual") == "pro"
 
-    def test_unknown_price_defaults_to_pro(self, monkeypatch):
+    def test_unknown_price_defaults_to_basic(self, monkeypatch):
         monkeypatch.delenv("STRIPE_PRICE_PRO_MAX_MONTHLY", raising=False)
         monkeypatch.delenv("STRIPE_PRICE_PRO_MAX_ANNUAL", raising=False)
         from subscriptions.stripe_events import _tier_for_price
 
-        assert _tier_for_price("price_legacy_monthly_123") == "pro"
+        assert _tier_for_price("price_legacy_monthly_123") == "basic"
 
-    def test_none_price_defaults_to_pro(self):
+    def test_none_price_defaults_to_basic(self):
         from subscriptions.stripe_events import _tier_for_price
 
-        assert _tier_for_price(None) == "pro"
+        assert _tier_for_price(None) == "basic"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ class TestTierForPrice:
 
 
 class TestHandleCheckoutSessionCompletedCredits:
-    def test_upserts_tier_pro_max_from_price(self, monkeypatch):
+    def test_upserts_top_tier_from_price(self, monkeypatch):
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         from subscriptions import stripe_events
 
@@ -143,7 +143,7 @@ class TestHandleCheckoutSessionCompletedCredits:
             stripe_events.handle_checkout_session_completed(event, sb)
 
         payload = builders["subscriptions"].upsert.call_args[0][0]
-        assert payload["tier"] == "pro_max"
+        assert payload["tier"] == "pro"
 
     def test_credits_on_grants_topup_and_reanchors_wallet_period(self, monkeypatch):
         monkeypatch.setenv("CREDITS_ENABLED", "true")
@@ -242,7 +242,7 @@ class TestHandleCheckoutSessionCompletedCredits:
         ):
             stripe_events.handle_checkout_session_completed(event, sb)
 
-    def test_pro_max_checkout_identifies_plan_pro_max(self, monkeypatch):
+    def test_top_tier_checkout_identifies_plan_pro(self, monkeypatch):
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         from subscriptions import stripe_events
 
@@ -263,9 +263,9 @@ class TestHandleCheckoutSessionCompletedCredits:
         with patch("stripe.Subscription.retrieve", return_value=_fake_stripe_subscription("price_pm_monthly")):
             stripe_events.handle_checkout_session_completed(event, sb)
 
-        assert identify_calls == [(TEST_USER_ID, {"plan": "pro_max"})]
+        assert identify_calls == [(TEST_USER_ID, {"plan": "pro"})]
         assert capture_calls[0][1] == "subscription_activated"
-        assert capture_calls[0][2]["tier"] == "pro_max"
+        assert capture_calls[0][2]["tier"] == "pro"
 
 
 # ---------------------------------------------------------------------------
@@ -570,18 +570,18 @@ def _build_tier_update_sb(
 
 
 class TestSubscriptionUpdatedTierSync:
-    def test_upgrade_pro_to_pro_max_tops_up_bundle(self, monkeypatch):
+    def test_upgrade_basic_to_pro_tops_up_bundle(self, monkeypatch):
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         from subscriptions import stripe_events
 
-        sb, builders = _build_tier_update_sb(prev_tier="pro", new_tier_grant=8000, wallet_bundle=2500)
+        sb, builders = _build_tier_update_sb(prev_tier="basic", new_tier_grant=8000, wallet_bundle=2500)
         event = _subscription_event("customer.subscription.updated", price_id="price_pm_monthly")
 
         stripe_events.handle_subscription_updated(event, sb)
 
         update_payload = builders["subscriptions"].update.call_args[0][0]
-        assert update_payload["tier"] == "pro_max"
+        assert update_payload["tier"] == "pro"
 
         grant_calls = [c for c in sb.rpc.call_args_list if c.args[0] == "grant_credits"]
         assert len(grant_calls) == 1
@@ -598,7 +598,7 @@ class TestSubscriptionUpdatedTierSync:
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         from subscriptions import stripe_events
 
-        sb, builders = _build_tier_update_sb(prev_tier="pro", new_tier_grant=8000, wallet_bundle=8000)
+        sb, builders = _build_tier_update_sb(prev_tier="basic", new_tier_grant=8000, wallet_bundle=8000)
         event = _subscription_event("customer.subscription.updated", price_id="price_pm_monthly")
 
         stripe_events.handle_subscription_updated(event, sb)
@@ -615,7 +615,7 @@ class TestSubscriptionUpdatedTierSync:
         from subscriptions import stripe_events
 
         sb, builders = _build_tier_update_sb(
-            prev_tier="pro", new_tier_grant=8000, wallet_bundle=0, granted_this_period=8000
+            prev_tier="basic", new_tier_grant=8000, wallet_bundle=0, granted_this_period=8000
         )
         event = _subscription_event("customer.subscription.updated", price_id="price_pm_monthly")
 
@@ -624,15 +624,15 @@ class TestSubscriptionUpdatedTierSync:
         assert not any(c.args[0] == "grant_credits" for c in sb.rpc.call_args_list)
 
     def test_legitimate_upgrade_after_partial_spend_caps_by_period_sum(self, monkeypatch):
-        """Pro user granted 3000 this period, spent down to 500, upgrades to pro_max:
+        """Basic user granted 3000 this period, spent down to 500, upgrades to pro:
         top_up = min(8000 - 500, 8000 - 3000) = 5000 — spent credits are not refunded,
-        but the user still reaches the pro_max grant total for the period."""
+        but the user still reaches the pro grant total for the period."""
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         from subscriptions import stripe_events
 
         sb, builders = _build_tier_update_sb(
-            prev_tier="pro", new_tier_grant=8000, wallet_bundle=500, granted_this_period=3000
+            prev_tier="basic", new_tier_grant=8000, wallet_bundle=500, granted_this_period=3000
         )
         event = _subscription_event("customer.subscription.updated", price_id="price_pm_monthly")
 
@@ -649,27 +649,14 @@ class TestSubscriptionUpdatedTierSync:
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         from subscriptions import stripe_events
 
-        sb, builders = _build_tier_update_sb(prev_tier="pro", new_tier_grant=8000, wallet_bundle=2500)
+        sb, builders = _build_tier_update_sb(prev_tier="basic", new_tier_grant=8000, wallet_bundle=2500)
         sb.rpc.return_value.execute.side_effect = RuntimeError("grant_credits down")
         event = _subscription_event("customer.subscription.updated", price_id="price_pm_monthly")
 
         with pytest.raises(RuntimeError, match="grant_credits down"):
             stripe_events.handle_subscription_updated(event, sb)
 
-    def test_downgrade_pro_max_to_pro_syncs_tier_no_grant(self, monkeypatch):
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        from subscriptions import stripe_events
-
-        sb, builders = _build_tier_update_sb(prev_tier="pro_max", new_tier_grant=3000, wallet_bundle=100)
-        event = _subscription_event("customer.subscription.updated", price_id="price_monthly_123")
-
-        stripe_events.handle_subscription_updated(event, sb)
-
-        update_payload = builders["subscriptions"].update.call_args[0][0]
-        assert update_payload["tier"] == "pro"
-        sb.rpc.assert_not_called()
-
-    def test_unchanged_price_no_grant(self, monkeypatch):
+    def test_downgrade_pro_to_basic_syncs_tier_no_grant(self, monkeypatch):
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions import stripe_events
 
@@ -679,20 +666,33 @@ class TestSubscriptionUpdatedTierSync:
         stripe_events.handle_subscription_updated(event, sb)
 
         update_payload = builders["subscriptions"].update.call_args[0][0]
-        assert update_payload["tier"] == "pro"
+        assert update_payload["tier"] == "basic"
+        sb.rpc.assert_not_called()
+
+    def test_unchanged_price_no_grant(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions import stripe_events
+
+        sb, builders = _build_tier_update_sb(prev_tier="basic", new_tier_grant=3000, wallet_bundle=100)
+        event = _subscription_event("customer.subscription.updated", price_id="price_monthly_123")
+
+        stripe_events.handle_subscription_updated(event, sb)
+
+        update_payload = builders["subscriptions"].update.call_args[0][0]
+        assert update_payload["tier"] == "basic"
         sb.rpc.assert_not_called()
 
     def test_credits_disabled_does_not_sync_tier_or_call_rpc(self, monkeypatch):
         """CREDITS_ENABLED unset (default) — tier is NOT synced (pre-credits
         behavior, clean rollback) and no grant logic runs.
 
-        The pro_max env var IS set here, so the upgrade branch (pro→pro_max,
+        The top-tier env var IS set here, so the upgrade branch (basic→pro,
         low bundle) WOULD sync tier and grant if the credits_enabled() gate
         were removed — pins that the gate is load-bearing on both."""
         monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pm_monthly")
         from subscriptions import stripe_events
 
-        sb, builders = _build_tier_update_sb(prev_tier="pro", new_tier_grant=8000, wallet_bundle=100)
+        sb, builders = _build_tier_update_sb(prev_tier="basic", new_tier_grant=8000, wallet_bundle=100)
         event = _subscription_event("customer.subscription.updated", price_id="price_pm_monthly")
 
         stripe_events.handle_subscription_updated(event, sb)
@@ -1085,7 +1085,7 @@ class TestSubscriptionDeletedFinalBilling:
 # ---------------------------------------------------------------------------
 
 
-class TestCreateCheckoutSessionProMaxPlans:
+class TestCreateCheckoutSessionPlanParams:
     def _set_env(self, monkeypatch):
         monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
         monkeypatch.setenv("STRIPE_PRICE_MONTHLY", "price_monthly_test")
@@ -1097,7 +1097,7 @@ class TestCreateCheckoutSessionProMaxPlans:
 
         monkeypatch.setattr(stripe_client, "_initialized", False)
 
-    def test_pro_max_monthly_resolves_pro_max_monthly_price(self, client, mock_supabase, monkeypatch):
+    def test_legacy_pro_max_monthly_alias_resolves_top_tier_price(self, client, mock_supabase, monkeypatch):
         self._set_env(monkeypatch)
 
         fake_session = MagicMock(url="https://checkout.stripe.com/c/pay/cs_test_pm_monthly")
@@ -1107,7 +1107,7 @@ class TestCreateCheckoutSessionProMaxPlans:
         assert resp.status_code == 200, resp.text
         assert m.call_args.kwargs["line_items"][0]["price"] == "price_pro_max_monthly_test"
 
-    def test_pro_max_annual_resolves_pro_max_annual_price(self, client, mock_supabase, monkeypatch):
+    def test_legacy_pro_max_annual_alias_resolves_top_tier_price(self, client, mock_supabase, monkeypatch):
         self._set_env(monkeypatch)
 
         fake_session = MagicMock(url="https://checkout.stripe.com/c/pay/cs_test_pm_annual")
@@ -1116,6 +1116,22 @@ class TestCreateCheckoutSessionProMaxPlans:
 
         assert resp.status_code == 200, resp.text
         assert m.call_args.kwargs["line_items"][0]["price"] == "price_pro_max_annual_test"
+
+    def test_canonical_plan_params_resolve_their_prices(self, client, mock_supabase, monkeypatch):
+        """basic_* / pro_* are the canonical params after the tier-key rename."""
+        self._set_env(monkeypatch)
+        expected = {
+            "basic_monthly": "price_monthly_test",
+            "basic_annual": "price_annual_test",
+            "pro_monthly": "price_pro_max_monthly_test",
+            "pro_annual": "price_pro_max_annual_test",
+        }
+        for plan, price in expected.items():
+            fake_session = MagicMock(url=f"https://checkout.stripe.com/c/pay/cs_{plan}")
+            with patch("stripe.checkout.Session.create", return_value=fake_session) as m:
+                resp = client.post("/billing/create-checkout-session", json={"plan": plan})
+            assert resp.status_code == 200, resp.text
+            assert m.call_args.kwargs["line_items"][0]["price"] == price, plan
 
     def test_still_rejects_invalid_plan(self, client, mock_supabase, monkeypatch):
         self._set_env(monkeypatch)

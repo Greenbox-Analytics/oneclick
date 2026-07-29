@@ -1,15 +1,16 @@
 /**
- * Canonical tier keys vs display labels (spec 2026-07-19 §2).
- * DB keys are PERMANENT: "pro" = the $25 plan LABELED "Basic";
- * "pro_max" = the $50 plan LABELED "Pro". Never compare a label,
- * never display a raw key. Enterprise has no DB key (org seats, Phase B).
+ * Canonical tier keys and their display labels. Keys match the labels since
+ * 20260728000001_rename_tier_keys.sql ("pro" was the $25 plan labeled "Basic",
+ * "pro_max" the $50 plan labeled "Pro" — a translation table nobody could keep
+ * straight). Still go through tierLabel() rather than printing a raw key.
+ * Enterprise has no DB key (org seats, Phase B).
  */
-export type TierKey = "free" | "pro" | "pro_max";
+export type TierKey = "free" | "basic" | "pro";
 
 export const TIER_LABELS: Record<TierKey, string> = {
   free: "Free",
-  pro: "Basic",
-  pro_max: "Pro",
+  basic: "Basic",
+  pro: "Pro",
 };
 
 export const ENTERPRISE_LABEL = "Enterprise";
@@ -20,7 +21,7 @@ export function tierLabel(tier: string | null | undefined): string {
 }
 
 export function isPaidTier(tier: string | null | undefined): boolean {
-  return tier === "pro" || tier === "pro_max";
+  return tier === "basic" || tier === "pro";
 }
 
 /**
@@ -29,8 +30,8 @@ export function isPaidTier(tier: string | null | undefined): boolean {
  */
 export const TIER_PRICES: Record<TierKey, { monthly: number; annual: number }> = {
   free: { monthly: 0, annual: 0 },
-  pro: { monthly: 25, annual: 250 },
-  pro_max: { monthly: 50, annual: 500 },
+  basic: { monthly: 25, annual: 250 },
+  pro: { monthly: 50, annual: 500 },
 };
 
 /** "US$25" / "US$20.83" — cents only when the amount has them. */

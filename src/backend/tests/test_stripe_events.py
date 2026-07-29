@@ -71,7 +71,7 @@ class TestHandleCheckoutSessionCompleted:
         assert upsert_call is not None
         payload = upsert_call[0][0]
         assert payload["user_id"] == TEST_USER_ID
-        assert payload["tier"] == "pro"
+        assert payload["tier"] == "basic"
         assert payload["stripe_subscription_id"] == "sub_123"
         assert payload["stripe_customer_id"] == "cus_123"
         assert payload["stripe_price_id"] == "price_monthly_123"
@@ -117,8 +117,8 @@ class TestHandleSubscriptionUpdated:
         payload = update_call[0][0]
         assert payload["status"] == "active"
         assert payload["cancel_at_period_end"] is True
-        # price_id "price_monthly_123" is not a pro_max price → tier resolves to "pro"
-        assert payload["tier"] == "pro"
+        # price_id "price_monthly_123" is not a pro_max price → tier resolves to "basic"
+        assert payload["tier"] == "basic"
 
     def test_credits_off_does_not_sync_tier(self, monkeypatch):
         """Pins the clean-rollback guarantee: with CREDITS_ENABLED off, tier is
@@ -196,7 +196,7 @@ class TestHandleInvoicePaymentFailed:
 
         update_call = sb.table("subscriptions").update.call_args
         assert update_call[0][0]["status"] == "past_due"
-        # tier stays "pro" — Stripe retries; we keep access during retry window
+        # tier stays "basic" — Stripe retries; we keep access during retry window
         assert "tier" not in update_call[0][0]
 
     def test_no_op_when_subscription_id_missing(self):

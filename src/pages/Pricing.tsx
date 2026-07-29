@@ -27,7 +27,7 @@ const FREE_FEATURES: Feature[] = [
   { included: false, label: "Slack integration" },
 ];
 
-// "pro" DB tier — labeled Basic (spec 2026-07-19 §2).
+// "basic" DB tier.
 const BASIC_FEATURES: Feature[] = [
   { included: true, label: "Unlimited artists, projects, tasks" },
   { included: true, label: "Unlimited storage" },
@@ -39,9 +39,9 @@ const BASIC_FEATURES: Feature[] = [
   { included: true, label: "3,000 monthly credits for AI-powered tools" },
 ];
 
-// "pro_max" DB tier — labeled Pro (spec 2026-07-19 §2).
+// "pro" DB tier.
 const PRO_FEATURES: Feature[] = [
-  { included: true, label: `Everything in ${tierLabel("pro")}` },
+  { included: true, label: `Everything in ${tierLabel("basic")}` },
   { included: true, label: "8,000 monthly credits for AI-powered tools" },
   { included: true, label: "More storage headroom" },
   { included: true, label: "Priority support" },
@@ -49,7 +49,7 @@ const PRO_FEATURES: Feature[] = [
 
 // No DB tier — org seats resolve to these entitlements (Phase B).
 const ENTERPRISE_FEATURES: Feature[] = [
-  { included: true, label: `Everything in ${tierLabel("pro_max")}` },
+  { included: true, label: `Everything in ${tierLabel("pro")}` },
   { included: true, label: "Centralized billing for your whole team" },
   { included: true, label: "Email-invited member seats" },
   { included: true, label: "Org credit pool with per-seat allocation" },
@@ -97,7 +97,7 @@ const Pricing = () => {
   };
 
   const handleProClick = async () => {
-    const planParam = proPeriod === "annual" ? "pro_max_annual" : "pro_max_monthly";
+    const planParam = proPeriod === "annual" ? "pro_annual" : "pro_monthly";
     if (!user) {
       navigate(`/auth?redirect=/pricing&plan=${planParam}`);
       return;
@@ -188,11 +188,11 @@ const Pricing = () => {
             </Button>
           </Card>
 
-          {/* Basic ("pro" DB tier) */}
+          {/* Basic */}
           <Card className="p-8 flex flex-col border-primary relative">
             <Badge className="absolute -top-3 left-8">Most popular</Badge>
             <div className="mb-6">
-              <h2 className="text-xl font-semibold mb-1">{tierLabel("pro")}</h2>
+              <h2 className="text-xl font-semibold mb-1">{tierLabel("basic")}</h2>
               <p className="text-sm text-muted-foreground">
                 For managers, labels, and serious creators
               </p>
@@ -207,14 +207,14 @@ const Pricing = () => {
 
             {basicPeriod === "monthly" ? (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro.monthly)}</span>
+                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.basic.monthly)}</span>
                 <span className="text-muted-foreground ml-1">/month</span>
               </div>
             ) : (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro.annual)}</span>
+                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.basic.annual)}</span>
                 <span className="text-muted-foreground ml-1">/year</span>
-                <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth("pro")}/month — save 2 months</div>
+                <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth("basic")}/month — save 2 months</div>
               </div>
             )}
 
@@ -224,14 +224,14 @@ const Pricing = () => {
               ))}
             </ul>
             <Button size="lg" className="w-full" onClick={handleBasicClick} disabled={isBasicPending}>
-              {isBasicPending ? "Starting checkout…" : `Upgrade to ${tierLabel("pro")}`}
+              {isBasicPending ? "Starting checkout…" : `Upgrade to ${tierLabel("basic")}`}
             </Button>
           </Card>
 
-          {/* Pro ("pro_max" DB tier) */}
+          {/* Pro */}
           <Card className="p-8 flex flex-col relative">
             <div className="mb-6">
-              <h2 className="text-xl font-semibold mb-1">{tierLabel("pro_max")}</h2>
+              <h2 className="text-xl font-semibold mb-1">{tierLabel("pro")}</h2>
               <p className="text-sm text-muted-foreground">
                 For power users who lean hardest on Zoe, OneClick, and Registry
               </p>
@@ -246,14 +246,14 @@ const Pricing = () => {
 
             {proPeriod === "monthly" ? (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro_max.monthly)}</span>
+                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro.monthly)}</span>
                 <span className="text-muted-foreground ml-1">/month</span>
               </div>
             ) : (
               <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro_max.annual)}</span>
+                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro.annual)}</span>
                 <span className="text-muted-foreground ml-1">/year</span>
-                <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth("pro_max")}/month — save 2 months</div>
+                <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth("pro")}/month — save 2 months</div>
               </div>
             )}
 
@@ -269,7 +269,7 @@ const Pricing = () => {
               onClick={handleProClick}
               disabled={isProPending}
             >
-              {isProPending ? "Starting checkout…" : `Upgrade to ${tierLabel("pro_max")}`}
+              {isProPending ? "Starting checkout…" : `Upgrade to ${tierLabel("pro")}`}
             </Button>
           </Card>
 

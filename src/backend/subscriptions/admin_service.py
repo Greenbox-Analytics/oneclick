@@ -165,7 +165,7 @@ class AdminService:
 
         return {"user": user, "entitlements": ent.to_dict(), "override": override}
 
-    def set_tier(self, user_id: str, tier: Literal["free", "pro", "pro_max"]) -> None:
+    def set_tier(self, user_id: str, tier: Literal["free", "basic", "pro"]) -> None:
         self.supabase.table("subscriptions").upsert(
             {
                 "user_id": user_id,

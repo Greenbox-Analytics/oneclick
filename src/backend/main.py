@@ -618,7 +618,7 @@ def health_check():
 class AnalyticsContext(BaseModel):
     is_tester: bool
     is_admin: bool
-    plan: Literal["free", "pro", "pro_max"]
+    plan: Literal["free", "basic", "pro"]
     role: str | None
     email: str | None
     signed_up_at: str | None
