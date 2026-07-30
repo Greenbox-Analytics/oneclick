@@ -99,6 +99,15 @@ jobs:
               missing+=("$vercel_name <- gsm:$gsm_name")
               continue
             fi
+            # An empty secret payload reads as SUCCESS above, and the rm+add
+            # below would then replace a working Vercel value with "" —
+            # breaking the next build (an empty VITE_SUPABASE_URL throws
+            # "Invalid supabaseUrl" before the app renders). Skip instead.
+            if [ -z "$value" ]; then
+              echo "::warning::Skipped $vercel_name — GSM secret $gsm_name is empty"
+              missing+=("$vercel_name <- gsm:$gsm_name (empty)")
+              continue
+            fi
             for target in "${ENVS[@]}"; do
               echo "Syncing $vercel_name <- gsm:$gsm_name ($PROJECT project, $target env)"
               # vercel env add is not idempotent — remove existing first (ignore
