@@ -20,7 +20,7 @@ These are the bare minimum to run `npm run dev` + `poetry run uvicorn main:app` 
 | `VITE_SUPABASE_SECRET_KEY` | BE | Same dashboard → "service_role" key (REVEAL secret) | `eyJ...` JWT. **Never** expose to frontend |
 | `DATABASE_PW` | Scripts / migrations | Supabase Dashboard → Project Settings → Database → Connection string password | One-time; auto-rotation requires re-saving |
 | `VITE_BACKEND_API_URL` | FE | Your local backend URL | `http://localhost:8000` for dev |
-| `ALLOWED_ORIGINS` | BE (CORS) | Comma-separated frontend URLs | `http://localhost:8080` for dev. Prod set in `deploy-backend.yml` |
+| `ALLOWED_ORIGINS` | BE (CORS) | Comma-separated frontend URLs | `http://localhost:8080` locally. Prod/dev come from the `PROD_ALLOWED_ORIGINS` / `DEV_ALLOWED_ORIGINS` GitHub secrets. **No trailing slash and no path** — CORS compares this to the browser's `Origin` header by exact string match, and an `Origin` header never has either |
 
 ---
 
@@ -34,7 +34,7 @@ Without these, `/billing/*` endpoints raise `KeyError` on first call and the Pri
 | `STRIPE_WEBHOOK_SECRET` | Local: output of `stripe listen --forward-to ...`. Prod: Webhooks → endpoint → Reveal signing secret | `whsec_...`; **different per environment** |
 | `STRIPE_PRICE_MONTHLY` | Stripe Dashboard → Products → recurring price ID | `price_...` |
 | `STRIPE_PRICE_ANNUAL` | Stripe Dashboard → Products → second price ID | `price_...` |
-| `FRONTEND_URL` | Your frontend's base URL | `http://localhost:8080` (dev), `https://app.msanii.com` (prod). Used for Checkout success/cancel redirects + Portal return |
+| `FRONTEND_URL` | Your frontend's base URL | `http://localhost:8080` (local), `https://www.msanii-beta.com` (prod). **No trailing slash** — see below. Used for Checkout success/cancel redirects + Portal return. In prod it comes from the `PROD_FRONTEND_URL` GitHub secret, not GSM |
 
 **Test-mode IDs do NOT work with `sk_live_`** — recreate products + prices in live mode for prod.
 
@@ -170,6 +170,43 @@ These work but aren't documented in `.env.example` — usually because they're o
 | **GitHub Actions** | Repo Settings → Secrets and variables → Actions | Used by deploy workflows (Vercel tokens, dev-vs-prod allowed origins) |
 
 **Never commit `.env`, `service-account.json`, or any file with credentials.** `.env` is in `.gitignore`. Crypto keys (`INTEGRATION_ENCRYPTION_KEY`, `CREDENTIALS_AES_KEY`, etc.) should be generated per-environment and never reused across dev/staging/prod.
+
+---
+
+## Deploy-time secrets (GitHub Actions, NOT GSM)
+
+Most prod values live in GSM, but the per-environment **URLs and deploy targets** are GitHub Actions repo secrets instead — they're config, not credentials, and the workflows read them directly. Naming is inconsistent by history (`PROD_FRONTEND_URL`, not `FRONTEND_PROD_URL`); a typo'd secret name resolves to an **empty string** in a workflow, which deploys silently and breaks at runtime. Use these exact names:
+
+| GitHub secret | Feeds | Value |
+|---|---|---|
+| `PROD_FRONTEND_URL` | `FRONTEND_URL` + `VITE_FRONTEND_URL` on `msanii-backend` | `https://www.msanii-beta.com` |
+| `DEV_FRONTEND_URL` | same, on `msanii-backend-dev` | the dev Vercel URL |
+| `PROD_BACKEND_API_URL` / `DEV_BACKEND_API_URL` | `VITE_BACKEND_API_URL` | the Cloud Run service URL |
+| `PROD_ALLOWED_ORIGINS` / `DEV_ALLOWED_ORIGINS` | `ALLOWED_ORIGINS` (CORS) | comma-separated origins |
+| `GCP_PROJECT_ID`, `GCP_SERVICE_ACCOUNT_EMAIL`, `GCP_WORKLOAD_IDENTITY_PROVIDER` | GCP auth (WIF) | — |
+| `VERCEL_ORG_ID`, `VERCEL_PROD_TOKEN` | Vercel CLI auth (one token for both projects) | — |
+| `VERCEL_PROJECT_ID` | the **dev** Vercel project | — |
+| `VERCEL_PROD_PROJECT_ID` | the **prod** Vercel project | — |
+
+**No trailing slash on any URL secret.** Every consumer appends a path — `f"{frontend_url}{success_path}"` in [billing_router.py](../src/backend/subscriptions/billing_router.py), `f"{FRONTEND_URL}/workspace?..."` in the Slack blocks and OAuth redirects, and the same pattern in all nine `VITE_FRONTEND_URL` readers. A trailing slash produces `//path`, which React Router does not match — the link loads the app on a route that doesn't exist. For `ALLOWED_ORIGINS` it's worse: a trailing slash fails CORS outright.
+
+### Two Vercel projects
+
+`VITE_*` vars are **inlined by Vite at build time**, so setting one in Vercel does nothing until the frontend is rebuilt — and the two projects have entirely separate env var sets:
+
+| | Project secret | Deploy trigger | Rebuild after an env change |
+|---|---|---|---|
+| dev | `VERCEL_PROJECT_ID` | Vercel Git integration, on push to `main` | dashboard "Redeploy" works |
+| prod | `VERCEL_PROD_PROJECT_ID` | `deploy-frontend-prod.yml` on a `v*` tag | dashboard "Redeploy" **cannot** rebuild (deployed `--prebuilt`, so Vercel has no source) — you must re-run the workflow or push a new tag |
+
+A `VITE_*` var that is missing or misscoped at prod build time is inlined as `undefined`. That fails loudly for Supabase (`Invalid supabaseUrl` before the app renders) and silently for others — `VITE_PAYPAL_CLIENT_ID` just hides the "Pay with PayPal" button. To check what a live deployment actually built with, grep the served bundle rather than the dashboard:
+
+```bash
+curl -s https://www.msanii-beta.com/ | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js'
+curl -s https://www.msanii-beta.com/assets/index-XXXX.js | grep -oE 'https://[a-z0-9]+\.supabase\.co'
+```
+
+`gh workflow run sync-vercel-env-from-gsm.yml -f project=prod` rewrites **all** mapped `VITE_*` vars on that project, not just the one you're after — it does `vercel env rm` then `add` per var under `set -euo pipefail`, so a failure mid-loop leaves the vars it already removed **missing**. Read its `MAPPING` block first, and check the run's log for which vars it actually wrote.
 
 ---
 

@@ -200,7 +200,7 @@ Portal access is gated on having a `stripe_customer_id` in `subscriptions`. Admi
 ### Prod cutover checklist
 
 - [ ] Live-mode `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_*` all set in GSM
-- [ ] `FRONTEND_URL=https://app.msanii.com` (or the live domain — `localhost` will break Stripe redirects)
+- [ ] `FRONTEND_URL=https://www.msanii-beta.com` (the live domain — `localhost` will break Stripe redirects). **No trailing slash**: `success_url` is built as `f"{FRONTEND_URL}{success_path}"`, so a slash yields `//profile?...` and React Router won't match the route — the user lands on a blank page after paying
 - [ ] `BYPASS_PAYWALLS` is `false` (or unset) — setting it to `true` would give every user Pro-shaped entitlements regardless of Stripe status
 - [ ] Live webhook endpoint receives a test event from Dashboard ("Send test webhook") and returns 200
 - [ ] Run one real `$0.50` Pro signup with your own card, then refund + cancel — sanity check the round-trip
