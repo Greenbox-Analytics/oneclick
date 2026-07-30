@@ -53,15 +53,7 @@ ALTER TABLE tier_entitlements
   ADD COLUMN IF NOT EXISTS max_works INTEGER NOT NULL DEFAULT -1,
   ADD COLUMN IF NOT EXISTS included_storage_bytes BIGINT NOT NULL DEFAULT -1;
 
--- Free gets 150 credits: enough for ONE complete pass through the product plus
--- room to repeat the best part (at 21/12/3 that's ~2 OneClick runs + 2 contract
--- parses + ~20 Zoe messages). The AI tools are open on Free under credits — the
--- wallet is the only gate — so the grant has to cover a full workflow or the
--- wall reads as "broken" instead of "your free allowance ran out". Free has no
--- card on file (overage is paid-only), so every credit here is pure COGS:
--- ~$0.60-1.65/signup/month at current model rates. Cache hits stay free and the
--- grant expires at rollover, so it can't accumulate.
-UPDATE tier_entitlements SET monthly_credits = 150,  max_works = 10,
+UPDATE tier_entitlements SET monthly_credits = 50,   max_works = 10,
   included_storage_bytes = 1073741824       WHERE tier = 'free';   -- 1 GB
 UPDATE tier_entitlements SET monthly_credits = 3000, max_works = -1,
   included_storage_bytes = 107374182400     WHERE tier = 'pro';    -- 100 GB
@@ -86,11 +78,10 @@ ALTER TABLE tier_overrides
 -- ---------------------------------------------------------------------------
 -- 3. Billing prefs (opt-in overage) on subscriptions
 -- ---------------------------------------------------------------------------
--- Storage has no pay-per-use: uploads block at included_storage_bytes, so the
--- only opt-in here is credit overage.
 ALTER TABLE subscriptions
   ADD COLUMN IF NOT EXISTS overage_enabled BOOLEAN NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS overage_cap_credits INTEGER;
+  ADD COLUMN IF NOT EXISTS overage_cap_credits INTEGER,
+  ADD COLUMN IF NOT EXISTS storage_overage_enabled BOOLEAN NOT NULL DEFAULT false;
 
 -- ---------------------------------------------------------------------------
 -- 4. credit_prices — published per-action prices (public read, like tiers)
@@ -143,7 +134,7 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
   wallet_id UUID NOT NULL REFERENCES credit_wallets(id),
   delta INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN
-    ('monthly_grant', 'debit', 'overage_debit', 'admin_grant', 'refund', 'expiry')),
+    ('monthly_grant', 'debit', 'overage_debit', 'admin_grant', 'refund', 'expiry', 'storage_bill')),
   action TEXT,
   request_id TEXT,
   balance_after INTEGER NOT NULL,
@@ -333,7 +324,9 @@ DECLARE
 BEGIN
   IF p_amount < 0 THEN RAISE EXCEPTION 'grant amount must be >= 0'; END IF;
   IF p_bucket NOT IN ('bundle', 'reserve') THEN RAISE EXCEPTION 'invalid bucket %', p_bucket; END IF;
-  -- Kind whitelist symmetric with debit_credits.
+  -- Kind whitelist symmetric with debit_credits. storage_bill rows are
+  -- inserted directly by the sweep, never via grant_credits — that's why
+  -- it's absent here.
   IF p_kind NOT IN ('monthly_grant', 'admin_grant', 'refund') THEN
     RAISE EXCEPTION 'invalid grant kind %', p_kind;
   END IF;

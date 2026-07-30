@@ -1,22 +1,30 @@
 -- supabase/migrations/20260721000001_licensing_core.sql
 -- ============================================================================
--- Licensing Phase B — organizations, members, ONE org credit pool, per-member caps.
+-- Licensing Phase B — organizations, seats, org credit pool, transfer_credits.
+--
+-- SUPERSEDED IN PART by 20260730000001_dispersal_and_caps.sql. This file is
+-- kept verbatim because it has been APPLIED — it is the historical record, not
+-- the current shape. What it creates here and the fix-forward later removes:
+-- seat wallets (owner_type='seat'), transfer_credits, the 'allocation'/'reclaim'
+-- ledger kinds, and the 6-arg debit_credits. Members no longer hold wallets;
+-- they spend from the org pool against org_members.monthly_cap. Read the
+-- fix-forward for the model that is actually live.
 --
 -- Spec: docs/superpowers/specs/2026-07-19-enterprise-licensing-credits-design.md §4
 -- Plan: docs/superpowers/plans/2026-07-20-licensing-phase-b-core.md Task 1
 --
 -- Load-bearing rules restated (full numbered list lives at the top of the
 -- plan; only the ones this migration is directly responsible for):
---  1. ONE wallet per org (owner_type='org'), created by the dedicated helper —
---     never the user-wallet seeding trigger below. Members hold NO wallet:
---     they spend from the org pool against a monthly cap enforced inside
---     debit_credits, under the same lock as the debit itself.
---  2. Two buckets, two lifetimes: the monthly contract dispersal lands in
---     bundle_balance and EXPIRES at each period end (so an org can't bank a
---     year of credits and burn them in one month); purchased packs land in
---     reserve_balance and never expire. rollover_wallet is what expires the
---     bundle, and carries a DB-level RAISE so it can only ever be pointed at
---     a user or org wallet.
+--  1. Seat/org wallets: period_start/period_end NULL FOREVER, ALL money in
+--     reserve_balance, created only by the dedicated helpers (backend Task 4)
+--     — never the user-wallet seeding trigger below. rollover_wallet gains a
+--     DB-level RAISE on non-user wallets so "seat money never expires" is a
+--     database guarantee, not just an application convention.
+--  2. transfer_credits writes PAIRED ledger rows keyed request_id||':from' /
+--     ':to' — idx_credit_ledger_request_id is UNIQUE GLOBALLY, so one shared
+--     key would make every transfer a phantom duplicate on the second insert.
+--     Fails on insufficient source (transfers never overdraw); touches
+--     reserve_balance on BOTH sides only.
 --  4. Orgs get NO last-admin auto-promote (inheriting a funded pool is
 --     privilege escalation, unlike inheriting a team board). The guard
 --     auto-archives the org on the account-deletion/cascade escape and
@@ -46,17 +54,9 @@ CREATE TABLE organizations (
   -- would quantize the floor to pack sizes and strand below-floor money in
   -- a pending org). NULL = platform default from env.
   min_initial_purchase_credits INTEGER,
-  -- The negotiated contract volume: credits added to the POOL each month by
-  -- the sweep. Lands in the pool's EXPIRING bucket, so an unspent month does
-  -- not bank — otherwise the org could hoard a year of credits and burn them
-  -- in one, which removes the COGS ceiling the dispersal model exists to give.
-  -- 0 = no contract (pack purchases only).
-  monthly_dispersal_credits INTEGER NOT NULL DEFAULT 0,
-  -- Default per-member monthly CAP, applied when org_members.monthly_cap is
-  -- NULL. A cap is a CEILING on the shared pool, never a reservation, so caps
-  -- may deliberately sum to more than the dispersal (most members never reach
-  -- theirs). NULL = uncapped members (the pool is the only limit).
-  default_member_cap INTEGER,
+  -- §4 allowance: sweep tops each active seat up to this monthly, pool
+  -- permitting. NULL/0 = manual-only allocation.
+  default_seat_allowance INTEGER,
   -- 'pending' until cumulative pool purchases >= the minimum (§ lifecycle). Seats
   -- confer enterprise entitlements ONLY while status='active' AND
   -- archived_at IS NULL — otherwise self-serve org creation would hand out
@@ -72,23 +72,17 @@ CREATE TABLE org_members (
   org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK (role IN ('admin','member')),
-  -- 'removed' is a SOFT state: the row survives removal as (a) the audit chain
-  -- for everything this member spent from the pool and (b) the marker that
-  -- exempts org-accrued storage from personal billing. Re-invite of a removed
-  -- member reactivates this row (UNIQUE(org_id,user_id) holds). Nothing has to
-  -- be reclaimed on the way out — a member never held credits, only a ceiling.
+  -- 'removed' is a SOFT state (round 5): the row survives removal as (a) the
+  -- seat wallet's owner reference / audit chain and (b) the marker that
+  -- exempts org-accrued storage from personal overage billing. Re-invite of a
+  -- removed member reactivates this row (UNIQUE(org_id,user_id) holds).
   status TEXT NOT NULL CHECK (status IN ('active','suspended','removed')) DEFAULT 'active',
   -- Written ONCE at each active→suspended/removed transition (cleared on
-  -- reactivation). Kept as the offboarding audit timestamp.
+  -- reactivation). The offboard reclaim's request_id uses its epoch: stable
+  -- across retries of ONE offboard (replay converges), distinct across
+  -- suspension cycles (a second offboard reclaims again). now()-at-reclaim
+  -- would be unique per call = no replay protection at all.
   revoked_at TIMESTAMPTZ,
-  -- This member's monthly ceiling on POOL spend. NULL = fall through to
-  -- organizations.default_member_cap; NULL there too = uncapped.
-  monthly_cap INTEGER CHECK (monthly_cap IS NULL OR monthly_cap >= 0),
-  -- Spend counter for the current cap period, maintained INSIDE debit_credits
-  -- under the wallet lock (see the RPC below) so two concurrent actions cannot
-  -- both slip under the cap. Rolls when cap_period_end passes.
-  cap_used INTEGER NOT NULL DEFAULT 0,
-  cap_period_end TIMESTAMPTZ,
   invited_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -111,18 +105,15 @@ CREATE TABLE credit_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   org_member_id UUID NOT NULL REFERENCES org_members(id) ON DELETE CASCADE,
-  -- A request to RAISE this member's monthly cap, not to move credits: nothing
-  -- is allocated, so approving one is idempotent and costs the pool nothing
-  -- until the member actually spends. NULL = "raise it, admin decides".
-  requested_cap INTEGER CHECK (requested_cap > 0),
+  requested_credits INTEGER CHECK (requested_credits > 0),  -- NULL = "more, admin decides"
   note TEXT,
   status TEXT NOT NULL CHECK (status IN ('pending','approved','denied')) DEFAULT 'pending',
   resolved_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,   -- repo precedent: 20260518 fix_user_delete_cascades
-  resolved_cap INTEGER,               -- the cap the admin actually set
+  resolved_credits INTEGER,           -- what the admin actually granted
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   resolved_at TIMESTAMPTZ
 );
--- Anti-spam: one open request per member (each request emails every admin).
+-- Anti-spam: one open request per seat (each request emails every admin).
 CREATE UNIQUE INDEX uq_credit_requests_pending
   ON credit_requests (org_member_id) WHERE status = 'pending';
 
@@ -161,9 +152,7 @@ CREATE TRIGGER org_members_updated_at
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS billing_context_org_id UUID;
 
 -- ---------------------------------------------------------------------------
--- 3. credit_wallets.owner_type CHECK — re-asserted as ('user','org'). There is
--- no 'seat' owner: members spend from the ORG POOL against a monthly cap, so a
--- member never holds a wallet. Catalog-driven
+-- 3. credit_wallets.owner_type CHECK widens to include 'seat'. Catalog-driven
 -- drop (same rationale as the tier CHECK widening in 20260713000002 — the
 -- original CHECK is inline/unnamed, so a live DB may carry a different
 -- generated name; dropping by guessed name would silently no-op).
@@ -181,14 +170,17 @@ BEGIN
   END LOOP;
 END $$;
 ALTER TABLE credit_wallets ADD CONSTRAINT credit_wallets_owner_type_check
-  CHECK (owner_type IN ('user', 'org'));
+  CHECK (owner_type IN ('user', 'org', 'seat'));
 
 -- credit_wallets.owner_id / credit_ledger.wallet_id intentionally carry NO FK
--- to organizations: owner_type is a polymorphic discriminator (user/org) so a
--- single FK target is impossible without a discriminated-union constraint, AND
--- an ON DELETE CASCADE would silently destroy money history. Orphan prevention
--- is a SERVICE responsibility: member removal is a SOFT status transition,
--- never a bare DELETE, and the pool outlives every membership row anyway.
+-- to organizations/org_members: owner_type is a polymorphic discriminator
+-- (user/org/seat) so a single FK target is impossible without a
+-- discriminated-union constraint, AND an ON DELETE CASCADE from org_members
+-- would silently destroy money history the moment a seat row disappeared.
+-- Orphan prevention here is a SERVICE responsibility, not a schema one:
+-- offboarding is reclaim-then-transition (backend Task 3) and seat removal is
+-- a SOFT status transition, never a bare DELETE — so no cascade can orphan a
+-- wallet or ledger row silently.
 
 -- ---------------------------------------------------------------------------
 -- 4. Auto-create-admin trigger on organizations. AFTER INSERT, keyed on
@@ -220,9 +212,9 @@ CREATE TRIGGER auto_create_org_admin_trigger
 -- 5. Last-admin guard trigger on org_members. BEFORE UPDATE OR DELETE.
 -- Clones the teams v2 guard (20260703000000_fix_admin_guard_team_teardown_v2)
 -- with ONE structural delta: orgs get NO auto-promote branch AT ALL —
--- inheriting a funded credit pool is privilege escalation (a board is harmless
--- to inherit; the right to buy credits and raise everyone's caps is not).
--- Where teams would promote the longest-tenured member, orgs instead
+-- inheriting a funded credit pool is privilege escalation (a board is
+-- harmless to inherit; purchase/allocate/reclaim rights over real money are
+-- not). Where teams would promote the longest-tenured member, orgs instead
 -- auto-archive (cascade case) or RAISE (in-app case).
 --
 -- "Losing the last admin" here means: role demotion away from 'admin',
@@ -325,9 +317,9 @@ $$;
 -- tables goes through the backend's service-role client, which bypasses RLS
 -- entirely; per-endpoint ownership/role checks in orgs/authz.py ARE the
 -- authz (repo convention — see reference_backend_authz_model). Adding client
--- write policies here would let an admin (or anyone, for INSERT) mutate org or
--- membership state directly via PostgREST — including their OWN monthly_cap,
--- which is the whole enforcement mechanism.
+-- write policies here would let an admin (or anyone, for INSERT) mutate
+-- org/seat state directly via PostgREST, skipping the reclaim-then-transition
+-- and transfer_credits invariants the service layer enforces.
 -- ---------------------------------------------------------------------------
 ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_members ENABLE ROW LEVEL SECURITY;
@@ -360,17 +352,108 @@ CREATE POLICY "credit_requests_select_member_or_admin" ON credit_requests
   );
 
 -- ---------------------------------------------------------------------------
--- No transfer primitive. In the dispersal model credits only ever enter the
--- ORG POOL (grant_credits: 'purchase' for packs, 'dispersal' for the monthly
--- contract volume) and leave it as member spend (debit_credits). Nothing moves
--- wallet-to-wallet, so there is no transfer to make atomic, no paired ledger
--- rows, no deadlock ordering to get right, and nothing to reclaim when someone
--- is offboarded — a member only ever held a ceiling, never a balance.
+-- transfer_credits — THE org-money primitive (spec §4). Reserve-only on BOTH
+-- sides; fails on insufficient source (transfers never overdraw — an admin
+-- cannot allocate credits the pool doesn't hold); paired ledger rows carry
+-- request_id || ':from' / ':to' because idx_credit_ledger_request_id is
+-- UNIQUE GLOBALLY — one shared key would abort the second insert and make
+-- every transfer converge as a phantom duplicate.
 -- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.transfer_credits(
+  p_from_wallet UUID,
+  p_to_wallet UUID,
+  p_amount INTEGER,
+  p_kind TEXT,
+  p_request_id TEXT,
+  p_metadata JSONB DEFAULT '{}'
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $$
+DECLARE
+  v_existing RECORD;
+  v_first UUID; v_second UUID;
+  v_first_bundle INTEGER; v_first_reserve INTEGER;
+  v_second_bundle INTEGER; v_second_reserve INTEGER;
+  v_from_bundle INTEGER; v_from_reserve INTEGER;
+  v_to_bundle INTEGER; v_to_reserve INTEGER;
+BEGIN
+  IF p_amount <= 0 THEN RAISE EXCEPTION 'transfer amount must be > 0'; END IF;
+  IF p_kind NOT IN ('allocation', 'reclaim') THEN
+    RAISE EXCEPTION 'invalid transfer kind %', p_kind;
+  END IF;
+  IF p_request_id IS NULL OR p_request_id = '' THEN
+    RAISE EXCEPTION 'transfer requires a request_id';
+  END IF;
+  IF p_from_wallet = p_to_wallet THEN RAISE EXCEPTION 'cannot transfer to self'; END IF;
 
--- Ledger kind CHECK gains 'dispersal' (the monthly contract top-up into the org
--- pool) — WRITTEN OUT, not prose (Phase A's plan went stale in exactly this
--- spot). 'allocation'/'reclaim' are deliberately absent: nothing transfers.
+  -- Fast-path idempotency on the :from key (no lock yet).
+  SELECT balance_after INTO v_existing FROM credit_ledger
+    WHERE request_id = p_request_id || ':from';
+  IF FOUND THEN RETURN jsonb_build_object('duplicate', true); END IF;
+
+  -- Lock BOTH wallets in id order — every concurrent transfer locks in the
+  -- same order regardless of direction, so allocate/reclaim can't deadlock.
+  v_first := LEAST(p_from_wallet, p_to_wallet);
+  v_second := GREATEST(p_from_wallet, p_to_wallet);
+  SELECT bundle_balance, reserve_balance INTO v_first_bundle, v_first_reserve
+    FROM credit_wallets WHERE id = v_first FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'wallet % not found', v_first; END IF;
+  SELECT bundle_balance, reserve_balance INTO v_second_bundle, v_second_reserve
+    FROM credit_wallets WHERE id = v_second FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'wallet % not found', v_second; END IF;
+
+  IF p_from_wallet = v_first THEN
+    v_from_bundle := v_first_bundle;  v_from_reserve := v_first_reserve;
+    v_to_bundle   := v_second_bundle; v_to_reserve   := v_second_reserve;
+  ELSE
+    v_from_bundle := v_second_bundle; v_from_reserve := v_second_reserve;
+    v_to_bundle   := v_first_bundle;  v_to_reserve   := v_first_reserve;
+  END IF;
+
+  -- Re-check idempotency under the lock (racer committed while we waited).
+  SELECT balance_after INTO v_existing FROM credit_ledger
+    WHERE request_id = p_request_id || ':from';
+  IF FOUND THEN RETURN jsonb_build_object('duplicate', true); END IF;
+
+  -- Transfers never overdraw: RESERVE-only on both sides (seat/org money
+  -- lives in reserve; bundle on these wallets is only accepted debit drift).
+  IF v_from_reserve < p_amount THEN
+    RAISE EXCEPTION 'insufficient balance on source wallet (have %, need %)',
+      v_from_reserve, p_amount;
+  END IF;
+
+  v_from_reserve := v_from_reserve - p_amount;
+  v_to_reserve := v_to_reserve + p_amount;
+
+  -- Both UPDATEs + both INSERTs in ONE guarded subtransaction: a request_id
+  -- collision on either insert rolls back the whole pair atomically.
+  BEGIN
+    UPDATE credit_wallets SET reserve_balance = v_from_reserve, updated_at = now()
+      WHERE id = p_from_wallet;
+    UPDATE credit_wallets SET reserve_balance = v_to_reserve, updated_at = now()
+      WHERE id = p_to_wallet;
+    INSERT INTO credit_ledger (wallet_id, delta, kind, request_id, balance_after, metadata)
+      VALUES (p_from_wallet, -p_amount, p_kind, p_request_id || ':from',
+              v_from_bundle + v_from_reserve,
+              p_metadata || jsonb_build_object('other_wallet', p_to_wallet, 'direction', 'out'));
+    INSERT INTO credit_ledger (wallet_id, delta, kind, request_id, balance_after, metadata)
+      VALUES (p_to_wallet, p_amount, p_kind, p_request_id || ':to',
+              v_to_bundle + v_to_reserve,
+              p_metadata || jsonb_build_object('other_wallet', p_from_wallet, 'direction', 'in'));
+  EXCEPTION WHEN unique_violation THEN
+    RETURN jsonb_build_object('duplicate', true);
+  END;
+
+  RETURN jsonb_build_object('duplicate', false,
+    'from_balance', v_from_bundle + v_from_reserve,
+    'to_balance', v_to_bundle + v_to_reserve);
+END;
+$$;
+
+-- Ledger kind CHECK gains 'allocation' + 'reclaim' — WRITTEN OUT, not prose
+-- (Phase A's plan went stale in exactly this spot):
 DO $$
 DECLARE c RECORD;
 BEGIN
@@ -385,239 +468,20 @@ BEGIN
 END $$;
 ALTER TABLE credit_ledger ADD CONSTRAINT credit_ledger_kind_check
   CHECK (kind IN ('monthly_grant', 'debit', 'overage_debit', 'admin_grant', 'refund',
-                  'expiry', 'purchase', 'clawback', 'dispersal'));
-
--- ---------------------------------------------------------------------------
--- debit_credits — re-created with a 7th parameter, p_member_id. Body is the
--- CURRENT definition (20260720000001_credit_packs.sql, which added the
--- reserve-only clamped 'clawback' branch) plus the member-cap block. Rebasing on
--- the credits_schema version instead would silently drop clawback support.
---
--- WHY THE CAP LIVES HERE AND NOT IN THE SERVICE: a cap is a promise about a
--- SHARED pool. A service-side pre-check cannot keep two of a member's own
--- concurrent actions from both passing it, so the counter has to move inside
--- the same transaction and the same wallet lock as the debit.
---
--- WHY IT RECORDS RATHER THAN REJECTS: debits are charge-on-success — by the
--- time this runs, the LLM call has already happened and been paid for. A
--- rejection here would hand out free work. So an over-cap debit is written
--- anyway, `cap_exceeded` is flagged in both the return value and the ledger
--- metadata, and the wall that actually stops members is the pre-check in
--- EntitlementsService.check_credits(). The only way past that pre-check is a
--- genuine race, and a race that overshoots by one action is visible in the
--- ledger rather than silent.
---
--- CREATE OR REPLACE does NOT replace across arities, so the 6-arg version is
--- dropped first — otherwise both overloads survive and PostgREST cannot
--- resolve /rest/v1/rpc/debit_credits at all.
--- ---------------------------------------------------------------------------
-DROP FUNCTION IF EXISTS public.debit_credits(UUID, INTEGER, TEXT, TEXT, TEXT, JSONB);
-
-CREATE OR REPLACE FUNCTION public.debit_credits(
-  p_wallet_id UUID,
-  p_amount INTEGER,
-  p_action TEXT,
-  p_request_id TEXT,
-  p_kind TEXT DEFAULT 'debit',
-  p_metadata JSONB DEFAULT '{}',
-  p_member_id UUID DEFAULT NULL
-) RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO 'public'
-AS $$
-DECLARE
-  v_existing RECORD;
-  v_bundle INTEGER;
-  v_reserve INTEGER;
-  v_from_reserve INTEGER;
-  v_balance_after INTEGER;
-  v_cap INTEGER;
-  v_cap_used INTEGER;
-  v_cap_end TIMESTAMPTZ;
-  v_cap_exceeded BOOLEAN := false;
-BEGIN
-  IF p_amount < 0 THEN RAISE EXCEPTION 'debit amount must be >= 0'; END IF;
-  -- 'clawback' is the admin adjust path (pack refunds / chargebacks) added by
-  -- 20260720000001; it keeps its own reserve-only clamped branch below.
-  IF p_kind NOT IN ('debit', 'overage_debit', 'clawback') THEN
-    RAISE EXCEPTION 'invalid debit kind %', p_kind;
-  END IF;
-  -- Org pools have no pay-as-you-go: a member past their cap asks for a raise,
-  -- and a dry pool is the admin's problem to fix by buying credits.
-  IF p_member_id IS NOT NULL AND p_kind = 'overage_debit' THEN
-    RAISE EXCEPTION 'org member spend cannot be overage — pools have no pay-as-you-go';
-  END IF;
-  -- A clawback is support removing money, never a member spending it: it must
-  -- not touch anybody's cap counter.
-  IF p_member_id IS NOT NULL AND p_kind = 'clawback' THEN
-    RAISE EXCEPTION 'clawback is not member spend — p_member_id must be NULL';
-  END IF;
-
-  -- Fast-path idempotency check (no lock taken yet).
-  IF p_request_id IS NOT NULL THEN
-    SELECT balance_after INTO v_existing FROM credit_ledger WHERE request_id = p_request_id;
-    IF FOUND THEN
-      RETURN jsonb_build_object('duplicate', true, 'balance_after', v_existing.balance_after);
-    END IF;
-  END IF;
-
-  SELECT bundle_balance, reserve_balance INTO v_bundle, v_reserve
-    FROM credit_wallets WHERE id = p_wallet_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'wallet % not found', p_wallet_id; END IF;
-
-  -- Re-check idempotency under the lock: a racer that won while we waited has
-  -- already committed its ledger row (it held this lock until commit).
-  IF p_request_id IS NOT NULL THEN
-    SELECT balance_after INTO v_existing FROM credit_ledger WHERE request_id = p_request_id;
-    IF FOUND THEN
-      RETURN jsonb_build_object('duplicate', true, 'balance_after', v_existing.balance_after);
-    END IF;
-  END IF;
-
-  -- Member cap accounting. Only ever set on plain member spend (the guards
-  -- above reject it for overage and clawback). Locks org_members AFTER
-  -- credit_wallets — the only place that takes both, so the order can't
-  -- deadlock against anything.
-  IF p_member_id IS NOT NULL THEN
-    SELECT COALESCE(m.monthly_cap, o.default_member_cap), m.cap_used, m.cap_period_end
-      INTO v_cap, v_cap_used, v_cap_end
-      FROM org_members m
-      JOIN organizations o ON o.id = m.org_id
-      WHERE m.id = p_member_id
-      FOR UPDATE OF m;
-    IF NOT FOUND THEN RAISE EXCEPTION 'org member % not found', p_member_id; END IF;
-
-    -- The cap period tracks the POOL's period, so a member's ceiling resets
-    -- exactly when the dispersal does — otherwise a member could spend a full
-    -- cap on either side of a boundary that never lines up with the money.
-    IF v_cap_end IS NULL OR v_cap_end <= now() THEN
-      v_cap_used := 0;
-      v_cap_end := COALESCE(
-        (SELECT period_end FROM credit_wallets WHERE id = p_wallet_id),
-        date_trunc('month', now()) + INTERVAL '1 month'
-      );
-    END IF;
-
-    IF v_cap IS NOT NULL AND v_cap_used + p_amount > v_cap THEN
-      v_cap_exceeded := true;   -- recorded, not blocked (see the header)
-    END IF;
-    v_cap_used := v_cap_used + p_amount;
-    p_metadata := p_metadata || jsonb_build_object(
-      'org_member_id', p_member_id, 'cap', v_cap, 'cap_used', v_cap_used,
-      'cap_exceeded', v_cap_exceeded);
-  END IF;
-
-  IF p_kind = 'overage_debit' THEN
-    -- Overage does NOT drain buckets (a partial balance must not be eaten on
-    -- top of the full Stripe charge — that double-charges and violates
-    -- reserve persistence). delta=0 keeps sum(delta)==balance reconciliation;
-    -- the billable amount rides metadata.credits_billed for the sweep.
-    v_balance_after := v_bundle + v_reserve;
-    BEGIN
-      UPDATE credit_wallets SET
-        overage_this_period = overage_this_period + p_amount,
-        updated_at = now()
-      WHERE id = p_wallet_id;
-
-      INSERT INTO credit_ledger (wallet_id, delta, kind, action, request_id, balance_after, metadata)
-      VALUES (p_wallet_id, 0, p_kind, p_action, p_request_id, v_balance_after,
-              p_metadata || jsonb_build_object('credits_billed', p_amount));
-    EXCEPTION WHEN unique_violation THEN
-      SELECT balance_after INTO v_existing FROM credit_ledger WHERE request_id = p_request_id;
-      RETURN jsonb_build_object('duplicate', true, 'balance_after', v_existing.balance_after);
-    END;
-    RETURN jsonb_build_object('duplicate', false, 'balance_after', v_balance_after);
-  END IF;
-
-  IF p_kind = 'clawback' THEN
-    -- Admin clawback (pack refunds / chargebacks — spec 2026-07-19 §3).
-    -- Purchased credits land in RESERVE, so a clawback drains reserve ONLY,
-    -- clamped to what remains. The generic bundle-first drain below would be
-    -- a NO-OP clawback: it removes credits the next rollover restores
-    -- wholesale (a personal monthly grant, or an org's monthly dispersal), and
-    -- any negative landed on the bundle is forgiven there as "drift". Clamping
-    -- means no negative is ever created — the shortfall is a written-off cost,
-    -- returned to the caller so support can see the refund exceeded what was
-    -- recoverable.
-    v_from_reserve := LEAST(GREATEST(v_reserve, 0), p_amount);
-    v_reserve := v_reserve - v_from_reserve;
-    v_balance_after := v_bundle + v_reserve;
-    BEGIN
-      UPDATE credit_wallets SET
-        reserve_balance = v_reserve,
-        updated_at = now()
-      WHERE id = p_wallet_id;
-
-      INSERT INTO credit_ledger (wallet_id, delta, kind, action, request_id, balance_after, metadata)
-      VALUES (p_wallet_id, -v_from_reserve, p_kind, p_action, p_request_id, v_balance_after,
-              p_metadata || jsonb_build_object('credits_requested', p_amount,
-                                               'credits_removed', v_from_reserve,
-                                               'shortfall', p_amount - v_from_reserve));
-    EXCEPTION WHEN unique_violation THEN
-      SELECT balance_after INTO v_existing FROM credit_ledger WHERE request_id = p_request_id;
-      RETURN jsonb_build_object('duplicate', true, 'balance_after', v_existing.balance_after);
-    END;
-    RETURN jsonb_build_object('duplicate', false, 'balance_after', v_balance_after,
-                              'removed', v_from_reserve, 'shortfall', p_amount - v_from_reserve);
-  END IF;
-
-  -- Drain bundle first; reserve second; any remainder (accepted concurrency
-  -- drift) lands on the bundle, which may go negative. On an ORG pool that
-  -- order is load-bearing: bundle is the EXPIRING monthly dispersal, so it
-  -- must be spent before the permanent purchased reserve.
-  v_from_reserve := LEAST(GREATEST(v_reserve, 0), GREATEST(p_amount - GREATEST(v_bundle, 0), 0));
-  v_bundle := v_bundle - (p_amount - v_from_reserve);
-  v_reserve := v_reserve - v_from_reserve;
-  v_balance_after := v_bundle + v_reserve;
-
-  -- Wallet UPDATE, member-cap UPDATE and ledger INSERT share ONE guarded
-  -- subtransaction: a plpgsql EXCEPTION block only rolls back statements
-  -- INSIDE it, so a request_id collision must roll back the cap counter too —
-  -- otherwise a retried debit is free of charge but still eats the cap.
-  BEGIN
-    UPDATE credit_wallets SET
-      bundle_balance = v_bundle,
-      reserve_balance = v_reserve,
-      updated_at = now()
-    WHERE id = p_wallet_id;
-
-    IF p_member_id IS NOT NULL THEN
-      UPDATE org_members SET cap_used = v_cap_used, cap_period_end = v_cap_end, updated_at = now()
-        WHERE id = p_member_id;
-    END IF;
-
-    INSERT INTO credit_ledger (wallet_id, delta, kind, action, request_id, balance_after, metadata)
-    VALUES (p_wallet_id, -p_amount, p_kind, p_action, p_request_id, v_balance_after,
-            p_metadata || jsonb_build_object('from_reserve', v_from_reserve));
-  EXCEPTION WHEN unique_violation THEN
-    SELECT balance_after INTO v_existing FROM credit_ledger WHERE request_id = p_request_id;
-    RETURN jsonb_build_object('duplicate', true, 'balance_after', v_existing.balance_after);
-  END;
-
-  RETURN jsonb_build_object('duplicate', false, 'balance_after', v_balance_after,
-                            'cap', v_cap, 'cap_used', v_cap_used,
-                            'cap_exceeded', v_cap_exceeded);
-END;
-$$;
-
-REVOKE EXECUTE ON FUNCTION public.debit_credits(UUID, INTEGER, TEXT, TEXT, TEXT, JSONB, UUID) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.debit_credits(UUID, INTEGER, TEXT, TEXT, TEXT, JSONB, UUID) TO service_role;
+                  'expiry', 'storage_bill', 'purchase', 'clawback',
+                  'allocation', 'reclaim'));
 
 -- ---------------------------------------------------------------------------
 -- rollover_wallet — re-created. Body is a byte-copy of the CURRENT definition
--- from 20260713000002_credits_schema.sql, with ONE addition: a guard as the
--- FIRST statement that RAISEs on any wallet that is neither 'user' nor 'org'.
---
--- ORG pools DO roll: the monthly dispersal lands in the expiring bundle bucket
--- and is zeroed at each period end, which is what stops an org banking a year
--- of credits and burning them in one month. What never expires is the RESERVE
--- bucket — purchased packs — and rollover only touches the bundle.
---
--- The guard exists because the RPC treats a NULL period_end as ROLLABLE on
--- both of its locking-SELECT guards, so a future caller (repair script, new
--- sweep step) pointing it at the wrong wallet would silently expire money.
--- This makes the invariant a DATABASE guarantee rather than a convention.
+-- from 20260713000002_credits_schema.sql (lines 377-438), with ONE addition:
+-- a guard as the FIRST statements of the body that RAISEs on any wallet whose
+-- owner_type is not 'user'. "Seat/org money never expires" was previously an
+-- application-level convention (_maybe_rollover_wallet's owner_type guard,
+-- the sweep's owner_type='user' filter) — both of those defenses live in
+-- code that could be bypassed by a future caller (repair script, new sweep
+-- step) calling this RPC directly, since the RPC itself treats NULL
+-- period_end as ROLLABLE on both of its locking-SELECT guards. This migration
+-- makes the invariant a DATABASE guarantee instead.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.rollover_wallet(
   p_wallet_id UUID,
@@ -633,8 +497,8 @@ DECLARE
   v_bundle INTEGER;
   v_reserve INTEGER;
 BEGIN
-  IF (SELECT owner_type FROM credit_wallets WHERE id = p_wallet_id) NOT IN ('user', 'org') THEN
-    RAISE EXCEPTION 'rollover_wallet: wallet % is neither a user nor an org wallet', p_wallet_id;
+  IF (SELECT owner_type FROM credit_wallets WHERE id = p_wallet_id) <> 'user' THEN
+    RAISE EXCEPTION 'rollover_wallet: wallet % is not a user wallet — seat/org money never expires', p_wallet_id;
   END IF;
 
   IF p_monthly_grant < 0 THEN RAISE EXCEPTION 'monthly grant must be >= 0'; END IF;
@@ -692,7 +556,9 @@ $$;
 -- signed-in user could move credits between arbitrary wallets or force a
 -- rollover. Same posture as every other money RPC (debit_credits,
 -- grant_credits, 20260713000002 / 20260720000001).
+REVOKE EXECUTE ON FUNCTION public.transfer_credits(UUID, UUID, INTEGER, TEXT, TEXT, JSONB) FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.rollover_wallet(UUID, INTEGER, TIMESTAMPTZ, TIMESTAMPTZ) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.transfer_credits(UUID, UUID, INTEGER, TEXT, TEXT, JSONB) TO service_role;
 GRANT EXECUTE ON FUNCTION public.rollover_wallet(UUID, INTEGER, TIMESTAMPTZ, TIMESTAMPTZ) TO service_role;
 
 COMMIT;

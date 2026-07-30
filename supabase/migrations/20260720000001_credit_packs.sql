@@ -64,7 +64,7 @@ BEGIN
 END $$;
 ALTER TABLE credit_ledger ADD CONSTRAINT credit_ledger_kind_check
   CHECK (kind IN ('monthly_grant', 'debit', 'overage_debit', 'admin_grant',
-                  'refund', 'expiry', 'purchase', 'clawback'));
+                  'refund', 'expiry', 'storage_bill', 'purchase', 'clawback'));
 
 -- ---------------------------------------------------------------------------
 -- 3. grant_credits learns kind='purchase'. Body copied EXACTLY from
@@ -92,7 +92,9 @@ DECLARE
 BEGIN
   IF p_amount < 0 THEN RAISE EXCEPTION 'grant amount must be >= 0'; END IF;
   IF p_bucket NOT IN ('bundle', 'reserve') THEN RAISE EXCEPTION 'invalid bucket %', p_bucket; END IF;
-  -- Kind whitelist symmetric with debit_credits. 'purchase' added for one-time credit top-up packs
+  -- Kind whitelist symmetric with debit_credits. storage_bill rows are
+  -- inserted directly by the sweep, never via grant_credits — that's why
+  -- it's absent here. 'purchase' added for one-time credit top-up packs
   -- (Licensing Phase A).
   IF p_kind NOT IN ('monthly_grant', 'admin_grant', 'refund', 'purchase') THEN
     RAISE EXCEPTION 'invalid grant kind %', p_kind;
