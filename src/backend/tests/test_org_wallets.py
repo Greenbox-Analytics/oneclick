@@ -384,10 +384,19 @@ def test_org_router_has_no_dispersal_endpoint(client):
     assert resp.status_code in (404, 405), f"a customer-facing dispersal route exists: {resp.status_code}"
 
 
-def test_admin_dispersal_endpoint_requires_platform_admin(client):
+def test_admin_dispersal_endpoint_requires_platform_admin(client, monkeypatch):
     """And on the admin surface it is gated by Msanii's own admin dependency,
-    not by org membership."""
-    # Nothing is patched: the admin dependency must reject the caller BEFORE any
-    # service call, so a passing service mock would hide the very thing under test.
+    not by org membership.
+
+    ADMIN_EMAILS is pinned to somebody OTHER than the caller (the house idiom —
+    see test_admin_router's _set_admin_emails). Without it this test reads the
+    developer's .env: with an allowlist present require_admin returns 403, but
+    with an EMPTY one it takes its deliberate "no admins configured" branch and
+    returns 500, so the same assertion passed locally and failed in CI.
+
+    Nothing else is patched — the dependency must reject the caller BEFORE any
+    service call, and a passing service mock would hide the very thing under test.
+    """
+    monkeypatch.setenv("ADMIN_EMAILS", "someone-else@example.com")
     resp = client.put(f"/admin/orgs/{ORG_ID}/dispersal", json={"monthly_dispersal_credits": 10000})
-    assert resp.status_code in (401, 403), f"expected an admin gate, got {resp.status_code}"
+    assert resp.status_code == 403, f"expected an admin gate, got {resp.status_code}: {resp.text[:200]}"

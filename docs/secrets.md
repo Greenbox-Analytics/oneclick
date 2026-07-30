@@ -197,9 +197,13 @@ Most prod values live in GSM, but the per-environment **URLs and deploy targets*
 | | Project secret | Deploy trigger | Rebuild after an env change |
 |---|---|---|---|
 | dev | `VERCEL_PROJECT_ID` | Vercel Git integration, on push to `main` | dashboard "Redeploy" works |
-| prod | `VERCEL_PROD_PROJECT_ID` | `deploy-frontend-prod.yml` on a `v*` tag | dashboard "Redeploy" **cannot** rebuild (deployed `--prebuilt`, so Vercel has no source) — you must re-run the workflow or push a new tag |
+| prod | `VERCEL_PROD_PROJECT_ID` | `deploy-frontend-prod.yml` on a `v*` tag or manual dispatch | dashboard "Redeploy" works — both projects now build **on Vercel** from source |
 
-A `VITE_*` var that is missing or misscoped at prod build time is inlined as `undefined`. That fails loudly for Supabase (`Invalid supabaseUrl` before the app renders) and silently for others — `VITE_PAYPAL_CLIENT_ID` just hides the "Pay with PayPal" button. To check what a live deployment actually built with, grep the served bundle rather than the dashboard:
+### Do not reintroduce `--prebuilt`
+
+`deploy-frontend-prod.yml` used to run `vercel build` in CI and upload the output with `vercel deploy --prebuilt`. That broke prod on 2026-07-30 in a way that took hours to find, because a prebuilt build gets its env from `vercel pull` — and **`vercel pull` cannot read values marked Sensitive in the Vercel UI.** `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` were present and correctly scoped in the dashboard the whole time, yet inlined as `undefined`, shipping a bundle that threw `Invalid supabaseUrl` before the app rendered. Prebuilt also disables the dashboard Redeploy button, so the only recovery was another release. Vercel's own builders read Sensitive vars fine, so building from source avoids both traps. The release gate did not change: prod still deploys only on a `v*` tag or manual dispatch, never on a merge to `main`.
+
+A `VITE_*` var that is missing, misscoped, or unreadable at build time is inlined as `undefined`. That fails loudly for Supabase (`Invalid supabaseUrl` before the app renders) and silently for everything else — `VITE_PAYPAL_CLIENT_ID` just hides the "Pay with PayPal" button with no error. **The dashboard is not evidence of what a deployment built with**; grep the served bundle instead:
 
 ```bash
 curl -s https://www.msanii-beta.com/ | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js'
