@@ -767,31 +767,32 @@ async def set_member_cap(db: Client, user_id: str, org_id: str, member_id: str, 
     return res.data[0]
 
 
-async def set_org_dispersal(
-    db: Client, user_id: str, org_id: str, monthly_dispersal_credits: int, default_member_cap: int | None
-) -> dict:
-    """Admin-only: the contract dials — how many credits land in the pool each
-    month, and the cap new members inherit.
+async def set_org_dispersal(db: Client, org_id: str, monthly_dispersal_credits: int) -> dict:
+    """PLATFORM-ADMIN ONLY: how many credits the sweep adds to this org's pool
+    each period. Called from subscriptions/admin_router.py, which gates on
+    Msanii's own admin dependency — deliberately NOT from /orgs/*, and it takes
+    no acting user_id precisely so it cannot be wired to an org-admin route by
+    accident.
 
-    Changing the dispersal does NOT top the pool up immediately: the sweep
-    delivers it once per period, so a mid-month raise takes effect at the next
-    period boundary. That keeps one path writing dispersal credits, which is
-    what makes the once-per-month idempotency hold.
+    WHY: the dispersal is the contract, and nothing in the app collects payment
+    for it — there is no org subscription object. If an ORG admin could write
+    it, then since any signed-in user can create an org and is auto-made its
+    admin, they could set their own dispersal to any number and the sweep would
+    grant it monthly for free. It would also self-activate the org, because
+    `wallets.cumulative_paid_in` counts 'dispersal' toward the activation floor
+    (correct once an operator sets it — an operator setting it IS the commercial
+    agreement — and a hole the moment the customer can).
+
+    A raise does NOT top the pool up now: the sweep delivers it once per period,
+    so a mid-month change takes effect at the next boundary. That keeps ONE path
+    writing dispersal credits, which is what makes its monthly idempotency hold.
     """
-    authz.require_admin(db, user_id, org_id)
     if monthly_dispersal_credits < 0:
         raise ValueError("monthly_dispersal_credits must be >= 0")
-    if default_member_cap is not None and default_member_cap < 0:
-        raise ValueError("default_member_cap must be >= 0")
 
     res = (
         db.table("organizations")
-        .update(
-            {
-                "monthly_dispersal_credits": monthly_dispersal_credits,
-                "default_member_cap": default_member_cap,
-            }
-        )
+        .update({"monthly_dispersal_credits": monthly_dispersal_credits})
         .eq("id", org_id)
         .execute()
     )

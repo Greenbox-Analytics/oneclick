@@ -42,14 +42,16 @@ class MemberCapUpdate(BaseModel):
 
 
 class OrgDispersalUpdate(BaseModel):
-    """PUT /orgs/{org_id}/dispersal body (admin-only) — the contract dials.
+    """PUT /admin/orgs/{org_id}/dispersal body — MSANII ADMIN ONLY (see
+    orgs.service.set_org_dispersal for why this can't live on /orgs/*).
 
-    `monthly_dispersal_credits` is what the sweep adds to the pool each period;
-    `default_member_cap` is the ceiling new members inherit.
+    `monthly_dispersal_credits` is what the sweep adds to the org's pool each
+    period: the contract volume. `default_member_cap` is NOT here — dividing up
+    what they've paid for is the customer's own business, and it rides
+    PUT /orgs/{org_id} like the org name.
     """
 
     monthly_dispersal_credits: int = Field(ge=0, le=100_000_000)
-    default_member_cap: int | None = Field(default=None, ge=0, le=10_000_000)
 
 
 class CreditRequestCreate(BaseModel):

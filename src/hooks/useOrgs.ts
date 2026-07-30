@@ -331,32 +331,6 @@ export function useSetMemberCap() {
   });
 }
 
-export function useSetOrgDispersal() {
-  const qc = useQueryClient();
-  return useMutation<
-    OrgSummary,
-    Error,
-    { orgId: string; monthlyDispersalCredits: number; defaultMemberCap: number | null }
-  >({
-    mutationFn: ({ orgId, monthlyDispersalCredits, defaultMemberCap }) =>
-      apiFetch<OrgSummary>(`${API_URL}/orgs/${orgId}/dispersal`, {
-        method: "PUT",
-        body: JSON.stringify({
-          monthly_dispersal_credits: monthlyDispersalCredits,
-          default_member_cap: defaultMemberCap,
-        }),
-      }),
-    onSuccess: (_d, { orgId }) => {
-      invalidateOrgUsage(qc, orgId);
-      qc.invalidateQueries({ queryKey: ["orgs", orgId] });
-      // The next top-up lands at the period boundary, not now — say so, or an
-      // admin will refresh looking for credits that aren't due yet.
-      toast.success("Contract updated — the next top-up applies at the period reset");
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't update the contract.")),
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Invites
 // ---------------------------------------------------------------------------

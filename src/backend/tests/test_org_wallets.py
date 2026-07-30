@@ -270,15 +270,10 @@ async def test_set_member_cap_rejects_negative(monkeypatch):
         await service.set_member_cap(db, U1, ORG_ID, MEMBER_ID, -1)
 
 
-async def test_set_org_dispersal_requires_admin_403(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: False)
-    with pytest.raises(HTTPException) as exc_info:
-        await service.set_org_dispersal(MagicMock(), U1, ORG_ID, 10000, 2000)
-    assert exc_info.value.status_code == 403
-
-
-async def test_set_org_dispersal_writes_both_dials(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+async def test_set_org_dispersal_writes_the_contract_volume(monkeypatch):
+    """No org-admin authz inside: the dispersal is an OPERATOR dial, gated by the
+    admin router. The service takes no acting user_id precisely so it can't be
+    wired to an org-admin route by accident."""
     captured = {}
 
     def _side(name):
@@ -297,20 +292,43 @@ async def test_set_org_dispersal_writes_both_dials(monkeypatch):
     db = MagicMock()
     db.table.side_effect = _side
 
-    await service.set_org_dispersal(db, U1, ORG_ID, 10000, 2000)
+    await service.set_org_dispersal(db, ORG_ID, 10000)
 
-    assert captured["payload"] == {"monthly_dispersal_credits": 10000, "default_member_cap": 2000}
-    # Raising the dispersal must NOT top the pool up here — the sweep is the only
-    # writer of dispersal credits, which is what keeps its monthly idempotency honest.
+    assert captured["payload"] == {"monthly_dispersal_credits": 10000}
+    # Raising it must NOT top the pool up here — the sweep is the only writer of
+    # dispersal credits, which is what keeps its monthly idempotency honest.
     db.rpc.assert_not_called()
 
 
-async def test_set_org_dispersal_rejects_negative_values(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+async def test_set_org_dispersal_rejects_negative(monkeypatch):
     with pytest.raises(ValueError, match="monthly_dispersal_credits must be >= 0"):
-        await service.set_org_dispersal(MagicMock(), U1, ORG_ID, -1, None)
-    with pytest.raises(ValueError, match="default_member_cap must be >= 0"):
-        await service.set_org_dispersal(MagicMock(), U1, ORG_ID, 100, -5)
+        await service.set_org_dispersal(MagicMock(), ORG_ID, -1)
+
+
+async def test_set_org_dispersal_does_not_touch_the_member_cap(monkeypatch):
+    """default_member_cap is the CUSTOMER's dial (it divides what they paid for)
+    and rides PUT /orgs/{id}; the operator endpoint must never write it."""
+    captured = {}
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data=[{"id": ORG_ID}], count=1)
+            original_update = b.update
+
+            def _update(payload):
+                captured["payload"] = payload
+                return original_update(payload)
+
+            b.update = _update
+        return b
+
+    db = MagicMock()
+    db.table.side_effect = _side
+
+    await service.set_org_dispersal(db, ORG_ID, 500)
+
+    assert "default_member_cap" not in captured["payload"]
 
 
 # ---------------------------------------------------------------------------
@@ -356,28 +374,20 @@ def test_cap_router_404_when_licensing_off(client, monkeypatch):
     assert resp.status_code == 404
 
 
-def test_dispersal_router_ok_fires_analytics(client):
-    with (
-        patch(
-            "orgs.router.service.set_org_dispersal",
-            new=AsyncMock(return_value={"id": ORG_ID, "monthly_dispersal_credits": 10000}),
-        ),
-        patch("orgs.router.analytics_capture") as mock_capture,
-    ):
-        resp = client.put(
-            f"/orgs/{ORG_ID}/dispersal", json={"monthly_dispersal_credits": 10000, "default_member_cap": 2000}
-        )
-    assert resp.status_code == 200
-    mock_capture.assert_called_once()
-    assert mock_capture.call_args.args[1] == "org_dispersal_set"
+def test_org_router_has_no_dispersal_endpoint(client):
+    """REGRESSION GUARD for a hole this replaced: the dispersal used to sit on
+    /orgs/{id}/dispersal behind org-admin authz. Since any signed-in user can
+    create an org and is auto-made its admin — and dispersed credits count toward
+    the activation floor — that let anyone mint themselves unlimited monthly
+    credits and self-activate. It must never come back to a customer route."""
+    resp = client.put(f"/orgs/{ORG_ID}/dispersal", json={"monthly_dispersal_credits": 1_000_000})
+    assert resp.status_code in (404, 405), f"a customer-facing dispersal route exists: {resp.status_code}"
 
 
-def test_dispersal_router_requires_the_dispersal_field_422(client):
-    resp = client.put(f"/orgs/{ORG_ID}/dispersal", json={"default_member_cap": 2000})
-    assert resp.status_code == 422
-
-
-def test_dispersal_router_404_when_licensing_off(client, monkeypatch):
-    monkeypatch.delenv("LICENSING_ENABLED", raising=False)
-    resp = client.put(f"/orgs/{ORG_ID}/dispersal", json={"monthly_dispersal_credits": 100})
-    assert resp.status_code == 404
+def test_admin_dispersal_endpoint_requires_platform_admin(client):
+    """And on the admin surface it is gated by Msanii's own admin dependency,
+    not by org membership."""
+    # Nothing is patched: the admin dependency must reject the caller BEFORE any
+    # service call, so a passing service mock would hide the very thing under test.
+    resp = client.put(f"/admin/orgs/{ORG_ID}/dispersal", json={"monthly_dispersal_credits": 10000})
+    assert resp.status_code in (401, 403), f"expected an admin gate, got {resp.status_code}"

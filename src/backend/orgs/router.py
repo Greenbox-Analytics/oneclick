@@ -26,7 +26,6 @@ from orgs.models import (
     MemberCapUpdate,
     MemberRoleUpdate,
     OrgCreate,
-    OrgDispersalUpdate,
     OrgUpdate,
     ProjectMemberRoleUpdate,
 )
@@ -283,26 +282,6 @@ async def set_member_cap(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     analytics_capture(user_id, "org_member_cap_set", {"org_id": org_id, "member_id": member_id, "cap": body.cap})
-    return result
-
-
-@router.put("/{org_id}/dispersal")
-async def set_org_dispersal(org_id: str, body: OrgDispersalUpdate, user_id: str = Depends(get_current_user_id)):
-    """The contract dials: monthly dispersal into the pool, and the cap new
-    members inherit. A raise takes effect at the next period boundary — the
-    sweep is the only writer of dispersal credits, which is what keeps its
-    once-per-month idempotency honest."""
-    try:
-        result = await service.set_org_dispersal(
-            _get_supabase(), user_id, org_id, body.monthly_dispersal_credits, body.default_member_cap
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    analytics_capture(
-        user_id,
-        "org_dispersal_set",
-        {"org_id": org_id, "monthly_dispersal_credits": body.monthly_dispersal_credits},
-    )
     return result
 
 

@@ -15,6 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_email, get_current_user_id
+from orgs.models import OrgDispersalUpdate
 from subscriptions.admin_auth import is_env_admin, is_user_admin, require_admin
 from subscriptions.admin_service import AdminService
 from subscriptions.models import OverridePayload
@@ -337,6 +338,40 @@ async def admin_credit_ledger(
 # org is just flipping that column; there is no separate enforcement path to
 # wire up here.
 # ---------------------------------------------------------------------------
+
+
+@router.put("/orgs/{org_id}/dispersal")
+async def set_org_dispersal(
+    org_id: str,
+    body: OrgDispersalUpdate,
+    _admin: str = Depends(require_admin),
+) -> dict:
+    """Set an org's monthly credit dispersal — the contract volume the sweep
+    adds to its pool each period.
+
+    MSANII ADMIN ONLY, and that placement is load-bearing rather than tidiness:
+    nothing in the app collects payment for a dispersal (there is no org
+    subscription object), any signed-in user may create an org and is auto-made
+    its admin, and `wallets.cumulative_paid_in` counts dispersed credits toward
+    the activation floor. On an org-admin route those three facts compose into
+    "mint yourself unlimited credits and self-activate". An operator setting it
+    IS the commercial agreement, so here it's the same statement of fact the
+    signed contract is.
+
+    Takes effect at the next period boundary — the sweep is the only writer of
+    dispersal credits, which is what keeps its once-per-month idempotency honest.
+    """
+    from main import get_supabase_client
+    from orgs import service as orgs_service
+
+    sb = get_supabase_client()
+    org = sb.table("organizations").select("id").eq("id", org_id).maybe_single().execute()
+    if not (org and org.data):
+        raise HTTPException(status_code=404, detail="Organization not found")
+    try:
+        return await orgs_service.set_org_dispersal(sb, org_id, body.monthly_dispersal_credits)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/orgs/{org_id}/suspend")

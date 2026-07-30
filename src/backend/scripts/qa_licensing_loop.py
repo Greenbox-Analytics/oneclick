@@ -4,7 +4,7 @@ Drives the full org lifecycle over HTTP (real JWTs, real RLS, real RPCs)
 against a locally-running backend with LICENSING_ENABLED + CREDITS_ENABLED:
 
   create org -> activate (purchase-grant path) -> invite x2 -> claim ->
-  set member caps -> link project -> admin grants access -> derived billing
+  set member caps + operator sets the dispersal -> link project -> admin grants access -> derived billing
   debits the ORG POOL against the member's cap -> cap wall + dry-pool wall
   (member + owner-aware) -> offboard -> unlink -> archive.
 
@@ -157,8 +157,18 @@ try:
         # pool is still funded, which is the wall a dry pool can't produce.
         r = c.put(f"/orgs/{org_id}/members/{collab_member_id}/cap", json={"cap": 0})
         check("4b. set collab cap = 0", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
-        r = c.put(f"/orgs/{org_id}/dispersal", json={"monthly_dispersal_credits": 500, "default_member_cap": 100})
-        check("4c. set contract dials", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        # default_member_cap is the customer's dial and rides the org update.
+        r = c.put(f"/orgs/{org_id}", json={"default_member_cap": 100})
+        check("4c. admin sets the default member cap", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        # The DISPERSAL is not theirs to set — proving the hole stays closed.
+        r = c.put(f"/orgs/{org_id}/dispersal", json={"monthly_dispersal_credits": 1_000_000})
+        check(
+            "4d. org admin CANNOT set their own dispersal (no customer route)",
+            r.status_code in (404, 405),
+            f"{r.status_code}: {r.text[:200]}",
+        )
+    # Operator sets it directly, the way a signed contract is applied.
+    sb.table("organizations").update({"monthly_dispersal_credits": 500}).eq("id", org_id).execute()
     pool_after = (
         sb.table("credit_wallets")
         .select("reserve_balance, bundle_balance")

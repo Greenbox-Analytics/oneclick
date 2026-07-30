@@ -19,22 +19,18 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { useUpdateOrg, useArchiveOrg, useSetOrgDispersal, type OrgDetail } from "@/hooks/useOrgs";
+import { useUpdateOrg, useArchiveOrg, type OrgDetail } from "@/hooks/useOrgs";
 
 // Client-side-only suggested default (plan Task 12/14, round 5: cut the
 // backend env fallback — the sweep reads the STORED column and NULL/0 means
 // manual-only, so a runtime env default would never be read. This is purely
 // a UI pre-fill when the admin flips the toggle on).
 const SUGGESTED_DEFAULT_CAP = 2000;
-const SUGGESTED_DISPERSAL = 10000;
 
 export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
   const updateOrg = useUpdateOrg();
   const archiveOrg = useArchiveOrg();
-  const setDispersal = useSetOrgDispersal();
-
   const [name, setName] = useState(org.name);
-  const [dispersal, setDispersalValue] = useState(String(org.monthly_dispersal_credits ?? 0));
   const [capEnabled, setCapEnabled] = useState((org.default_member_cap ?? 0) > 0);
   const [cap, setCap] = useState(
     org.default_member_cap && org.default_member_cap > 0 ? String(org.default_member_cap) : String(SUGGESTED_DEFAULT_CAP),
@@ -44,7 +40,6 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
   // new server values) — same pattern as TeamCardSettings' startEdit.
   useEffect(() => {
     setName(org.name);
-    setDispersalValue(String(org.monthly_dispersal_credits ?? 0));
     setCapEnabled((org.default_member_cap ?? 0) > 0);
     setCap(
       org.default_member_cap && org.default_member_cap > 0
@@ -55,11 +50,9 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
 
   const nameDirty = name.trim() !== org.name && !!name.trim();
   const capValue = Number(cap);
-  const dispersalValue = Number(dispersal);
   const storedCap = org.default_member_cap ?? 0;
-  const storedDispersal = org.monthly_dispersal_credits ?? 0;
+  const dispersalValue = org.monthly_dispersal_credits ?? 0;
   const capDirty = capEnabled ? capValue !== storedCap && capValue > 0 : storedCap > 0;
-  const dispersalDirty = Number.isFinite(dispersalValue) && dispersalValue >= 0 && dispersalValue !== storedDispersal;
 
   const handleToggleCap = (enabled: boolean) => {
     setCapEnabled(enabled);
@@ -67,21 +60,14 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
   };
 
   const handleSave = () => {
-    if (nameDirty) updateOrg.mutate({ orgId: org.id, name: name.trim() });
-    // The contract dials live on their own endpoint: they're the commercial
-    // terms, not display preferences, and the dispersal only takes effect at the
-    // next period boundary.
-    if (dispersalDirty || capDirty) {
-      setDispersal.mutate({
-        orgId: org.id,
-        monthlyDispersalCredits: dispersalDirty ? dispersalValue : storedDispersal,
-        defaultMemberCap: capEnabled ? capValue : null,
-      });
-    }
+    const fields: { orgId: string; name?: string; default_member_cap?: number | null } = { orgId: org.id };
+    if (nameDirty) fields.name = name.trim();
+    if (capDirty) fields.default_member_cap = capEnabled ? capValue : null;
+    updateOrg.mutate(fields);
   };
 
-  const canSave = nameDirty || capDirty || dispersalDirty;
-  const saving = updateOrg.isPending || setDispersal.isPending;
+  const canSave = nameDirty || capDirty;
+  const saving = updateOrg.isPending;
   const totalCommitted = capEnabled && capValue > 0 ? capValue * Math.max(1, org.member_count) : 0;
 
   return (
@@ -95,23 +81,29 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
           <Input id="org-name" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
 
-        <div className="bg-background border border-border rounded-xl px-4 py-3.5 space-y-1.5">
-          <Label htmlFor="org-dispersal" className="text-sm font-medium">
-            Monthly credits
-          </Label>
-          <p className="text-[12.5px] text-muted-foreground max-w-[460px]">
-            Added to the shared pool at the start of each month under your contract. Unused monthly
-            credits don&apos;t carry over — credits you buy separately never expire.
+        {/* Read-only: the dispersal is the contract, and Msanii sets it. Editable
+            here it would be free credits — anyone can create an org and is auto-made
+            its admin, and dispersed credits count toward activation. */}
+        <div className="bg-background border border-border rounded-xl px-4 py-3.5">
+          <div className="text-sm font-medium">Monthly credits</div>
+          <div className="text-[26px] font-bold tracking-tight mt-1 tabular-nums">
+            {dispersalValue.toLocaleString()}{" "}
+            <span className="text-sm font-normal text-muted-foreground">credits / month</span>
+          </div>
+          <p className="text-[12.5px] text-muted-foreground mt-1 max-w-[460px]">
+            {dispersalValue > 0 ? (
+              <>
+                Added to your shared pool at the start of each month under your contract. Unused
+                monthly credits don&apos;t carry over — credits you buy separately never expire. To
+                change this, talk to us.
+              </>
+            ) : (
+              <>
+                No monthly contract on this organization — you&apos;re running on credits you buy,
+                which never expire. Talk to us to set up a monthly allocation.
+              </>
+            )}
           </p>
-          <Input
-            id="org-dispersal"
-            type="number"
-            min={0}
-            className="max-w-[180px]"
-            value={dispersal}
-            onChange={(e) => setDispersalValue(e.target.value)}
-            placeholder={String(SUGGESTED_DISPERSAL)}
-          />
         </div>
 
         <div className="bg-background border border-border rounded-xl px-4 py-3.5">
