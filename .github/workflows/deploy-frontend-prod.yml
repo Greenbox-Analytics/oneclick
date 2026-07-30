@@ -31,16 +31,24 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
-      - name: Pull Vercel environment
+      # Links the project (.vercel/project.json) from VERCEL_ORG_ID /
+      # VERCEL_PROJECT_ID. No longer used to fetch env for a local build.
+      - name: Link Vercel project
         run: vercel pull --yes --environment=production --token=${{ env.VERCEL_TOKEN }}
 
-      - name: Build for production
-        run: vercel build --prod --token=${{ env.VERCEL_TOKEN }}
-
+      # Vercel builds from source — deliberately NOT `vercel build` + `--prebuilt`.
+      # Prebuilt uploads carry finished output, which means (a) Vercel can't
+      # re-run the build, so the dashboard Redeploy button is disabled and the
+      # only way to pick up an env var change is re-running this workflow, and
+      # (b) the build reads env via `vercel pull`, which cannot read values
+      # marked Sensitive — those inline as `undefined` and ship a broken bundle
+      # with no error. Building on Vercel avoids both. The release gate is
+      # unchanged: this workflow still only runs on a `v*` tag or manual
+      # dispatch, never on a merge to main.
       - name: Deploy to production
         id: deploy
         run: |
-          DEPLOY_URL=$(vercel deploy --prebuilt --prod --token=${{ env.VERCEL_TOKEN }})
+          DEPLOY_URL=$(vercel deploy --prod --token=${{ env.VERCEL_TOKEN }})
           echo "Deployed to: $DEPLOY_URL"
           echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
 
