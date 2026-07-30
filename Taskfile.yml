@@ -69,7 +69,8 @@ tasks:
           BYPASS_PAYWALLS: "false"
           POSTHOG_ENABLED: "false"
           PAYPAL_ENV: "live"
-          FRONTEND_URL: "https://app.msanii.com"
+          # No trailing slash — every consumer appends "/path".
+          FRONTEND_URL: "https://www.msanii-beta.com"
           VITE_BACKEND_API_URL: "https://msanii-backend-529844341368.northamerica-northeast2.run.app"
 
   setup:secrets:reset:dev:
@@ -96,7 +97,8 @@ tasks:
           BYPASS_PAYWALLS: "false"
           POSTHOG_ENABLED: "false"
           PAYPAL_ENV: "live"
-          FRONTEND_URL: "https://app.msanii.com"
+          # No trailing slash — every consumer appends "/path".
+          FRONTEND_URL: "https://www.msanii-beta.com"
           VITE_BACKEND_API_URL: "https://msanii-backend-529844341368.northamerica-northeast2.run.app"
 
   _setup:secrets:reset-env-file:
