@@ -107,8 +107,7 @@ export function AddWorkConfirmDialog({
           <div className="flex items-start gap-2 text-xs bg-muted/60 text-muted-foreground border rounded-lg px-3 py-2">
             <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <span>
-              No royalty splits have been added — go back to the Splits step to add them now, or
-              add them any time later on the work page.
+              No royalty splits have been added - Return to the previous step and select ‘Add splits from contract’ to have it reflected or add them anytime on the work's metadata page.
             </span>
           </div>
         )}

@@ -1845,7 +1845,7 @@ function RoyaltyStep({
                 {parsing
                   ? `Reading contract${queuedContracts.length > 1 ? "s" : ""}…`
                   : queuedContracts.length <= 1
-                    ? "Read contract"
+                    ? "Add splits from contract"
                     : `Read ${queuedContracts.length} contracts`}
               </Button>
             </div>
