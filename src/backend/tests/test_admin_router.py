@@ -98,9 +98,8 @@ class TestAdminMe:
 
     def test_returns_isAdmin_false_when_admin_emails_unset(self, admin_client, monkeypatch):
         """Operator misconfig (no admins) → /admin/me returns isAdmin: false.
-        Fail-loud-on-misconfig is still in effect for protected admin actions
-        (those raise 500 via require_admin); /admin/me itself is now a
-        non-blocking status probe."""
+        Protected admin actions deny with 403 (and log an ERROR for the
+        operator); /admin/me itself is a non-blocking status probe."""
         monkeypatch.setenv("ADMIN_EMAILS", "")
         resp = admin_client.get("/admin/me")
         assert resp.status_code == 200
@@ -167,8 +166,8 @@ class TestRequireAdminDbPath:
 
     def test_non_admin_with_empty_env_via_admin_me_returns_isAdmin_false(self, mock_supabase, monkeypatch):
         """/admin/me is a status probe → returns isAdmin: false even when env
-        is empty + no DB admin (the operator-misconfig 500 still fires for
-        protected actions like /admin/users — see TestNonAdminBlocked)."""
+        is empty + no DB admin (protected actions like /admin/users deny with
+        403 — see TestNonAdminBlocked and TestNoAdminsConfigured)."""
         from fastapi.testclient import TestClient
 
         import main
@@ -741,6 +740,47 @@ class TestNonAdminBlocked:
     def test_non_admin_blocked(self, method, path, non_admin_client):
         resp = non_admin_client.request(method, path, json={} if method in ("POST",) else None)
         assert resp.status_code == 403, f"{method} {path} should be 403 for non-admin"
+
+
+class TestNoAdminsConfigured:
+    """An environment with NO admins at all — empty ADMIN_EMAILS and no
+    profiles.is_admin row — must deny with 403, never 500.
+
+    It used to 500 as a fail-loud operator signal, which made every /admin/*
+    route look like a server fault on a fresh environment and misdirected anyone
+    debugging it. The signal now lives where operators actually look: an ERROR
+    log. The caller sees the same 403 any other non-admin sees.
+    """
+
+    def test_denies_with_403_not_500(self, non_admin_client, mock_supabase, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.setenv("ADMIN_EMAILS", "")
+        # profiles: no is_admin row anywhere → the bootstrap probe finds nothing.
+        mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = (
+            MagicMock(data=[])
+        )
+
+        with caplog.at_level(logging.ERROR):
+            resp = non_admin_client.get("/admin/users")
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Admin access required"
+        assert any("No admins configured" in r.message for r in caplog.records), (
+            "the operator signal must survive as an ERROR log"
+        )
+
+    def test_probe_failure_still_denies_quietly(self, non_admin_client, mock_supabase, monkeypatch):
+        """The bootstrap probe is diagnostics only — if the read itself raises,
+        the caller still gets the same 403 rather than a 500 leaking out."""
+        monkeypatch.setenv("ADMIN_EMAILS", "")
+        mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.side_effect = (
+            Exception("db down")
+        )
+
+        resp = non_admin_client.get("/admin/users")
+
+        assert resp.status_code == 403
 
 
 class TestOrgSuspendReactivate:

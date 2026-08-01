@@ -111,14 +111,14 @@ def test_cache_keyed_on_window_and_cohort(monkeypatch):
 
 
 def test_non_admin_returns_403_or_401(monkeypatch):
-    # No override - require_admin runs the real check.
-    # In this codebase, when caller has no email and ADMIN_EMAILS is empty,
-    # require_admin can return 500 (operator misconfig signal); otherwise 403.
+    # No override - require_admin runs the real check. With ADMIN_EMAILS unset
+    # and no DB admin this used to be a 500 ("operator misconfig"); it is now a
+    # plain 403 plus an ERROR log, so the assertion no longer has to tolerate a
+    # server error to stay green.
     monkeypatch.delenv("ADMIN_EMAILS", raising=False)
     client = TestClient(app)
     resp = client.get("/admin/analytics/summary")
-    # Accept any auth-style failure code
-    assert resp.status_code in (401, 403, 500)
+    assert resp.status_code in (401, 403)
 
 
 def test_returns_unavailable_when_posthog_query_fails(monkeypatch):
