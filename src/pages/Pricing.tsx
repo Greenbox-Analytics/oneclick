@@ -8,6 +8,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { useCreateCheckoutSession } from "@/hooks/useBilling";
+import { useEntitlements } from "@/hooks/useEntitlements";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { tierLabel, usd, annualPerMonth, ENTERPRISE_LABEL, TIER_PRICES } from "@/lib/tiers";
 
@@ -71,6 +72,13 @@ const FeatureItem = ({ included, label }: Feature) => (
 const Pricing = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  // LICENSING_ENABLED is a BACKEND env var — Vite only exposes VITE_-prefixed
+  // vars to the browser, so the frontend can't read it and must not try. The
+  // signal it ships instead is `availableContexts`, which /me/entitlements
+  // includes only when licensing is on. Absent for signed-out visitors too,
+  // which is the behaviour we want: they get the contact-us CTA.
+  const { data: ent } = useEntitlements();
+  const licensingOn = ent?.availableContexts != null;
 
   const [basicPeriod, setBasicPeriod] = useState<Period>("monthly");
   const [proPeriod, setProPeriod] = useState<Period>("monthly");
@@ -291,16 +299,38 @@ const Pricing = () => {
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
-            <Button size="lg" variant="outline" className="w-full" disabled title="Coming soon">
-              Create an organization
-            </Button>
-            <p className="text-xs text-muted-foreground mt-3 text-center">
-              Coming soon —{" "}
-              <Link to="/contact" className="underline">
-                reach out
-              </Link>{" "}
-              for early access.
-            </p>
+            {licensingOn ? (
+              <>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => navigate("/organization")}
+                >
+                  Create an organization
+                </Button>
+                <p className="text-xs text-muted-foreground mt-3 text-center">
+                  Starts free and inactive until it&apos;s funded.{" "}
+                  <Link to="/contact" className="underline">
+                    Talk to us
+                  </Link>{" "}
+                  about a monthly plan.
+                </p>
+              </>
+            ) : (
+              <>
+                <Button size="lg" variant="outline" className="w-full" disabled title="Coming soon">
+                  Create an organization
+                </Button>
+                <p className="text-xs text-muted-foreground mt-3 text-center">
+                  Coming soon —{" "}
+                  <Link to="/contact" className="underline">
+                    reach out
+                  </Link>{" "}
+                  for early access.
+                </p>
+              </>
+            )}
           </Card>
         </div>
 
