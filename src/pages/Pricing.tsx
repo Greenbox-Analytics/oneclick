@@ -339,15 +339,17 @@ const Pricing = () => {
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
-            {licensingOn ? (
+            {/* Signed-out visitors can't load entitlements, so licensingOn reads false
+                for them — send them to sign in rather than telling them it's unreleased. */}
+            {licensingOn || !user ? (
               <>
                 <Button
                   size="lg"
                   variant="outline"
                   className="w-full"
-                  onClick={() => navigate("/organization")}
+                  onClick={() => navigate(user ? "/organization" : "/auth")}
                 >
-                  Create an organization
+                  {user ? "Create an organization" : "Sign in to create an organization"}
                 </Button>
                 <p className="text-xs text-muted-foreground mt-3 text-center">
                   Starts free and inactive until it&apos;s funded.{" "}
