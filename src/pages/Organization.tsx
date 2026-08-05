@@ -236,6 +236,9 @@ function MemberPanel({ org }: { org: OrgSummary }) {
   const hasPending = (myRequests ?? []).some((r) => r.status === "pending");
   const usedTools = (usage?.tools ?? []).filter((t) => t.count > 0);
 
+  const capExceeded =
+    ent?.credits?.memberCap != null && (ent.credits.memberCapUsed ?? 0) > ent.credits.memberCap;
+
   return (
     <div className="flex flex-col gap-[22px]">
       <OrgHeader org={org} />
@@ -244,6 +247,13 @@ function MemberPanel({ org }: { org: OrgSummary }) {
         <div className="text-[13.5px] text-muted-foreground mt-0.5">
           You&apos;re a member of {org.name} — an admin manages invites and credit limits
         </div>
+
+        {org.my_status === "suspended" && (
+          <div className="mt-4 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3.5 text-[13px] text-amber-700 dark:text-amber-400">
+            Your seat is paused — your usage bills to your personal plan until an admin reactivates
+            you.
+          </div>
+        )}
 
         <div className="mt-4 bg-background border border-border rounded-xl px-[18px] py-4">
           {isActiveContext ? (
@@ -263,6 +273,12 @@ function MemberPanel({ org }: { org: OrgSummary }) {
                   {(ent.credits.memberCapUsed ?? 0).toLocaleString()} of{" "}
                   {ent.credits.memberCap.toLocaleString()} used · organization pool holds{" "}
                   {(ent.credits.balance ?? 0).toLocaleString()}
+                </div>
+              )}
+              {capExceeded && (
+                <div className="text-[12px] text-amber-700 dark:text-amber-400 mt-1">
+                  You&apos;re over your monthly limit — ask your admin to raise it before your next
+                  AI action.
                 </div>
               )}
 

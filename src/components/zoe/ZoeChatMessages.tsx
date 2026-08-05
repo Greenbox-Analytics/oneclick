@@ -389,10 +389,8 @@ function CreditWallCard({
           variant="inline"
           reason={reason}
           managedByOrg={managedByOrg}
+          capReached={detail?.capReached}
           requestUrl={detail?.requestUrl}
-          ownerCanUnlink={detail?.ownerCanUnlink}
-          projectId={detail?.projectId}
-          projectName={detail?.projectName}
         />
         {resetNote}
       </div>

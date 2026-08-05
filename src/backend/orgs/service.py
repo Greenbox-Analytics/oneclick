@@ -15,6 +15,7 @@ exist without an admin) belongs to the trigger, one write, no orphan-org
 window.
 """
 
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 
@@ -22,6 +23,8 @@ from fastapi import HTTPException
 from supabase import Client
 
 from orgs import authz, wallets
+
+logger = logging.getLogger(__name__)
 
 
 class DuplicateInviteError(Exception):
@@ -245,8 +248,10 @@ def _teardown_archived_org_grants(db: Client, org_id: str) -> None:
         from orgs.projects import revoke_org_granted_memberships
 
         revoke_org_granted_memberships(db, org_id)
-    except Exception as exc:
-        print(f"archive_org: revoke_org_granted_memberships failed org_id={org_id}: {exc}")
+    except Exception:
+        # The daily sweep's org-grant reconciliation (subscriptions/sweep.py)
+        # cleans up any grant this best-effort pass missed.
+        logger.exception("archive_org: revoke_org_granted_memberships failed org_id=%s", org_id)
 
 
 async def archive_org(db: Client, user_id: str, org_id: str) -> dict:
@@ -275,8 +280,12 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
     pool's `period_start` so "spent" means THIS period — the same window a
     member's cap resets on, which is the only comparison an admin can act on.
 
-    Also surfaces the storage ceiling: the finite ENTERPRISE_SEAT_STORAGE_BYTES
-    must be visible in the console BEFORE an upload fails, not just at the wall.
+    Per-seat storage is deliberately NOT reported. Post-20260803000003,
+    `usage_counters.total_storage_bytes` counts only PERSONAL (team_id IS NULL)
+    artists — surfacing it here was both semantically stale (team bytes live on
+    `organizations.storage_bytes`, kept by the storage triggers) and a privacy
+    leak of members' non-org activity to org admins. Org-level storage stays
+    available via the org row itself (get_org spreads `organizations.*`).
 
     Member visibility: every non-removed member is included. A removed member is
     included only if they spent something this period — an admin reading the
@@ -339,20 +348,6 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
             continue
         spent_by_member[member_id] = spent_by_member.get(member_id, 0) + abs(r.get("delta", 0))
 
-    user_ids = [m["user_id"] for m in members]
-    storage_by_user: dict[str, int] = {}
-    if user_ids:
-        usage_res = db.table("usage_counters").select("user_id, total_storage_bytes").in_("user_id", user_ids).execute()
-        storage_by_user = {r["user_id"]: r.get("total_storage_bytes", 0) for r in (usage_res.data or [])}
-
-    # Reuse the ONE existing reader of ENTERPRISE_SEAT_STORAGE_BYTES (spec
-    # rule 12) rather than re-parsing the env var here — lazy import mirrors
-    # this module's existing subscriptions.service call sites' avoidance of a
-    # module-level cross-package import.
-    from subscriptions.service import _enterprise_seat_storage_bytes
-
-    storage_cap = _enterprise_seat_storage_bytes()
-
     seats = []
     for m in members:
         spent = spent_by_member.get(m["id"], 0)
@@ -384,8 +379,6 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
                 "effectiveCap": effective_cap,
                 "capUsed": m.get("cap_used") or 0,
                 "spentThisPeriod": spent,
-                "storageBytes": storage_by_user.get(m["user_id"], 0),
-                "storageCapBytes": storage_cap,
             }
         )
 
@@ -629,8 +622,12 @@ def _revoke_offboarded_member_access(db: Client, org_id: str, member_user_id: st
         from orgs.projects import revoke_org_granted_memberships
 
         revoke_org_granted_memberships(db, org_id, user_id=member_user_id)
-    except Exception as exc:
-        print(f"_offboard: revoke_org_granted_memberships failed org_id={org_id} user_id={member_user_id}: {exc}")
+    except Exception:
+        # The daily sweep's org-grant reconciliation (subscriptions/sweep.py)
+        # cleans up any grant this best-effort pass missed.
+        logger.exception(
+            "_offboard: revoke_org_granted_memberships failed org_id=%s member_user_id=%s", org_id, member_user_id
+        )
 
 
 async def _offboard(db: Client, user_id: str, org_id: str, member_id: str, final_status: str) -> dict:

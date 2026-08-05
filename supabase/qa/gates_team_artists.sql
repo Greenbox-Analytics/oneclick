@@ -12,12 +12,14 @@
 -- whole block with "column reference org_id is ambiguous".
 --
 -- Gates 1-6 cover 20260803000001, 7-14 cover 20260803000002, 15-16 cover
--- 20260803000003.
+-- 20260803000003, 17-19 cover 20260805000001 (parent-pointer walk-out locks),
+-- 20-21 cover 20260805000002 (notes team scope).
 --
 -- Run the whole file after each of those migrations, and read the count in
 -- context: after 20260803000001 alone, gates 1-6 pass and 7-11 fail because the
 -- policies they exercise do not exist yet. Expected totals are 6 after
--- 20260803000001, 14 after 20260803000002, and 16 after 20260803000003.
+-- 20260803000001, 14 after 20260803000002, 16 after 20260803000003, 19 after
+-- 20260805000001, and 21 after 20260805000002.
 -- ============================================================================
 DO $$
 DECLARE
@@ -158,12 +160,17 @@ BEGIN
   -- Policy gates that need real projects/files (20260803000002).
   INSERT INTO projects (name, artist_id) VALUES ('GATE p-team', v_team) RETURNING id INTO v_proj_team;
   INSERT INTO projects (name, artist_id) VALUES ('GATE p-pers', v_personal) RETURNING id INTO v_proj_personal;
-  INSERT INTO project_files (project_id, file_name, file_url, file_size)
-    VALUES (v_proj_team, 'c.wav', 'https://x.test/c.wav', 500);
+  INSERT INTO project_files (project_id, file_name, file_url, file_size, folder_category)
+    VALUES (v_proj_team, 'c.wav', 'https://x.test/c.wav', 500, 'other');
 
   -- The creator backdoor. v_owner CREATED the team artist, so artists.user_id
   -- still points at them. Offboard them: every child-table policy must now
   -- deny, because each was re-scoped with `AND a.team_id IS NULL`.
+  --
+  -- org_members_admin_guard refuses to suspend the last ACTIVE admin, and
+  -- v_owner is it. Promote v_member for the duration so this is an ordinary
+  -- offboarding; both writes are legitimate and both are undone below.
+  UPDATE org_members SET role = 'admin' WHERE org_id = v_org AND user_id = v_member;
   UPDATE org_members SET status = 'suspended' WHERE org_id = v_org AND user_id = v_owner;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_owner, 'role', 'authenticated')::text, true);
@@ -175,7 +182,10 @@ BEGIN
     v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 12. offboarded creator still reads the team subtree (creator backdoor)';
   END IF;
   RESET ROLE;
+  -- Reactivate BEFORE demoting: the guard counts other active admins, so
+  -- v_owner must be back first or the demotion is the last-admin case.
   UPDATE org_members SET status = 'active' WHERE org_id = v_org AND user_id = v_owner;
+  UPDATE org_members SET role = 'member' WHERE org_id = v_org AND user_id = v_member;
 
   -- The one-statement walk-out: move a team file into a personal project.
   PERFORM set_config('request.jwt.claims',
@@ -217,10 +227,10 @@ BEGIN
     SELECT COALESCE(storage_bytes, 0) INTO v_org_before FROM organizations WHERE id = v_org;
     SELECT COALESCE(total_storage_bytes, 0) INTO v_user_before FROM usage_counters WHERE user_id = v_owner;
 
-    INSERT INTO project_files (project_id, file_name, file_url, file_size)
-      VALUES (v_proj_team, 'a.wav', 'https://x.test/a.wav', 1000);
-    INSERT INTO project_files (project_id, file_name, file_url, file_size)
-      VALUES (v_proj_personal, 'b.wav', 'https://x.test/b.wav', 7);
+    INSERT INTO project_files (project_id, file_name, file_url, file_size, folder_category)
+      VALUES (v_proj_team, 'a.wav', 'https://x.test/a.wav', 1000, 'other');
+    INSERT INTO project_files (project_id, file_name, file_url, file_size, folder_category)
+      VALUES (v_proj_personal, 'b.wav', 'https://x.test/b.wav', 7, 'other');
 
     IF (SELECT storage_bytes FROM organizations WHERE id = v_org) = v_org_before + 1000
        AND COALESCE((SELECT total_storage_bytes FROM usage_counters WHERE user_id = v_owner), 0)
@@ -236,6 +246,126 @@ BEGIN
     ELSE
       v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 16. team storage did not decrement';
     END IF;
+  END;
+
+  -- -------------------------------------------------------------- 17..19 --
+  -- Parent-pointer walk-outs (20260805000001). Gate 13 proved a member cannot
+  -- move a FILE across owners; these prove the same one level up — and here
+  -- RLS genuinely passes both ways, because the destination is the member's
+  -- OWN personal artist (USING via team membership, WITH CHECK via personal
+  -- ownership). Only the lock_parent_owner_move trigger stands in the way.
+  DECLARE
+    v_member_artist UUID; v_member_proj UUID; v_work UUID; v_afolder UUID;
+    v_ok BOOLEAN;
+  BEGIN
+    INSERT INTO artists (name, email, user_id) VALUES ('GATE member personal', 'gm@x.test', v_member)
+      RETURNING id INTO v_member_artist;
+    INSERT INTO projects (name, artist_id) VALUES ('GATE p-member', v_member_artist)
+      RETURNING id INTO v_member_proj;
+    INSERT INTO works_registry (user_id, artist_id, project_id, title)
+      VALUES (v_owner, v_team, v_proj_team, 'GATE work') RETURNING id INTO v_work;
+    INSERT INTO audio_folders (artist_id, name) VALUES (v_team, 'GATE folder')
+      RETURNING id INTO v_afolder;
+
+    PERFORM set_config('request.jwt.claims',
+      json_build_object('sub', v_member, 'role', 'authenticated')::text, true);
+    SET LOCAL ROLE authenticated;
+
+    -- 17: the whole-project walk-out (every file inside comes along).
+    BEGIN
+      UPDATE projects SET artist_id = v_member_artist WHERE id = v_proj_team;
+      IF EXISTS (SELECT 1 FROM projects WHERE id = v_proj_team AND artist_id = v_member_artist) THEN
+        v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 17. member MOVED a team project onto their personal artist';
+      ELSE
+        v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 17. cross-owner project move affected no rows';
+      END IF;
+    EXCEPTION WHEN insufficient_privilege THEN
+      v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 17. cross-owner project move refused by the lock trigger';
+    END;
+
+    -- 18: a work has TWO parent edges — artist_id and project_id. Both must
+    -- refuse to cross an owner boundary (stakes, collaborators and licensing
+    -- all hang off the work).
+    v_ok := false;
+    BEGIN
+      UPDATE works_registry SET artist_id = v_member_artist WHERE id = v_work;
+      v_ok := NOT EXISTS (SELECT 1 FROM works_registry WHERE id = v_work AND artist_id = v_member_artist);
+    EXCEPTION WHEN insufficient_privilege THEN v_ok := true;
+    END;
+    IF v_ok THEN
+      v_ok := false;
+      BEGIN
+        UPDATE works_registry SET project_id = v_member_proj WHERE id = v_work;
+        v_ok := NOT EXISTS (SELECT 1 FROM works_registry WHERE id = v_work AND project_id = v_member_proj);
+      EXCEPTION WHEN insufficient_privilege THEN v_ok := true;
+      END;
+    END IF;
+    IF v_ok THEN
+      v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 18. work cannot be re-pointed across owners (artist edge AND project edge)';
+    ELSE
+      v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 18. member walked a work out via artist_id or project_id';
+    END IF;
+
+    -- 19: the whole-audio-folder walk-out.
+    BEGIN
+      UPDATE audio_folders SET artist_id = v_member_artist WHERE id = v_afolder;
+      IF EXISTS (SELECT 1 FROM audio_folders WHERE id = v_afolder AND artist_id = v_member_artist) THEN
+        v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 19. member MOVED a team audio folder onto their personal artist';
+      ELSE
+        v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 19. cross-owner audio folder move affected no rows';
+      END IF;
+    EXCEPTION WHEN insufficient_privilege THEN
+      v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 19. cross-owner audio folder move refused by the lock trigger';
+    END;
+
+    RESET ROLE;
+    PERFORM set_config('request.jwt.claims', NULL, true);
+  END;
+
+  -- -------------------------------------------------------------- 20..21 --
+  -- notes joined the creator re-scope late (20260805000002): the original
+  -- policies keyed on row user_id and artists.user_id with no team_id scope,
+  -- so the CREATOR kept team notes forever and actual members had nothing.
+  DECLARE
+    v_note UUID;
+  BEGIN
+    INSERT INTO notes (user_id, artist_id, title) VALUES (v_owner, v_team, 'GATE note')
+      RETURNING id INTO v_note;
+
+    -- 20: the creator, offboarded. The row still carries their user_id and
+    -- they still created the artist — both of the OLD grant paths. Deny.
+    -- Second admin again, so the guard allows suspending v_owner (see gate 12).
+    UPDATE org_members SET role = 'admin' WHERE org_id = v_org AND user_id = v_member;
+    UPDATE org_members SET status = 'suspended' WHERE org_id = v_org AND user_id = v_owner;
+    PERFORM set_config('request.jwt.claims',
+      json_build_object('sub', v_owner, 'role', 'authenticated')::text, true);
+    SET LOCAL ROLE authenticated;
+    IF NOT EXISTS (SELECT 1 FROM notes WHERE id = v_note) THEN
+      v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 20. offboarded creator cannot read a team artist''s notes';
+    ELSE
+      v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 20. offboarded creator still reads team notes (creator backdoor)';
+    END IF;
+    RESET ROLE;
+    PERFORM set_config('request.jwt.claims', NULL, true);
+    UPDATE org_members SET status = 'active' WHERE org_id = v_org AND user_id = v_owner;
+    UPDATE org_members SET role = 'member' WHERE org_id = v_org AND user_id = v_member;
+
+    -- 21: an ordinary ACTIVE member (not the creator) reads and creates.
+    PERFORM set_config('request.jwt.claims',
+      json_build_object('sub', v_member, 'role', 'authenticated')::text, true);
+    SET LOCAL ROLE authenticated;
+    BEGIN
+      INSERT INTO notes (user_id, artist_id, title) VALUES (v_member, v_team, 'GATE note 2');
+      IF EXISTS (SELECT 1 FROM notes WHERE id = v_note) THEN
+        v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 21. active member reads and creates notes under the team artist';
+      ELSE
+        v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 21. active member cannot read team notes';
+      END IF;
+    EXCEPTION WHEN insufficient_privilege THEN
+      v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 21. active member''s note INSERT was refused';
+    END;
+    RESET ROLE;
+    PERFORM set_config('request.jwt.claims', NULL, true);
   END;
 
   RAISE EXCEPTION E'\n=== TEAM ARTIST GATES: % passed, % failed. ALL TEST DATA ROLLED BACK. ===%\n',

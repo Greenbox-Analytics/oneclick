@@ -358,12 +358,21 @@ class EntitlementsService:
                              create-org → invite → buy onboarding order must not wipe
                              every member's preference before activation).
 
+        A SUSPENDED org (status not in active/pending, but the org row still exists
+        un-archived and the caller's seat is still active) gets the same rule-7
+        "park, don't clear" treatment as pending: the caller resolves to PERSONAL
+        while the org is suspended, but the stored preference survives, so org
+        billing resumes automatically the moment the org is reactivated. Suspension
+        is temporary by definition — clearing here would silently dump every member
+        onto personal billing PERMANENTLY, with nobody switched back on reactivate.
+
         `billing_context_org_id` is ATTACKER-CONTROLLED (users can PATCH their own
         profiles row): this validation is the load-bearing security gate. Anything
         that is not the caller's own active seat in a live org falls closed to
-        personal, and lazy-clear fires for dead references (no seat, revoked/
-        suspended/removed seat, archived/suspended/nonexistent org) — NEVER for a
-        pending org. The whole function short-circuits to None when licensing is off.
+        personal, and lazy-clear fires for genuinely DEAD references (no seat,
+        revoked/suspended/removed seat, archived/nonexistent org) — NEVER for a
+        pending or suspended org. The whole function short-circuits to None when
+        licensing is off.
         """
         if not licensing_enabled():
             return None
@@ -389,8 +398,12 @@ class EntitlementsService:
         org = self._first_row(
             self.supabase.table("organizations").select("id, name, status, archived_at").eq("id", org_id).execute()
         )
-        if not org or org.get("archived_at") is not None or org.get("status") not in ("active", "pending"):
+        if not org or org.get("archived_at") is not None:
             self._clear_billing_context(user_id)
+            return None
+        if org.get("status") not in ("active", "pending"):
+            # SUSPENDED org: park, don't clear (see docstring). Personal context
+            # for now; org billing resumes automatically on reactivation.
             return None
 
         return {
@@ -406,7 +419,7 @@ class EntitlementsService:
 
         NEVER raises — a failed clear must not break an entitlements read; the next
         read simply re-attempts. Fires only for genuinely dead references (see
-        _resolve_context), never for a pending org (rule 7)."""
+        _resolve_context), never for a pending or suspended org (rule 7)."""
         try:
             self.supabase.table("profiles").update({"billing_context_org_id": None}).eq("id", user_id).execute()
         except Exception:

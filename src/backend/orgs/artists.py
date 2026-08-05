@@ -31,20 +31,35 @@ async def transfer_artist_to_team(db: Client, user_id: str, org_id: str, artist_
     keep them live from here on, but the bytes already on disk were counted
     against the wrong side and have to be re-derived once.
 
-    Order: authz (destination seat), then ownership, then the state check, then
-    the write. Ownership is checked AFTER membership so a stranger probing
-    artist ids learns nothing about them beyond the 404 they would get anyway.
+    Order: authz (destination seat), then the destination's archived check,
+    then creator-ship, then the state check, then the write. Anyone who is NOT
+    the artist's creator gets the SAME 404 whether the artist doesn't exist,
+    is someone else's personal artist, or is already team-owned — a 403/409
+    split there would let any org member probe arbitrary artist ids for
+    existence and ownership. The 409 "already belongs to a team" is reserved
+    for the creator themselves (the helpful "already transferred" signal).
+
+    An ARCHIVED destination org is refused with a 409: `can_access_artist`
+    denies on `archived_at`, so transferring in would permanently lock the
+    creator out of their own artist.
     """
     authz.require_member(db, user_id, org_id)
 
+    org_rows = db.table("organizations").select("archived_at").eq("id", org_id).execute().data
+    org_row = (org_rows or [None])[0]
+    if org_row and org_row.get("archived_at"):
+        raise HTTPException(
+            status_code=409,
+            detail="This organization has been archived — artists can't be moved into it.",
+        )
+
     row = db.table("artists").select("id, user_id, team_id").eq("id", artist_id).execute().data
     artist = (row or [None])[0]
-    if not artist:
+    if not artist or artist.get("user_id") != user_id:
+        # Non-creators (and unknown ids) always get the same 404 — no oracle.
         raise HTTPException(status_code=404, detail="Artist not found")
     if artist.get("team_id"):
         raise ArtistAlreadyTeamOwnedError("This artist already belongs to a team")
-    if artist.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Only the artist's owner can move it to a team")
 
     updated = (
         db.table("artists")

@@ -36,6 +36,9 @@ interface Artist {
   has_contract: boolean;
   avatar_url: string | null;
   verified?: boolean;
+  /** NOT NULL = owned by that organization (both fetch paths select * on
+   * artists, so the column is already in the payload). */
+  team_id?: string | null;
   teamcard?: {
     display_name?: string;
     avatar_url?: string;
@@ -213,6 +216,11 @@ const Artists = () => {
                           {artist.has_contract && (
                             <Badge variant="outline" className="text-xs gap-1 text-primary border-primary/30">
                               <FileText className="w-3 h-3" /> Contract
+                            </Badge>
+                          )}
+                          {artist.team_id && (
+                            <Badge variant="outline" className="text-xs gap-1">
+                              <Users className="w-3 h-3" /> Team
                             </Badge>
                           )}
                         </div>

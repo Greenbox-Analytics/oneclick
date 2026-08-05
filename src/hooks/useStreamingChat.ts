@@ -38,14 +38,11 @@ export interface CreditWallDetail {
   upgradeRequired?: boolean;
   overageAvailable?: boolean;
   managedByOrg?: boolean;
+  /** True when the MEMBER hit their own monthly limit (remedy: ask for a
+   * raise). False/absent on a dry pool, where only an admin buying credits
+   * helps — two different walls with different CTAs. */
+  capReached?: boolean;
   requestUrl?: string;
-  /** Licensing Phase C (spec §6/§11 rule 11c, plan Task 8) — set when this
-   * denial is a dry ORG seat on a project the caller OWNS and can unlink.
-   * Lands on the 402 in Task 6 (running separately); undefined until then,
-   * so every consumer renders it behind a presence-check. */
-  ownerCanUnlink?: boolean;
-  projectId?: string;
-  projectName?: string;
 }
 
 export interface Message {

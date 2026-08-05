@@ -158,7 +158,10 @@ def test_cumulative_paid_in_sums_purchase_and_dispersal_kinds():
     """Load-bearing: an org whose only funding is its monthly contract dispersal
     must still clear the activation floor. If this summed 'purchase' alone, a
     contract-only org would sit pending forever with its seats conferring
-    nothing."""
+    nothing. 'monthly_grant' is in the filter because the dispersal sweep is
+    implemented via rollover_wallet, which writes THAT kind — on org wallets
+    the sweep is its only writer, so it IS the dispersal component (kind
+    'dispersal' itself has never been written by anything)."""
     captured = {}
     b = MockQueryBuilder()
     original_in = b.in_
@@ -170,14 +173,14 @@ def test_cumulative_paid_in_sums_purchase_and_dispersal_kinds():
 
     b.in_ = _in
     b.execute.return_value = MagicMock(
-        data=[{"delta": 10000, "kind": "purchase"}, {"delta": 5000, "kind": "dispersal"}], count=2
+        data=[{"delta": 10000, "kind": "purchase"}, {"delta": 5000, "kind": "monthly_grant"}], count=2
     )
     db = MagicMock()
     db.table.return_value = b
 
     assert wallets.cumulative_paid_in(db, POOL_WALLET) == 15000
     assert captured["col"] == "kind"
-    assert set(captured["vals"]) == {"purchase", "dispersal"}
+    assert set(captured["vals"]) == {"purchase", "dispersal", "monthly_grant"}
 
 
 # ---------------------------------------------------------------------------

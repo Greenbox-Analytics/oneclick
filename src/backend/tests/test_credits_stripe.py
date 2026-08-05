@@ -538,6 +538,74 @@ class TestOrgTopupCompleted:
         assert "organizations" not in builders  # activation check never runs for the personal path
 
 
+class TestMaybeActivateOrg:
+    """Unit tests for orgs.wallets.maybe_activate_org — the ONE activation
+    check shared by _handle_org_topup_grant and the dispersal sweep."""
+
+    ORG_ID = "org-1"
+    WALLET_ID = "w-org-pool"
+
+    def _sb(self, org_status="pending", min_initial=None, ledger_rows=None):
+        return _mock_supabase(
+            {
+                "organizations": [
+                    {"id": self.ORG_ID, "status": org_status, "min_initial_purchase_credits": min_initial}
+                ],
+                "credit_ledger": ledger_rows or [],
+            }
+        )
+
+    def test_pending_over_floor_activates_and_returns_true(self, monkeypatch):
+        from orgs.wallets import maybe_activate_org
+
+        monkeypatch.setenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000")
+        sb, builders = self._sb(ledger_rows=[{"delta": 12000, "kind": "monthly_grant"}])
+
+        assert maybe_activate_org(sb, self.ORG_ID, self.WALLET_ID) is True
+        builders["organizations"].update.assert_called_once_with({"status": "active"})
+
+    def test_pending_under_floor_stays_pending_returns_false(self, monkeypatch):
+        from orgs.wallets import maybe_activate_org
+
+        monkeypatch.setenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000")
+        sb, builders = self._sb(ledger_rows=[{"delta": 3000, "kind": "monthly_grant"}])
+
+        assert maybe_activate_org(sb, self.ORG_ID, self.WALLET_ID) is False
+        builders["organizations"].update.assert_not_called()
+
+    def test_non_pending_org_never_touched(self, monkeypatch):
+        from orgs.wallets import maybe_activate_org
+
+        for status in ("active", "suspended"):
+            sb, builders = self._sb(org_status=status, ledger_rows=[{"delta": 999_999, "kind": "purchase"}])
+            assert maybe_activate_org(sb, self.ORG_ID, self.WALLET_ID) is False
+            builders["organizations"].update.assert_not_called()
+
+    def test_org_specific_min_wins_over_env_default(self, monkeypatch):
+        from orgs.wallets import maybe_activate_org
+
+        monkeypatch.setenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000")
+        sb, builders = self._sb(min_initial=500, ledger_rows=[{"delta": 600, "kind": "monthly_grant"}])
+
+        assert maybe_activate_org(sb, self.ORG_ID, self.WALLET_ID) is True
+        builders["organizations"].update.assert_called_once_with({"status": "active"})
+
+
+class TestPaidInKinds:
+    def test_monthly_grant_counts_toward_paid_in(self):
+        """FIX 2b: the dispersal sweep writes kind='monthly_grant' (via
+        rollover_wallet), and on org wallets the sweep is that kind's ONLY
+        writer — so dispersal must count toward the activation floor. Kind
+        'dispersal' remains listed but nothing ever writes it."""
+        from orgs.wallets import PAID_IN_KINDS
+
+        assert "monthly_grant" in PAID_IN_KINDS
+        assert "purchase" in PAID_IN_KINDS
+        # NOT paid-in: spend, expiry, and support gifts.
+        for kind in ("debit", "overage_debit", "expiry", "admin_grant", "refund"):
+            assert kind not in PAID_IN_KINDS
+
+
 # ---------------------------------------------------------------------------
 # handle_subscription_updated — tier sync + upgrade top-up
 # ---------------------------------------------------------------------------

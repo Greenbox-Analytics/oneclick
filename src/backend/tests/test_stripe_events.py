@@ -46,6 +46,43 @@ def _subscription_event(
     return e
 
 
+class TestTierForPrice:
+    def test_unknown_price_id_logs_error_but_keeps_basic_fallback(self, monkeypatch, caplog):
+        """FIX: a rotated/unwired Stripe price must not silently misassign
+        tiers — the 'basic' fallback stays (never drop a paying customer to
+        free), but an ERROR is logged naming the price id."""
+        import logging
+
+        from subscriptions.stripe_events import _tier_for_price
+
+        monkeypatch.setenv("STRIPE_PRICE_MONTHLY", "price_basic_m")
+        monkeypatch.setenv("STRIPE_PRICE_ANNUAL", "price_basic_a")
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pro_m")
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_pro_a")
+
+        with caplog.at_level(logging.ERROR):
+            assert _tier_for_price("price_1RotatedUnknown") == "basic"
+
+        errors = [r for r in caplog.records if "price_1RotatedUnknown" in r.getMessage()]
+        assert len(errors) == 1 and errors[0].levelno == logging.ERROR
+
+    def test_known_prices_do_not_log(self, monkeypatch, caplog):
+        import logging
+
+        from subscriptions.stripe_events import _tier_for_price
+
+        monkeypatch.setenv("STRIPE_PRICE_MONTHLY", "price_basic_m")
+        monkeypatch.setenv("STRIPE_PRICE_ANNUAL", "price_basic_a")
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_MONTHLY", "price_pro_m")
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_pro_a")
+
+        with caplog.at_level(logging.ERROR):
+            assert _tier_for_price("price_pro_a") == "pro"
+            assert _tier_for_price("price_basic_m") == "basic"
+
+        assert not [r for r in caplog.records if "Stripe price" in r.getMessage()]
+
+
 class TestHandleCheckoutSessionCompleted:
     def test_upserts_subscription_with_tier_pro(self):
         from subscriptions import stripe_events

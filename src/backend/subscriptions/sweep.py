@@ -153,9 +153,13 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     # the one invoice, so credit overage (overage_debit) can't starve on an
     # annual plan waiting for its ~12-month renewal.
     cadence_floor = now - relativedelta(days=ANNUAL_INVOICE_MIN_DAYS)
+    # Annual plans are identified by comparing stripe_price_id against the
+    # configured annual price ids. (A substring check like "annual" in the id
+    # can never match — real Stripe price ids are opaque, e.g. price_1AbC….)
+    annual_price_ids = {p for p in (os.getenv("STRIPE_PRICE_ANNUAL"), os.getenv("STRIPE_PRICE_PRO_MAX_ANNUAL")) if p}
     for sub in paid_subs:
         try:
-            is_annual = bool(sub.get("stripe_price_id") and "annual" in sub["stripe_price_id"])
+            is_annual = sub.get("stripe_price_id") in annual_price_ids
             if not is_annual or not sub.get("stripe_customer_id"):
                 continue
             wallet_res = (
@@ -188,10 +192,17 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         except Exception:
             logger.exception("sweep annual invoicing failed user=%s", sub.get("user_id"))
 
-    # --- 4. Monthly credit dispersal (licensing Phase B): for every ACTIVE,
-    # non-archived org on a contract, roll the POOL wallet — which zeroes last
-    # month's unspent dispersal and grants this month's. LICENSING_ENABLED only;
-    # the credits-disabled early-return above already covers the credits gate.
+    # --- 4. Monthly credit dispersal (licensing Phase B): for every ACTIVE or
+    # PENDING, non-archived org on a contract, roll the POOL wallet — which
+    # zeroes last month's unspent dispersal and grants this month's.
+    # LICENSING_ENABLED only; the credits-disabled early-return above already
+    # covers the credits gate.
+    #
+    # PENDING orgs are included deliberately: dispersal counts toward the
+    # activation floor (orgs.wallets.PAID_IN_KINDS), so an org whose only
+    # funding is its negotiated contract activates via the sweep itself —
+    # without it, a pending org with a dispersal set by a Msanii admin would
+    # sit pending forever unless someone also bought a pack.
     #
     # rollover_wallet is the whole implementation, and deliberately so: it is
     # already the tested primitive for "expire the bundle, grant the new period,
@@ -203,10 +214,12 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     # Only the BUNDLE bucket is touched, so purchased packs (reserve) survive
     # untouched: a contract that lapses doesn't confiscate credits the org bought.
     if licensing_enabled():
+        from orgs.wallets import maybe_activate_org
+
         orgs = _capped(
             sb.table("organizations")
-            .select("id, monthly_dispersal_credits")
-            .eq("status", "active")
+            .select("id, status, monthly_dispersal_credits")
+            .in_("status", ["active", "pending"])
             .is_("archived_at", "null")
             .gt("monthly_dispersal_credits", 0),
             "organizations(dispersal)",
@@ -258,12 +271,121 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
                 ).execute()
                 if res.data:
                     dispersed += 1
+                    if org.get("status") == "pending":
+                        # Dispersal counts toward the activation floor — same
+                        # shared check as the pack-purchase webhook path.
+                        maybe_activate_org(sb, org_id, pool["id"])
             except Exception:
                 logger.exception("sweep dispersal failed org=%s", org_id)
+
+    # --- 5. Reconcile org-granted project access: the offboard/archive paths'
+    # revocation is best-effort (orgs/service.py swallows failures so a
+    # committed offboard is never undone), so a failed revoke can leave a
+    # project_members row alive after its backing seat died. Delete any
+    # org-granted row (org_id NOT NULL — the provenance stamp written only by
+    # orgs/projects.set_org_project_member_role) whose backing org seat is no
+    # longer ACTIVE, or whose org is archived/gone. Organic rows (org_id NULL)
+    # are untouched by the filter itself.
+    orphan_grants_revoked = 0
+    if licensing_enabled():
+        try:
+            grants = _capped(
+                sb.table("project_members").select("id, org_id, user_id").not_.is_("org_id", "null"),
+                "project_members(org-granted)",
+            )
+            if grants:
+                org_ids = sorted({g["org_id"] for g in grants})
+                org_rows = _capped(
+                    sb.table("organizations").select("id, archived_at").in_("id", org_ids),
+                    "organizations(grant-backing)",
+                )
+                live_orgs = {o["id"] for o in org_rows if not o.get("archived_at")}
+                seat_rows = _capped(
+                    sb.table("org_members").select("org_id, user_id").in_("org_id", org_ids).eq("status", "active"),
+                    "org_members(grant-backing)",
+                )
+                active_seats = {(s["org_id"], s["user_id"]) for s in seat_rows}
+                stale_ids = [
+                    g["id"]
+                    for g in grants
+                    if g["org_id"] not in live_orgs or (g["org_id"], g["user_id"]) not in active_seats
+                ]
+                if stale_ids:
+                    sb.table("project_members").delete().in_("id", stale_ids).execute()
+                    orphan_grants_revoked = len(stale_ids)
+                    logger.warning(
+                        "sweep reconciliation: revoked %d orphaned org-granted project_members rows ids=%s",
+                        orphan_grants_revoked,
+                        stale_ids[:20],
+                    )
+        except Exception:
+            logger.exception("sweep org-grant reconciliation failed")
+
+    # --- 6. Charge-leak DETECTION (no auto-charging): charge-on-success means
+    # a debit-RPC failure after successful work (debit_for_action swallows it)
+    # or a client disconnect before the terminal event (main.py's accepted
+    # residual) leaves LLM work uncharged. ai_usage_log is the detector.
+    #
+    # Granularity is per USER-DAY, not per row: ai_usage_log and credit_ledger
+    # share no request id, and one charged action spans several LLM calls, so a
+    # row-level join is impossible with the current schema. A user with ANY
+    # debit in the window is presumed charged; a user with successful
+    # (non-cache-hit) LLM work and ZERO debits is flagged. Known benign
+    # false positives (this is a human-read warning, not an alert pipeline):
+    # free actions that still call the LLM (Zoe conversational replies) and
+    # price-0 users (admins/bypass).
+    charge_leaks = 0
+    try:
+        day_floor = (now - relativedelta(days=1)).isoformat()
+        usage_rows = _capped(
+            sb.table("ai_usage_log")
+            .select("id, user_id")
+            .eq("success", True)
+            .eq("cache_hit", False)
+            .gte("created_at", day_floor),
+            "ai_usage_log(charge-leaks)",
+        )
+        if usage_rows:
+            debit_rows = _capped(
+                sb.table("credit_ledger")
+                .select("wallet_id, metadata")
+                .in_("kind", ["debit", "overage_debit"])
+                .gte("created_at", day_floor),
+                "credit_ledger(charge-leaks)",
+            )
+            charged_users: set = set()
+            wallet_ids = sorted({r["wallet_id"] for r in debit_rows if r.get("wallet_id")})
+            if wallet_ids:
+                wallet_rows = _capped(
+                    sb.table("credit_wallets").select("id, owner_type, owner_id").in_("id", wallet_ids),
+                    "credit_wallets(charge-leaks)",
+                )
+                charged_users |= {w["owner_id"] for w in wallet_rows if w.get("owner_type") == "user"}
+            # Org-pool debits are attributed to the spender via metadata.org_member_id.
+            member_ids = sorted({(r.get("metadata") or {}).get("org_member_id") for r in debit_rows} - {None})
+            if member_ids:
+                seat_rows = _capped(
+                    sb.table("org_members").select("id, user_id").in_("id", member_ids),
+                    "org_members(charge-leaks)",
+                )
+                charged_users |= {s["user_id"] for s in seat_rows}
+            leaked = [r for r in usage_rows if r.get("user_id") not in charged_users]
+            charge_leaks = len(leaked)
+            if leaked:
+                logger.warning(
+                    "charge-leak detection: %d ai_usage_log success rows in the last day from users with no "
+                    "credit debit at all — ids=%s",
+                    charge_leaks,
+                    [r["id"] for r in leaked][:20],
+                )
+    except Exception:
+        logger.exception("sweep charge-leak detection failed")
 
     return {
         "walletsRolled": rolled,
         "overageBilled": overage_billed,
         "annualInvoiced": annual_invoiced,
         "orgsDispersed": dispersed,
+        "orphanGrantsRevoked": orphan_grants_revoked,
+        "chargeLeaks": charge_leaks,
     }

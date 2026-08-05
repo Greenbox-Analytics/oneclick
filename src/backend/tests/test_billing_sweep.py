@@ -70,9 +70,11 @@ class _FilterBuilder:
     def __init__(self, rows):
         self._rows = rows
         self._preds = []
+        self._negate_next = False
         self.insert = MagicMock(return_value=self)
         self.update = MagicMock(return_value=self)
         self.upsert = MagicMock(return_value=self)
+        self.delete = MagicMock(return_value=self)
 
     def select(self, *a, **k):
         return self
@@ -83,9 +85,17 @@ class _FilterBuilder:
     def order(self, *a, **k):
         return self
 
+    @property
+    def not_(self):
+        # Supports `.not_.is_(col, "null")` — the org-grant reconciliation's
+        # "org_id IS NOT NULL" provenance filter.
+        self._negate_next = True
+        return self
+
     def is_(self, col, val):
         if val == "null":
-            self._preds.append(("isnull", col, None))
+            self._preds.append(("notnull" if self._negate_next else "isnull", col, None))
+        self._negate_next = False
         return self
 
     def eq(self, col, val):
@@ -128,6 +138,8 @@ class _FilterBuilder:
             if op == "gte" and not (rv is not None and rv >= val):
                 return False
             if op == "isnull" and rv is not None:
+                return False
+            if op == "notnull" and rv is None:
                 return False
         return True
 
@@ -432,6 +444,8 @@ def _annual_setup(user_id, price_id, ledger_rows, last_standalone_invoice_at=Non
 class TestSweepAnnual:
     async def test_a_null_timestamp_fires_stamps_and_records_cadence(self, monkeypatch):
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        # FIX 3: annual is now matched against the STRIPE_PRICE_*_ANNUAL env vars.
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_annual_xyz")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
 
@@ -463,6 +477,8 @@ class TestSweepAnnual:
 
     async def test_b_recent_invoice_within_27d_does_not_fire(self, monkeypatch):
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        # FIX 3: annual is now matched against the STRIPE_PRICE_*_ANNUAL env vars.
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_annual_xyz")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
 
@@ -485,6 +501,8 @@ class TestSweepAnnual:
 
     async def test_c_stale_invoice_beyond_27d_fires(self, monkeypatch):
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        # FIX 3: annual is now matched against the STRIPE_PRICE_*_ANNUAL env vars.
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_annual_xyz")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
 
@@ -509,6 +527,8 @@ class TestSweepAnnual:
         """Critical 2 regression guard: an annual user with a single already-priced
         floating item must still get a standalone invoice."""
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        # FIX 3: annual is now matched against the STRIPE_PRICE_*_ANNUAL env vars.
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_annual_xyz")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
 
@@ -535,6 +555,8 @@ class TestSweepAnnual:
         FALSE (user is NOT in any 'rolled this sweep' set). The standalone invoice must STILL
         fire, gated purely on the cadence timestamp + unswept items."""
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        # FIX 3: annual is now matched against the STRIPE_PRICE_*_ANNUAL env vars.
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_annual_xyz")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
 
@@ -581,6 +603,8 @@ class TestSweepAnnual:
 
     async def test_no_unswept_items_no_invoice(self, monkeypatch):
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        # FIX 3: annual is now matched against the STRIPE_PRICE_*_ANNUAL env vars.
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_annual_xyz")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
 
@@ -614,6 +638,8 @@ class TestSweepAnnual:
         import stripe as stripe_lib
 
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        # FIX 3: annual is now matched against the STRIPE_PRICE_*_ANNUAL env vars.
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_annual_xyz")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
 
@@ -637,6 +663,60 @@ class TestSweepAnnual:
         assert result["annualInvoiced"] == 0  # nothing actually invoiced
         assert builders["credit_ledger"].update.call_args[0][0]["metadata"]["swept"] is True
         assert "last_standalone_invoice_at" in builders["credit_wallets"].update.call_args[0][0]
+
+    async def test_real_stripe_price_id_matching_env_var_is_annual(self, monkeypatch):
+        """FIX 3 (the actual bug): real Stripe price ids are opaque
+        (price_1AbC...) and never contain "annual" — the old substring check
+        made is_annual always False, so annual overage floated unbilled.
+        Matching against the configured env var must catch it."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("STRIPE_PRICE_PRO_MAX_ANNUAL", "price_1AbCdEfGh0RealId")
+        from subscriptions.sweep import billing_sweep
+
+        sb, builders = _annual_setup(
+            "u13",
+            "price_1AbCdEfGh0RealId",
+            [{"id": "ledger-real-1", "kind": "overage_debit", "metadata": {"invoice_item_id": "ii_prev"}}],
+            last_standalone_invoice_at=None,
+        )
+        fake_stripe = _fake_stripe()
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["annualInvoiced"] == 1
+        fake_stripe.Invoice.create.assert_called_once()
+
+    async def test_price_id_containing_annual_but_not_configured_is_not_annual(self, monkeypatch):
+        """Pins the fix direction: the substring heuristic is GONE — a price id
+        that happens to contain "annual" but matches no STRIPE_PRICE_*_ANNUAL
+        env var is not treated as an annual plan."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.delenv("STRIPE_PRICE_ANNUAL", raising=False)
+        monkeypatch.delenv("STRIPE_PRICE_PRO_MAX_ANNUAL", raising=False)
+        from subscriptions.sweep import billing_sweep
+
+        sb, builders = _annual_setup(
+            "u14",
+            "price_annual_xyz",
+            [{"id": "ledger-sub-1", "kind": "overage_debit", "metadata": {"invoice_item_id": "ii_prev"}}],
+            last_standalone_invoice_at=None,
+        )
+        fake_stripe = _fake_stripe()
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("subscriptions.overage_billing.stripe_client_module.get_stripe", return_value=fake_stripe),
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["annualInvoiced"] == 0
+        fake_stripe.Invoice.create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -740,18 +820,82 @@ class TestSweepDispersal:
         assert result["orgsDispersed"] == 0
         assert [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"] == []
 
-    async def test_pending_and_archived_orgs_are_skipped(self, monkeypatch):
+    async def test_archived_and_suspended_orgs_are_skipped(self, monkeypatch):
+        """Archived orgs never receive dispersal; nor do suspended ones (the
+        status IN-list is ('active','pending') only)."""
         monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         from subscriptions.sweep import billing_sweep
 
-        for kwargs in ({"status": "pending"}, {"archived_at": "2026-01-01T00:00:00+00:00"}):
+        for kwargs in ({"status": "suspended"}, {"archived_at": "2026-01-01T00:00:00+00:00"}):
             sb = self._sb(**kwargs)
             with patch("main.get_supabase_client", return_value=sb):
                 result = await billing_sweep(x_sweep_token="s3cret")
             assert result["orgsDispersed"] == 0, kwargs
             assert [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"] == [], kwargs
+
+    async def test_pending_org_is_dispersed_and_activation_checked(self, monkeypatch):
+        """FIX 2: the sweep disperses to PENDING orgs too, and — because the
+        dispersal counts toward the activation floor — runs the SAME shared
+        activation check the pack-purchase webhook uses after a successful
+        rollover."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb = self._sb(status="pending")
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("orgs.wallets.maybe_activate_org") as mock_activate,
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orgsDispersed"] == 1
+        calls = [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"]
+        assert len(calls) == 1 and calls[0].args[1]["p_wallet_id"] == "pool-org1"
+        mock_activate.assert_called_once_with(sb, "org1", "pool-org1")
+
+    async def test_active_org_dispersal_skips_activation_check(self, monkeypatch):
+        """Activation only ever moves pending -> active; an already-active org's
+        dispersal must not even attempt the check."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb = self._sb(status="active")
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("orgs.wallets.maybe_activate_org") as mock_activate,
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orgsDispersed"] == 1
+        mock_activate.assert_not_called()
+
+    async def test_pending_org_open_period_no_dispersal_no_activation(self, monkeypatch):
+        """A pending org whose pool period is still open gets neither a second
+        dispersal nor an activation check this run."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        future = (datetime.now(UTC) + timedelta(days=20)).isoformat()
+        sb = self._sb(status="pending", period_end=future)
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("orgs.wallets.maybe_activate_org") as mock_activate,
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orgsDispersed"] == 0
+        mock_activate.assert_not_called()
 
     async def test_missing_pool_wallet_skips_the_org(self, monkeypatch):
         """Wallet creation is the app layer's job (lazy on the first org-context
@@ -789,3 +933,182 @@ class TestSweepDispersal:
 
         assert result["orgsDispersed"] == 0
         assert [c for c in sb.table.call_args_list if c.args[0] == "organizations"] == []
+
+
+# ---------------------------------------------------------------------------
+# FIX 5b — org-grant reconciliation: the offboard/archive revocation paths are
+# best-effort, so the sweep deletes any org-granted project_members row whose
+# backing seat is no longer active (or whose org is archived/gone).
+# ---------------------------------------------------------------------------
+
+
+def _filter_aware_supabase_with_builders(table_data: dict):
+    """Like _filter_aware_supabase, but records every builder per table so a
+    test can reach the builder a delete ran on (fresh builder per table()
+    call, so the plain helper can't expose it)."""
+    sb = MagicMock()
+    created: dict = {}
+
+    def _mk(name):
+        b = _FilterBuilder(list(table_data.get(name, [])))
+        created.setdefault(name, []).append(b)
+        return b
+
+    sb.table.side_effect = _mk
+    sb.rpc.return_value.execute.return_value = MagicMock(data=True)
+    return sb, created
+
+
+class TestSweepGrantReconciliation:
+    def _data(self):
+        return {
+            "project_members": [
+                # Backing seat still ACTIVE -> kept.
+                {"id": "pm-live", "org_id": "org1", "user_id": "u-active", "project_id": "p1"},
+                # Backing seat suspended -> stale.
+                {"id": "pm-suspended-seat", "org_id": "org1", "user_id": "u-suspended", "project_id": "p1"},
+                # Backing seat removed -> stale.
+                {"id": "pm-removed-seat", "org_id": "org1", "user_id": "u-removed", "project_id": "p2"},
+                # Backing org archived -> stale even though its seat is active.
+                {"id": "pm-archived-org", "org_id": "org2", "user_id": "u-arch", "project_id": "p3"},
+                # Organic row (org_id NULL) -> excluded by the provenance filter.
+                {"id": "pm-organic", "org_id": None, "user_id": "u-organic", "project_id": "p1"},
+            ],
+            "organizations": [
+                {"id": "org1", "archived_at": None},
+                {"id": "org2", "archived_at": "2026-01-01T00:00:00+00:00"},
+            ],
+            "org_members": [
+                {"org_id": "org1", "user_id": "u-active", "status": "active"},
+                {"org_id": "org1", "user_id": "u-suspended", "status": "suspended"},
+                {"org_id": "org1", "user_id": "u-removed", "status": "removed"},
+                {"org_id": "org2", "user_id": "u-arch", "status": "active"},
+            ],
+        }
+
+    async def test_stale_grants_deleted_live_and_organic_kept(self, monkeypatch):
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, builders = _filter_aware_supabase_with_builders(self._data())
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orphanGrantsRevoked"] == 3
+        delete_builders = [b for b in builders["project_members"] if b.delete.called]
+        assert len(delete_builders) == 1
+        deleted_ids = next(v for op, col, v in delete_builders[0]._preds if op == "in" and col == "id")
+        assert sorted(deleted_ids) == ["pm-archived-org", "pm-removed-seat", "pm-suspended-seat"]
+
+    async def test_no_stale_grants_no_delete(self, monkeypatch):
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        data = self._data()
+        data["project_members"] = [
+            {"id": "pm-live", "org_id": "org1", "user_id": "u-active", "project_id": "p1"},
+            {"id": "pm-organic", "org_id": None, "user_id": "u-organic", "project_id": "p1"},
+        ]
+        sb, builders = _filter_aware_supabase_with_builders(data)
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orphanGrantsRevoked"] == 0
+        assert not any(b.delete.called for b in builders["project_members"])
+
+    async def test_licensing_off_skips_reconciliation(self, monkeypatch):
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        from subscriptions.sweep import billing_sweep
+
+        sb, builders = _filter_aware_supabase_with_builders(self._data())
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["orphanGrantsRevoked"] == 0
+        assert "project_members" not in builders
+
+
+# ---------------------------------------------------------------------------
+# FIX 12 — charge-leak DETECTION: ai_usage_log success rows from users with no
+# credit debit at all in the window are counted + warned about. Detection only.
+# ---------------------------------------------------------------------------
+
+
+class TestSweepChargeLeakDetection:
+    def _data(self):
+        recent = _iso_days_ago(0)  # now-ish, inside the 1-day window
+        return {
+            "ai_usage_log": [
+                # u-leak did successful LLM work but has NO debit -> flagged.
+                {"id": "log-leak", "user_id": "u-leak", "success": True, "cache_hit": False, "created_at": recent},
+                # u-paid has a personal-wallet debit -> not flagged.
+                {"id": "log-paid", "user_id": "u-paid", "success": True, "cache_hit": False, "created_at": recent},
+                # u-org spent from a pool (via org_member metadata) -> not flagged.
+                {"id": "log-org", "user_id": "u-org", "success": True, "cache_hit": False, "created_at": recent},
+                # Cache hits are free by design -> excluded from detection.
+                {"id": "log-cache", "user_id": "u-cache", "success": True, "cache_hit": True, "created_at": recent},
+                # Failures are uncharged by design -> excluded.
+                {"id": "log-fail", "user_id": "u-fail", "success": False, "cache_hit": False, "created_at": recent},
+                # Old rows are outside the 1-day window.
+                {
+                    "id": "log-old",
+                    "user_id": "u-old",
+                    "success": True,
+                    "cache_hit": False,
+                    "created_at": _iso_days_ago(5),
+                },
+            ],
+            "credit_ledger": [
+                {"wallet_id": "w-paid", "kind": "debit", "metadata": {}, "created_at": recent},
+                {"wallet_id": "w-pool", "kind": "debit", "metadata": {"org_member_id": "m-org"}, "created_at": recent},
+            ],
+            "credit_wallets": [
+                {"id": "w-paid", "owner_type": "user", "owner_id": "u-paid"},
+                {"id": "w-pool", "owner_type": "org", "owner_id": "org1"},
+            ],
+            "org_members": [
+                {"id": "m-org", "user_id": "u-org", "status": "active"},
+            ],
+        }
+
+    async def test_counts_and_warns_only_undebited_users(self, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        from subscriptions.sweep import billing_sweep
+
+        sb = _filter_aware_supabase(self._data())
+
+        with patch("main.get_supabase_client", return_value=sb), caplog.at_level(logging.WARNING):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["chargeLeaks"] == 1
+        leak_logs = [r for r in caplog.records if "charge-leak detection" in r.getMessage()]
+        assert len(leak_logs) == 1
+        assert "log-leak" in leak_logs[0].getMessage()
+
+    async def test_no_usage_rows_skips_quietly(self, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb = _filter_aware_supabase({})
+
+        with patch("main.get_supabase_client", return_value=sb), caplog.at_level(logging.WARNING):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["chargeLeaks"] == 0
+        assert not [r for r in caplog.records if "charge-leak detection" in r.getMessage()]

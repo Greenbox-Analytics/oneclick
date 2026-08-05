@@ -399,7 +399,6 @@ class TestForgedContextFallsClosed:
             pytest.param(
                 [_member(status="active")], [_org(status="active", archived_at=FAR_FUTURE)], id="archived_org"
             ),
-            pytest.param([_member(status="active")], [_org(status="suspended")], id="suspended_org"),
         ],
     )
     def test_dead_reference_falls_to_personal_and_clears(self, monkeypatch, members, orgs):
@@ -428,6 +427,59 @@ class TestForgedContextFallsClosed:
         data["org_members"] = []  # no seat
         sb = _ctx_supabase(data)
         assert EntitlementsService(sb)._resolve_context(USER) is None
+
+
+# ===========================================================================
+# Suspended org — PARKS (rule 7 extended): personal context while suspended,
+# preference kept, org billing resumes automatically on reactivation.
+# ===========================================================================
+
+
+class TestSuspendedOrgParks:
+    def test_suspended_org_personal_shape_but_not_cleared(self, monkeypatch):
+        """A temporarily suspended org must NOT be treated like a dead
+        reference: the caller falls to personal shape for now, but the stored
+        preference survives so nobody is dumped onto personal billing
+        permanently."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(_org_context_data(org_status="suspended"))
+
+        ent = EntitlementsService(sb).get_for_user(USER)
+        payload = ent.to_dict()
+
+        # Personal shape while suspended.
+        assert ent.managed_by_org is None
+        assert "managedByOrg" not in (payload.get("credits") or {})
+        assert payload["credits"]["balance"] == 3000  # personal wallet, not seat 500
+
+        # Preference NOT cleared — the load-bearing assertion.
+        assert not sb._updates.get("profiles")
+
+    def test_org_billing_resumes_on_reactivation(self, monkeypatch):
+        """The whole point of parking: once the org goes back to 'active', the
+        SAME stored preference resolves to the org context again with no user
+        action."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        sb = _ctx_supabase(_org_context_data(org_status="suspended"))
+        svc = EntitlementsService(sb)
+
+        assert svc._resolve_context(USER) is None
+        assert not sb._updates.get("profiles")  # parked, not cleared
+
+        sb._store["organizations"][0]["status"] = "active"  # org reactivated
+        ctx = svc._resolve_context(USER)
+        assert ctx is not None and ctx["org_id"] == ORG and ctx["pending"] is False
+
+    def test_archived_org_still_clears(self, monkeypatch):
+        """Regression guard on the boundary: archiving stays a genuinely DEAD
+        reference — only suspension parks."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        data = _org_context_data()
+        data["organizations"] = [_org(status="active", archived_at=FAR_FUTURE)]
+        sb = _ctx_supabase(data)
+        assert EntitlementsService(sb)._resolve_context(USER) is None
+        assert {"billing_context_org_id": None} in sb._updates.get("profiles", [])
 
 
 # ===========================================================================

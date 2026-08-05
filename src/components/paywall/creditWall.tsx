@@ -1,11 +1,8 @@
 // src/components/paywall/creditWall.tsx
-// Shared helpers for the org-seat credit-wall (402) UX: derive the structured
-// fields off an ApiError's `detail`, and render the "unlink this project"
-// escape-hatch hint that an owner sees when their own project is dry on an org
-// seat. Co-located so the derivation + copy stay in one place across the
-// paywall card, the OneClick error alert, and the AddWork parse queue.
-import { Link } from "react-router-dom";
-import { cn } from "@/lib/utils";
+// Shared helper for the org credit-wall (402) UX: derive the structured
+// fields off an ApiError's `detail`. Co-located so the derivation stays in
+// one place across the paywall card, the OneClick error alert, and the
+// AddWork parse queue.
 
 export interface CreditWallInfo {
   /** Denial came from an org billing context (the shared pool). */
@@ -14,16 +11,12 @@ export interface CreditWallInfo {
    * raise). False on a dry pool, where only an admin buying credits helps —
    * two different walls that must not offer the same CTA. */
   capReached: boolean;
-  /** Where "Request credits" navigates (member request form) when present. */
+  /** Where "Ask for a higher limit" navigates (member request form) when present. */
   requestUrl?: string;
-  /** The dry seat is on a project the CALLER OWNS and can unlink. */
-  ownerCanUnlink: boolean;
-  projectId?: string;
-  projectName?: string;
 }
 
 /**
- * Derive the org-seat credit-wall fields from an ApiError's structured
+ * Derive the org credit-wall fields from an ApiError's structured
  * `detail`. Mirrors the 402 shape from subscriptions/enforcement.py — every
  * field is presence-checked so a legacy plain-string detail (or any non-object)
  * yields an all-false/undefined result.
@@ -31,39 +24,9 @@ export interface CreditWallInfo {
 export function parseCreditWallDetail(detail: unknown): CreditWallInfo {
   const d = (detail && typeof detail === "object" ? detail : {}) as Record<string, unknown>;
   const managedByOrg = d.managedByOrg === true;
-  const ownerCanUnlink = managedByOrg && d.ownerCanUnlink === true;
   return {
     managedByOrg,
     capReached: managedByOrg && d.capReached === true,
     requestUrl: managedByOrg && typeof d.requestUrl === "string" ? d.requestUrl : undefined,
-    ownerCanUnlink,
-    projectId: ownerCanUnlink && typeof d.projectId === "string" ? d.projectId : undefined,
-    projectName: ownerCanUnlink && typeof d.projectName === "string" ? d.projectName : undefined,
   };
-}
-
-/** "Or, unlink … in its settings to use your own plan here." — shown alongside
- * the Request-credits CTA when the caller owns the dry project. */
-export function UnlinkProjectHint({
-  projectId,
-  projectName,
-  className,
-}: {
-  projectId?: string;
-  projectName?: string;
-  className?: string;
-}) {
-  return (
-    <p className={cn("text-xs text-muted-foreground mt-1", className)}>
-      Or,{" "}
-      {projectId ? (
-        <Link to={`/projects/${projectId}?tab=settings`} className="underline underline-offset-2">
-          unlink {projectName ? `"${projectName}"` : "this project"} in its settings
-        </Link>
-      ) : (
-        "unlink this project in its settings"
-      )}{" "}
-      to use your own plan here.
-    </p>
-  );
 }

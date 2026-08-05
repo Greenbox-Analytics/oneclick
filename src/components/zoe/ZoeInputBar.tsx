@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from "react";
 import { ZoeContextPopover } from "@/components/zoe/ZoeContextPopover";
 import { ContractSlideOver } from "@/components/zoe/ContractSlideOver";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 
 // Inline SVGs — exact mockup shapes
 
@@ -241,6 +242,10 @@ export function ZoeInputBar({
           </div>
 
           <p className="composer-note">{noteText}</p>
+          <p className="composer-note">
+            <CreditsChip className="mr-1.5 align-middle" />
+            Chatting with Zoe is free — credits are only used when she analyzes a contract.
+          </p>
         </div>
       </div>
 

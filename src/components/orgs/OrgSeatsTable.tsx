@@ -1,7 +1,6 @@
 // src/components/orgs/OrgSeatsTable.tsx
-// Admin console: per-member monthly cap, spend against it, status, and
-// storage-vs-cap (the finite per-seat storage ceiling must be visible before an
-// upload fails), with cap/role/suspend/reactivate/remove actions.
+// Admin console: per-member monthly cap, spend against it, and status, with
+// cap/role/suspend/reactivate/remove actions.
 //
 // Members hold no credit balance — they spend from the org pool up to their cap
 // — so the money column is "used of cap", and setting a cap moves nothing.
@@ -43,7 +42,6 @@ import {
   type OrgSeatUsage,
   type OrgRole,
 } from "@/hooks/useOrgs";
-import { formatBytes } from "@/lib/utils";
 
 const STATUS_STYLE: Record<string, string> = {
   active: "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10",
@@ -194,15 +192,15 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Used this month</TableHead>
                 <TableHead className="text-right">Limit</TableHead>
-                <TableHead>Storage</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {seats.map((seat) => {
                 const isSelf = seat.userId === currentUserId;
-                const storagePct = seat.storageCapBytes > 0 ? seat.storageBytes / seat.storageCapBytes : 0;
-                const nearCap = storagePct >= 0.8;
+                // cap_exceeded: a concurrent over-cap debit is recorded, never
+                // rejected — surface it instead of showing "5,200 / 5,000" flat.
+                const overCap = seat.effectiveCap != null && seat.spentThisPeriod > seat.effectiveCap;
                 const isActive = seat.status === "active";
                 return (
                   <TableRow key={seat.orgMemberId}>
@@ -237,11 +235,17 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
                         {seat.status}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell
+                      className={`text-right tabular-nums ${overCap ? "text-amber-700 dark:text-amber-400 font-medium" : ""}`}
+                      title={overCap ? "Over their monthly limit — overage still came from the pool" : undefined}
+                    >
                       {seat.spentThisPeriod.toLocaleString()}
                       {seat.effectiveCap != null && (
-                        <span className="text-muted-foreground"> / {seat.effectiveCap.toLocaleString()}</span>
+                        <span className={overCap ? "" : "text-muted-foreground"}>
+                          {" "}/ {seat.effectiveCap.toLocaleString()}
+                        </span>
                       )}
+                      {overCap && <div className="text-[11px] font-normal">over limit</div>}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {seat.effectiveCap == null
@@ -249,19 +253,6 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
                         : seat.monthlyCap == null
                           ? `${seat.effectiveCap.toLocaleString()} (default)`
                           : seat.effectiveCap.toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      <div
-                        className={`text-xs ${nearCap ? "text-amber-700 dark:text-amber-400 font-medium" : "text-muted-foreground"}`}
-                      >
-                        {formatBytes(seat.storageBytes)} of {formatBytes(seat.storageCapBytes)}
-                      </div>
-                      <div className="h-1.5 w-24 rounded-full bg-muted mt-1 overflow-hidden">
-                        <span
-                          className={`block h-full rounded-full ${nearCap ? "bg-amber-500" : "bg-primary"}`}
-                          style={{ width: `${Math.min(100, Math.round(storagePct * 100))}%` }}
-                        />
-                      </div>
                     </TableCell>
                     <TableCell>
                       <DropdownMenu>

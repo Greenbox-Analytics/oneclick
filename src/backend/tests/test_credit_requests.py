@@ -675,6 +675,126 @@ def test_deny_router_allows_missing_note(client):
 
 
 # ---------------------------------------------------------------------------
+# FIX 10 — member notification on approve/deny (resolution used to be silent)
+# ---------------------------------------------------------------------------
+
+
+def test_approve_router_schedules_member_resolved_email(client):
+    with (
+        patch(
+            "orgs.router.service.approve_credit_request",
+            new=AsyncMock(
+                return_value={
+                    "id": REQUEST_ID,
+                    "status": "approved",
+                    "resolved_cap": 250,
+                    "org_member_id": MEMBER_ID,
+                }
+            ),
+        ),
+        patch("orgs.router.analytics_capture"),
+        patch("orgs.router._send_credit_request_resolved_email_background") as mock_bg,
+    ):
+        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/approve", json={"cap": 2500})
+
+    assert resp.status_code == 200
+    mock_bg.assert_called_once()
+    kwargs = mock_bg.call_args.kwargs
+    assert kwargs["org_id"] == ORG_ID
+    assert kwargs["org_member_id"] == MEMBER_ID
+    assert kwargs["approved"] is True
+    assert kwargs["new_cap"] == 250
+
+
+def test_deny_router_schedules_member_resolved_email_with_admin_note(client):
+    with (
+        patch(
+            "orgs.router.service.deny_credit_request",
+            new=AsyncMock(return_value={"id": REQUEST_ID, "status": "denied", "org_member_id": MEMBER_ID}),
+        ),
+        patch("orgs.router.analytics_capture"),
+        patch("orgs.router._send_credit_request_resolved_email_background") as mock_bg,
+    ):
+        resp = client.post(f"/orgs/{ORG_ID}/credit-requests/{REQUEST_ID}/deny", json={"note": "budget freeze"})
+
+    assert resp.status_code == 200
+    mock_bg.assert_called_once()
+    kwargs = mock_bg.call_args.kwargs
+    assert kwargs["org_member_id"] == MEMBER_ID
+    assert kwargs["approved"] is False
+    assert kwargs["note"] == "budget freeze"
+
+
+def test_resolved_email_background_sends_to_member():
+    """Direct test of the background task: the member's email comes off their
+    org_members row (auth-admin fallback for NULL, mirroring get_org_usage)."""
+    from orgs import router as orgs_router
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data={"name": "Acme"}, count=1)
+        elif name == "org_members":
+            b.execute.return_value = MagicMock(data={"user_id": U1, "email": "member@example.com"}, count=1)
+        return b
+
+    fake_db = MagicMock()
+    fake_db.table.side_effect = _side
+
+    with (
+        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.emails.send_credit_request_resolved_email") as mock_send,
+    ):
+        orgs_router._send_credit_request_resolved_email_background(
+            db_url="http://fake",
+            db_key="fake-key",
+            org_id=ORG_ID,
+            org_member_id=MEMBER_ID,
+            approved=True,
+            new_cap=500,
+            note=None,
+        )
+
+    mock_send.assert_called_once()
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["recipient_email"] == "member@example.com"
+    assert kwargs["org_name"] == "Acme"
+    assert kwargs["approved"] is True
+    assert kwargs["new_cap"] == 500
+
+
+def test_resolved_email_background_missing_member_skips_send():
+    from orgs import router as orgs_router
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data={"name": "Acme"}, count=1)
+        elif name == "org_members":
+            b.execute.return_value = MagicMock(data=None, count=0)
+        return b
+
+    fake_db = MagicMock()
+    fake_db.table.side_effect = _side
+
+    with (
+        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.emails.send_credit_request_resolved_email") as mock_send,
+    ):
+        orgs_router._send_credit_request_resolved_email_background(
+            db_url="http://fake",
+            db_key="fake-key",
+            org_id=ORG_ID,
+            org_member_id=MEMBER_ID,
+            approved=False,
+            new_cap=None,
+            note=None,
+        )
+
+    mock_send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Background email task: admins-only recipients
 # ---------------------------------------------------------------------------
 

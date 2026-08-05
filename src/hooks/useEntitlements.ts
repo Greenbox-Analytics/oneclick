@@ -1,4 +1,5 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import type { TierKey } from "@/lib/tiers";
@@ -143,6 +144,49 @@ export interface Entitlements {
   billingContext?: BillingContext | null;
 }
 
+// ---------------------------------------------------------------------------
+// Silent payer-switch detection: when the billing context flips org → personal
+// WITHOUT the user choosing it (seat suspended/removed, org lapsed), tell them
+// once that their personal wallet is now paying. A deliberate switch goes
+// through useSetBillingContext, which calls clearRememberedBillingContext()
+// first so this never false-fires. Runs inside the queryFn (once per actual
+// fetch, deduped across every component using this hook).
+// ---------------------------------------------------------------------------
+
+const lastBillingContextKey = (userId: string) => `msanii:lastBillingContext:${userId}`;
+
+/** Forget the remembered context — called on a DELIBERATE switch so the next
+ * entitlements fetch records the new context without treating it as a
+ * surprise. */
+export function clearRememberedBillingContext(userId?: string): void {
+  if (!userId) return;
+  try {
+    localStorage.removeItem(lastBillingContextKey(userId));
+  } catch {
+    // storage unavailable — nothing to clear
+  }
+}
+
+function noticePayerSwitch(userId: string, ents: Entitlements): void {
+  try {
+    const key = lastBillingContextKey(userId);
+    const current =
+      ents.billingContext?.type === "org"
+        ? { type: "org", orgId: ents.billingContext.orgId, orgName: ents.billingContext.orgName }
+        : { type: "personal" as const };
+    const raw = localStorage.getItem(key);
+    const prev = raw ? (JSON.parse(raw) as { type?: string; orgName?: string }) : null;
+    if (prev?.type === "org" && current.type === "personal") {
+      toast(
+        `You're no longer billing to ${prev.orgName ?? "your organization"} — your usage now comes out of your personal plan.`,
+      );
+    }
+    localStorage.setItem(key, JSON.stringify(current));
+  } catch {
+    // storage unavailable / bad JSON — skip silently, never block the fetch
+  }
+}
+
 /**
  * Primary hook — returns the merged entitlements for the current user.
  * Cached for 60s via React Query staleTime.
@@ -151,7 +195,11 @@ export function useEntitlements(): UseQueryResult<Entitlements> {
   const { user } = useAuth();
   return useQuery<Entitlements>({
     queryKey: ["entitlements", user?.id],
-    queryFn: async () => apiFetch<Entitlements>(`${API_URL}/me/entitlements`),
+    queryFn: async () => {
+      const ents = await apiFetch<Entitlements>(`${API_URL}/me/entitlements`);
+      if (user?.id) noticePayerSwitch(user.id, ents);
+      return ents;
+    },
     enabled: !!user?.id,
     staleTime: 60_000,
     gcTime: 5 * 60_000,

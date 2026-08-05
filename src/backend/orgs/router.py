@@ -6,6 +6,7 @@ map the business-logic exceptions that aren't plain authz checks."""
 
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -142,9 +143,149 @@ def _send_credit_request_email_background(
         print(f"Background: failed to send credit request email: {exc}")
 
 
+def _send_credit_request_resolved_email_background(
+    db_url: str,
+    db_key: str,
+    org_id: str,
+    org_member_id: str,
+    approved: bool,
+    new_cap: int | None,
+    note: str | None,
+):
+    """Notify the requesting member that an admin resolved their cap-raise
+    request. Runs on a FastAPI BackgroundTask with its own service-role client
+    (mirrors _send_credit_request_email_background). The member's email comes
+    off their org_members row (denormalized at invite-accept), falling back to
+    the auth admin API for legacy/creator rows."""
+    from supabase import create_client
+
+    from orgs.emails import send_credit_request_resolved_email
+
+    db = create_client(db_url, db_key)
+    try:
+        org = db.table("organizations").select("name").eq("id", org_id).single().execute()
+        member = (
+            db.table("org_members")
+            .select("user_id, email")
+            .eq("id", org_member_id)
+            .eq("org_id", org_id)
+            .maybe_single()
+            .execute()
+        )
+        row = member.data if member else None
+        if not row:
+            print(f"Background: credit-request member {org_member_id} not found in org {org_id} — skipping email")
+            return
+        email = row.get("email") or service._resolve_user_email(db, row["user_id"])
+        if not email:
+            print(f"Background: no email resolvable for org member {org_member_id} — skipping resolved email")
+            return
+        send_credit_request_resolved_email(
+            recipient_email=email,
+            org_name=org.data["name"] if org.data else "your organization",
+            approved=approved,
+            new_cap=new_cap,
+            note=note,
+        )
+    except Exception as exc:
+        print(f"Background: failed to send credit request resolved email: {exc}")
+
+
+def _notify_billing_reverted_background(
+    db_url: str,
+    db_key: str,
+    org_id: str,
+    member_user_ids: list[str] | None = None,
+):
+    """Tell offboarded member(s) their Msanii usage now bills to their personal
+    plan (audit FIX: suspend/remove/archive used to be silent). Runs on a
+    FastAPI BackgroundTask with its own service-role client. `member_user_ids`
+    None means "every ACTIVE member" (the org-archive case — archiving doesn't
+    transition seat statuses, so active seats are exactly who just lost
+    coverage). Each member gets an email (orgs/emails.py) plus an in-app
+    notification on the unified `notifications` table — type 'status_change'
+    (an existing CHECK-allowed type) with entity_type='org', mirroring
+    teams.service.create_team_invite_notification's writer shape."""
+    from supabase import create_client
+
+    from orgs.emails import send_billing_reverted_email
+
+    db = create_client(db_url, db_key)
+    try:
+        org = db.table("organizations").select("name").eq("id", org_id).single().execute()
+        org_name = org.data["name"] if org.data else "your organization"
+
+        query = db.table("org_members").select("user_id, email").eq("org_id", org_id)
+        if member_user_ids is None:
+            query = query.eq("status", "active")
+        else:
+            query = query.in_("user_id", member_user_ids)
+        rows = query.execute().data or []
+
+        for row in rows:
+            user_id = row.get("user_id")
+            if not user_id:
+                continue
+            email = row.get("email") or service._resolve_user_email(db, user_id)
+            if email:
+                send_billing_reverted_email(recipient_email=email, org_name=org_name)
+            try:
+                db.table("notifications").insert(
+                    {
+                        "user_id": user_id,
+                        "type": "status_change",
+                        "title": "Billing moved to your personal plan",
+                        "message": (
+                            f'Your seat on "{org_name}" is no longer active — '
+                            "your Msanii usage now bills to your personal plan."
+                        ),
+                        "entity_type": "org",
+                        "entity_id": org_id,
+                        "metadata": {"org_id": org_id},
+                    }
+                ).execute()
+            except Exception as exc:
+                print(f"Background: failed to write billing-reverted notification for {user_id}: {exc}")
+    except Exception as exc:
+        print(f"Background: failed to send billing-reverted notifications for org {org_id}: {exc}")
+
+
 # --- Invites by token (MUST come before /{org_id} routes — same convention
 # as teams/router.py, even though these currently can't collide: org_id is a
 # single path segment and every route below has more segments than it) ---
+
+
+@router.get("/invites/{token}/preview")
+async def get_org_invite_preview(token: str):
+    """Claim-page preview: name what the user is joining BEFORE they commit
+    (the OrgInviteClaim page previously had nothing to show but generic copy).
+
+    DELIBERATELY UNAUTHENTICATED (stated decision): the claim page renders
+    before sign-in, and the unguessable token — delivered only to the invited
+    email — is the capability. The body is minimal on purpose: org name plus
+    the inviter's display name, both of which the invite email already told
+    the recipient. Nothing else (no invitee email, role, or expiry) is
+    exposed to a bare token holder. 404 for an unknown, expired, or
+    already-resolved token — email-match and acceptance stay with the
+    authed accept endpoint."""
+    db = _get_supabase()
+    invite = await service.get_invite_by_token(db, token)
+    if not invite or invite.get("status") != "pending":
+        raise HTTPException(status_code=404, detail="Invite not found")
+    expires_at = invite.get("expires_at")
+    if expires_at and datetime.fromisoformat(expires_at) < datetime.now(UTC):
+        raise HTTPException(status_code=404, detail="Invite not found")
+
+    org = db.table("organizations").select("name").eq("id", invite["org_id"]).maybe_single().execute()
+    inviter_name = None
+    if invite.get("invited_by"):
+        prof = db.table("profiles").select("full_name").eq("id", invite["invited_by"]).maybe_single().execute()
+        inviter_name = (prof.data or {}).get("full_name") if prof else None
+
+    return {
+        "orgName": (org.data or {}).get("name") if org else None,
+        "inviterName": inviter_name,
+    }
 
 
 @router.post("/invites/{token}/accept")
@@ -206,11 +347,20 @@ async def update_org(org_id: str, body: OrgUpdate, user_id: str = Depends(get_cu
 
 
 @router.post("/{org_id}/archive")
-async def archive_org(org_id: str, user_id: str = Depends(get_current_user_id)):
+async def archive_org(org_id: str, background_tasks: BackgroundTasks, user_id: str = Depends(get_current_user_id)):
     """Whatever the POOL still holds survives archiving — disposing of it is a
     support decision (admin clawback), so there is no balance precondition and
-    nothing here can 409."""
-    return await service.archive_org(_get_supabase(), user_id, org_id)
+    nothing here can 409. Every active member is notified their usage now
+    bills to their personal plan (background, best-effort)."""
+    result = await service.archive_org(_get_supabase(), user_id, org_id)
+    background_tasks.add_task(
+        _notify_billing_reverted_background,
+        db_url=os.getenv("VITE_SUPABASE_URL"),
+        db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
+        org_id=org_id,
+        member_user_ids=None,  # archive: notify every ACTIVE member
+    )
+    return result
 
 
 @router.get("/{org_id}/usage")
@@ -237,8 +387,24 @@ async def update_member_role(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _schedule_billing_reverted_notice(background_tasks: BackgroundTasks, org_id: str, member_user_id: str | None):
+    """Shared by suspend/remove: the offboarded member is told their usage now
+    bills to their personal plan (background, best-effort)."""
+    if not member_user_id:
+        return
+    background_tasks.add_task(
+        _notify_billing_reverted_background,
+        db_url=os.getenv("VITE_SUPABASE_URL"),
+        db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
+        org_id=org_id,
+        member_user_ids=[member_user_id],
+    )
+
+
 @router.post("/{org_id}/members/{member_id}/suspend")
-async def suspend_member(org_id: str, member_id: str, user_id: str = Depends(get_current_user_id)):
+async def suspend_member(
+    org_id: str, member_id: str, background_tasks: BackgroundTasks, user_id: str = Depends(get_current_user_id)
+):
     try:
         result = await service.suspend_member(_get_supabase(), user_id, org_id, member_id)
     except LastAdminError as e:
@@ -246,11 +412,14 @@ async def suspend_member(org_id: str, member_id: str, user_id: str = Depends(get
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     analytics_capture(user_id, "org_license_revoked", {"org_id": org_id, "member_id": member_id, "action": "suspend"})
+    _schedule_billing_reverted_notice(background_tasks, org_id, result.get("user_id"))
     return result
 
 
 @router.delete("/{org_id}/members/{member_id}")
-async def remove_member(org_id: str, member_id: str, user_id: str = Depends(get_current_user_id)):
+async def remove_member(
+    org_id: str, member_id: str, background_tasks: BackgroundTasks, user_id: str = Depends(get_current_user_id)
+):
     try:
         result = await service.remove_member(_get_supabase(), user_id, org_id, member_id)
     except LastAdminError as e:
@@ -258,6 +427,7 @@ async def remove_member(org_id: str, member_id: str, user_id: str = Depends(get_
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     analytics_capture(user_id, "org_license_revoked", {"org_id": org_id, "member_id": member_id, "action": "remove"})
+    _schedule_billing_reverted_notice(background_tasks, org_id, result.get("user_id"))
     return result
 
 
@@ -364,7 +534,11 @@ async def list_credit_requests(org_id: str, user_id: str = Depends(get_current_u
 
 @router.post("/{org_id}/credit-requests/{request_id}/approve")
 async def approve_credit_request(
-    org_id: str, request_id: str, body: CreditRequestApprove, user_id: str = Depends(get_current_user_id)
+    org_id: str,
+    request_id: str,
+    body: CreditRequestApprove,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
 ):
     try:
         result = await service.approve_credit_request(_get_supabase(), user_id, org_id, request_id, body.cap)
@@ -380,12 +554,27 @@ async def approve_credit_request(
         "credit_request_resolved",
         {"org_id": org_id, "request_id": request_id, "status": "approved", "cap": result.get("resolved_cap")},
     )
+    if result.get("org_member_id"):
+        background_tasks.add_task(
+            _send_credit_request_resolved_email_background,
+            db_url=os.getenv("VITE_SUPABASE_URL"),
+            db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
+            org_id=org_id,
+            org_member_id=result["org_member_id"],
+            approved=True,
+            new_cap=result.get("resolved_cap"),
+            note=None,
+        )
     return result
 
 
 @router.post("/{org_id}/credit-requests/{request_id}/deny")
 async def deny_credit_request(
-    org_id: str, request_id: str, body: CreditRequestDeny, user_id: str = Depends(get_current_user_id)
+    org_id: str,
+    request_id: str,
+    body: CreditRequestDeny,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
 ):
     try:
         result = await service.deny_credit_request(_get_supabase(), user_id, org_id, request_id, body.note)
@@ -399,6 +588,17 @@ async def deny_credit_request(
         "credit_request_resolved",
         {"org_id": org_id, "request_id": request_id, "status": "denied", "credits": None},
     )
+    if result.get("org_member_id"):
+        background_tasks.add_task(
+            _send_credit_request_resolved_email_background,
+            db_url=os.getenv("VITE_SUPABASE_URL"),
+            db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
+            org_id=org_id,
+            org_member_id=result["org_member_id"],
+            approved=False,
+            new_cap=None,
+            note=body.note,
+        )
     return result
 
 

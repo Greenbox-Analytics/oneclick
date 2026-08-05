@@ -1,6 +1,5 @@
 // src/components/orgs/OrgSettingsPanel.tsx
-// Admin console: org name, default seat allowance (the sweep's monthly
-// auto-top-up), and archive (reclaim-all-first guard).
+// Admin console: org name, default member limit, and archive.
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -163,8 +162,9 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
             <AlertDialogHeader>
               <AlertDialogTitle>Archive {org.name}?</AlertDialogTitle>
               <AlertDialogDescription>
-                This only succeeds once every seat is at a zero balance — reclaim credits from the
-                Seats table first if this is rejected. Members lose access immediately once archived.
+                Members lose access immediately. Credits left in the pool stay held — contact
+                support if you need them refunded or moved. Artists owned by the team stay with it
+                but become unreachable while it&apos;s archived.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

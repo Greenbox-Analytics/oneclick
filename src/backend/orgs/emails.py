@@ -134,3 +134,100 @@ def send_credit_request_email(
         html_body=html_body,
         recipients=recipient_emails,
     )
+
+
+def send_billing_reverted_email(recipient_email: str, org_name: str):
+    """Tell a member their org seat no longer covers them (suspended, removed,
+    or the org was archived) — their Msanii usage now bills to their personal
+    plan. Clones send_org_invite_email's shape/env guards."""
+    frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
+    safe_org = html.escape(org_name)
+    cta_href = f"{frontend_url}/profile"
+
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <h1 style="color: #1a3a2a; font-size: 24px; margin: 0;">Msanii</h1>
+      </div>
+      <p style="font-size: 16px; color: #333;">Your billing has moved to your personal plan.</p>
+      <p style="font-size: 15px; color: #555;">
+        Your seat on <strong>&ldquo;{safe_org}&rdquo;</strong> is no longer active, so your
+        Msanii usage now bills to your <strong>personal plan</strong>. Your artists, projects,
+        and files stay exactly as they are.
+      </p>
+      <div style="text-align: center; margin: 32px 0;">
+        <a href="{cta_href}"
+           style="display: inline-block; background: #1a3a2a; color: white; padding: 14px 32px;
+                  border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px;">
+          Review your plan
+        </a>
+      </div>
+      <p style="font-size: 13px; color: #999; text-align: center;">
+        If this is unexpected, contact your organization's admin.
+      </p>
+    </div>
+    """
+
+    return _send(
+        subject=f'Your Msanii usage now bills to your personal plan ("{safe_org}")',
+        html_body=html_body,
+        recipients=[recipient_email],
+    )
+
+
+def send_credit_request_resolved_email(
+    recipient_email: str,
+    org_name: str,
+    approved: bool,
+    new_cap: int | None = None,
+    note: str | None = None,
+):
+    """Tell the requesting member how their cap-raise request was resolved.
+    Clones send_credit_request_email's shape/env guards; `note` is the admin's
+    optional deny note."""
+    frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
+    safe_org = html.escape(org_name)
+    cta_href = f"{frontend_url}/organization"
+
+    if approved:
+        headline = "Your credit limit request was approved."
+        detail = (
+            f"Your monthly limit on <strong>&ldquo;{safe_org}&rdquo;</strong> is now "
+            f"<strong>{new_cap:,} credits / month</strong>."
+            if new_cap is not None
+            else f"Your monthly limit on <strong>&ldquo;{safe_org}&rdquo;</strong> has been raised."
+        )
+        subject = f'Your credit limit on "{safe_org}" was raised'
+    else:
+        headline = "Your credit limit request was declined."
+        detail = (
+            f"An admin of <strong>&ldquo;{safe_org}&rdquo;</strong> declined your request "
+            "for a higher monthly credit limit."
+        )
+        subject = f'Your credit limit request on "{safe_org}" was declined'
+
+    note_html = (
+        f'<p style="font-size: 14px; color: #555; font-style: italic;">&ldquo;{html.escape(note)}&rdquo;</p>'
+        if note
+        else ""
+    )
+
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <h1 style="color: #1a3a2a; font-size: 24px; margin: 0;">Msanii</h1>
+      </div>
+      <p style="font-size: 16px; color: #333;">{headline}</p>
+      <p style="font-size: 15px; color: #555;">{detail}</p>
+      {note_html}
+      <div style="text-align: center; margin: 32px 0;">
+        <a href="{cta_href}"
+           style="display: inline-block; background: #1a3a2a; color: white; padding: 14px 32px;
+                  border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px;">
+          Open your organization
+        </a>
+      </div>
+    </div>
+    """
+
+    return _send(subject=subject, html_body=html_body, recipients=[recipient_email])

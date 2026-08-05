@@ -9,6 +9,8 @@ import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useCreditUsage, type CreditAction } from "@/hooks/useCreditUsage";
@@ -49,6 +51,9 @@ export function CreditsUsageCard() {
   const setPrefs = useSetBillingPrefs();
   const { data: packsData } = useCreditPacks();
   const [topUpOpen, setTopUpOpen] = useState(false);
+  // Pay-per-use monthly spend limit — draft-until-blur (see commitLimit below).
+  // Declared before the early returns so hook order stays stable.
+  const [limitDraft, setLimitDraft] = useState<string | null>(null);
   const navigate = useNavigate();
 
   if (isLoading || !usage) return null;
@@ -174,6 +179,35 @@ export function CreditsUsageCard() {
       },
     );
 
+  // Monthly spend limit on pay-per-use (backend `overage_cap_credits`; the
+  // credit walls tell users to "raise it in Billing settings" — this is that
+  // control). Draft-until-blur so we don't fire a request per keystroke.
+  const overageCap = ent?.credits?.overageCapCredits ?? null;
+  const limitValue = limitDraft ?? (overageCap != null ? String(overageCap) : "");
+  const commitLimit = () => {
+    if (limitDraft == null) return;
+    const trimmed = limitDraft.trim();
+    const parsed = trimmed === "" ? null : Number(trimmed);
+    if (trimmed !== "" && (!Number.isFinite(parsed) || parsed <= 0)) {
+      toast.error("Enter a positive number of credits, or leave it empty for no limit.");
+      return;
+    }
+    if (parsed === overageCap) {
+      setLimitDraft(null);
+      return;
+    }
+    setPrefs.mutate(
+      { overage_cap_credits: parsed },
+      {
+        onSuccess: () => {
+          setLimitDraft(null);
+          toast.success(parsed == null ? "Monthly limit removed." : "Monthly limit saved.");
+        },
+        onError: (e) => toast.error(e instanceof Error ? e.message : "Couldn't save the limit."),
+      },
+    );
+  };
+
   return (
     <Card className="overflow-hidden">
       {/* header */}
@@ -251,21 +285,49 @@ export function CreditsUsageCard() {
               + {reserve.toLocaleString()} bonus credits (don&apos;t expire).
             </p>
           )}
+          <p className="text-xs text-muted-foreground mt-3">
+            Unused monthly credits don&apos;t carry over. Credits you buy separately never expire.
+          </p>
         </div>
       </div>
 
       {/* pay-per-use */}
       {isPaid && (
-        <div className="flex items-center justify-between gap-4 mx-6 mt-4 mb-[22px] px-4 py-3.5 border border-border rounded-xl bg-background">
-          <div>
-            <div className="text-sm font-semibold">Pay-per-use</div>
-            <div className="text-[12.5px] text-muted-foreground mt-0.5 max-w-[520px]">
-              Keep working past your monthly credits — overage is billed on your next invoice
-              {overageRate ? ` at US$${overageRate.toFixed(2)} / credit` : ""}.
-              {(usage.overageThisPeriod ?? 0) > 0 && ` (${usage.overageThisPeriod} cr this period)`}
+        <div className="mx-6 mt-4 mb-[22px] px-4 py-3.5 border border-border rounded-xl bg-background">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-semibold">Pay-per-use</div>
+              <div className="text-[12.5px] text-muted-foreground mt-0.5 max-w-[520px]">
+                Keep working past your monthly credits — overage is billed on your next invoice
+                {overageRate ? ` at US$${overageRate.toFixed(2)} / credit` : ""}.
+                {(usage.overageThisPeriod ?? 0) > 0 && ` (${usage.overageThisPeriod} cr this period)`}
+              </div>
             </div>
+            <Switch checked={overageOn} onCheckedChange={toggleOverage} disabled={setPrefs.isPending} />
           </div>
-          <Switch checked={overageOn} onCheckedChange={toggleOverage} disabled={setPrefs.isPending} />
+          {overageOn && (
+            <div className="mt-3 pt-3 border-t border-border/60">
+              <Label htmlFor="overage-cap" className="text-xs">
+                Monthly limit (credits)
+              </Label>
+              <div className="flex items-center gap-3 mt-1.5">
+                <Input
+                  id="overage-cap"
+                  type="number"
+                  min={1}
+                  className="h-8 w-32"
+                  placeholder="No limit"
+                  value={limitValue}
+                  onChange={(e) => setLimitDraft(e.target.value)}
+                  onBlur={commitLimit}
+                  disabled={setPrefs.isPending}
+                />
+                <p className="text-[12px] text-muted-foreground">
+                  Pay-per-use stops when you hit it. Leave empty for no limit.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

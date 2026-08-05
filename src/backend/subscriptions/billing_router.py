@@ -248,9 +248,14 @@ async def webhook(request: Request):
                 "payload": event.to_dict(),
             }
         ).execute()
-    except Exception:
-        # Duplicate key (or other insert failure) → ack so Stripe stops retrying
-        return {"received": True, "duplicate": True}
+    except Exception as e:
+        # ONLY a genuine unique-violation means "already processed". Anything
+        # else (transient DB error) must 500 so Stripe RETRIES — acking here
+        # would permanently drop a paid event the moment the DB hiccups.
+        is_duplicate = getattr(e, "code", None) == "23505" or "23505" in str(e) or "duplicate key" in str(e).lower()
+        if is_duplicate:
+            return {"received": True, "duplicate": True}
+        raise HTTPException(status_code=500, detail=f"Idempotency insert failed: {e}")
 
     handler = stripe_events_module.HANDLERS.get(event.type)
     if handler is None:

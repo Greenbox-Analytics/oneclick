@@ -2,7 +2,7 @@
 
 Everything behind `LICENSING_ENABLED`: organizations ("Teams" in the UI), the shared credit pool, per-member caps, and **team-owned artist profiles**.
 
-> **The flag is a true rollback.** With `LICENSING_ENABLED` unset, every `/orgs/*` route 404s at the router level, `resolve_billing_org_for_project` short-circuits before any query, and `useActiveTeam()` returns null so no team affordance renders. Nobody can be in a team, so every artist has `team_id IS NULL` and every code path is the one that shipped before licensing existed.
+> **The flag is a true rollback — until real orgs exist.** With `LICENSING_ENABLED` unset, every `/orgs/*` route 404s at the router level, `resolve_billing_org_for_project` short-circuits before any query, and `useActiveTeam()` returns null so no team affordance renders. Nobody can be in a team, so every artist has `team_id IS NULL` and every code path is the one that shipped before licensing existed. **Caveat:** the SQL layer (RLS policies, triggers, `can_access_artist`) is live regardless of the flag. Once orgs and team artists exist, flipping the flag off freezes the feature (no new orgs, no transfers, no org billing) but existing members keep team-artist access via RLS and can still create team artists straight through PostgREST. Rollback-after-adoption is "frozen but live", not a no-op.
 
 ---
 
@@ -54,7 +54,7 @@ They are permissive and OR together — a user reaches a row if *any* layer gran
 
 `artists.user_id` keeps holding whoever **created** the artist, even after it is handed to a team. On a team artist it is a creator stamp, nothing more; `team_id` is ownership.
 
-This matters because every policy written before licensing reads `artists.user_id = auth.uid()`. `20260803000002` re-scopes all 21 of them with `AND a.team_id IS NULL` — without that, the creator of a team artist would keep personal-owner rights over the whole subtree **forever, including after being offboarded** (`can_access_artist` would deny; the old policy would grant anyway, and permissive policies OR).
+This matters because every policy written before licensing reads `artists.user_id = auth.uid()`. `20260803000002` re-scopes all 21 of them with `AND a.team_id IS NULL` — without that, the creator of a team artist would keep personal-owner rights over the whole subtree **forever, including after being offboarded** (`can_access_artist` would deny; the old policy would grant anyway, and permissive policies OR). `20260805000002` applies the same re-scope to `notes` / `note_folders`, which the first pass missed, and adds their team-layer `can_access_artist` policies.
 
 Practical rules when touching this area:
 
@@ -73,7 +73,7 @@ Artists are created **client-side, straight against PostgREST** — there is no 
 - `src/pages/NewArtist.tsx`
 - `src/components/NewArtistDialog.tsx`
 
-Both default `team_id` to the active billing-context org and show `TeamOwnershipField` with a "Keep this artist private to me" escape hatch. Because there is no backend endpoint, **RLS is the only enforcement**: `artists_insert_team` requires an ACTIVE membership in the target org *and* pins `user_id` to the caller, so neither the team nor the creator stamp can be forged.
+Both default `team_id` to the active billing-context org and show `TeamOwnershipField` with a "Keep this artist private to me" escape hatch. Because there is no backend endpoint, **RLS is the only enforcement**: `artists_insert_team` requires an ACTIVE membership in the target org, a **non-archived** org (`20260805000004` — inserting into an archived org would create an artist nobody can access), *and* pins `user_id` to the caller, so neither the team nor the creator stamp can be forged.
 
 Team artists are excluded from the personal `maxArtists` cap count (`.is("team_id", null)` in `NewArtist.tsx`) — the team pays for them.
 
@@ -97,6 +97,8 @@ Nothing is copied — one column moves the whole subtree.
 
 The same reasoning produces `lock_asset_owner_move` on `project_files` / `audio_files`: a member with legitimate read could otherwise walk a file out with `UPDATE project_files SET project_id = <my personal project>`. It compares `team_id`, so same-team moves stay ordinary work.
 
+`lock_parent_owner_move` (`20260805000001`) extends the same rule one level up, where the attack was still open: `projects.artist_id`, `audio_folders.artist_id`, and `works_registry.artist_id` / `project_id` cannot change the resolved owner (team, or personal owner when `team_id IS NULL`) under an end-user JWT. Without it, one `UPDATE projects SET artist_id = <my personal artist>` walked out an entire project — every file rides along untouched because `project_id` never changes, so the file-level trigger never fires.
+
 ### What is NOT protected
 
 A member who can read a team artist can retype its name, email and splits into a personal artist. That is not preventable by RLS and nothing in the app pretends otherwise — there is deliberately no "duplicate artist" affordance, but facts leaving in someone's head is a contract problem. What *is* enforced is the assets: file rows cannot cross an ownership boundary, and DSP credentials are admin-only (read included).
@@ -107,7 +109,7 @@ A member who can read a team artist can retype its name, email and splits into a
 
 An org negotiates a monthly credit volume, set **only by a Msanii admin** (`PUT /admin/orgs/{id}/dispersal`) — never by the org's own admin. Any signed-in user can create an org and is auto-made its admin, and dispersed credits count toward the activation floor, so a customer-writable dial would mint free credits and self-activate.
 
-- The org holds **one** pool wallet (`credit_wallets`, `owner_type='org'`). The daily sweep grants `organizations.monthly_dispersal_credits` into the **expiring** bundle bucket, so an unspent month can't be banked; purchased packs land in reserve and never expire.
+- The org holds **one** pool wallet (`credit_wallets`, `owner_type='org'`). The daily sweep grants `organizations.monthly_dispersal_credits` into the **expiring** bundle bucket, so an unspent month can't be banked; purchased packs land in reserve and never expire. Dispersal flows to `pending` orgs too — it counts toward the activation floor and auto-activates the org the moment the floor is met (`orgs.wallets.maybe_activate_org`, shared with the pack-purchase path). On org wallets the dispersal component of `cumulative_paid_in` is the `monthly_grant` ledger kind — the sweep disperses via `rollover_wallet`, and nothing writes the kind `'dispersal'`.
 - Members hold **no wallet**. They spend straight from the pool, bounded by `org_members.monthly_cap` → `organizations.default_member_cap` → uncapped.
 - The cap counter (`cap_used` / `cap_period_end`) moves **inside `debit_credits`** under the pool lock. A service-side pre-check cannot stop two concurrent actions both slipping under the ceiling.
 - An over-cap debit is recorded and flagged (`cap_exceeded`), never rejected — charge-on-success means the work already happened.
@@ -130,6 +132,8 @@ project → projects.artist_id → artists.team_id → org
 ```
 
 It returns a context only when the org is `active`, not archived, **and** the caller holds an active seat. Anything short of that returns `None` and falls through to personal billing — derivation only ever *upgrades*, never restricts, and a team the caller is not in must never become their payer.
+
+A **suspended** org parks the member's stored billing preference instead of clearing it: usage bills personally while suspended, and org billing resumes automatically on reactivation. Only genuinely dead references (org deleted or archived, member removed) lazy-clear. Because the fallback drains a personal wallet, members are told when it happens — suspend/remove/archive each send an email plus an in-app notification, and the frontend shows a one-time "you're now billing to your personal plan" notice when the context flips without the user choosing it.
 
 ---
 
@@ -159,6 +163,7 @@ Storage is a **hard cap on every tier**, with no pay-per-use.
 | GET | `/orgs/{org_id}/usage` | member |
 | POST / GET / DELETE | `/orgs/{org_id}/invites`, `/invites/{invite_id}` | admin |
 | POST | `/orgs/invites/{token}/accept` · `/decline` | invitee |
+| GET | `/orgs/invites/{token}/preview` | anyone holding the token (unauthenticated) — returns only `orgName` / `inviterName` for the claim page |
 | PUT | `/orgs/{org_id}/members/{member_id}/role` · `/cap` | admin |
 | POST | `/orgs/{org_id}/members/{member_id}/suspend` · `/reactivate` | admin |
 | DELETE | `/orgs/{org_id}/members/{member_id}` | admin |
@@ -214,7 +219,7 @@ pytest mocks the Supabase client and never reaches Postgres, so **the SQL layer'
 | The money RPCs | paste `supabase/qa/launch_gates_credit_rpcs.sql` |
 | Full HTTP lifecycle | `poetry run python -m scripts.qa_licensing_loop --port 8000` (needs both flags on) |
 
-`gates_team_artists.sql` builds a throwaway org, members, artists, projects and files, asserts, then **RAISEs on purpose** — the error message *is* the report, and the raise is what rolls the test data back. It needs at least 3 rows in `auth.users`. Expected totals: **6** after `20260803000001`, **14** after `…0002`, **16** after `…0003`.
+`gates_team_artists.sql` builds a throwaway org, members, artists, projects and files, asserts, then **RAISEs on purpose** — the error message *is* the report, and the raise is what rolls the test data back. It needs at least 3 rows in `auth.users`. Expected totals: **6** after `20260803000001`, **14** after `…0002`, **16** after `…0003`, **19** after `20260805000001` (parent-pointer move gates), **21** after `…0002` (notes gates).
 
 Every PL/pgSQL variable in those scripts is `v_`-prefixed. PL/pgSQL's `variable_conflict` defaults to `error`, so a variable named `org_id` in `WHERE org_id = org_id` aborts the whole block with "column reference org_id is ambiguous".
 

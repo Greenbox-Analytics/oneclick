@@ -64,7 +64,7 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
         const afterPct = after / cap;
         if (afterPct >= 0.8 && beforePct < 0.8 && !_toastedResources.has(opts.resource)) {
           _toastedResources.add(opts.resource);
-          toast(`You're at ${after}/${cap} ${opts.resource}s — upgrade to Pro for unlimited.`);
+          toast(`You're at ${after}/${cap} ${opts.resource}s — upgrade your plan for more.`);
         }
       }
       opts.onSuccess?.(data, vars, context);
@@ -90,7 +90,7 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
         return; // swallow: paywall surfaces in the modal, not via consumer toast
       }
       if (looksLikeStorageCap) {
-        setPaywallReason("Upload would exceed your storage cap. Upgrade to Pro for unlimited.");
+        setPaywallReason("Upload would exceed your storage limit. Upgrade your plan for more storage.");
         setPaywallDetail({});
         setPaywallOpen(true);
         return;

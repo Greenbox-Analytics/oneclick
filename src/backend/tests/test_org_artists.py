@@ -24,7 +24,7 @@ class TestTransferArtist:
     artist pulled out of a team whose credits paid for its files — so v1 does
     not offer it; support moves it back by hand if it is ever needed."""
 
-    def _db(self, *, owner_id=U1, team_id=None, exists=True):
+    def _db(self, *, owner_id=U1, team_id=None, exists=True, archived_at=None):
         captured: dict = {}
 
         def _side(name):
@@ -38,6 +38,8 @@ class TestTransferArtist:
                     return b
 
                 b.update = _update
+            elif name == "organizations":
+                b.execute.return_value = MagicMock(data=[{"id": ORG_ID, "archived_at": archived_at}], count=1)
             return b
 
         db = MagicMock()
@@ -64,21 +66,53 @@ class TestTransferArtist:
 
         assert exc_info.value.status_code == 404
 
-    async def test_non_owner_cannot_transfer(self, monkeypatch):
+    async def test_non_creator_gets_404_not_403(self, monkeypatch):
+        """No existence oracle: someone else's personal artist answers with the
+        SAME 404 as a nonexistent one — a 403 would confirm the artist exists."""
         monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
         db, _ = self._db(owner_id="someone-else")
 
         with pytest.raises(HTTPException) as exc_info:
             await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Artist not found"
 
-    async def test_already_team_owned_is_409(self, monkeypatch):
+    async def test_non_creator_team_owned_gets_404_not_409(self, monkeypatch):
+        """No existence oracle: a 409 on someone ELSE's team-owned artist would
+        tell any org member 'this artist exists and is team-owned'. Only the
+        creator gets the 409."""
+        monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
+        db, _ = self._db(owner_id="someone-else", team_id="0rg00000-0000-0000-0000-0000000000ff")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Artist not found"
+
+    async def test_creator_already_team_owned_is_409(self, monkeypatch):
+        """The helpful 'already transferred' signal is reserved for the
+        artist's creator."""
         monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
         db, _ = self._db(team_id="0rg00000-0000-0000-0000-0000000000ff")
 
         with pytest.raises(org_artists.ArtistAlreadyTeamOwnedError):
             await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
+
+    async def test_archived_destination_org_is_409(self, monkeypatch):
+        """FIX 7: can_access_artist denies on archived_at, so transferring into
+        an archived org would permanently lock the creator out of their own
+        artist — refused up front with a clear message."""
+        monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
+        db, captured = self._db(archived_at="2026-01-01T00:00:00+00:00")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
+
+        assert exc_info.value.status_code == 409
+        assert "archived" in exc_info.value.detail.lower()
+        assert "payload" not in captured  # nothing written
 
     async def test_transfer_stamps_and_recomputes_both_totals(self, monkeypatch):
         monkeypatch.setattr(authz, "is_org_member", lambda *a: True)

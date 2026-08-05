@@ -4,9 +4,8 @@ import { Card } from "@/components/ui/card";
 import { Lock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import type { GatedFeature, CountableResource } from "@/hooks/useEntitlements";
+import { useEntitlements, type GatedFeature, type CountableResource } from "@/hooks/useEntitlements";
 import { useAnalytics, type PaywallFeature } from "@/hooks/useAnalytics";
-import { UnlinkProjectHint } from "@/components/paywall/creditWall";
 
 interface PaywallCardProps {
   feature?: GatedFeature;
@@ -27,20 +26,6 @@ interface PaywallCardProps {
    * /organization (the member view's request form) when the 402 didn't carry
    * one. */
   requestUrl?: string;
-  /** Licensing Phase C (spec §6/§11 rule 11c, plan Task 8): true when this
-   * wall is a dry ORG seat on a project the CALLER OWNS and can unlink — the
-   * backend only sets this after confirming ownership (Task 6, landing
-   * separately), so it's safe to render unconditionally once present. Always
-   * renders ALONGSIDE the "Request credits" CTA above, never instead of it —
-   * an owner who's also an org admin still needs both escape hatches. */
-  ownerCanUnlink?: boolean;
-  /** The project to unlink, for the hint's link target. Required alongside
-   * `ownerCanUnlink` in practice (Task 6 always sets both together); the
-   * plain-text fallback below covers the defensive case where it's missing. */
-  projectId?: string;
-  /** Project display name for the hint's link text — falls back to generic
-   * "this project" wording when absent. */
-  projectName?: string;
 }
 
 const FEATURE_LABELS: Record<GatedFeature, string> = {
@@ -64,13 +49,20 @@ export const PaywallCard = ({
   managedByOrg,
   capReached,
   requestUrl,
-  ownerCanUnlink,
-  projectId,
-  projectName,
 }: PaywallCardProps) => {
   const navigate = useNavigate();
   const { capturePaywallShown, capturePaywallUpgradeClicked } = useAnalytics();
+  const { data: ent } = useEntitlements();
   const pwFeature = (feature ?? "create_cap") as PaywallFeature;
+  // Is the viewer an ADMIN of the org whose pool ran dry? An admin can buy
+  // credits themselves — "ask your admin" would be telling them to email
+  // themselves.
+  const orgRole =
+    ent?.billingContext?.type === "org" ? ent.billingContext.role : ent?.credits?.managedByOrg?.role;
+  const isOrgAdmin = orgRole === "admin";
+  // Credit packs are only sellable when the credits system is on and the
+  // wall is personal — never suggest packs on a legacy tier-gate wall.
+  const packsAvailable = !managedByOrg && ent?.credits != null;
 
   useEffect(() => {
     capturePaywallShown(pwFeature, variant ?? "page", reason);
@@ -87,7 +79,9 @@ export const PaywallCard = ({
   const title = capReached
     ? "You've reached your monthly limit"
     : managedByOrg
-    ? "Your organization is out of credits"
+    ? isOrgAdmin
+      ? "Your team's credit pool is empty"
+      : "Your organization is out of credits"
     : feature
     ? `${FEATURE_LABELS[feature]} is a Pro feature`
     : resource
@@ -97,7 +91,9 @@ export const PaywallCard = ({
   const body = capReached
     ? reason ?? "You've used your monthly credit limit. Ask your organization's admin to raise it."
     : managedByOrg
-    ? reason ?? "Your organization is out of credits. Ask your admin to top up."
+    ? isOrgAdmin
+      ? "Your team's shared credit pool is empty. Buy credits to get everyone working again."
+      : reason ?? "Your organization is out of credits. Ask your admin to top up."
     : reason ??
       (feature
         ? `${FEATURE_LABELS[feature]} is included in Pro. Upgrade to access it.`
@@ -126,14 +122,31 @@ export const PaywallCard = ({
                 Ask for a higher limit
               </Button>
             )}
-            {ownerCanUnlink && (
-              <UnlinkProjectHint projectId={projectId} projectName={projectName} />
+            {!capReached && isOrgAdmin && (
+              <Button onClick={() => navigate("/organization")} className="mt-2">
+                Buy credits
+              </Button>
             )}
           </>
         ) : (
-          <Button onClick={handleUpgradeClick} className="mt-2">
-            Upgrade to Pro
-          </Button>
+          <>
+            <Button onClick={handleUpgradeClick} className="mt-2">
+              Upgrade to Pro
+            </Button>
+            {packsAvailable && (
+              <p className="text-xs text-muted-foreground">
+                Or{" "}
+                <button
+                  type="button"
+                  onClick={() => navigate("/profile")}
+                  className="underline underline-offset-2"
+                >
+                  buy a credit pack
+                </button>{" "}
+                — packs never expire.
+              </p>
+            )}
+          </>
         )}
       </div>
     </Card>

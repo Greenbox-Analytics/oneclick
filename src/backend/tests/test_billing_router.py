@@ -193,6 +193,76 @@ class TestWebhook:
         assert resp.status_code == 200
         assert resp.json().get("duplicate") is True
 
+    def test_transient_idempotency_insert_failure_returns_500_so_stripe_retries(
+        self, client, mock_supabase, monkeypatch
+    ):
+        """FIX: a NON-duplicate insert failure (transient DB error) must NOT be
+        acked as a duplicate — a 200 would make Stripe stop retrying and
+        permanently drop the event (e.g. a paid checkout.session.completed)."""
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
+        monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test_dummy")
+
+        from subscriptions import stripe_client
+
+        fake_event = MagicMock(id="evt_transient_1", type="checkout.session.completed")
+        fake_event.to_dict.return_value = {"id": "evt_transient_1"}
+
+        original_side_effect = mock_supabase.table.side_effect
+
+        def _table(name):
+            if name == "stripe_events":
+                b = MockQueryBuilder()
+                b.insert.return_value.execute.side_effect = Exception("connection reset by peer")
+                return b
+            return original_side_effect(name)
+
+        mock_supabase.table.side_effect = _table
+
+        with patch.object(stripe_client, "verify_webhook", return_value=fake_event):
+            resp = client.post(
+                "/billing/webhook",
+                content=b'{"id":"evt_transient_1"}',
+                headers={"stripe-signature": "t=1,v1=sig"},
+            )
+
+        assert resp.status_code == 500
+        assert "duplicate" not in resp.json().get("detail", "").lower()
+
+    def test_postgrest_error_code_23505_still_acked_as_duplicate(self, client, mock_supabase, monkeypatch):
+        """The Supabase client surfaces unique violations as APIError-like
+        exceptions carrying code='23505' — that shape must still be acked."""
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
+        monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test_dummy")
+
+        from subscriptions import stripe_client
+
+        fake_event = MagicMock(id="evt_dup_2", type="checkout.session.completed")
+        fake_event.to_dict.return_value = {"id": "evt_dup_2"}
+
+        class FakeApiError(Exception):
+            code = "23505"
+
+        original_side_effect = mock_supabase.table.side_effect
+
+        def _table(name):
+            if name == "stripe_events":
+                b = MockQueryBuilder()
+                b.insert.return_value.execute.side_effect = FakeApiError("conflict")
+                return b
+            return original_side_effect(name)
+
+        mock_supabase.table.side_effect = _table
+
+        with patch.object(stripe_client, "verify_webhook", return_value=fake_event):
+            resp = client.post(
+                "/billing/webhook",
+                content=b'{"id":"evt_dup_2"}',
+                headers={"stripe-signature": "t=1,v1=sig"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json().get("duplicate") is True
+
     def test_handler_exception_deletes_idempotency_row_and_returns_500(self, client, mock_supabase, monkeypatch):
         monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
         monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test_dummy")

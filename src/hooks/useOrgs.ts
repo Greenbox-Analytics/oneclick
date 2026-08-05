@@ -69,8 +69,6 @@ export interface OrgSeatUsage {
   capUsed: number;
   /** Ledger-derived spend for the pool's current period. */
   spentThisPeriod: number;
-  storageBytes: number;
-  storageCapBytes: number;
 }
 
 /** GET /orgs/{id}/usage — admin-only per-member rollup. */

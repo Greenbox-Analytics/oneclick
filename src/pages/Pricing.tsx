@@ -15,6 +15,9 @@ import { tierLabel, usd, annualPerMonth, ENTERPRISE_LABEL, TIER_PRICES } from "@
 type Feature = { included: boolean; label: string };
 type Period = "monthly" | "annual";
 
+// ---------------------------------------------------------------------------
+// Legacy (credits off): tools are tier-gated, so Free shows locks.
+// ---------------------------------------------------------------------------
 const FREE_FEATURES: Feature[] = [
   { included: true, label: "3 artists" },
   { included: true, label: "3 projects" },
@@ -37,14 +40,44 @@ const BASIC_FEATURES: Feature[] = [
   { included: true, label: "Unlimited OneClick royalty calculations" },
   { included: true, label: "Metadata Registry" },
   { included: true, label: "All integrations: Drive, Slack" },
-  { included: true, label: "3,000 monthly credits for AI-powered tools" },
 ];
 
 // "pro" DB tier.
 const PRO_FEATURES: Feature[] = [
   { included: true, label: `Everything in ${tierLabel("basic")}` },
-  { included: true, label: "8,000 monthly credits for AI-powered tools" },
   { included: true, label: "More storage headroom" },
+  { included: true, label: "Priority support" },
+];
+
+// ---------------------------------------------------------------------------
+// Credits model: every tool is open on every tier — AI actions draw from a
+// monthly credit allowance instead of tier locks. Credit and storage numbers
+// mirror tier_entitlements (150/3,000/8,000 credits; 1/100/250 GB — storage is
+// a hard cap on every tier, never pay-per-use).
+// ---------------------------------------------------------------------------
+const FREE_FEATURES_CREDITS: Feature[] = [
+  { included: true, label: "All tools included — Zoe, OneClick, Registry, split sheets" },
+  { included: true, label: "150 credits per month for AI-powered actions" },
+  { included: true, label: "3 artists, 3 projects, 50 tasks" },
+  { included: true, label: "1 GB storage" },
+  { included: true, label: "5 split sheets per month" },
+  { included: true, label: "Google Drive integration" },
+  { included: false, label: "Slack integration" },
+];
+
+const BASIC_FEATURES_CREDITS: Feature[] = [
+  { included: true, label: "All tools included — usage draws from your monthly credits" },
+  { included: true, label: "3,000 credits per month for AI-powered actions" },
+  { included: true, label: "Unlimited artists, projects, and tasks" },
+  { included: true, label: "100 GB storage" },
+  { included: true, label: "Unlimited split sheets" },
+  { included: true, label: "All integrations: Drive, Slack" },
+];
+
+const PRO_FEATURES_CREDITS: Feature[] = [
+  { included: true, label: `Everything in ${tierLabel("basic")}` },
+  { included: true, label: "8,000 credits per month for AI-powered actions" },
+  { included: true, label: "250 GB storage" },
   { included: true, label: "Priority support" },
 ];
 
@@ -79,6 +112,13 @@ const Pricing = () => {
   // which is the behaviour we want: they get the contact-us CTA.
   const { data: ent } = useEntitlements();
   const licensingOn = ent?.availableContexts != null;
+  // CREDITS_ENABLED is likewise backend-only: `credits` is non-null on
+  // /me/entitlements exactly when the flag is on. Signed-out visitors (no
+  // entitlements) see the legacy lists — same tradeoff as licensingOn above.
+  const creditsOn = ent?.credits != null;
+  const freeFeatures = creditsOn ? FREE_FEATURES_CREDITS : FREE_FEATURES;
+  const basicFeatures = creditsOn ? BASIC_FEATURES_CREDITS : BASIC_FEATURES;
+  const proFeatures = creditsOn ? PRO_FEATURES_CREDITS : PRO_FEATURES;
 
   const [basicPeriod, setBasicPeriod] = useState<Period>("monthly");
   const [proPeriod, setProPeriod] = useState<Period>("monthly");
@@ -182,7 +222,7 @@ const Pricing = () => {
               <span className="text-muted-foreground ml-1">/month</span>
             </div>
             <ul className="space-y-3 flex-1 mb-8">
-              {FREE_FEATURES.map((f) => (
+              {freeFeatures.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
@@ -227,7 +267,7 @@ const Pricing = () => {
             )}
 
             <ul className="space-y-3 flex-1 mb-8">
-              {BASIC_FEATURES.map((f) => (
+              {basicFeatures.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
@@ -266,7 +306,7 @@ const Pricing = () => {
             )}
 
             <ul className="space-y-3 flex-1 mb-8">
-              {PRO_FEATURES.map((f) => (
+              {proFeatures.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>

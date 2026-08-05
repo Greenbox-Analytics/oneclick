@@ -840,8 +840,8 @@ class TestCheckCreditsOrgContext:
         assert r.managed_by_org is True
 
     def test_suspended_org_context_uses_personal_wallet(self, monkeypatch):
-        """A suspended org is a DEAD reference → personal check path, personal
-        wallet id, no managed_by_org."""
+        """A suspended org is PARKED (preference kept, resumes on reactivation)
+        → personal check path meanwhile: personal wallet id, no managed_by_org."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _ctx_supabase(_personal_via_dead_org_data(org_status="suspended"))

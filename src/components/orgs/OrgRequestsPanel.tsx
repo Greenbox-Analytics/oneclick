@@ -154,12 +154,12 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
           <DialogHeader>
             <DialogTitle>Approve request</DialogTitle>
             <DialogDescription>
-              Choose how many credits to send {approveTarget ? requesterLabel(approveTarget) : "this member"} from the
-              pool.
+              Set {approveTarget ? requesterLabel(approveTarget) : "this member"}&apos;s new monthly
+              limit.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="approve-amount">Credits</Label>
+            <Label htmlFor="approve-amount">New monthly limit</Label>
             <Input
               id="approve-amount"
               type="number"
@@ -167,6 +167,9 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
               value={approveAmount}
               onChange={(e) => setApproveAmount(e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">
+              Nothing is set aside — this only raises their ceiling.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => closeApprove(false)}>

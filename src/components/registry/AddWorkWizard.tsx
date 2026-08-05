@@ -42,6 +42,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
 import { parseCreditWallDetail } from "@/components/paywall/creditWall";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
 import {
@@ -100,19 +101,13 @@ interface QueuedContract {
   displayName: string;
   status: "pending" | "parsing" | "done" | "error";
   error?: string;
-  /** Licensing Phase B (plan Task 13) — set when `error` came from a credit-402
-   * whose seat wallet is managed by an organization: there's no upgrade path
-   * on a seat, so the row offers a "Request credits" link instead. */
+  /** Licensing Phase B (plan Task 13) — set when `error` came from a
+   * credit-402 billed to an organization. `capReached` = the member's own
+   * monthly limit (remedy: ask an admin for a raise via `requestUrl`); a dry
+   * pool has no member-side remedy, so no link renders for it. */
   managedByOrg?: boolean;
+  capReached?: boolean;
   requestUrl?: string;
-  /** Licensing Phase C (spec §6/§11 rule 11c, plan Task 8) — set when the
-   * dry-seat wall is on a project the caller OWNS and can unlink. Lands on
-   * the 402 in Task 6 (running separately); rendered behind a
-   * presence-check until then, alongside (never instead of) "Request
-   * credits". */
-  ownerCanUnlink?: boolean;
-  projectId?: string;
-  projectName?: string;
   parties?: ParsedParty[]; // raw parse result, kept for provenance + re-merge
   mainArtistFound?: boolean;
 }
@@ -1828,25 +1823,14 @@ function RoyaltyStep({
                       {q.status === "done" &&
                         `Parsed · ${q.parties?.length ?? 0} ${(q.parties?.length ?? 0) === 1 ? "party" : "parties"} found`}
                       {q.status === "error" && (q.error || "Parse failed")}
-                      {q.status === "error" && q.managedByOrg && (
+                      {/* Cap wall only — a dry pool has no member-side remedy,
+                          so no link there (only an admin buying credits helps). */}
+                      {q.status === "error" && q.managedByOrg && q.capReached && (
                         <>
                           {" · "}
                           <Link to={q.requestUrl || "/organization"} className="underline underline-offset-2">
-                            Request credits
+                            Ask for a higher limit
                           </Link>
-                        </>
-                      )}
-                      {q.status === "error" && q.managedByOrg && q.ownerCanUnlink && (
-                        <>
-                          {" · "}
-                          {q.projectId ? (
-                            <Link to={`/projects/${q.projectId}?tab=settings`} className="underline underline-offset-2">
-                              unlink {q.projectName ? `"${q.projectName}"` : "this project"}
-                            </Link>
-                          ) : (
-                            "unlink this project in its settings"
-                          )}{" "}
-                          for your own plan
                         </>
                       )}
                     </div>
@@ -1888,6 +1872,7 @@ function RoyaltyStep({
                     ? "Read contract"
                     : `Read ${queuedContracts.length} contracts`}
               </Button>
+              <CreditsChip />
             </div>
             {queuedContracts.length === 0 && (
               <p className="mt-1.5 text-[11px] text-muted-foreground">

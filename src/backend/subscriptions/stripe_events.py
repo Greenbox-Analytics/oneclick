@@ -38,12 +38,25 @@ def _tier_for_price(price_id: str | None) -> str:
     The env var names still say PRO_MAX: they point at the $50 plan's Stripe
     prices, which is the tier now KEYED 'pro'. Renaming them would mean rotating
     deploy secrets for a cosmetic win, so the mapping is documented instead.
+
+    A price id that matches NEITHER tier's env vars still falls back to 'basic'
+    (a paying customer must never be dropped to free by a config drift), but it
+    is logged as an ERROR: a rotated/added Stripe price that nobody wired into
+    STRIPE_PRICE_* would otherwise silently misassign tiers forever.
     """
     top_tier_prices = {
         os.getenv("STRIPE_PRICE_PRO_MAX_MONTHLY"),
         os.getenv("STRIPE_PRICE_PRO_MAX_ANNUAL"),
     }
-    return "pro" if price_id and price_id in top_tier_prices else "basic"
+    if price_id and price_id in top_tier_prices:
+        return "pro"
+    basic_prices = {os.getenv("STRIPE_PRICE_MONTHLY"), os.getenv("STRIPE_PRICE_ANNUAL")}
+    if price_id not in basic_prices:
+        logger.error(
+            "unknown Stripe price id %r — not in any STRIPE_PRICE_* env var; defaulting tier to 'basic'",
+            price_id,
+        )
+    return "basic"
 
 
 def _capped_topup(supabase, wallet: dict, grant: int) -> int:
@@ -284,19 +297,18 @@ def _handle_org_topup_grant(
     path, so an async-payment redelivery converges identically.
 
     After the grant call (fresh OR duplicate — re-running this is harmless,
-    the sum is unchanged either way), re-evaluates cumulative activation: a
-    'pending' org whose lifetime SUM of 'purchase' ledger deltas on this
-    wallet reaches the effective minimum (the org's own
-    `min_initial_purchase_credits`, else `ENTERPRISE_MIN_INITIAL_CREDITS`)
-    flips to 'active'. Activation only ever moves pending -> active —
-    already-active/suspended/archived orgs are never touched here (that
-    would be a status regression, not an activation).
+    the sum is unchanged either way), re-evaluates cumulative activation via
+    the shared `orgs.wallets.maybe_activate_org` — the SAME implementation
+    the dispersal sweep uses (subscriptions/sweep.py step 4), so the two
+    activation paths can never drift. A 'pending' org whose lifetime paid-in
+    SUM on this wallet reaches the effective minimum flips to 'active';
+    already-active/suspended/archived orgs are never touched.
 
     No try/except anywhere: a failure must 500 the webhook so Stripe
     retries — every step here is idempotent (request-id'd grant, a re-run of
     the SUM, and a status flip that's a no-op once already 'active').
     """
-    from orgs.wallets import cumulative_paid_in, read_or_create_org_wallet
+    from orgs.wallets import maybe_activate_org, read_or_create_org_wallet
 
     wallet = read_or_create_org_wallet(supabase, org_id)
     wallet_id = wallet["id"]
@@ -319,20 +331,7 @@ def _handle_org_topup_grant(
             {"pack": pack_key, "credits": credits, "usd": price_cents / 100, "target": "org", "org_id": org_id},
         )
 
-    org_res = supabase.table("organizations").select("status, min_initial_purchase_credits").eq("id", org_id).execute()
-    org_row = org_res.data[0] if org_res.data else None
-    if not org_row or org_row.get("status") != "pending":
-        return  # activation only ever moves pending -> active
-
-    # Shared with admin_service.get_org_pool (orgs/wallets.py) — "did this org
-    # cross the minimum" must be the SAME sum in both places (follow-ups plan
-    # Task 2, review round 2).
-    total_paid_in = cumulative_paid_in(supabase, wallet_id)
-    effective_min = org_row.get("min_initial_purchase_credits") or int(
-        os.getenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000")
-    )
-    if total_paid_in >= effective_min:
-        supabase.table("organizations").update({"status": "active"}).eq("id", org_id).execute()
+    maybe_activate_org(supabase, org_id, wallet_id)
 
 
 def handle_subscription_updated(event, supabase) -> None:

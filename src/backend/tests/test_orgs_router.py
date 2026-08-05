@@ -36,6 +36,7 @@ class TestFlagGate:
         ("PUT", f"/orgs/{ORG_ID}", {"name": "Acme"}),
         ("POST", f"/orgs/{ORG_ID}/archive", None),
         ("GET", f"/orgs/{ORG_ID}/usage", None),
+        ("GET", f"/orgs/invites/{TOKEN}/preview", None),
         ("POST", f"/orgs/invites/{TOKEN}/accept", None),
         ("POST", f"/orgs/invites/{TOKEN}/decline", None),
         ("PUT", f"/orgs/{ORG_ID}/members/{MEMBER_ID}/role", {"role": "admin"}),
@@ -173,10 +174,28 @@ def test_update_org_denied_for_non_admin_403(client):
 
 
 def test_archive_org_ok(client):
-    with patch("orgs.router.service.archive_org", new=AsyncMock(return_value={"id": ORG_ID, "archived_at": "now"})):
+    with (
+        patch("orgs.router.service.archive_org", new=AsyncMock(return_value={"id": ORG_ID, "archived_at": "now"})),
+        patch("orgs.router._notify_billing_reverted_background"),
+    ):
         resp = client.post(f"/orgs/{ORG_ID}/archive")
     assert resp.status_code == 200
     assert resp.json()["archived_at"] == "now"
+
+
+def test_archive_org_schedules_billing_reverted_notice_for_all_members(client):
+    """FIX 1 notify: archiving an org silently moved every member to personal
+    billing — now every ACTIVE member is notified (member_user_ids=None means
+    'all active members' in the background task)."""
+    with (
+        patch("orgs.router.service.archive_org", new=AsyncMock(return_value={"id": ORG_ID, "archived_at": "now"})),
+        patch("orgs.router._notify_billing_reverted_background") as mock_bg,
+    ):
+        resp = client.post(f"/orgs/{ORG_ID}/archive")
+    assert resp.status_code == 200
+    mock_bg.assert_called_once()
+    assert mock_bg.call_args.kwargs["org_id"] == ORG_ID
+    assert mock_bg.call_args.kwargs["member_user_ids"] is None
 
 
 def test_archive_org_denied_for_non_admin_403(client):
@@ -216,6 +235,102 @@ def test_get_org_usage_denied_for_non_admin_403(client):
     ):
         resp = client.get(f"/orgs/{ORG_ID}/usage")
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /orgs/invites/{token}/preview — claim-page preview (FIX 11)
+# ---------------------------------------------------------------------------
+
+
+def _preview_invite(**overrides):
+    base = {
+        "id": INVITE_ID,
+        "org_id": ORG_ID,
+        "role": "member",
+        "status": "pending",
+        "invited_by": "u-admin",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_get_org_invite_preview_ok(client, mock_supabase):
+    """The claim page can name what the user is joining. Frontend field names:
+    orgName / inviterName. The body is DELIBERATELY minimal — a bare token
+    holder learns the org name and inviter (both already in the invite email)
+    and nothing else: no invitee email, role, or expiry."""
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data={"name": "Acme Records"}, count=1)
+        elif name == "profiles":
+            b.execute.return_value = MagicMock(data={"full_name": "Ada Admin"}, count=1)
+        return b
+
+    mock_supabase.table.side_effect = _side
+
+    with patch("orgs.router.service.get_invite_by_token", new=AsyncMock(return_value=_preview_invite())):
+        resp = client.get(f"/orgs/invites/{TOKEN}/preview")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"orgName": "Acme Records", "inviterName": "Ada Admin"}
+
+
+def test_get_org_invite_preview_unknown_token_404(client):
+    with patch("orgs.router.service.get_invite_by_token", new=AsyncMock(return_value=None)):
+        resp = client.get(f"/orgs/invites/{TOKEN}/preview")
+    assert resp.status_code == 404
+
+
+def test_get_org_invite_preview_expired_token_404(client):
+    invite = _preview_invite(expires_at="2020-01-01T00:00:00+00:00")
+    with patch("orgs.router.service.get_invite_by_token", new=AsyncMock(return_value=invite)):
+        resp = client.get(f"/orgs/invites/{TOKEN}/preview")
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("status", ["accepted", "declined"])
+def test_get_org_invite_preview_resolved_token_404(client, status):
+    """An already-resolved token previews as not-found — the claim page
+    degrades to its generic copy and the accept endpoint still answers
+    'already_accepted' properly for the real invitee."""
+    with patch("orgs.router.service.get_invite_by_token", new=AsyncMock(return_value=_preview_invite(status=status))):
+        resp = client.get(f"/orgs/invites/{TOKEN}/preview")
+    assert resp.status_code == 404
+
+
+def test_get_org_invite_preview_missing_inviter_profile_still_returns(client, mock_supabase):
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data={"name": "Acme Records"}, count=1)
+        elif name == "profiles":
+            b.execute.return_value = MagicMock(data=None, count=0)
+        return b
+
+    mock_supabase.table.side_effect = _side
+
+    with patch(
+        "orgs.router.service.get_invite_by_token", new=AsyncMock(return_value=_preview_invite(invited_by="u-gone"))
+    ):
+        resp = client.get(f"/orgs/invites/{TOKEN}/preview")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"orgName": "Acme Records", "inviterName": None}
+
+
+def test_get_org_invite_preview_requires_no_auth():
+    """The claim page renders before sign-in — the preview route must carry no
+    auth dependency (the unguessable token is the capability)."""
+    from auth import get_current_user_email, get_current_user_id
+    from orgs import router as orgs_router
+
+    route = next(r for r in orgs_router.router.routes if r.path == "/invites/{token}/preview")
+    dep_calls = [d.call for d in route.dependant.dependencies]
+    assert get_current_user_id not in dep_calls
+    assert get_current_user_email not in dep_calls
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +591,116 @@ def test_remove_member_last_admin_409(client):
     assert resp.status_code == 409
 
 
+def test_suspend_member_schedules_billing_reverted_notice(client):
+    """FIX 1 notify: the suspended member is told their usage now bills to
+    their personal plan (email + in-app, via the background task)."""
+    with (
+        patch(
+            "orgs.router.service.suspend_member",
+            new=AsyncMock(return_value={"id": MEMBER_ID, "user_id": "u-member", "status": "suspended"}),
+        ),
+        patch("orgs.router.analytics_capture"),
+        patch("orgs.router._notify_billing_reverted_background") as mock_bg,
+    ):
+        resp = client.post(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/suspend")
+    assert resp.status_code == 200
+    mock_bg.assert_called_once()
+    assert mock_bg.call_args.kwargs["org_id"] == ORG_ID
+    assert mock_bg.call_args.kwargs["member_user_ids"] == ["u-member"]
+
+
+def test_remove_member_schedules_billing_reverted_notice(client):
+    with (
+        patch(
+            "orgs.router.service.remove_member",
+            new=AsyncMock(return_value={"id": MEMBER_ID, "user_id": "u-member", "status": "removed"}),
+        ),
+        patch("orgs.router.analytics_capture"),
+        patch("orgs.router._notify_billing_reverted_background") as mock_bg,
+    ):
+        resp = client.delete(f"/orgs/{ORG_ID}/members/{MEMBER_ID}")
+    assert resp.status_code == 200
+    mock_bg.assert_called_once()
+    assert mock_bg.call_args.kwargs["member_user_ids"] == ["u-member"]
+
+
+def test_notify_billing_reverted_background_sends_email_and_notification():
+    """Direct test of the background task: the member's email comes off their
+    org_members row, the email fires, and an in-app notification lands on the
+    unified notifications table with a CHECK-allowed type."""
+    from orgs import router as orgs_router
+
+    inserted: list = []
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data={"name": "Acme"}, count=1)
+        elif name == "org_members":
+            b.execute.return_value = MagicMock(data=[{"user_id": "u-member", "email": "member@example.com"}], count=1)
+        elif name == "notifications":
+            original_insert = b.insert
+
+            def _capture(payload, *a, **kw):
+                inserted.append(payload)
+                return original_insert(payload, *a, **kw)
+
+            b.insert = _capture
+        return b
+
+    fake_db = MagicMock()
+    fake_db.table.side_effect = _side
+
+    with (
+        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.emails.send_billing_reverted_email") as mock_send,
+    ):
+        orgs_router._notify_billing_reverted_background(
+            db_url="http://fake",
+            db_key="fake-key",
+            org_id=ORG_ID,
+            member_user_ids=["u-member"],
+        )
+
+    mock_send.assert_called_once_with(recipient_email="member@example.com", org_name="Acme")
+    assert len(inserted) == 1
+    notif = inserted[0]
+    assert notif["user_id"] == "u-member"
+    assert notif["type"] == "status_change"  # existing CHECK-allowed type
+    assert notif["entity_type"] == "org"
+    assert notif["entity_id"] == ORG_ID
+    assert "personal plan" in notif["message"]
+
+
+def test_notify_billing_reverted_background_null_email_falls_back_to_auth_lookup():
+    from orgs import router as orgs_router
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data={"name": "Acme"}, count=1)
+        elif name == "org_members":
+            b.execute.return_value = MagicMock(data=[{"user_id": "u-legacy", "email": None}], count=1)
+        return b
+
+    fake_db = MagicMock()
+    fake_db.table.side_effect = _side
+    fake_db.auth.admin.get_user_by_id.return_value = MagicMock(user=MagicMock(email="legacy@example.com"))
+
+    with (
+        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.emails.send_billing_reverted_email") as mock_send,
+    ):
+        orgs_router._notify_billing_reverted_background(
+            db_url="http://fake",
+            db_key="fake-key",
+            org_id=ORG_ID,
+            member_user_ids=["u-legacy"],
+        )
+
+    mock_send.assert_called_once_with(recipient_email="legacy@example.com", org_name="Acme")
+
+
 def test_reactivate_member_ok(client):
     with patch(
         "orgs.router.service.reactivate_member", new=AsyncMock(return_value={"id": MEMBER_ID, "status": "active"})
@@ -662,16 +887,19 @@ class TestGetOrgUsageService:
         assert member_2_seat["effectiveCap"] == 2000
         assert member_2_seat["spentThisPeriod"] == 0
 
-    async def test_storage_bytes_and_cap_from_env(self, monkeypatch):
+    async def test_per_member_personal_storage_is_not_reported(self, monkeypatch):
+        """FIX 8 (privacy leak): post-20260803000003 usage_counters counts only
+        PERSONAL artists, so per-seat storageBytes/storageCapBytes exposed
+        members' non-org activity to org admins — the fields are gone and the
+        usage_counters table is never even queried."""
         monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-        monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", "999")
         db = self._db()
         result = await service.get_org_usage(db, self.U_ADMIN, self.ORG)
-        seats = {s["orgMemberId"]: s for s in result["seats"]}
-        assert seats[self.ADMIN_MEMBER]["storageBytes"] == 1000
-        assert seats[self.ADMIN_MEMBER]["storageCapBytes"] == 999
-        assert seats[self.MEMBER_2]["storageBytes"] == 0
-        assert seats[self.MEMBER_2]["storageCapBytes"] == 999
+        for seat in result["seats"]:
+            assert "storageBytes" not in seat
+            assert "storageCapBytes" not in seat
+        queried_tables = [c.args[0] for c in db.table.call_args_list]
+        assert "usage_counters" not in queried_tables
 
     async def test_removed_member_who_spent_this_period_is_included(self, monkeypatch):
         """An admin reading the console wants this month's spend attributed —

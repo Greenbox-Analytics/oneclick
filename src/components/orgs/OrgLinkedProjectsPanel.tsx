@@ -1,10 +1,9 @@
 // src/components/orgs/OrgLinkedProjectsPanel.tsx
-// Admin console (Licensing Phase C, spec §6, plan Task 8): linked projects +
-// per-project member matrix. Linking/unlinking is the project OWNER's alone
-// (rule 1, managed from the project's own settings tab) — this panel is
-// VIEW + manage-seat-access only: admins grant/adjust/remove which of their
-// org's seats can reach a linked project, driving Task 3's endpoints. They
-// can never create or remove the link itself here.
+// Admin console: the projects this org owns THROUGH ITS ARTISTS
+// (artists.team_id — per-project links were retired in 20260804000001) +
+// per-project member matrix. This panel is VIEW + manage-seat-access only:
+// admins grant/adjust/remove which of their org's seats can reach a project.
+// Ownership itself moves only by transferring an artist to the team.
 //
 // The per-member role select has no "current role" to preload from: no
 // endpoint exposes a linked project's existing project_members rows to the
@@ -150,7 +149,8 @@ function LinkedProjectRow({
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium truncate">{project.name ?? "Untitled project"}</div>
           <div className="text-xs text-muted-foreground truncate">
-            Owned by {project.ownerEmail ?? "unknown"} · Linked {fmtDate(project.linkedAt)}
+            Created by {project.ownerEmail ?? "unknown"}
+            {project.linkedAt ? ` · With the team since ${fmtDate(project.linkedAt)}` : ""}
           </div>
         </div>
         <Badge variant="outline" className="flex-none">
@@ -181,11 +181,11 @@ export function OrgLinkedProjectsPanel({ orgId, seats }: { orgId: string; seats:
     <Card className="p-6">
       <div className="flex items-center gap-2">
         <FolderKanban className="w-4 h-4 text-muted-foreground" />
-        <div className="text-[15px] font-semibold">Linked projects</div>
+        <div className="text-[15px] font-semibold">Team projects</div>
       </div>
       <div className="text-[13.5px] text-muted-foreground mt-0.5">
-        Projects an owner has linked to this organization. Grant or remove seat access below — a member with
-        access on their own is left alone, with a note instead of an error.
+        Projects owned by this team (through its artists). Grant or remove member access below — a
+        member with access on their own is left alone, with a note instead of an error.
       </div>
 
       <div className="mt-4">
@@ -195,11 +195,12 @@ export function OrgLinkedProjectsPanel({ orgId, seats }: { orgId: string; seats:
           </div>
         ) : isError ? (
           <div className="text-sm text-muted-foreground text-center py-8">
-            Couldn&apos;t load linked projects. Please try refreshing.
+            Couldn&apos;t load team projects. Please try refreshing.
           </div>
         ) : !projects || projects.length === 0 ? (
           <div className="text-sm text-muted-foreground text-center py-8">
-            No projects are linked yet. Project owners can link from their project&apos;s settings.
+            No team projects yet. Projects join the team when an artist is moved to it from the
+            artist&apos;s profile page.
           </div>
         ) : (
           <div className="space-y-2">

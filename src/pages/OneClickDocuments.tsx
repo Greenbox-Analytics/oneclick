@@ -18,7 +18,8 @@ import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { API_URL, apiFetch, getAuthHeaders, ApiError, apiErrorFromBody } from "@/lib/apiFetch";
-import { parseCreditWallDetail, UnlinkProjectHint } from "@/components/paywall/creditWall";
+import { parseCreditWallDetail } from "@/components/paywall/creditWall";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
 import CalculationResults from "@/components/oneclick/CalculationResults";
@@ -65,18 +66,13 @@ interface CalculationErrorState {
     excluded_payor_count?: number;
   };
   /** Licensing Phase B (plan Task 13) — set when the calculation was denied by
-   * a credit-402 whose seat wallet is managed by an organization: there's no
-   * upgrade/pay-per-use path on a seat, so the alert offers a "Request
-   * credits" link (to `requestUrl`, or /organization) instead. */
+   * a credit-402 billed to an organization. Two org walls with different
+   * remedies: `capReached` (the member's own monthly limit — ask an admin to
+   * raise it via `requestUrl`) vs a dry pool (only an admin buying credits
+   * helps, so no member CTA). */
   managedByOrg?: boolean;
+  capReached?: boolean;
   requestUrl?: string;
-  /** Licensing Phase C (spec §6/§11 rule 11c, plan Task 8) — set when the
-   * dry-seat wall is on a project the caller OWNS and can unlink. Lands on
-   * the 402 in Task 6 (running separately); rendered behind a presence-check
-   * until then, alongside (never instead of) the "Request credits" link. */
-  ownerCanUnlink?: boolean;
-  projectId?: string;
-  projectName?: string;
 }
 interface Project { id: string; name: string; }
 interface ArtistFile { id: string; file_name: string; created_at: string; folder_category: string; file_path: string; project_id: string; }
@@ -749,7 +745,7 @@ const OneClickDocuments = () => {
           />
         </div>
 
-        <div className="flex gap-3 justify-center mb-8">
+        <div className="flex flex-col items-center gap-2 mb-8">
           <Button
             data-walkthrough="oneclick-calculate"
             onClick={() => openReviewDialog(false)}
@@ -768,6 +764,7 @@ const OneClickDocuments = () => {
               "Calculate Royalties"
             )}
           </Button>
+          <CreditsChip />
         </div>
 
         {/* Error Alert */}
@@ -777,22 +774,17 @@ const OneClickDocuments = () => {
                 <AlertTitle>{error.message}</AlertTitle>
                 <AlertDescription>
                     {error.suggestion && <p className="mt-2">{error.suggestion}</p>}
-                    {error.managedByOrg && (
+                    {/* Cap wall only — a dry pool has no member-side remedy, so
+                        no CTA there (only an admin buying credits helps). */}
+                    {error.managedByOrg && error.capReached && (
                         <Button
                             size="sm"
                             variant="outline"
                             className="mt-3"
                             onClick={() => navigate(error.requestUrl || "/organization")}
                         >
-                            Request credits
+                            Ask for a higher limit
                         </Button>
-                    )}
-                    {error.managedByOrg && error.ownerCanUnlink && (
-                        <UnlinkProjectHint
-                            projectId={error.projectId}
-                            projectName={error.projectName}
-                            className="mt-2"
-                        />
                     )}
                     {error.code === 'NO_SONG_MATCHES' && error.details?.contract_works && error.details?.statement_songs && (
                         <SongMismatchComparison

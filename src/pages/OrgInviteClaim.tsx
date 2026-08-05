@@ -11,6 +11,7 @@
 // hooks — this page owns the distinct expired/wrong-email/not-found copy.
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2, Building2, ShieldAlert } from "lucide-react";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -90,6 +91,23 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
   const declineInvite = useDeclineOrgInvite();
   const [errorState, setErrorState] = useState<ErrorKind | null>(null);
   const [declined, setDeclined] = useState(false);
+
+  // Best-effort invite preview so the card can NAME the org (mirrors the
+  // registry claim page's /preview convention). Defensive on purpose: the
+  // endpoint/payload may not exist yet — any failure or missing field just
+  // leaves the generic "an organization" copy below.
+  const { data: invitePreview } = useQuery<Record<string, unknown>>({
+    queryKey: ["org-invite-preview", token],
+    queryFn: () => apiFetch<Record<string, unknown>>(`${API_URL}/orgs/invites/${token}/preview`),
+    retry: false,
+    staleTime: Infinity,
+  });
+  const previewOrgName =
+    typeof invitePreview?.orgName === "string"
+      ? invitePreview.orgName
+      : typeof invitePreview?.org_name === "string"
+        ? invitePreview.org_name
+        : null;
 
   const handleAccept = async () => {
     setErrorState(null);
@@ -186,7 +204,11 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
           <div className="mx-auto mb-2 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
             <Building2 className="h-6 w-6 text-primary" />
           </div>
-          <CardTitle>You&apos;ve been invited to join an organization</CardTitle>
+          <CardTitle>
+            {previewOrgName
+              ? `You've been invited to join ${previewOrgName}`
+              : "You've been invited to join an organization"}
+          </CardTitle>
           <CardDescription>
             Accepting moves your Msanii credits and billing to their shared pool. Your artists, projects,
             and files stay exactly as they are.

@@ -31,6 +31,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useActiveTeam, useTransferArtistToTeam } from "@/hooks/useArtistTeam";
+import { useMyOrgs } from "@/hooks/useOrgs";
 
 // Helper component for field containers (defined outside to prevent re-renders)
 const FieldContainer = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
@@ -129,6 +130,14 @@ const ArtistProfile = () => {
   const activeTeam = useActiveTeam();
   const transfer = useTransferArtistToTeam();
   const isTeamOwned = !!teamId;
+  // Name the owning team on the badge. useMyOrgs is cached app-wide; when the
+  // org isn't in the caller's list (or licensing is off) fall back to the
+  // generic label.
+  const { data: myOrgs } = useMyOrgs();
+  const teamName = teamId
+    ? myOrgs?.find((o) => o.id === teamId)?.name ??
+      (activeTeam?.orgId === teamId ? activeTeam.orgName : null)
+    : null;
 
   // Display fields: prefer TeamCard data when verified
   const displayName = (isVerified && teamcard?.display_name) || formData.name;
@@ -555,7 +564,7 @@ const ArtistProfile = () => {
                   )}
                   {isTeamOwned && (
                     <Badge variant="outline" className="flex items-center gap-1">
-                      <Users className="w-3 h-3" /> Shared with your team
+                      <Users className="w-3 h-3" /> Shared with {teamName ?? "your team"}
                     </Badge>
                   )}
                   {!isTeamOwned && activeTeam && id && (
@@ -571,8 +580,9 @@ const ArtistProfile = () => {
                           <AlertDialogDescription>
                             Its projects, files, audio and credentials move with it, everyone on the
                             team will be able to see them, and its storage and AI usage will come
-                            out of the team&apos;s allowance instead of yours. This can&apos;t be
-                            undone from the app.
+                            out of the team&apos;s allowance instead of yours. If any works under
+                            this artist have collaborators, their splits and agreements will become
+                            visible to everyone on the team. This can&apos;t be undone from the app.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
