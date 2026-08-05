@@ -115,6 +115,20 @@ Generate once per environment and stash in GSM. **Rotating these invalidates eve
 
 ---
 
+## 🟢 Feature flags (credits, licensing / teams)
+
+Both default to **off**. Off is a true rollback, not a partial one: `/orgs/*` 404s at the router, no billing derivation runs, and no team affordance renders in the UI.
+
+| Var | Source | Notes |
+|-----|--------|-------|
+| `CREDITS_ENABLED` | — | `"true"` turns on the credit-wallet model. Off = legacy per-tier gating; the stored feature flags are bypassed in code, never mutated |
+| `LICENSING_ENABLED` | — | `"true"` turns on organizations, team-owned artists and org billing. See [Licensing & Teams](licensing.md) |
+| `ENTERPRISE_SEAT_STORAGE_BYTES` | Default `536870912000` (500 GiB) | **Per seat.** A team's storage cap is this × its active seats |
+
+`src/backend/tests/conftest.py` clears the first two, so backend tests must set them explicitly with `monkeypatch.setenv` — a developer's `.env` can never leak into a test run.
+
+---
+
 ## 🟢 PostHog analytics
 
 | Var | Source | Notes |

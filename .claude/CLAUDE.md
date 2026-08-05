@@ -189,9 +189,10 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 ## Core Concepts
 
 ### Artists & Projects
-- Users create **artist profiles** (private to the creator — personal docs/notes folder)
+- Users create **artist profiles**. `artists.team_id` decides who owns one: `NULL` = personal (private to the creator), `NOT NULL` = owned by that organization and visible to every ACTIVE member. See `docs/licensing.md`
 - Each artist has **projects** (albums, EPs, singles, etc.)
 - Projects contain **works** (individual tracks/compositions)
+- **`artists.user_id` is the CREATOR, not the owner.** It keeps pointing at whoever made the artist after it is handed to a team. Never write `artists.user_id = auth.uid()` in a policy or query without `AND team_id IS NULL`, and never use it to mean "owner"
 
 ### Metadata Registry
 - Works are registered with ownership stakes (master % and publishing %)
@@ -199,16 +200,19 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 - Collaboration flow: Invited -> Accepted / Declined
 - Work statuses: Draft -> Pending -> Registered
 
-### Dual-Layer Access Control
+### Three-Layer Access Control
+- **Artist ownership** — the personal owner, or every active member of the owning org. Sees the whole subtree: projects, works, files, audio, credentials
 - **Project members** (owner/admin/editor/viewer) — see all works in a project
 - **Work-only collaborators** — see only the specific work they're invited to
-- RLS policies enforce both layers
+- RLS policies enforce all three, and they OR together. The artist layer is expressed once as `can_access_artist(artist_id, auth.uid(), require_admin => false)` — **a new artist-scoped table needs exactly one `FOR ALL` policy calling that function**
 
 ### File Management
 - Files stored in Supabase Storage (`project-files`, `audio-files` buckets)
 - Files linked to projects AND optionally to specific works (via `work_files` join table)
 - Audio files are artist-scoped via `audio_folders` (`audio_files.folder_id → audio_folders.artist_id`), and linkable to specific works via `work_audio_links`
 - SHA-256 content hash for deduplication on upload
+- **Storage attribution follows artist ownership, and lives in TRIGGERS.** `trigger_storage_pf_change` / `trigger_storage_af_change` call `_bump_storage(artist_id, delta)`, which routes bytes to `organizations.storage_bytes` for a team artist and to the creator's `usage_counters` otherwise. `recalc_user_storage` / `recalc_team_storage` are repair paths only — changing just those leaves every real upload charging the wrong side
+- A file cannot cross an ownership boundary: `lock_asset_owner_move` blocks `UPDATE project_files SET project_id = <other owner>`. `WITH CHECK` can't see `OLD` and permissive policies OR, so no policy can express "the owner must not change"
 
 ### Tool Integration
 - **OneClick** reads contracts from portfolio, works, and artist profiles for royalty analysis. Confirmed calculations feed a gated payment ledger (`src/backend/oneclick/royalties/ledger_sync.py` is the ONLY writer of `royalty_lines`) — identity, gates, credits, and invariants are documented in `src/backend/oneclick/ONECLICK.md` ("Royalty Ledger & Payment Tracking"); read that before touching royalties code
@@ -219,9 +223,13 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 Metered AI actions (Zoe message, OneClick run, Registry contract parse) draw from a per-user **credit wallet** (`credit_wallets` two buckets: `bundle_balance` expires monthly, `reserve_balance` — admin grants and purchased packs — never expires) backed by an append-only `credit_ledger` and transactional RPCs (`debit_credits`/`grant_credits`/`rollover_wallet`, all `SECURITY DEFINER`, service-role only). Prices live in `credit_prices` (DB, public read). Cache hits and Zoe conversational replies are free. Decision chokepoint: `EntitlementsService.check_credits()`; charge-on-success via `gated_credits()` → `debit_for_action()` at the tool endpoints. Overage is opt-in (`/me/billing-prefs`), billed off the request path via Stripe InvoiceItems (daily `POST /internal/billing-sweep` + `invoice.created` webhook). Tiers are Free / Basic / Pro, keyed `free` / `basic` / `pro` (`tier_entitlements.monthly_credits`; renamed from `pro`/`pro_max` in `20260728000001_rename_tier_keys.sql` — pre-rename analytics used `pro` for the $25 plan). Under credits the AI tools are open on every tier including Free (the wallet is the only gate); storage is a hard cap with no pay-per-use. **Flag off = legacy tier gating; the stored feature flags are bypassed in code, never mutated, so it's a true rollback.** Real LLM cost is logged to `ai_usage_log` (via the `TrackedOpenAI` proxy) to calibrate prices; the planning dashboard is `subscriptions/pricing_model/` (`task pricing`).
 
 ### Licensing / organizations (behind `LICENSING_ENABLED`)
+**Full guide: `docs/licensing.md`. Read it before touching orgs, team artists, or org billing.**
+
+**Team-owned artists are the ownership edge.** `artists.team_id` NULL = personal, NOT NULL = the org owns the artist and everything that hangs off it (ten tables cascade off one row). One `SECURITY DEFINER` predicate — `can_access_artist(artist_id, user_id, require_admin => false)` — answers visibility for every artist-scoped table, so a new table needs exactly one `FOR ALL` policy calling it. `artists.user_id` stays the CREATOR after a transfer, which is why `20260803000002` re-scopes all 21 pre-existing creator-keyed policies with `AND team_id IS NULL` — without that an offboarded member keeps full read/write on the subtree of any artist they created. `team_id` has one writer: `POST /orgs/{id}/artists/{id}/transfer` (one-way in v1, 409 on re-transfer), enforced by the `artists_lock_team_id` trigger, which refuses any change made under an end-user JWT. Artists are created **client-side** (`NewArtist.tsx` and `NewArtistDialog.tsx` — there is no backend `POST /artists`), so `artists_insert_team`'s `WITH CHECK` is the only thing stopping a caller inserting into someone else's team. Storage follows the same edge inside the storage triggers via `_bump_storage`; a team's cap is `ENTERPRISE_SEAT_STORAGE_BYTES` × active seats (the env value is per-seat). **`org_project_links` was retired in `20260804000001`** — a project's payer comes from its artist; any reference to linking/unlinking a project is stale.
+
 **Dispersal + caps** (`20260730000001_dispersal_and_caps.sql` — a fix-forward over the applied `20260721000001_licensing_core.sql`, which still describes the retired seat-wallet shape). An org negotiates a monthly credit volume — set ONLY by a Msanii admin (`PUT /admin/orgs/{id}/dispersal`), never by the org's own admin: any signed-in user can create an org and is auto-made its admin, and dispersed credits count toward the activation floor, so a customer-writable dial would mint free credits and self-activate. The org admin owns `default_member_cap` (dividing what they paid for) via `PUT /orgs/{id}`. The daily sweep rolls the org's **one** pool wallet (`credit_wallets` `owner_type='org'`) each period, granting `organizations.monthly_dispersal_credits` into the EXPIRING bundle bucket — so an unspent month can't be banked and burned later, while purchased packs (reserve) never expire. Members hold **no wallet**: they spend straight from the pool, bounded by `org_members.monthly_cap` (falling back to `organizations.default_member_cap`, then uncapped). The cap counter (`cap_used`/`cap_period_end`) moves **inside `debit_credits`** under the pool lock — a service pre-check can't stop a member's two concurrent actions both slipping under the ceiling. An over-cap debit is recorded and flagged (`cap_exceeded`), never rejected: charge-on-success means the work already happened.
 
-Caps are ceilings, not reservations, so they may deliberately sum to more than the dispersal. Two org walls with different remedies: `capReached` → the member asks an admin to raise it (`credit_requests` is a **cap-raise** request; approving writes `monthly_cap` and moves nothing); a dry pool → only an admin buying credits helps, so the member sees no CTA. No pay-as-you-go on a pool. Offboarding is a soft status transition with nothing to reclaim, and archiving leaves pool credits for support (admin clawback is reserve-only). Per-member spend for the console comes from the pool ledger grouped by `metadata.org_member_id`. QA: `scripts/qa_licensing_loop.py` (HTTP lifecycle) + `supabase/qa/launch_gates_credit_rpcs.sql` (the money RPCs against real Postgres — pytest mocks `sb.rpc()`, so this is their only executable coverage).
+Caps are ceilings, not reservations, so they may deliberately sum to more than the dispersal. Two org walls with different remedies: `capReached` → the member asks an admin to raise it (`credit_requests` is a **cap-raise** request; approving writes `monthly_cap` and moves nothing); a dry pool → only an admin buying credits helps, so the member sees no CTA. No pay-as-you-go on a pool. Offboarding is a soft status transition with nothing to reclaim, and archiving leaves pool credits for support (admin clawback is reserve-only) and leaves `artists.team_id` attached — `can_access_artist` already denies on `archived_at`, so the roster goes inert without being destroyed. Per-member spend for the console comes from the pool ledger grouped by `metadata.org_member_id`. QA: `scripts/qa_licensing_loop.py` (HTTP lifecycle) + `supabase/qa/gates_team_artists.sql` (artist ownership, RLS, storage triggers) + `supabase/qa/launch_gates_credit_rpcs.sql` (the money RPCs) — pytest mocks `sb.rpc()` and never reaches Postgres, so the gate scripts are the SQL layer's ONLY executable coverage.
 
 ### Admin Roles
 
@@ -348,3 +356,5 @@ Both environments share the same Supabase database — data is user-scoped.
 Current design spec: `docs/superpowers/specs/2026-04-03-portfolio-registry-redesign.md`
 
 This covers the Portfolio -> Project Detail -> Work Detail page restructure, dual-layer access control, Registry dashboard redesign, and OneClick/Zoe integration points.
+
+**Superseded in part:** access control is now three layers, not two — artist ownership sits above project members and work-only collaborators. See `docs/licensing.md`.
