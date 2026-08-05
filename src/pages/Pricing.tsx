@@ -347,7 +347,7 @@ const Pricing = () => {
                   size="lg"
                   variant="outline"
                   className="w-full"
-                  onClick={() => navigate(user ? "/organization" : "/auth")}
+                  onClick={() => navigate(user ? "/organization" : "/auth?redirect=/pricing")}
                 >
                   {user ? "Create an organization" : "Sign in to create an organization"}
                 </Button>
