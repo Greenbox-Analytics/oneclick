@@ -4,9 +4,10 @@ Drives the full org lifecycle over HTTP (real JWTs, real RLS, real RPCs)
 against a locally-running backend with LICENSING_ENABLED + CREDITS_ENABLED:
 
   create org -> activate (purchase-grant path) -> invite x2 -> claim ->
-  set member caps + operator sets the dispersal -> link project -> admin grants access -> derived billing
-  debits the ORG POOL against the member's cap -> cap wall + dry-pool wall
-  (member + owner-aware) -> offboard -> unlink -> archive.
+  set member caps + operator sets the dispersal -> transfer artist to the team ->
+  admin grants access -> derived billing debits the ORG POOL against the
+  member's cap -> cap wall + dry-pool wall (member + owner-aware) -> offboard
+  -> archive.
 
 Creates 3 throwaway auth users (…@example.com) and CLEANS UP EVERY ROW in
 a finally block — the DB is shared with prod.
@@ -182,7 +183,7 @@ try:
         f"pool={pool_after}",
     )
 
-    # ------------------------------- 5. owner creates + links a project --
+    # -------------------- 5. owner creates an artist + transfers it to the team --
     artist_id = (
         sb.table("artists")
         .insert({"user_id": owner["id"], "name": f"QA Artist {SUFFIX}", "email": owner["email"]})
@@ -195,19 +196,19 @@ try:
     sb.table("project_members").insert({"project_id": project_id, "user_id": owner["id"], "role": "owner"}).execute()
 
     with api(collab["token"]) as c:
-        r = c.post(f"/orgs/{org_id}/projects/{project_id}/link")
+        r = c.post(f"/orgs/{org_id}/artists/{artist_id}/transfer")
         check(
-            "5. non-owner link -> 404 'Project not found' (no oracle)",
-            r.status_code == 404 and r.json()["detail"] == "Project not found",
+            "5. non-owner transfer -> 403 (member of the org, but not the artist's owner)",
+            r.status_code == 403,
             f"{r.status_code}: {r.text[:200]}",
         )
     with api(owner["token"]) as c:
-        r = c.post(f"/orgs/{org_id}/projects/{project_id}/link")
-        check("5b. owner links project", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
-        r2 = c.post(f"/orgs/{org_id}/projects/{project_id}/link")
+        r = c.post(f"/orgs/{org_id}/artists/{artist_id}/transfer")
+        check("5b. owner transfers the artist to the team", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        r2 = c.post(f"/orgs/{org_id}/artists/{artist_id}/transfer")
         check(
-            "5c. re-link -> 409 rule-8 copy",
-            r2.status_code == 409 and "already linked" in r2.json()["detail"],
+            "5c. re-transfer -> 409 (one-way in v1)",
+            r2.status_code == 409 and "already belongs" in r2.json()["detail"],
             f"{r2.status_code}: {r2.text[:200]}",
         )
     with api(admin["token"]) as c:
@@ -215,7 +216,7 @@ try:
         listed = r.status_code == 200 and any(
             p.get("projectId") == project_id for p in (r.json().get("projects") or [])
         )
-        check("5d. admin console lists linked project", listed, f"{r.status_code}: {r.text[:300]}")
+        check("5d. admin console lists the team-owned project", listed, f"{r.status_code}: {r.text[:300]}")
 
     # --------------------------- 6. admin grants/adjusts/refuses access --
     with api(admin["token"]) as c:
@@ -382,11 +383,13 @@ finally:
             sb.table("credit_ledger").delete().in_("wallet_id", wallet_ids).execute()
             sb.table("credit_wallets").delete().in_("id", wallet_ids).execute()
         if project_id:
-            sb.table("org_project_links").delete().eq("project_id", project_id).execute()
             # Delete the PROJECT (cascades project_members) — a direct delete of
             # the owner row trips prevent_owner_deletion; the cascade is exempt.
             sb.table("projects").delete().eq("id", project_id).execute()
         if artist_id:
+            # Detach first: artists.team_id is ON DELETE RESTRICT, so a
+            # team-owned artist would block the org teardown below.
+            sb.table("artists").update({"team_id": None}).eq("id", artist_id).execute()
             sb.table("artists").delete().eq("id", artist_id).execute()
         if org_id:
             sb.table("credit_requests").delete().eq("org_id", org_id).execute()

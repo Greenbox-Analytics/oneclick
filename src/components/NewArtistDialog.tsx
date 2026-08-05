@@ -16,6 +16,8 @@ import { Upload } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { useActiveTeam } from "@/hooks/useArtistTeam";
+import { TeamOwnershipField } from "@/components/artists/TeamOwnershipField";
 
 interface NewArtistDialogProps {
   open: boolean;
@@ -33,6 +35,8 @@ export const NewArtistDialog = ({ open, onOpenChange, onCreated }: NewArtistDial
   const [genre, setGenre] = useState("");
   const [phone, setPhone] = useState("");
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const activeTeam = useActiveTeam();
+  const [keepPrivate, setKeepPrivate] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -69,6 +73,10 @@ export const NewArtistDialog = ({ open, onOpenChange, onCreated }: NewArtistDial
           genres: genre.split(",").map((g) => g.trim()).filter(Boolean),
           avatar_url: avatarPreview || "",
           user_id: user.id,
+          // Same context-defaulted ownership as the NewArtist page — this is
+          // the second creation path, and missing it is how a roster ends up
+          // half-private.
+          team_id: activeTeam && !keepPrivate ? activeTeam.orgId : null,
         })
         .select()
         .single();
@@ -183,6 +191,13 @@ export const NewArtistDialog = ({ open, onOpenChange, onCreated }: NewArtistDial
               onChange={(e) => setPhone(e.target.value)}
             />
           </div>
+
+          <TeamOwnershipField
+            id="new-artist-keep-private"
+            teamName={activeTeam?.orgName ?? null}
+            keepPrivate={keepPrivate}
+            onChange={setKeepPrivate}
+          />
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

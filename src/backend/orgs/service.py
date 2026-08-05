@@ -221,28 +221,25 @@ async def update_org(db: Client, user_id: str, org_id: str, fields: dict) -> dic
 
 
 def _teardown_archived_org_grants(db: Client, org_id: str) -> None:
-    """Licensing Phase C, Task 4 (rule 12): `archived_at` is an UPDATE, so
-    the `org_project_links.org_id` ON DELETE CASCADE never fires — without
-    this, a project stays linked to a tombstone org and rule 8's
-    `UNIQUE(project_id)` blocks re-linking to a live org. Runs AFTER
-    `archived_at` has already landed (the load-bearing write for
-    `archive_org`) and is best-effort/never-raising, mirroring `_offboard`'s
-    money-first-then-cleanup posture: a teardown failure here must not undo
-    or block an already-committed archive.
+    """Licensing Phase C, Task 4 (rule 12): drop every `project_members` row
+    THIS org granted, once an org is archived. Runs AFTER `archived_at` has
+    already landed (the load-bearing write for `archive_org`) and is
+    best-effort/never-raising, mirroring `_offboard`'s money-first-then-cleanup
+    posture: a teardown failure here must not undo or block an already-committed
+    archive.
 
-    Two independent cleanups, each swallowing its own failure so one doesn't
-    block the other:
-      1. `revoke_org_granted_memberships` (Task 2's single implementation of
-         rule 3, imported lazily here to avoid a module-level import cycle —
-         `orgs.projects` imports `_resolve_user_email` from this module at
-         its own top level) — org-scoped only (no user_id/project_id
-         narrowing), i.e. every `project_members` row THIS org ever granted,
-         on every project it touched. Organic rows are untouched by
-         construction (the helper's `org_id` filter is the entire mechanism).
-      2. Deletes this org's `org_project_links` row(s) directly — there is
-         no separate "revoke a link" helper; unlike `project_members` grants,
-         a link has no organic/other-org ambiguity to protect (rule 8: at
-         most one link per project, and it's unconditionally this org's).
+    `revoke_org_granted_memberships` (this codebase's single implementation of
+    rule 3, imported lazily to avoid a module-level import cycle — `orgs.projects`
+    imports `_resolve_user_email` from this module at its own top level) is
+    called org-scoped only (no user_id/project_id narrowing), i.e. every
+    `project_members` row THIS org ever granted, on every project it touched.
+    Organic rows are untouched by construction (the helper's `org_id` filter is
+    the entire mechanism).
+
+    There is no link row to clean up any more: `org_project_links` was retired
+    in 20260804000001. An archived org's `artists.team_id` rows are deliberately
+    LEFT in place — `can_access_artist` already denies on `archived_at`, so the
+    roster is inert without being destroyed, and support can still reach it.
     """
     try:
         from orgs.projects import revoke_org_granted_memberships
@@ -250,10 +247,6 @@ def _teardown_archived_org_grants(db: Client, org_id: str) -> None:
         revoke_org_granted_memberships(db, org_id)
     except Exception as exc:
         print(f"archive_org: revoke_org_granted_memberships failed org_id={org_id}: {exc}")
-    try:
-        db.table("org_project_links").delete().eq("org_id", org_id).execute()
-    except Exception as exc:
-        print(f"archive_org: deleting org_project_links failed org_id={org_id}: {exc}")
 
 
 async def archive_org(db: Client, user_id: str, org_id: str) -> dict:

@@ -16,9 +16,25 @@ from users.account_deletion_service import (
 
 def test_list_user_storage_paths_empty_user():
     sb = MagicMock()
-    sb.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+    sb.table.return_value.select.return_value.eq.return_value.is_.return_value.execute.return_value.data = []
     paths = list_user_storage_paths(sb, "user-1")
     assert paths == []
+
+
+def test_list_user_storage_paths_excludes_team_owned_artists():
+    """artists.user_id keeps holding the CREATOR after an artist is handed to a
+    team, so the artist walk MUST filter team_id IS NULL. Without it, a member
+    deleting their own account enumerates — and the caller then deletes — the
+    label's masters."""
+    sb = MagicMock()
+    artists_tbl = MagicMock()
+    artists_tbl.select.return_value.eq.return_value.is_.return_value.execute.return_value.data = []
+    sb.table.side_effect = lambda name: artists_tbl
+
+    assert list_user_storage_paths(sb, "user-1") == []
+
+    artists_tbl.select.return_value.eq.assert_called_once_with("user_id", "user-1")
+    artists_tbl.select.return_value.eq.return_value.is_.assert_called_once_with("team_id", None)
 
 
 def test_list_user_storage_paths_collects_project_and_audio_files():
@@ -34,7 +50,7 @@ def test_list_user_storage_paths_collects_project_and_audio_files():
         "audio_folders": MagicMock(),
         "audio_files": MagicMock(),
     }
-    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["artists"].select.return_value.eq.return_value.is_.return_value.execute.return_value.data = [{"id": "a1"}]
     tables["projects"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "p1"}]
     tables["project_files"].select.return_value.in_.return_value.execute.return_value.data = [
         {"file_path": "a1/p1/contracts/foo.pdf"},
@@ -69,7 +85,7 @@ def test_list_user_storage_paths_user_with_no_projects_still_walks_audio():
         "audio_folders": MagicMock(),
         "audio_files": MagicMock(),
     }
-    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["artists"].select.return_value.eq.return_value.is_.return_value.execute.return_value.data = [{"id": "a1"}]
     tables["projects"].select.return_value.in_.return_value.execute.return_value.data = []
     tables["audio_folders"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "f1"}]
     tables["audio_files"].select.return_value.in_.return_value.execute.return_value.data = [
@@ -91,7 +107,7 @@ def test_list_user_storage_paths_user_with_no_audio_folders():
         "audio_folders": MagicMock(),
         "audio_files": MagicMock(),
     }
-    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["artists"].select.return_value.eq.return_value.is_.return_value.execute.return_value.data = [{"id": "a1"}]
     tables["projects"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "p1"}]
     tables["project_files"].select.return_value.in_.return_value.execute.return_value.data = [
         {"file_path": "a1/p1/foo.pdf"},
@@ -111,7 +127,7 @@ def test_list_user_storage_paths_user_with_no_projects_or_audio():
         "projects": MagicMock(),
         "audio_folders": MagicMock(),
     }
-    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["artists"].select.return_value.eq.return_value.is_.return_value.execute.return_value.data = [{"id": "a1"}]
     tables["projects"].select.return_value.in_.return_value.execute.return_value.data = []
     tables["audio_folders"].select.return_value.in_.return_value.execute.return_value.data = []
     sb.table.side_effect = lambda name: tables[name]
@@ -602,46 +618,39 @@ class TestArchiveSoleAdminOrgs:
 class TestTeardownArchivedOrgGrants:
     """Standalone coverage of `_teardown_archived_org_grants` (Licensing
     Phase C, Task 4, rule 12) — mirrors `orgs.service._teardown_archived_org_
-    grants`'s own test coverage in tests/test_orgs_service.py. Both cleanup
-    steps (revoke org-granted memberships, delete org_project_links rows)
-    are independently best-effort: a failure in one must not prevent the
-    other from running, and neither may ever raise out of this function
-    (account deletion must never be blocked by this cleanup)."""
+    grants`'s own test coverage in tests/test_orgs_service.py. The cleanup
+    (revoke org-granted memberships) is best-effort and may never raise out of
+    this function: account deletion must never be blocked by it.
 
-    def test_calls_revoke_org_scoped_and_deletes_links(self):
+    There is no link row to delete any more — org_project_links was retired in
+    20260804000001, and an archived org's artists.team_id rows are deliberately
+    left attached (can_access_artist already denies on archived_at)."""
+
+    def test_calls_revoke_org_scoped(self):
         sb = MagicMock()
-        tables: dict = {}
-        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
-        links_tbl = tables.setdefault("org_project_links", MagicMock())
+        sb.table.side_effect = lambda name: MagicMock()
 
         with patch("orgs.projects.revoke_org_granted_memberships") as mock_revoke:
             _teardown_archived_org_grants(sb, "org1")
 
         mock_revoke.assert_called_once_with(sb, "org1")
-        links_tbl.delete.return_value.eq.assert_called_once_with("org_id", "org1")
 
-    def test_revoke_failure_is_logged_and_link_delete_still_runs(self):
+    def test_revoke_failure_is_logged_and_does_not_raise(self):
         sb = MagicMock()
-        tables: dict = {}
-        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
-        links_tbl = tables.setdefault("org_project_links", MagicMock())
+        sb.table.side_effect = lambda name: MagicMock()
 
         with patch("orgs.projects.revoke_org_granted_memberships", side_effect=RuntimeError("boom")):
             _teardown_archived_org_grants(sb, "org1")  # must not raise
 
-        links_tbl.delete.return_value.eq.assert_called_once_with("org_id", "org1")
-
-    def test_link_delete_failure_is_logged_and_does_not_raise(self):
+    def test_team_owned_artists_are_left_attached(self):
         sb = MagicMock()
         tables: dict = {}
         sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
-        links_tbl = tables.setdefault("org_project_links", MagicMock())
-        links_tbl.delete.side_effect = RuntimeError("link delete boom")
 
-        with patch("orgs.projects.revoke_org_granted_memberships") as mock_revoke:
-            _teardown_archived_org_grants(sb, "org1")  # must not raise
+        with patch("orgs.projects.revoke_org_granted_memberships"):
+            _teardown_archived_org_grants(sb, "org1")
 
-        mock_revoke.assert_called_once_with(sb, "org1")
+        assert "artists" not in tables, "the roster must survive the archive"
 
     def test_organic_and_other_org_rows_survive_through_real_revoke_helper(self):
         """End-to-end through the REAL orgs.projects.revoke_org_granted_

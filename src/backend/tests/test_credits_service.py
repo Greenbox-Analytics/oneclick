@@ -25,6 +25,7 @@ from tests.test_billing_context import (
     _org,
     _pool_wallet,
     _profile,
+    _usage_row,
     _user_wallet,
 )
 from tests.test_billing_context import _sub_row as _ctx_sub_row  # avoid shadowing this file's _sub_row(user_id)
@@ -934,8 +935,13 @@ MEMBER_A = "mem0000a-0000-0000-0000-000000000001"
 MEMBER_B = "mem0000b-0000-0000-0000-000000000001"
 
 
-def _link_row(project_id, org_id=ORG):
-    return {"project_id": project_id, "org_id": org_id}
+def _artist_owned_tables(project_id, org_id=ORG, artist_id="art-owned"):
+    """The artist edge that replaced org_project_links: project -> artist ->
+    team. Two tables where the link table was one row."""
+    return {
+        "projects": [{"id": project_id, "artist_id": artist_id}],
+        "artists": [{"id": artist_id, "team_id": org_id}],
+    }
 
 
 def _member_row(member_id, org_id, role="member", status="active"):
@@ -964,12 +970,13 @@ def _owner_pm_row(role="owner", project_id=DERIV_PROJECT):
 
 
 def _derived_single_org_data(seat_wallets, *, project_members=None, org_status="active", member_status="active"):
-    """A resource (DERIV_PROJECT) linked to ORG where CTX_USER holds a seat.
-    Deliberately OMITS personal subscription/tier/user-wallet rows — the derived
-    seat path must never read them."""
+    """A resource (DERIV_PROJECT) whose ARTIST is owned by ORG, where CTX_USER
+    holds a seat. Deliberately OMITS personal subscription/tier/user-wallet rows
+    — the derived seat path must never read them."""
     return {
         "profiles": [_profile(context_org=None)],  # ambient personal — derivation must still win
-        "org_project_links": [_link_row(DERIV_PROJECT, ORG)],
+        "projects": [{"id": DERIV_PROJECT, "artist_id": "art-deriv"}],
+        "artists": [{"id": "art-deriv", "team_id": ORG}],
         "organizations": [_org(status=org_status)],
         "org_members": [_member(status=member_status)],
         "credit_prices": list(PRICES),
@@ -1024,7 +1031,7 @@ class TestCheckCreditsResourceDerivation:
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         data = {
             "profiles": [{"id": CTX_USER, "billing_context_org_id": ORG_A, "is_admin": False}],  # ambient = A
-            "org_project_links": [_link_row(DERIV_PROJECT, ORG_B)],  # resource → B
+            **_artist_owned_tables(DERIV_PROJECT, ORG_B),  # resource's artist → B
             "organizations": [_org_row(ORG_A), _org_row(ORG_B)],
             "org_members": [_member_row(MEMBER_A, ORG_A), _member_row(MEMBER_B, ORG_B)],
             "credit_prices": list(PRICES),
@@ -1045,7 +1052,7 @@ class TestCheckCreditsResourceDerivation:
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         data = {
             "profiles": [_profile(context_org=None)],
-            "org_project_links": [_link_row(DERIV_PROJECT, ORG)],
+            **_artist_owned_tables(DERIV_PROJECT, ORG),
             "organizations": [_org(status="active")],
             "org_members": [],  # no seat for the caller
             "credit_prices": list(PRICES),
@@ -1068,7 +1075,7 @@ class TestCheckCreditsResourceDerivation:
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         data = {
             "profiles": [_profile(context_org=None)],
-            "org_project_links": [_link_row(DERIV_PROJECT, ORG)],
+            **_artist_owned_tables(DERIV_PROJECT, ORG),
             "organizations": [_org(status="active")],
             "org_members": [_member()],
             "project_files": [
@@ -1127,80 +1134,29 @@ class TestCheckCreditsResourceDerivation:
         assert "org_project_links" not in sb._log
 
 
-class TestOwnerAwareDrySeatWall:
-    """Rule 11: a dry seat on a linked project walls EVERYONE, but the OWNER
-    additionally gets an unlink CTA — surfaced lazily, DENY-path only."""
+class TestNoUnlinkCtaOnTheDryPoolWall:
+    """The owner-aware dry-pool wall used to offer "unlink this project to fall
+    back to your personal plan". org_project_links was retired in
+    20260804000001 and moving an artist OUT of a team is deliberately not
+    self-serve, so that CTA would point at an endpoint that 404s. It must never
+    be set again."""
 
-    def test_derived_deny_owner_gets_unlink_and_project_id(self, monkeypatch):
-        """Derived dry-seat deny + caller OWNS the linked project → owner_can_
-        unlink, project_id, appended reason — and managed_by_org STILL present
-        (the two CTAs co-occur, round 4)."""
+    def test_project_owner_gets_no_unlink_affordance(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _ctx_supabase(
-            _derived_single_org_data([_pool_wallet(reserve=0, bundle=0)], project_members=[_owner_pm_row("owner")])
+            _derived_single_org_data(
+                [_pool_wallet(reserve=0, bundle=0)],
+                project_members=[_owner_pm_row()],
+            )
         )
 
         r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
 
-        assert r.allowed is False
-        assert r.managed_by_org is True  # co-occurs — never mutually exclusive
-        assert r.owner_can_unlink is True
-        assert r.project_id == DERIV_PROJECT
-        assert "unlink this project" in r.reason.lower()
-
-    def test_derived_deny_non_owner_member_gets_no_owner_fields(self, monkeypatch):
-        """Same dry-seat deny, but the caller is a non-owner MEMBER of the
-        project → no owner fields, base reason unchanged."""
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(
-            _derived_single_org_data([_pool_wallet(reserve=0, bundle=0)], project_members=[_owner_pm_row("editor")])
-        )
-
-        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
-
-        assert r.allowed is False and r.managed_by_org is True
-        assert r.owner_can_unlink is False and r.project_id is None
-        assert r.reason == "Your organization is out of credits. Ask your admin to top up."
-
-    def test_ambient_org_deny_never_gains_owner_fields(self, monkeypatch):
-        """An AMBIENT org dry-seat deny (no resource → ctx has no project_id)
-        never runs the owner check and never gains owner fields (AC #4)."""
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        data = {
-            "profiles": [_profile(context_org=ORG)],  # ambient org context
-            "org_members": [_member(status="active")],
-            "organizations": [_org(status="active")],
-            "credit_prices": list(PRICES),
-            "credit_wallets": [_pool_wallet(reserve=0, bundle=0)],  # dry seat
-        }
-        sb = _ctx_supabase(data)
-
-        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")  # NO resource
-
-        assert r.allowed is False and r.managed_by_org is True
-        assert r.owner_can_unlink is False and r.project_id is None
-        # The owner read never happened — ambient path carries no project_id.
-        assert "project_members" not in sb._log
-
-    def test_ownership_read_only_on_deny_not_allow(self, monkeypatch):
-        """THE lazy-deny-only pin: on an ALLOW (funded seat), the project_members
-        owner read is NEVER issued — ownership is checked only when a wall is
-        already being built (Task 5 skips it on every derivation)."""
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(
-            _derived_single_org_data([_pool_wallet(reserve=500)], project_members=[_owner_pm_row("owner")])
-        )
-
-        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
-
-        assert r.allowed is True and r.managed_by_org is True
+        assert not r.allowed and r.managed_by_org
         assert r.owner_can_unlink is False
-        # No ownership read on the happy path.
-        assert "project_members" not in sb._log
+        assert r.project_id is None
+        assert "unlink" not in (r.reason or "").lower()
 
 
 class TestFreeTierToolsOpenUnderCredits:
@@ -1374,3 +1330,117 @@ class TestMemberCapGate:
 
         debit = [c for c in sb.rpc.call_args_list if c.args and c.args[0] == "debit_credits"][0]
         assert "p_member_id" not in debit.args[1]
+
+
+# ===========================================================================
+# ARTIST OWNERSHIP — the payer edge (Team-Owned Artists, Task 3)
+# ===========================================================================
+
+
+class TestArtistOwnershipDerivation:
+    """Artist ownership is THE payer edge — the only one, since
+    org_project_links was retired in 20260804000001."""
+
+    def _sb(self, *, artist_team):
+        data = {
+            "profiles": [_profile(context_org=None)],
+            "org_members": [_member(status="active")],
+            "organizations": [_org(status="active")],
+            "credit_prices": list(PRICES),
+            "credit_wallets": [_pool_wallet(reserve=500)],
+            "projects": [{"id": DERIV_PROJECT, "artist_id": "art-1"}],
+            "artists": [{"id": "art-1", "team_id": artist_team}],
+        }
+        return _ctx_supabase(data)
+
+    def test_team_owned_artist_resolves_to_its_org(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        svc = EntitlementsService(self._sb(artist_team=ORG))
+
+        ctx = svc.resolve_billing_org_for_project(CTX_USER, DERIV_PROJECT)
+
+        assert ctx is not None and ctx["org_id"] == ORG
+        assert ctx["project_id"] == DERIV_PROJECT
+
+    def test_personal_artist_resolves_to_none(self, monkeypatch):
+        """No artist team -> personal billing. There is no second source of
+        truth to fall through to."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        svc = EntitlementsService(self._sb(artist_team=None))
+
+        assert svc.resolve_billing_org_for_project(CTX_USER, DERIV_PROJECT) is None
+
+    def test_no_seat_in_the_artists_team_returns_none(self, monkeypatch):
+        """Derivation only ever UPGRADES (rule 4): a team the caller is not in
+        must never become their payer."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        foreign = "0rg00000-0000-0000-0000-0000000000ee"
+        sb = self._sb(artist_team=foreign)
+
+        assert EntitlementsService(sb).resolve_billing_org_for_project(CTX_USER, DERIV_PROJECT) is None
+
+    def test_licensing_off_short_circuits(self, monkeypatch):
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        sb = self._sb(artist_team=ORG)
+
+        assert EntitlementsService(sb).resolve_billing_org_for_project(CTX_USER, DERIV_PROJECT) is None
+        assert "artists" not in sb._log  # no query at all
+
+
+class TestTeamStorageAttribution:
+    """An upload into a team-owned artist's project is measured against the
+    TEAM's total and the TEAM's cap (per-seat x active seats), not against the
+    uploader's personal counter and not against a single seat."""
+
+    def _sb(self, *, artist_team, team_bytes=0, personal_bytes=0, seats=1):
+        data = {
+            "profiles": [_profile(context_org=None)],
+            "org_members": [_member(status="active") for _ in range(seats)],
+            "organizations": [{**_org(status="active"), "storage_bytes": team_bytes}],
+            "credit_prices": list(PRICES),
+            "credit_wallets": [_pool_wallet(reserve=500)],
+            "projects": [{"id": DERIV_PROJECT, "artist_id": "art-1"}],
+            "artists": [{"id": "art-1", "team_id": artist_team}],
+            "usage_counters": [_usage_row(storage=personal_bytes)],
+            "subscriptions": [_ctx_sub_row(tier="pro")],
+            "tier_entitlements": [PRO_TIER_ROW],
+            "tier_overrides": [],
+        }
+        return _ctx_supabase(data)
+
+    def _can_upload(self, sb, size=50):
+        from subscriptions.models import Action
+
+        return EntitlementsService(sb).can(CTX_USER, Action.UPLOAD_BYTES, size=size, resource_project_id=DERIV_PROJECT)
+
+    def test_team_artist_upload_measures_the_team_total(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", "1000")
+        sb = self._sb(artist_team=ORG, team_bytes=990, personal_bytes=0, seats=1)
+
+        r = self._can_upload(sb)
+
+        assert not r.allowed, "990 + 50 exceeds the 1-seat 1000-byte team cap"
+        assert "team" in r.reason.lower()
+
+    def test_team_cap_scales_with_active_seats(self, monkeypatch):
+        """The seat number is PER PERSON. A ten-person team that paid for ten
+        seats does not share one seat's worth of space."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", "1000")
+        sb = self._sb(artist_team=ORG, team_bytes=990, seats=10)
+
+        assert self._can_upload(sb).allowed, "990 + 50 is well inside 10 x 1000"
+
+    def test_personal_artist_upload_is_unchanged(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", "1000")
+        sb = self._sb(artist_team=None, team_bytes=999_999, personal_bytes=0)
+
+        assert self._can_upload(sb).allowed, "a personal artist must not see the team's usage"

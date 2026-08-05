@@ -15,6 +15,8 @@ import { useGatedAction } from "@/hooks/useGatedAction";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError } from "@/lib/apiFetch";
+import { useActiveTeam } from "@/hooks/useArtistTeam";
+import { TeamOwnershipField } from "@/components/artists/TeamOwnershipField";
 
 const NewArtist = () => {
   const navigate = useNavigate();
@@ -30,6 +32,8 @@ const NewArtist = () => {
 
   const { data: ent } = useEntitlements();
   const cap = ent?.caps.maxArtists ?? 0;
+  const activeTeam = useActiveTeam();
+  const [keepPrivate, setKeepPrivate] = useState(false);
 
   const { data: existingArtists } = useQuery({
     queryKey: ["artists-count", user?.id],
@@ -38,7 +42,10 @@ const NewArtist = () => {
       const { data, error } = await supabase
         .from("artists")
         .select("id")
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        // Team-owned artists belong to the team that pays for them, so they
+        // must not consume the creator's personal maxArtists allowance.
+        .is("team_id", null);
       if (error) return [];
       return data || [];
     },
@@ -69,6 +76,9 @@ const NewArtist = () => {
           genres: vars.genre.split(",").map((g) => g.trim()).filter(Boolean),
           avatar_url: vars.avatarPreview || "",
           user_id: user.id,
+          // Context-defaulted ownership: working inside a team means the artist
+          // is the team's unless the creator opts out.
+          team_id: activeTeam && !keepPrivate ? activeTeam.orgId : null,
         })
         .select()
         .single();
@@ -214,6 +224,11 @@ const NewArtist = () => {
                 <Label htmlFor="phone">Phone (Optional)</Label>
                 <Input id="phone" type="tel" placeholder="+1 (555) 123-4567" />
               </div>
+              <TeamOwnershipField
+                teamName={activeTeam?.orgName ?? null}
+                keepPrivate={keepPrivate}
+                onChange={setKeepPrivate}
+              />
               <div className="pt-4 flex gap-3">
                 <Button type="submit" disabled={isPending}>
                   {isPending ? "Creating..." : "Create Artist"}

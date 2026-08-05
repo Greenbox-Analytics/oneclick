@@ -16,6 +16,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from analytics import capture as analytics_capture
 from auth import get_current_user_email, get_current_user_id
+from orgs import artists as org_artists
 from orgs import projects as org_projects
 from orgs import service
 from orgs.models import (
@@ -404,30 +405,20 @@ async def deny_credit_request(
 # --- Project links (Task 2 — spec §6 rule 1: linking = consent) ---
 
 
-@router.post("/{org_id}/projects/{project_id}/link")
-async def link_project(org_id: str, project_id: str, user_id: str = Depends(get_current_user_id)):
-    try:
-        result = await org_projects.link_project(_get_supabase(), user_id, org_id, project_id)
-    except org_projects.ProjectAlreadyLinkedError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    analytics_capture(user_id, "org_project_linked", {"org_id": org_id, "project_id": project_id})
-    return result
-
-
-@router.delete("/{org_id}/projects/{project_id}/link")
-async def unlink_project(org_id: str, project_id: str, user_id: str = Depends(get_current_user_id)):
-    result = await org_projects.unlink_project(_get_supabase(), user_id, org_id, project_id)
-    analytics_capture(
-        user_id,
-        "org_project_unlinked",
-        {"org_id": org_id, "project_id": project_id, "revoked": result.get("revoked")},
-    )
-    return result
-
-
 @router.get("/{org_id}/projects")
 async def list_org_projects(org_id: str, user_id: str = Depends(get_current_user_id)):
     return {"projects": await org_projects.list_org_projects(_get_supabase(), user_id, org_id)}
+
+
+@router.post("/{org_id}/artists/{artist_id}/transfer")
+async def transfer_artist_to_team(org_id: str, artist_id: str, user_id: str = Depends(get_current_user_id)):
+    """Move a personal artist into this team. One-way — see orgs/artists.py."""
+    try:
+        result = await org_artists.transfer_artist_to_team(_get_supabase(), user_id, org_id, artist_id)
+    except org_artists.ArtistAlreadyTeamOwnedError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    analytics_capture(user_id, "artist_transferred", {"org_id": org_id, "artist_id": artist_id})
+    return result
 
 
 # --- Admin membership management on linked projects (Task 3, rules 2-3) ---

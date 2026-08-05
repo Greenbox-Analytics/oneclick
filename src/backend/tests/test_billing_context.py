@@ -806,11 +806,19 @@ PROJECT = "proj0000-0000-0000-0000-000000000001"
 HOST = "h0st0000-0000-0000-0000-000000000009"
 
 
-def _link(project_id=PROJECT, org_id=ORG):
-    return {"id": "link-1", "project_id": project_id, "org_id": org_id}
+ARTIST = "art00000-0000-0000-0000-000000000001"
 
 
-def _phase_c_data(*, tier="free", storage=0, linked=True, seat=True, org_status="active"):
+def _team_owned(project_id=PROJECT, org_id=ORG, artist_id=ARTIST):
+    """The artist edge that replaced org_project_links (20260804000001): a
+    project belongs to an org because its ARTIST does."""
+    return {
+        "projects": [{"id": project_id, "artist_id": artist_id}],
+        "artists": [{"id": artist_id, "team_id": org_id}],
+    }
+
+
+def _phase_c_data(*, tier="free", storage=0, linked=True, seat=True, org_status="active", team_storage=0):
     """Single-user, ambient-PERSONAL scenario: the project MAY be linked to an
     org where the caller MAY hold an active seat. Credits deliberately off — caps
     derivation is credits-independent, and leaving them off keeps the mock free of
@@ -825,8 +833,13 @@ def _phase_c_data(*, tier="free", storage=0, linked=True, seat=True, org_status=
         "credit_ledger": [],
         "credit_wallets": [],
         "org_members": [_member()] if seat else [],
-        "organizations": [_org(status=org_status)],
-        "org_project_links": [_link()] if linked else [],
+        "organizations": [{**_org(status=org_status), "storage_bytes": team_storage}],
+        # `linked` now means "the project's ARTIST is team-owned".
+        **(
+            _team_owned()
+            if linked
+            else {"projects": [{"id": PROJECT, "artist_id": ARTIST}], "artists": [{"id": ARTIST, "team_id": None}]}
+        ),
     }
 
 
@@ -839,7 +852,7 @@ class TestCreateWorkCapsDerivation:
         sb = _ctx_supabase(_phase_c_data())
         r = EntitlementsService(sb).can(USER, Action.CREATE_WORK, resource_project_id=PROJECT, current_count=10)
         assert r.allowed is True
-        assert "org_project_links" in sb._log  # derivation actually consulted the link
+        assert "artists" in sb._log  # derivation actually consulted the artist edge
 
     def test_unlinked_project_uses_personal_cap(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")
@@ -867,39 +880,41 @@ class TestCreateWorkCapsDerivation:
         sb = _ctx_supabase(_phase_c_data())
         r = EntitlementsService(sb).can(USER, Action.CREATE_WORK, current_count=10)
         assert r.allowed is False
-        assert "org_project_links" not in sb._log
+        assert "artists" not in sb._log
 
     def test_licensing_off_no_derivation(self, monkeypatch):
         monkeypatch.delenv("LICENSING_ENABLED", raising=False)
         sb = _ctx_supabase(_phase_c_data())
         r = EntitlementsService(sb).can(USER, Action.CREATE_WORK, resource_project_id=PROJECT, current_count=10)
         assert r.allowed is False
-        assert "org_project_links" not in sb._log  # resolver short-circuits before any query
+        assert "artists" not in sb._log  # resolver short-circuits before any query
 
 
 class TestUploadBytesCapsDerivation:
-    def test_free_user_beyond_personal_cap_allowed_in_linked_project(self, monkeypatch):
-        """Free personal cap 1GB, already storing 2GB (over personal), uploading
-        into a linked project where the caller holds a seat → org's 10GB seat
-        storage applies → ALLOWED. Caller IS the owner (host defaults to None)."""
+    def test_free_user_over_personal_cap_allowed_under_a_team_artist(self, monkeypatch):
+        """Free personal cap 1GB and the member personally over it at 2GB, but
+        uploading into a project whose ARTIST the team owns → the team's 10GB
+        (1 seat) is what gets measured, and the team is empty → ALLOWED. Caller
+        IS the owner (host defaults to None)."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", str(10 * GB))
         sb = _ctx_supabase(_phase_c_data(storage=2 * GB))
         r = EntitlementsService(sb).can(USER, Action.UPLOAD_BYTES, size=1, resource_project_id=PROJECT)
         assert r.allowed is True
-        assert "org_project_links" in sb._log
+        assert "artists" in sb._log
 
-    def test_over_seat_storage_denies_with_support_copy(self, monkeypatch):
-        """Seat storage 2GB (> free 1GB → the binding cap); already at 2GB → deny
-        with the round-5 support copy, not the legacy owner-limit copy."""
+    def test_over_team_storage_denies_with_team_copy(self, monkeypatch):
+        """Team cap 2GB (per-seat x 1 active seat); the TEAM is already at 2GB ->
+        deny with the team copy. The member's own counter is irrelevant: under
+        team ownership _bump_storage puts these bytes on the org."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", str(2 * GB))
-        sb = _ctx_supabase(_phase_c_data(storage=2 * GB))
+        sb = _ctx_supabase(_phase_c_data(storage=0, team_storage=2 * GB))
         r = EntitlementsService(sb).can(USER, Action.UPLOAD_BYTES, size=1, resource_project_id=PROJECT)
         assert r.allowed is False
-        assert r.reason == "Your organization seat's storage is full. Contact support to discuss options."
+        assert r.reason == "Your team's storage is full. Contact support to discuss more space."
 
-    def test_unlinked_project_uses_personal_cap_legacy_copy(self, monkeypatch):
+    def test_personal_artist_uses_personal_cap_legacy_copy(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", str(10 * GB))
         sb = _ctx_supabase(_phase_c_data(storage=1 * GB, linked=False))
@@ -908,14 +923,29 @@ class TestUploadBytesCapsDerivation:
         assert "project owner's storage limit" in r.reason
         assert "Contact support" not in r.reason
 
-    def test_upgrade_only_never_shrinks_larger_personal_headroom(self, monkeypatch):
-        """Rule 4 upgrade-only: a personal cap LARGER than the seat storage is not
-        shrunk by the link. Free 1GB personal, seat 512MB, already storing 800MB,
-        upload 1 byte → still allowed (personal 1GB is more permissive and kept)."""
+    def test_personal_headroom_does_not_extend_a_full_team(self, monkeypatch):
+        """Rule 4's upgrade-only max no longer applies to storage, and that is
+        the change 20260804000001 made. While the payer edge was a per-project
+        LINK the bytes still sat on the member's personal counter, so the more
+        permissive of (personal, seat) was the coherent cap. Under artist
+        ownership the bytes sit on the ORG's counter, so a member's roomier
+        personal plan is simply not about them: personal cap 1GB with 0 personal
+        bytes used, team cap 512MB and the team already full -> DENY."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", str(512 * 1024 * 1024))
-        sb = _ctx_supabase(_phase_c_data(storage=800 * 1024 * 1024))
+        sb = _ctx_supabase(_phase_c_data(storage=0, team_storage=512 * 1024 * 1024))
         r = EntitlementsService(sb).can(USER, Action.UPLOAD_BYTES, size=1, resource_project_id=PROJECT)
+        assert r.allowed is False
+        assert "team" in r.reason.lower()
+
+    def test_team_cap_scales_with_active_seats(self, monkeypatch):
+        """The env value is PER SEAT. Three active seats, team at 2GB, per-seat
+        1GB -> 2GB is inside the 3GB team cap."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", str(1 * GB))
+        data = _phase_c_data(storage=0, team_storage=2 * GB)
+        data["org_members"] = [_member(), _member(), _member()]
+        r = EntitlementsService(_ctx_supabase(data)).can(USER, Action.UPLOAD_BYTES, size=1, resource_project_id=PROJECT)
         assert r.allowed is True
 
     def test_no_resource_project_id_byte_identical(self, monkeypatch):
@@ -924,13 +954,13 @@ class TestUploadBytesCapsDerivation:
         sb = _ctx_supabase(_phase_c_data(storage=1 * GB))
         r = EntitlementsService(sb).can(USER, Action.UPLOAD_BYTES, size=1)
         assert r.allowed is False  # personal 1GB cap, no derivation
-        assert "org_project_links" not in sb._log
+        assert "artists" not in sb._log
 
 
 # ---------------------------------------------------------------------------
 # THE collision fix (rule 9): a seat-holding COLLABORATOR uploading to SOMEONE
 # ELSE's linked project keeps the host-scoped check UNTOUCHED — no enterprise
-# substitution, byte-identical deny copy, and NO org_project_links query.
+# substitution, byte-identical deny copy, and NO artist-ownership query.
 # ---------------------------------------------------------------------------
 
 
@@ -955,7 +985,7 @@ def _collision_data():
         "credit_wallets": [],
         "org_members": [_member()],  # USER's active seat
         "organizations": [_org(status="active")],
-        "org_project_links": [_link()],  # project IS linked...
+        **_team_owned(),  # the project's artist IS team-owned...
     }
 
 
@@ -973,5 +1003,5 @@ class TestUploadCollaboratorCollision:
         # Legacy host-scoped copy — NO enterprise substitution.
         assert "project owner's storage limit" in r.reason
         assert "Contact support" not in r.reason
-        # The load-bearing assertion: derivation never touched the link table.
-        assert "org_project_links" not in sb._log
+        # The load-bearing assertion: derivation never ran at all.
+        assert "artists" not in sb._log

@@ -27,8 +27,14 @@ def list_user_storage_paths(supabase: Client, user_id: str) -> list[tuple[str, s
     of whether the user has any projects. Storage rows do not have FK
     cascades, so we must enumerate them explicitly before deleting the
     auth user.
+
+    TEAM-OWNED artists are excluded (`team_id IS NULL`). `artists.user_id`
+    keeps holding the CREATOR after an artist is handed to a team, so without
+    this filter a member deleting their own account would enumerate — and then
+    delete — the LABEL's masters. Ownership is `team_id`; user_id is only a
+    creator stamp once it is set.
     """
-    artists_res = supabase.table("artists").select("id").eq("user_id", user_id).execute()
+    artists_res = supabase.table("artists").select("id").eq("user_id", user_id).is_("team_id", None).execute()
     artist_ids = [a["id"] for a in (artists_res.data or [])]
     if not artist_ids:
         return []
@@ -193,11 +199,9 @@ def _remove_own_memberships(supabase: Client, user_id: str, own_rows: list[dict]
 
 def _teardown_archived_org_grants(supabase: Client, org_id: str) -> None:
     """Licensing Phase C, Task 4 (rule 12): mirrors
-    `orgs.service._teardown_archived_org_grants` exactly — `archived_at` is
-    an UPDATE, so the `org_project_links.org_id` ON DELETE CASCADE never
-    fires, and without this an archived org can strand a live
-    `project_members` grant or a tombstone link that blocks re-linking under
-    rule 8's `UNIQUE(project_id)`. Reimplemented locally rather than calling
+    `orgs.service._teardown_archived_org_grants` exactly — `archived_at` is an
+    UPDATE, so nothing cascades, and without this an archived org can strand a
+    live `project_members` grant. Reimplemented locally rather than calling
     the `orgs.service` helper directly, for the same reason every other
     teardown helper in this module is local (see the module-section
     docstring above `_seat_wallet_balance`): this runs during a
@@ -217,10 +221,6 @@ def _teardown_archived_org_grants(supabase: Client, org_id: str) -> None:
         revoke_org_granted_memberships(supabase, org_id)
     except Exception:
         logger.exception("account deletion: org-granted membership revocation failed org=%s", org_id)
-    try:
-        supabase.table("org_project_links").delete().eq("org_id", org_id).execute()
-    except Exception:
-        logger.exception("account deletion: org_project_links cleanup failed org=%s", org_id)
 
 
 def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict]) -> set[str]:
@@ -243,8 +243,8 @@ def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict
     untouched (status, revoked_at unchanged) — archived_at alone already
     zeroes their entitlement resolution, per spec.
 
-    Also tears down (Task 4, rule 12) every `project_members` grant and
-    `org_project_links` row this org holds, via `_teardown_archived_org_grants`
+    Also tears down (Task 4, rule 12) every `project_members` grant this org
+    holds, via `_teardown_archived_org_grants`
     — same best-effort, never-blocks-deletion posture as the seat reclaim
     above, and run for BOTH a fresh archive and a retry-detected
     already-archived org (a prior attempt may have archived the org but

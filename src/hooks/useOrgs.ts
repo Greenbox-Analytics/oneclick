@@ -457,112 +457,19 @@ export function useDenyCreditRequest() {
 
 // ---------------------------------------------------------------------------
 // Project links (Licensing Phase C, spec §6, plan Task 8) — the project
-// OWNER links/unlinks their project to an org they hold an active seat in
-// (rule 1: linking = consent, never an org admin's call); org admins can
-// only VIEW linked projects and manage SEAT ACCESS on them (Task 3).
+// Org admins VIEW the projects their org owns (ownership comes from the
+// project's ARTIST) and manage SEAT ACCESS on them (Task 3). There is no
+// per-project link to create or remove any more — see 20260804000001.
 // ---------------------------------------------------------------------------
 
 export type OrgProjectRole = "viewer" | "editor" | "admin";
 
-/** The ONE org (if any) a project is linked to, from the OWNER's point of
- * view. There is no backend GET-by-project endpoint for this (only the org-
- * admin-scoped `GET /orgs/{id}/projects` list, which the owner may not be
- * authorized to call at all if they're a plain member) — the owner-facing
- * check reads `org_project_links` directly instead, which its RLS policy
- * (20260723000001 migration) explicitly grants the project OWNER SELECT on.
- * That table (and `organizations`) isn't in the generated Supabase types yet
- * (the migration is written, not run), hence the `as any` cast below — same
- * pattern as `src/components/project/AudioTab.tsx`'s `sb`. */
-export interface OrgProjectLinkInfo {
-  orgId: string;
-  orgName: string | null;
-  linkedAt: string | null;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const sbAny = supabase as any;
-
-export function useProjectOrgLink(projectId?: string) {
-  const { user } = useAuth();
-  return useQuery<OrgProjectLinkInfo | null>({
-    queryKey: ["orgs", "project-link", projectId],
-    queryFn: async () => {
-      const { data, error } = await sbAny
-        .from("org_project_links")
-        .select("org_id, created_at, organizations(name)")
-        .eq("project_id", projectId)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) return null;
-      return {
-        orgId: data.org_id as string,
-        // Null when the owner's own seat in that org no longer exists (e.g.
-        // offboarded after linking) — `organizations` RLS is member-scoped,
-        // so the embed silently drops rather than erroring. The UI falls
-        // back to generic "your organization" wording in that case.
-        orgName: (data.organizations?.name as string | undefined) ?? null,
-        linkedAt: (data.created_at as string | undefined) ?? null,
-      };
-    },
-    enabled: !!user?.id && !!projectId,
-    staleTime: 10_000,
-  });
-}
-
-export interface LinkProjectResult {
-  id?: string;
-  org_id: string;
-  project_id: string;
-  linked_by?: string | null;
-  created_at?: string;
-}
-
-/** POST /orgs/{org_id}/projects/{project_id}/link. 409 (already linked — to
- * this org or a DIFFERENT one, rule 8) carries exact backend copy, surfaced
- * as-is per this file's header note. */
-export function useLinkProjectToOrg() {
-  const qc = useQueryClient();
-  return useMutation<LinkProjectResult, Error, { orgId: string; projectId: string }>({
-    mutationFn: ({ orgId, projectId }) =>
-      apiFetch<LinkProjectResult>(`${API_URL}/orgs/${orgId}/projects/${projectId}/link`, { method: "POST" }),
-    onSuccess: (_d, { projectId }) => {
-      qc.invalidateQueries({ queryKey: ["orgs", "project-link", projectId] });
-      qc.invalidateQueries({ queryKey: ["entitlements"] });
-      toast.success("Project linked to your organization");
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't link this project.")),
-  });
-}
-
-export interface UnlinkProjectResult {
-  revoked: number;
-}
-
-/** DELETE /orgs/{org_id}/projects/{project_id}/link — owner-only, works even
- * if the owner's own seat has since lapsed (unlinking never re-checks seat
- * status, only ownership). Surfaces the exact revocation count from
- * `orgs/projects.py`'s `{"revoked": n}` response (rule 3). */
-export function useUnlinkProjectFromOrg() {
-  const qc = useQueryClient();
-  return useMutation<UnlinkProjectResult, Error, { orgId: string; projectId: string }>({
-    mutationFn: ({ orgId, projectId }) =>
-      apiFetch<UnlinkProjectResult>(`${API_URL}/orgs/${orgId}/projects/${projectId}/link`, { method: "DELETE" }),
-    onSuccess: (result, { projectId }) => {
-      qc.invalidateQueries({ queryKey: ["orgs", "project-link", projectId] });
-      qc.invalidateQueries({ queryKey: ["project-members", projectId] });
-      qc.invalidateQueries({ queryKey: ["entitlements"] });
-      const revoked = result?.revoked ?? 0;
-      toast.success(
-        revoked > 0
-          ? `Project unlinked — ${revoked} teammate${revoked === 1 ? "" : "s"} lost the access the organization granted`
-          : "Project unlinked from your organization",
-      );
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't unlink this project.")),
-  });
-}
-
-/** One row of GET /orgs/{id}/projects (org ADMIN console — Task 2 AC 3). */
+/** One row of GET /orgs/{id}/projects — the org ADMIN console list of the
+ * projects this org owns. Ownership comes from the project's ARTIST
+ * (`artists.team_id`); the per-project `org_project_links` edge, and the
+ * owner-facing link/unlink controls that went with it, were retired in
+ * 20260804000001. An owner hands a whole artist to a team from the artist's
+ * profile instead (`useTransferArtistToTeam` in `useArtistTeam.ts`). */
 export interface OrgLinkedProject {
   projectId: string;
   name: string | null;

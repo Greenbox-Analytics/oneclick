@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from postgrest.exceptions import APIError
 
 from orgs import projects as org_projects
 from tests.conftest import MockQueryBuilder
@@ -24,7 +23,7 @@ OTHER_ORG_ID = "20000000-0000-0000-0000-000000000002"
 PROJECT_ID = "10000000-0000-0000-0000-000000000001"
 USER_ID = "00000000-0000-0000-0000-000000000001"
 OTHER_USER_ID = "00000000-0000-0000-0000-000000000002"
-LINK_ID = "70000000-0000-0000-0000-000000000001"
+ARTIST_ID = "80000000-0000-0000-0000-000000000001"
 SEAT_MEMBER_ID = "30000000-0000-0000-0000-000000000001"
 TARGET_USER_ID = "00000000-0000-0000-0000-000000000003"
 PM_ROW_ID = "40000000-0000-0000-0000-000000000001"
@@ -52,337 +51,6 @@ def _org_row(**overrides):
     base = {"id": ORG_ID, "status": "active", "archived_at": None}
     base.update(overrides)
     return base
-
-
-# ---------------------------------------------------------------------------
-# link_project — no-leak 404 pairs (Task 2 AC 1)
-# ---------------------------------------------------------------------------
-
-
-class TestLinkProjectNoLeak404s:
-    """Two independent no-existence-oracle pairs:
-    (unknown project | not owner) -> "Project not found"
-    (unknown org | no active seat | org not ACTIVE) -> "Organization not found"
-    Every case in a pair must produce the IDENTICAL body as its sibling.
-    """
-
-    async def test_unknown_project_404(self, monkeypatch):
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value=None))
-        db = MagicMock()
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "Project not found"
-
-    async def test_non_owner_role_same_body_as_unknown_project(self, monkeypatch):
-        """seat-holder-non-owner: caller has SOME role but not 'owner' — must
-        produce the identical body as an unknown project."""
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="editor"))
-        monkeypatch.setattr(org_projects.authz, "is_org_member", lambda *a: True)
-        db = MagicMock()
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "Project not found"
-
-    async def test_unknown_org_404(self, monkeypatch):
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        monkeypatch.setattr(org_projects.authz, "is_org_member", lambda *a: False)
-        db = MagicMock()
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "Organization not found"
-
-    async def test_owner_without_active_seat_same_body_as_unknown_org(self, monkeypatch):
-        """owner-without-seat: caller owns the project but holds no active
-        seat in org_id — must produce the identical body as an unknown org."""
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        monkeypatch.setattr(org_projects.authz, "is_org_member", lambda *a: False)
-        db = MagicMock()
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "Organization not found"
-
-    async def test_pending_org_404_even_for_active_seat_holder(self, monkeypatch):
-        """A PENDING org confers nothing — 404s just like an unknown org,
-        even though the caller genuinely holds an active seat there."""
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        monkeypatch.setattr(org_projects.authz, "is_org_member", lambda *a: True)
-
-        def _side(name):
-            b = MockQueryBuilder()
-            if name == "organizations":
-                b.execute.return_value = MagicMock(data=_org_row(status="pending"), count=1)
-            return b
-
-        db = MagicMock()
-        db.table.side_effect = _side
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "Organization not found"
-
-    async def test_suspended_org_404(self, monkeypatch):
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        monkeypatch.setattr(org_projects.authz, "is_org_member", lambda *a: True)
-
-        def _side(name):
-            b = MockQueryBuilder()
-            if name == "organizations":
-                b.execute.return_value = MagicMock(data=_org_row(status="suspended"), count=1)
-            return b
-
-        db = MagicMock()
-        db.table.side_effect = _side
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "Organization not found"
-
-    async def test_archived_org_404_even_if_status_active(self, monkeypatch):
-        """archived_at set but status still 'active' (archive_org doesn't
-        touch status) must still 404 — archived_at is the load-bearing check."""
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        monkeypatch.setattr(org_projects.authz, "is_org_member", lambda *a: True)
-
-        def _side(name):
-            b = MockQueryBuilder()
-            if name == "organizations":
-                b.execute.return_value = MagicMock(
-                    data=_org_row(status="active", archived_at="2026-07-01T00:00:00+00:00"), count=1
-                )
-            return b
-
-        db = MagicMock()
-        db.table.side_effect = _side
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "Organization not found"
-
-
-# ---------------------------------------------------------------------------
-# link_project — duplicate/other-org 409 (rule 8) + happy path
-# ---------------------------------------------------------------------------
-
-
-class TestLinkProjectDuplicateAndSuccess:
-    def _authorized(self, monkeypatch):
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        monkeypatch.setattr(org_projects.authz, "is_org_member", lambda *a: True)
-
-    async def test_duplicate_link_to_same_org_409(self, monkeypatch):
-        self._authorized(monkeypatch)
-        db = _db_seq(
-            {
-                "organizations": [MagicMock(data=_org_row(), count=1)],
-                "org_project_links": [MagicMock(data={"id": LINK_ID, "org_id": ORG_ID}, count=1)],
-            }
-        )
-        with pytest.raises(org_projects.ProjectAlreadyLinkedError) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert str(exc_info.value) == "This project is already linked to an organization — unlink it first."
-
-    async def test_duplicate_link_to_different_org_409_same_copy(self, monkeypatch):
-        """rule 8: ANY existing link (even to a DIFFERENT org than the one
-        being requested) 409s with the exact same copy."""
-        self._authorized(monkeypatch)
-        db = _db_seq(
-            {
-                "organizations": [MagicMock(data=_org_row(), count=1)],
-                "org_project_links": [MagicMock(data={"id": LINK_ID, "org_id": OTHER_ORG_ID}, count=1)],
-            }
-        )
-        with pytest.raises(org_projects.ProjectAlreadyLinkedError) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert str(exc_info.value) == "This project is already linked to an organization — unlink it first."
-
-    async def test_success_inserts_link_row(self, monkeypatch):
-        self._authorized(monkeypatch)
-        captured = {}
-        link_calls = {"n": 0}
-
-        def _side(name):
-            b = MockQueryBuilder()
-            if name == "organizations":
-                b.execute.return_value = MagicMock(data=_org_row(), count=1)
-            elif name == "org_project_links":
-                link_calls["n"] += 1
-                if link_calls["n"] == 1:
-                    b.execute.return_value = MagicMock(data=None, count=0)  # existing-link check: none
-                else:
-                    original_insert = b.insert
-
-                    def _capture_insert(payload, *a, **kw):
-                        captured["insert_payload"] = payload
-                        return original_insert(payload, *a, **kw)
-
-                    b.insert = _capture_insert
-                    b.execute.return_value = MagicMock(
-                        data=[{"id": LINK_ID, "org_id": ORG_ID, "project_id": PROJECT_ID, "linked_by": USER_ID}],
-                        count=1,
-                    )
-            return b
-
-        db = MagicMock()
-        db.table.side_effect = _side
-
-        result = await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert result["org_id"] == ORG_ID
-        assert result["project_id"] == PROJECT_ID
-        assert captured["insert_payload"] == {"org_id": ORG_ID, "project_id": PROJECT_ID, "linked_by": USER_ID}
-
-    def _db_probe_clear_then_insert_raises(self, error):
-        """Probe finds no link; the INSERT then raises `error` (the race where
-        a concurrent duplicate slipped between probe and INSERT)."""
-        link_calls = {"n": 0}
-
-        def _side(name):
-            b = MockQueryBuilder()
-            if name == "organizations":
-                b.execute.return_value = MagicMock(data=_org_row(), count=1)
-            elif name == "org_project_links":
-                link_calls["n"] += 1
-                if link_calls["n"] == 1:
-                    b.execute.return_value = MagicMock(data=None, count=0)  # probe: no link yet
-                else:
-                    b.execute.side_effect = error
-            return b
-
-        db = MagicMock()
-        db.table.side_effect = _side
-        return db
-
-    async def test_concurrent_duplicate_unique_violation_maps_to_409(self, monkeypatch):
-        """The probe+INSERT pair is not atomic: a concurrent double-submit can
-        pass both probes and hit UNIQUE(project_id) at the DB. The unique
-        violation (23505) must surface as the SAME rule-8 409 copy, not a 500."""
-        self._authorized(monkeypatch)
-        db = self._db_probe_clear_then_insert_raises(
-            APIError({"message": "duplicate key value violates unique constraint", "code": "23505"})
-        )
-        with pytest.raises(org_projects.ProjectAlreadyLinkedError) as exc_info:
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert str(exc_info.value) == "This project is already linked to an organization — unlink it first."
-
-    async def test_non_unique_apierror_on_insert_reraises(self, monkeypatch):
-        """Only 23505 maps to the 409 — any other DB error propagates untouched
-        rather than masquerading as 'already linked'."""
-        self._authorized(monkeypatch)
-        db = self._db_probe_clear_then_insert_raises(
-            APIError({"message": "permission denied for table org_project_links", "code": "42501"})
-        )
-        with pytest.raises(APIError):
-            await org_projects.link_project(db, USER_ID, ORG_ID, PROJECT_ID)
-
-
-# ---------------------------------------------------------------------------
-# unlink_project
-# ---------------------------------------------------------------------------
-
-
-class TestUnlinkProject:
-    async def test_requires_owner_404(self, monkeypatch):
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="editor"))
-        db = MagicMock()
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.unlink_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "Project not found"
-
-    async def test_no_link_at_all_404(self, monkeypatch):
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        db = _db_seq({"org_project_links": [MagicMock(data=None, count=0)]})
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.unlink_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "This project is not linked to this organization."
-
-    async def test_link_belongs_to_different_org_404(self, monkeypatch):
-        """The link exists, but for a DIFFERENT org than the one in the path
-        — must 404, not silently unlink the wrong org's grant."""
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        db = _db_seq({"org_project_links": [MagicMock(data={"id": LINK_ID, "org_id": OTHER_ORG_ID}, count=1)]})
-        with pytest.raises(HTTPException) as exc_info:
-            await org_projects.unlink_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert exc_info.value.status_code == 404
-        assert exc_info.value.detail == "This project is not linked to this organization."
-
-    async def test_deletes_only_provenance_matched_rows_and_returns_count(self, monkeypatch):
-        """KEY TEST (rule 3): unlink must delete ONLY project_members rows
-        where org_id = THIS org AND project_id = THIS project — organic rows
-        (org_id NULL) and other-org rows must survive. The mock can't enforce
-        a real filter, so this asserts BOTH halves of the guarantee: (1) the
-        exact filter args passed to .eq() are org_id/THIS-org and
-        project_id/THIS-project (the entire safety mechanism), and (2) the
-        reported count matches only the rows that filter would match — an
-        organic row and an other-org row are included in the fixture but
-        deliberately excluded from the configured matched set."""
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-
-        matched_rows = [
-            {"id": "m1", "project_id": PROJECT_ID, "org_id": ORG_ID, "user_id": "u-a"},
-            {"id": "m2", "project_id": PROJECT_ID, "org_id": ORG_ID, "user_id": "u-b"},
-        ]
-        builders = {}
-
-        def _side(name):
-            b = MockQueryBuilder()
-            builders[name] = b
-            if name == "org_project_links":
-                b.execute.return_value = MagicMock(data={"id": LINK_ID, "org_id": ORG_ID}, count=1)
-                b.delete.return_value = b  # link-row delete chains through self
-            elif name == "project_members":
-                b.delete.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
-                    data=matched_rows, count=len(matched_rows)
-                )
-            return b
-
-        db = MagicMock()
-        db.table.side_effect = _side
-
-        result = await org_projects.unlink_project(db, USER_ID, ORG_ID, PROJECT_ID)
-
-        assert result == {"revoked": 2}
-        pm_builder = builders["project_members"]
-        pm_builder.delete.return_value.eq.assert_called_once_with("org_id", ORG_ID)
-        pm_builder.delete.return_value.eq.return_value.eq.assert_called_once_with("project_id", PROJECT_ID)
-
-    async def test_revocation_happens_before_link_row_delete(self, monkeypatch):
-        """The link row delete happens on org_project_links AFTER the
-        project_members revocation completes (rule 3's ordering: if a crash
-        lands between the two writes, the WORSE outcome — link row survives
-        a completed revocation — is the one that can happen, never access
-        surviving a deleted link)."""
-        monkeypatch.setattr(org_projects, "get_user_role", AsyncMock(return_value="owner"))
-        order = []
-
-        def _fake_revoke(sb, org_id, *, user_id=None, project_id=None):
-            order.append("revoke")
-            return 5
-
-        monkeypatch.setattr(org_projects, "revoke_org_granted_memberships", _fake_revoke)
-
-        def _side(name):
-            b = MockQueryBuilder()
-            if name == "org_project_links":
-                b.execute.return_value = MagicMock(data={"id": LINK_ID, "org_id": ORG_ID}, count=1)
-
-                def _tracked_delete(*a, **kw):
-                    order.append("link_delete")
-                    return b  # self-chain: .eq("id", ...).execute() resolves harmlessly
-
-                b.delete = MagicMock(side_effect=_tracked_delete)
-            return b
-
-        db = MagicMock()
-        db.table.side_effect = _side
-
-        result = await org_projects.unlink_project(db, USER_ID, ORG_ID, PROJECT_ID)
-        assert result == {"revoked": 5}
-        assert order == ["revoke", "link_delete"]
 
 
 # ---------------------------------------------------------------------------
@@ -446,9 +114,20 @@ class TestListOrgProjects:
             await org_projects.list_org_projects(db, OTHER_USER_ID, ORG_ID)
         assert exc_info.value.status_code == 403
 
-    async def test_empty_when_no_links(self, monkeypatch):
+    async def test_empty_when_the_org_owns_no_artists(self, monkeypatch):
         monkeypatch.setattr(org_projects.authz, "is_org_admin", lambda *a: True)
-        db = _db_seq({"org_project_links": [MagicMock(data=[], count=0)]})
+        db = _db_seq({"artists": [MagicMock(data=[], count=0)]})
+        result = await org_projects.list_org_projects(db, USER_ID, ORG_ID)
+        assert result == []
+
+    async def test_empty_when_the_owned_artists_have_no_projects(self, monkeypatch):
+        monkeypatch.setattr(org_projects.authz, "is_org_admin", lambda *a: True)
+        db = _db_seq(
+            {
+                "artists": [MagicMock(data=[{"id": ARTIST_ID, "transferred_at": None}], count=1)],
+                "projects": [MagicMock(data=[], count=0)],
+            }
+        )
         result = await org_projects.list_org_projects(db, USER_ID, ORG_ID)
         assert result == []
 
@@ -463,13 +142,14 @@ class TestListOrgProjects:
 
         def _side(name):
             b = MockQueryBuilder()
-            if name == "org_project_links":
+            if name == "artists":
                 b.execute.return_value = MagicMock(
-                    data=[{"id": LINK_ID, "project_id": PROJECT_ID, "created_at": "2026-07-20T00:00:00+00:00"}],
-                    count=1,
+                    data=[{"id": ARTIST_ID, "transferred_at": "2026-07-20T00:00:00+00:00"}], count=1
                 )
             elif name == "projects":
-                b.execute.return_value = MagicMock(data=[{"id": PROJECT_ID, "name": "Album One"}], count=1)
+                b.execute.return_value = MagicMock(
+                    data=[{"id": PROJECT_ID, "name": "Album One", "artist_id": ARTIST_ID}], count=1
+                )
             elif name == "project_members":
                 b.execute.return_value = MagicMock(
                     data=[
@@ -503,13 +183,14 @@ class TestListOrgProjects:
 
         def _side(name):
             b = MockQueryBuilder()
-            if name == "org_project_links":
+            if name == "artists":
                 b.execute.return_value = MagicMock(
-                    data=[{"id": LINK_ID, "project_id": PROJECT_ID, "created_at": "2026-07-20T00:00:00+00:00"}],
-                    count=1,
+                    data=[{"id": ARTIST_ID, "transferred_at": "2026-07-20T00:00:00+00:00"}], count=1
                 )
             elif name == "projects":
-                b.execute.return_value = MagicMock(data=[{"id": PROJECT_ID, "name": "Album One"}], count=1)
+                b.execute.return_value = MagicMock(
+                    data=[{"id": PROJECT_ID, "name": "Album One", "artist_id": ARTIST_ID}], count=1
+                )
             elif name == "project_members":
                 b.execute.return_value = MagicMock(
                     data=[{"project_id": PROJECT_ID, "user_id": OTHER_USER_ID, "role": "owner", "org_id": None}],
@@ -531,13 +212,14 @@ class TestListOrgProjects:
 
         def _side(name):
             b = MockQueryBuilder()
-            if name == "org_project_links":
+            if name == "artists":
                 b.execute.return_value = MagicMock(
-                    data=[{"id": LINK_ID, "project_id": PROJECT_ID, "created_at": "2026-07-20T00:00:00+00:00"}],
-                    count=1,
+                    data=[{"id": ARTIST_ID, "transferred_at": "2026-07-20T00:00:00+00:00"}], count=1
                 )
             elif name == "projects":
-                b.execute.return_value = MagicMock(data=[{"id": PROJECT_ID, "name": "Album One"}], count=1)
+                b.execute.return_value = MagicMock(
+                    data=[{"id": PROJECT_ID, "name": "Album One", "artist_id": ARTIST_ID}], count=1
+                )
             elif name == "project_members":
                 b.execute.return_value = MagicMock(
                     data=[
@@ -587,14 +269,14 @@ class TestSetOrgProjectMemberRoleNoLeak404s:
         assert exc_info.value.status_code == 404
         assert exc_info.value.detail == "Member not found"
 
-    async def test_unlinked_project_404(self, monkeypatch):
-        """Project doesn't exist, or isn't linked to THIS org (unlinked or
-        linked to a DIFFERENT org) — all collapse to the same 404 body."""
+    async def test_project_not_in_this_org_404(self, monkeypatch):
+        """Project doesn't exist, its artist is personal, or its artist belongs
+        to a DIFFERENT org — all collapse to the same 404 body."""
         _authorize_admin(monkeypatch)
         db = _db_seq(
             {
                 "org_members": [MagicMock(data={"user_id": TARGET_USER_ID}, count=1)],
-                "org_project_links": [MagicMock(data=None, count=0)],
+                "projects": [MagicMock(data=None, count=0)],
             }
         )
         with pytest.raises(HTTPException) as exc_info:
@@ -621,8 +303,9 @@ class TestSetOrgProjectMemberRoleDecisionTree:
             b = MockQueryBuilder()
             if name == "org_members":
                 b.execute.return_value = MagicMock(data={"user_id": TARGET_USER_ID}, count=1)
-            elif name == "org_project_links":
-                b.execute.return_value = MagicMock(data={"id": LINK_ID}, count=1)
+            elif name == "projects":
+                # _require_project_in_org: the project's ARTIST is owned by this org
+                b.execute.return_value = MagicMock(data={"id": PROJECT_ID, "artists": {"team_id": ORG_ID}}, count=1)
             elif name == "project_members":
                 pm_calls["n"] += 1
                 idx = min(pm_calls["n"] - 1, len(pm_rows_by_call) - 1)
@@ -785,12 +468,12 @@ class TestRemoveOrgProjectMemberNoLeak404s:
         assert exc_info.value.status_code == 404
         assert exc_info.value.detail == "Member not found"
 
-    async def test_unlinked_project_404(self, monkeypatch):
+    async def test_project_not_in_this_org_404(self, monkeypatch):
         _authorize_admin(monkeypatch)
         db = _db_seq(
             {
                 "org_members": [MagicMock(data={"user_id": TARGET_USER_ID}, count=1)],
-                "org_project_links": [MagicMock(data=None, count=0)],
+                "projects": [MagicMock(data=None, count=0)],
             }
         )
         with pytest.raises(HTTPException) as exc_info:
@@ -812,8 +495,9 @@ class TestRemoveOrgProjectMemberDecisionTree:
             b = MockQueryBuilder()
             if name == "org_members":
                 b.execute.return_value = MagicMock(data={"user_id": TARGET_USER_ID}, count=1)
-            elif name == "org_project_links":
-                b.execute.return_value = MagicMock(data={"id": LINK_ID}, count=1)
+            elif name == "projects":
+                # _require_project_in_org: the project's ARTIST is owned by this org
+                b.execute.return_value = MagicMock(data={"id": PROJECT_ID, "artists": {"team_id": ORG_ID}}, count=1)
             elif name == "project_members":
                 b.execute.return_value = MagicMock(data=pm_row, count=1 if pm_row else 0)
             return b
@@ -893,74 +577,6 @@ class TestRemoveOrgProjectMemberDecisionTree:
 @pytest.fixture(autouse=True)
 def _licensing_on_by_default(monkeypatch):
     monkeypatch.setenv("LICENSING_ENABLED", "true")
-
-
-class TestLinkRouteWiring:
-    def test_link_ok_fires_analytics(self, client):
-        with (
-            patch(
-                "orgs.router.org_projects.link_project",
-                new=AsyncMock(return_value={"org_id": ORG_ID, "project_id": PROJECT_ID}),
-            ),
-            patch("orgs.router.analytics_capture") as mock_capture,
-        ):
-            resp = client.post(f"/orgs/{ORG_ID}/projects/{PROJECT_ID}/link")
-        assert resp.status_code == 200
-        assert resp.json()["org_id"] == ORG_ID
-        mock_capture.assert_called_once()
-        assert mock_capture.call_args.args[1] == "org_project_linked"
-
-    def test_link_duplicate_maps_to_409(self, client):
-        with patch(
-            "orgs.router.org_projects.link_project",
-            new=AsyncMock(
-                side_effect=org_projects.ProjectAlreadyLinkedError(
-                    "This project is already linked to an organization — unlink it first."
-                )
-            ),
-        ):
-            resp = client.post(f"/orgs/{ORG_ID}/projects/{PROJECT_ID}/link")
-        assert resp.status_code == 409
-
-    def test_link_404_propagates_from_service(self, client):
-        with patch(
-            "orgs.router.org_projects.link_project",
-            new=AsyncMock(side_effect=HTTPException(status_code=404, detail="Project not found")),
-        ):
-            resp = client.post(f"/orgs/{ORG_ID}/projects/{PROJECT_ID}/link")
-        assert resp.status_code == 404
-
-    def test_link_route_404_when_flag_off(self, client, monkeypatch):
-        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
-        resp = client.post(f"/orgs/{ORG_ID}/projects/{PROJECT_ID}/link")
-        assert resp.status_code == 404
-
-
-class TestUnlinkRouteWiring:
-    def test_unlink_ok_fires_analytics_with_revoked_count(self, client):
-        with (
-            patch("orgs.router.org_projects.unlink_project", new=AsyncMock(return_value={"revoked": 3})),
-            patch("orgs.router.analytics_capture") as mock_capture,
-        ):
-            resp = client.delete(f"/orgs/{ORG_ID}/projects/{PROJECT_ID}/link")
-        assert resp.status_code == 200
-        assert resp.json() == {"revoked": 3}
-        mock_capture.assert_called_once()
-        assert mock_capture.call_args.args[1] == "org_project_unlinked"
-        assert mock_capture.call_args.args[2]["revoked"] == 3
-
-    def test_unlink_404_propagates_from_service(self, client):
-        with patch(
-            "orgs.router.org_projects.unlink_project",
-            new=AsyncMock(side_effect=HTTPException(status_code=404, detail="Project not found")),
-        ):
-            resp = client.delete(f"/orgs/{ORG_ID}/projects/{PROJECT_ID}/link")
-        assert resp.status_code == 404
-
-    def test_unlink_route_404_when_flag_off(self, client, monkeypatch):
-        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
-        resp = client.delete(f"/orgs/{ORG_ID}/projects/{PROJECT_ID}/link")
-        assert resp.status_code == 404
 
 
 class TestListOrgProjectsRouteWiring:

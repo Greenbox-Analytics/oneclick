@@ -419,8 +419,11 @@ async def test_archive_org_success_when_no_members(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# archive_org — Task 4 teardown (rule 12): revoke org-granted memberships AND
-# delete this org's org_project_links rows, after the archive lands.
+# archive_org — Task 4 teardown (rule 12): revoke org-granted memberships,
+# after the archive lands. (There is no link row to delete any more —
+# org_project_links was retired in 20260804000001, and an archived org's
+# artists.team_id rows are deliberately left in place: can_access_artist
+# already denies on archived_at, so the roster is inert without being destroyed.)
 # ---------------------------------------------------------------------------
 
 
@@ -449,19 +452,35 @@ async def test_archive_org_revokes_org_granted_memberships_org_scoped(monkeypatc
     fake_revoke.assert_called_once_with(db, ORG)
 
 
-async def test_archive_org_deletes_org_project_links_rows(monkeypatch):
-    """Rule 12 — archive is an UPDATE, so the ON DELETE CASCADE on
-    org_project_links.org_id never fires; archive_org must explicitly DELETE
-    this org's link row(s), scoped by org_id only, so a stranded link never
-    blocks re-linking the project to a different (live) org afterward."""
+async def test_archive_org_revokes_org_granted_memberships(monkeypatch):
+    """Rule 12 — archive is an UPDATE, so nothing cascades; archive_org must
+    explicitly drop every project_members row THIS org granted."""
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    revoke = MagicMock(return_value=0)
+    monkeypatch.setattr(org_projects, "revoke_org_granted_memberships", revoke)
+
+    db = MagicMock()
+    db.table.side_effect = _archive_success_side
+
+    result = await service.archive_org(db, U1, ORG)
+
+    assert result["archived_at"] is not None
+    revoke.assert_called_once()
+    assert revoke.call_args.args[1] == ORG
+
+
+async def test_archive_org_leaves_team_owned_artists_attached(monkeypatch):
+    """An archived org keeps its roster: can_access_artist denies on
+    archived_at, so the artists go inert on their own. Detaching them here
+    would destroy the ownership record support needs."""
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
     monkeypatch.setattr(org_projects, "revoke_org_granted_memberships", lambda *a, **k: 0)
 
-    links_builder = MockQueryBuilder()
+    artists_builder = MockQueryBuilder()
 
     def _side(name):
-        if name == "org_project_links":
-            return links_builder
+        if name == "artists":
+            return artists_builder
         return _archive_success_side(name)
 
     db = MagicMock()
@@ -470,29 +489,20 @@ async def test_archive_org_deletes_org_project_links_rows(monkeypatch):
     result = await service.archive_org(db, U1, ORG)
 
     assert result["archived_at"] is not None
-    links_builder.delete.assert_called_once()
-    links_builder.delete.return_value.eq.assert_called_once_with("org_id", ORG)
+    artists_builder.delete.assert_not_called()
 
 
 async def test_archive_org_teardown_failures_do_not_block_archive(monkeypatch):
-    """Both cleanup steps are best-effort — a failure in the revoke call OR
-    the link delete must not prevent archive_org from returning the archived
-    org row; the archived_at write has already landed by the time either
-    runs."""
+    """The cleanup is best-effort — a failure in the revoke call must not
+    prevent archive_org from returning the archived org row; the archived_at
+    write has already landed by the time it runs."""
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
     monkeypatch.setattr(
         org_projects, "revoke_org_granted_memberships", MagicMock(side_effect=RuntimeError("revoke boom"))
     )
 
-    def _side(name):
-        if name == "org_project_links":
-            b = MockQueryBuilder()
-            b.delete.side_effect = RuntimeError("link delete boom")
-            return b
-        return _archive_success_side(name)
-
     db = MagicMock()
-    db.table.side_effect = _side
+    db.table.side_effect = _archive_success_side
 
     result = await service.archive_org(db, U1, ORG)
     assert result["archived_at"] is not None

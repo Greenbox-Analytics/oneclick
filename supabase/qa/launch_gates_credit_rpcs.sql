@@ -264,11 +264,21 @@ BEGIN
     v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 14b. idx_credit_ledger_request_id MISSING';
   END IF;
 
-  SELECT COUNT(*) INTO v_n FROM pg_constraint WHERE conname = 'org_project_links_project_id_key';
+  -- Was: org_project_links UNIQUE(project_id) (one org per project). That table
+  -- was retired in 20260804000001 — a project belongs to an org because its
+  -- ARTIST does, and an artist carries at most one team_id, so "one org per
+  -- project" is now a column, not a constraint. What is worth asserting is that
+  -- the FK is RESTRICT: deleting an org must never take a roster with it.
+  SELECT COUNT(*) INTO v_n
+    FROM pg_constraint
+   WHERE conrelid = 'artists'::regclass
+     AND contype = 'f'
+     AND confrelid = 'organizations'::regclass
+     AND confdeltype = 'r';
   IF v_n = 1 THEN
-    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 14c. org_project_links UNIQUE(project_id) present (one org per project)';
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 14c. artists.team_id -> organizations is ON DELETE RESTRICT (one org per artist, roster protected)';
   ELSE
-    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 14c. org_project_links_project_id_key MISSING';
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 14c. artists.team_id FK missing or not ON DELETE RESTRICT';
   END IF;
 
   -- Money RPCs must NOT be callable by signed-in users (minting hole).

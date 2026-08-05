@@ -44,6 +44,7 @@ import {
   getDay,
 } from "date-fns";
 import { cn } from "@/lib/utils";
+import { parseDateString } from "@/lib/dateUtils";
 import { useCalendarTasks } from "@/hooks/useCalendarTasks";
 import { useBoards } from "@/hooks/useBoards";
 import { useTeams } from "@/hooks/useTeams";
@@ -58,6 +59,10 @@ type ColorFor = (task: BoardTask) => TeamColor;
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MAX_VISIBLE_TASKS = 3;
+
+/** "Jun 4" — parsed as local midnight so a YYYY-MM-DD due date can't slip a day. */
+const formatDueDate = (dateStr: string) =>
+  parseDateString(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
 export function CalendarView() {
   const { settings } = useWorkspaceSettings();
@@ -427,14 +432,17 @@ function TaskPill({
     <button
       onClick={() => onClick(task.id)}
       className={cn(
-        "w-full text-left px-1.5 py-0.5 rounded text-[10px] leading-tight truncate",
-        "hover:opacity-80 transition-opacity cursor-pointer",
+        "w-full text-left px-1.5 py-0.5 rounded text-[10px] leading-tight",
+        "flex items-center gap-1 hover:opacity-80 transition-opacity cursor-pointer",
         colors.bg,
         colors.text
       )}
       title={`${task.title} — ${task.team_name ?? "Personal"}`}
     >
-      {task.title}
+      <span className="truncate flex-1">{task.title}</span>
+      {task.due_date && (
+        <span className="shrink-0 tabular-nums opacity-70">{formatDueDate(task.due_date)}</span>
+      )}
     </button>
   );
 }

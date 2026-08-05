@@ -32,13 +32,20 @@ EXPECTED_CTX = {
 }
 
 
-def _link(project_id=PROJECT, org_id=ORG):
-    return {"project_id": project_id, "org_id": org_id}
+ARTIST = "art00000-0000-0000-0000-00000000000a"
 
 
-def _base_data(*, org_status="active", member_status="active", link_project_id=PROJECT, project_files=None):
+def _team_owned(project_id=PROJECT, org_id=ORG):
+    """The artist edge that replaced org_project_links (20260804000001)."""
     return {
-        "org_project_links": [_link(project_id=link_project_id)],
+        "projects": [{"id": project_id, "artist_id": ARTIST}],
+        "artists": [{"id": ARTIST, "team_id": org_id}],
+    }
+
+
+def _base_data(*, org_status="active", member_status="active", owned_project_id=PROJECT, project_files=None):
+    return {
+        **_team_owned(project_id=owned_project_id),
         "organizations": [_org(status=org_status)],
         "org_members": [_member(status=member_status)],
         "project_files": project_files or [],
@@ -51,35 +58,44 @@ def _base_data(*, org_status="active", member_status="active", link_project_id=P
 
 
 class TestResolveBillingOrgForProject:
-    def test_linked_seat_active_returns_ctx_with_project_id(self, monkeypatch):
+    def test_team_owned_seat_active_returns_ctx_with_project_id(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         sb = _ctx_supabase(_base_data())
         ctx = EntitlementsService(sb).resolve_billing_org_for_project(USER, PROJECT)
         assert ctx == EXPECTED_CTX
 
-    def test_linked_no_seat_returns_none(self, monkeypatch):
+    def test_team_owned_no_seat_returns_none(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         data = _base_data()
         data["org_members"] = []
         sb = _ctx_supabase(data)
         assert EntitlementsService(sb).resolve_billing_org_for_project(USER, PROJECT) is None
 
-    def test_linked_pending_org_returns_none(self, monkeypatch):
+    def test_team_owned_pending_org_returns_none(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         sb = _ctx_supabase(_base_data(org_status="pending"))
         assert EntitlementsService(sb).resolve_billing_org_for_project(USER, PROJECT) is None
 
-    def test_linked_archived_org_returns_none(self, monkeypatch):
+    def test_team_owned_archived_org_returns_none(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         data = _base_data()
         data["organizations"] = [_org(status="active", archived_at="2026-01-01T00:00:00+00:00")]
         sb = _ctx_supabase(data)
         assert EntitlementsService(sb).resolve_billing_org_for_project(USER, PROJECT) is None
 
-    def test_unlinked_project_returns_none(self, monkeypatch):
+    def test_personal_artist_returns_none(self, monkeypatch):
+        """The artist has no team -> personal billing. There is no second edge
+        to fall through to since org_project_links was retired."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         data = _base_data()
-        data["org_project_links"] = []
+        data["artists"] = [{"id": ARTIST, "team_id": None}]
+        sb = _ctx_supabase(data)
+        assert EntitlementsService(sb).resolve_billing_org_for_project(USER, PROJECT) is None
+
+    def test_project_without_an_artist_returns_none(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        data = _base_data()
+        data["projects"] = [{"id": PROJECT, "artist_id": None}]
         sb = _ctx_supabase(data)
         assert EntitlementsService(sb).resolve_billing_org_for_project(USER, PROJECT) is None
 

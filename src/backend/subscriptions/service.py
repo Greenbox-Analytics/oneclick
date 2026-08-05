@@ -474,18 +474,51 @@ class EntitlementsService:
     # themselves are untouched here (pure additions).
     # -----------------------------------------------------------------------
 
+    def _org_context_for(self, user_id: str, org_id: str) -> dict | None:
+        """The `_resolve_context` ctx shape for one org, or None when the org is
+        not live or the caller holds no ACTIVE seat in it. Shared by the artist
+        and project-link derivation paths so they cannot diverge on what
+        'billable org' means."""
+        org = self._first_row(
+            self.supabase.table("organizations").select("id, name, status, archived_at").eq("id", org_id).execute()
+        )
+        if not org or org.get("status") != "active" or org.get("archived_at") is not None:
+            return None
+        member = self._first_row(
+            self.supabase.table("org_members")
+            .select("id, role")
+            .eq("org_id", org_id)
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .execute()
+        )
+        if not member:
+            return None
+        return {
+            "org_id": org["id"],
+            "org_name": org.get("name"),
+            "org_member_id": member["id"],
+            "role": member.get("role"),
+        }
+
     def resolve_billing_org_for_project(self, user_id: str, project_id: str) -> dict | None:
         """Resolve the ACTIVE org billing context for a specific PROJECT.
 
-        Reads `org_project_links` by `project_id` — rule 8's `UNIQUE(project_id)`
-        guarantees at most one row, so there is no multi-org branch to resolve;
-        a single read settles it. Returns the `_resolve_context` ctx shape
-        (`org_id`, `org_name`, `org_member_id`, `role`) **plus `project_id`**
-        (round-4 pin: Task 6's deny branch needs it for the lazy owner-check,
-        and neither the ctx's org fields nor the contract-derived call path in
+        ONE edge: ARTIST OWNERSHIP (`projects.artist_id -> artists.team_id`).
+        An artist belongs to at most one team, and everything below it —
+        projects, works, files, audio — belongs to that team by construction,
+        so a single two-hop read settles who pays with no ambiguity to resolve.
+        `org_project_links`, which answered the same question one project at a
+        time, was retired in 20260804000001; two sources of truth for the payer
+        is exactly what this edge exists to eliminate.
+
+        Returns the `_resolve_context` ctx shape (`org_id`, `org_name`,
+        `org_member_id`, `role`) **plus `project_id`** (round-4 pin: Task 6's
+        deny branch needs it for the lazy owner-check, and neither the ctx's org
+        fields nor the contract-derived call path in
         `resolve_billing_org_for_resource` can otherwise recover it) when:
 
-          - the project is linked to an org,
+          - the project's artist is owned by an org,
           - that org is ACTIVE (not pending/suspended) and not archived, and
           - the caller holds an ACTIVE seat in it.
 
@@ -517,37 +550,28 @@ class EntitlementsService:
         if not licensing_enabled():
             return None
         try:
-            link = self._first_row(
-                self.supabase.table("org_project_links").select("org_id").eq("project_id", project_id).execute()
+            project = self._first_row(
+                self.supabase.table("projects").select("artist_id").eq("id", project_id).execute()
             )
-            org_id = link.get("org_id") if link else None
-            if not org_id:
+            if not project or not project.get("artist_id"):
                 return None
 
-            org = self._first_row(
-                self.supabase.table("organizations").select("id, name, status, archived_at").eq("id", org_id).execute()
+            artist = self._first_row(
+                self.supabase.table("artists").select("team_id").eq("id", project["artist_id"]).execute()
             )
-            if not org or org.get("archived_at") is not None or org.get("status") != "active":
+            team_id = (artist or {}).get("team_id")
+            if not team_id:
+                # No artist team -> personal billing. There is no second source
+                # of truth: org_project_links was retired in 20260804000001.
                 return None
 
-            seat = self._first_row(
-                self.supabase.table("org_members")
-                .select("id, role, status")
-                .eq("org_id", org_id)
-                .eq("user_id", user_id)
-                .eq("status", "active")
-                .execute()
-            )
-            if not seat:
+            # A team the caller has no live seat in resolves to None rather than
+            # billing a team they are not part of (rule 4 — derivation only ever
+            # UPGRADES, never restricts).
+            ctx = self._org_context_for(user_id, team_id)
+            if ctx is None:
                 return None
-
-            return {
-                "org_id": org_id,
-                "org_name": org.get("name"),
-                "org_member_id": seat.get("id"),
-                "role": seat.get("role"),
-                "project_id": project_id,
-            }
+            return {**ctx, "project_id": project_id}
         except Exception:
             import logging
 
@@ -959,25 +983,30 @@ class EntitlementsService:
             # ONLY when the caller IS the storage-counter owner (host_user_id is
             # None or equals the caller). A seat-holding COLLABORATOR uploading to
             # another owner's linked project keeps today's host-scoped check
-            # UNTOUCHED — no derivation attempt, no org_project_links query at all.
+            # UNTOUCHED — no derivation attempt, no artist-ownership query at all.
             # (Counts, CREATE_WORK, are exempt from this precedence because
             # enterprise makes them -1, unlimited under any scoping; storage is
             # finite, which is the whole reason the collision only bites here.)
+            # Derivation now only ever resolves a TEAM-OWNED artist (the link
+            # table is gone), so the bytes are always on the ORG's counter —
+            # _bump_storage put them there. Measuring the caller's personal
+            # counter would compare the wrong number against the wrong cap.
             derived_storage = False
             if (host_user_id is None or host_user_id == user_id) and resource_project_id is not None:
-                if self.resolve_billing_org_for_project(user_id, resource_project_id) is not None:
-                    # Upgrade-only (rule 4): a Pro user's larger personal headroom
-                    # is never shrunk by a link — take max(personal, seat storage),
-                    # treating personal -1 (unlimited) as infinity so it stays -1.
-                    cap = self._more_permissive_cap(cap, _enterprise_seat_storage_bytes())
+                org_ctx = self.resolve_billing_org_for_project(user_id, resource_project_id)
+                if org_ctx is not None:
                     derived_storage = True
+                    used, cap = self._team_storage(org_ctx["org_id"])
+                    projected = used + size
 
             if cap != -1 and projected > cap:
                 # An org storage wall — whether from ambient org context (rule 13)
-                # or a DERIVED org seat (rule 9) — points at SUPPORT, never "ask
-                # your admin" / upgrade: the admin has no storage lever, and the
-                # finite seat cap is the enforcement here.
-                if derived_storage or getattr(owner_ent, "managed_by_org", None) is not None:
+                # or a DERIVED team (rule 9) — points at SUPPORT, never "ask your
+                # admin" / upgrade: the admin has no storage lever, and the finite
+                # cap is the enforcement here.
+                if derived_storage:
+                    return deny("Your team's storage is full. Contact support to discuss more space.")
+                if getattr(owner_ent, "managed_by_org", None) is not None:
                     return deny("Your organization seat's storage is full. Contact support to discuss options.")
                 return deny(
                     f"Upload would exceed the project owner's storage limit "
@@ -1068,6 +1097,35 @@ class EntitlementsService:
             reason=f"You've reached your limit of {cap} {label}.",
             upgrade_required=True,
         )
+
+    def _team_storage(self, org_id: str) -> tuple[int, int]:
+        """(bytes used, cap) for a team (Team-Owned Artists, Task 4).
+
+        Used comes from the cached `organizations.storage_bytes`, which the
+        storage triggers in 20260803000003 keep live — an aggregate over two
+        file tables is far too expensive to run on the gate for every upload.
+
+        Cap is the per-seat allowance times the number of ACTIVE seats. The env
+        value is per person; charging a ten-person team one seat's worth of
+        space would make the feature unusable the day it shipped.
+
+        ponytail: cap moves when the roster does, so an org that loses members
+        can sit over its cap with files already uploaded (existing files are
+        never touched — only further uploads block). An explicit
+        organizations.storage_cap_bytes set alongside the credit dispersal is
+        the upgrade path if that becomes a real complaint.
+        """
+        org = self._first_row(self.supabase.table("organizations").select("storage_bytes").eq("id", org_id).execute())
+        seats = (
+            self.supabase.table("org_members")
+            .select("id", count="exact")
+            .eq("org_id", org_id)
+            .eq("status", "active")
+            .execute()
+            .count
+        ) or 0
+        used = (org or {}).get("storage_bytes") or 0
+        return used, _enterprise_seat_storage_bytes() * max(seats, 1)
 
     @staticmethod
     def _more_permissive_cap(personal: int, derived: int) -> int:
@@ -1396,23 +1454,24 @@ class EntitlementsService:
                 cap_reached=cap_reached,
                 reason=reason,
             )
-            # Owner-aware dry-seat wall (Licensing Phase C, spec §11, rule 11).
-            # ONLY on a DERIVED context — `ctx["project_id"]` is present only when
-            # the resource resolver (Task 5) built this ctx; the ambient org path
-            # (`_resolve_context`) never carries it, so an ambient seat wall never
-            # gains owner fields. The ownership read is LAZY and DENY-PATH ONLY:
-            # Task 5 deliberately does NOT compute owner status on every derivation
-            # (it would tax every ALLOW with an extra read); ownership only matters
-            # here, where a wall is already being built. An OWNER additionally sees
-            # a CTA to unlink their own project and fall back to their personal
-            # plan — this CO-OCCURS with the managedByOrg/requestUrl (buy/request)
-            # affordances in enforcement (an owner who is also an org admin is the
-            # COMMON persona; the two CTAs are never mutually exclusive).
-            project_id = ctx.get("project_id")
-            if project_id and self._is_project_owner(user_id, project_id):
-                result.owner_can_unlink = True
-                result.project_id = project_id
-                result.reason = reason + " Or unlink this project in its settings to use your own plan here."
+            # The owner-aware dry-seat wall (Licensing Phase C, spec §11, rule 11)
+            # used to add a second CTA here: "unlink this project to fall back to
+            # your personal plan". That escape hatch died with org_project_links
+            # in 20260804000001 — a project now belongs to the org because its
+            # ARTIST does, and moving an artist back out is deliberately not
+            # self-serve (one-way transfer, v1: an artist whose files the team's
+            # credits paid for is a support decision with a refund question
+            # attached). Offering the CTA would point at an endpoint that 404s.
+            #
+            # `owner_can_unlink` / `project_id` are therefore never set any more;
+            # the field, the enforcement branch and the paywall components stay
+            # inert rather than being ripped out of six frontend files for a flag
+            # that is now always False.
+            # ponytail: dead plumbing, kept because a "move an artist out of a
+            # team" flow would light it straight back up. Delete both, plus
+            # enforcement.py's `if result.owner_can_unlink` branch and the
+            # ownerCanUnlink props in PaywallCard/creditWall/AddWorkWizard/
+            # OneClickDocuments/ZoeChatMessages, if that flow never ships.
             return result
         except Exception:
             # Org-path READ ERROR → fail open uncharged, like the paid personal
