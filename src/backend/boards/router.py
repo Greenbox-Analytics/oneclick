@@ -1,9 +1,12 @@
 """FastAPI router for the Kanban board feature."""
 
+import re
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 # Ensure backend dir is in path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -12,7 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
-from boards import service
+from boards import ics, service
 from boards.models import (
     AssigneeAdd,
     BatchReorder,
@@ -227,6 +230,31 @@ async def calendar_tasks(
     """Get tasks within a date range for the calendar view."""
     tasks = await service.get_tasks_by_date_range(_get_supabase(), user_id, start, end, board_id, artist_id)
     return {"tasks": tasks}
+
+
+@router.get("/calendar/feeds")
+async def calendar_feeds(user_id: str = Depends(get_current_user_id)):
+    """The caller's private .ics subscription URLs — one per calendar they can subscribe to
+    (everything, personal, and each of their teams). Google/Apple/Outlook all read these."""
+    feeds = await service.list_calendar_feeds(_get_supabase(), user_id)
+    for feed in feeds:
+        feed["url"] = ics.feed_url(user_id, feed["scope"])
+        feed["webcal_url"] = re.sub(r"^https?://", "webcal://", feed["url"])
+    return {"feeds": feeds}
+
+
+@router.get("/calendar/{feed_user_id}/{scope}/{token}.ics", include_in_schema=False)
+async def calendar_feed(feed_user_id: str, scope: str, token: str):
+    """Public read-only task feed. The HMAC in the path is the only credential —
+    calendar clients send no auth headers — so a bad token is a plain 404."""
+    if not ics.verify_feed_token(feed_user_id, scope, token):
+        raise HTTPException(status_code=404, detail="Not found")
+    supabase = _get_supabase()
+    today = datetime.now(UTC).date()
+    window = timedelta(days=ics.FEED_WINDOW_DAYS)
+    tasks = await service.get_feed_tasks(supabase, feed_user_id, scope, str(today - window), str(today + window))
+    body = ics.build_ics(tasks, cal_name=service.feed_name(supabase, scope))
+    return Response(content=body, media_type="text/calendar; charset=utf-8")
 
 
 # --- Period-based Tasks (must come before /tasks/{task_id} routes) ---

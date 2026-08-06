@@ -17,7 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ChevronLeft, ChevronRight, Loader2, Search, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Search, Plus, CalendarPlus, Copy } from "lucide-react";
+import { toast } from "sonner";
 import {
   startOfMonth,
   endOfMonth,
@@ -45,7 +46,7 @@ import {
 } from "date-fns";
 import { cn } from "@/lib/utils";
 import { parseDateString } from "@/lib/dateUtils";
-import { useCalendarTasks } from "@/hooks/useCalendarTasks";
+import { useCalendarTasks, useCalendarFeeds, type CalendarFeed } from "@/hooks/useCalendarTasks";
 import { useBoards } from "@/hooks/useBoards";
 import { useTeams } from "@/hooks/useTeams";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
@@ -75,6 +76,7 @@ export function CalendarView() {
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [syncOpen, setSyncOpen] = useState(false);
 
   // Task creation dialog state
   const [createDate, setCreateDate] = useState<string | null>(null);
@@ -267,6 +269,10 @@ export function CalendarView() {
             <Button variant="outline" size="sm" onClick={goToToday}>
               Today
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>
+              <CalendarPlus className="h-4 w-4 mr-1.5" />
+              Sync to calendar
+            </Button>
           </div>
         </div>
 
@@ -336,6 +342,8 @@ export function CalendarView() {
         taskId={selectedTaskId}
         onClose={() => setSelectedTaskId(null)}
       />
+
+      <SyncCalendarDialog open={syncOpen} onOpenChange={setSyncOpen} />
 
       {/* Create task dialog */}
       <Dialog open={!!createDate} onOpenChange={(open) => !open && setCreateDate(null)}>
@@ -415,6 +423,127 @@ export function CalendarView() {
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+// --- Sync to calendar ---
+/**
+ * Picker label. Every feed shares the same "Msanii platform — … Calendar" branding, so
+ * repeating it on each row buries the one word that tells them apart. Show only what
+ * differs, with the team's own name carrying the emphasis.
+ */
+function FeedLabel({ feed }: { feed: CalendarFeed }) {
+  if (feed.team_name) {
+    return (
+      <span>
+        <span className="text-muted-foreground">Team</span> {feed.team_name}
+      </span>
+    );
+  }
+  return <span>{feed.scope === "personal" ? "Personal" : "All tasks"}</span>;
+}
+
+
+/**
+ * Hands the user their private .ics feed. Google and Apple both subscribe to a
+ * calendar URL natively, so one link covers both (plus Outlook) — the calendar
+ * re-reads it on its own schedule, which is what makes new tasks show up without
+ * anyone pressing anything.
+ *
+ * One feed per scope (everything / personal / each team) so each lands as its own
+ * named, separately colourable calendar rather than one undifferentiated blob.
+ */
+function SyncCalendarDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { feeds, isLoading } = useCalendarFeeds();
+  const [scope, setScope] = useState<string>("");
+  const selected = feeds.find((f) => f.scope === scope) ?? feeds[0];
+
+  const copyLink = async () => {
+    if (!selected) return;
+    await navigator.clipboard.writeText(selected.url);
+    toast.success(`${selected.name} link copied`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Sync tasks to your calendar</DialogTitle>
+        </DialogHeader>
+        {isLoading || !selected ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Add your tasks to the calendar you already use. Every task with a due date shows up
+              automatically — including new ones you add later.
+            </p>
+
+            {/* Only worth a picker once there's more than one calendar to pick. */}
+            {feeds.length > 1 && (
+              <div className="space-y-2">
+                <Label>Which tasks?</Label>
+                <Select value={selected.scope} onValueChange={setScope}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {feeds.map((feed) => (
+                      <SelectItem key={feed.scope} value={feed.scope}>
+                        <FeedLabel feed={feed} />
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="grid gap-2">
+              <Button asChild>
+                <a
+                  href={`https://calendar.google.com/calendar/r?cid=${encodeURIComponent(selected.webcal_url)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Add to Google Calendar
+                </a>
+              </Button>
+              <Button asChild variant="outline">
+                <a href={selected.webcal_url}>Add to Apple Calendar</a>
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Google and Apple show the raw link while you confirm — once added it appears as{" "}
+                <span className="font-medium text-foreground">{selected.name}</span>.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="cal-feed-url">Or paste this link into any other calendar app</Label>
+              <div className="flex gap-2">
+                <Input id="cal-feed-url" readOnly value={selected.url} onFocus={(e) => e.target.select()} />
+                <Button variant="outline" size="icon" onClick={copyLink} title="Copy link">
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Keep this link private — anyone with it can see your tasks. The calendar is read-only:
+              changes you make in Google or Apple won't come back to your board, and they refresh on
+              their own schedule (Apple lets you choose; Google can take a few hours).
+            </p>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

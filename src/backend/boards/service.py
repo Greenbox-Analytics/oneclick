@@ -254,6 +254,24 @@ def _personal_board_ids(db: Client, user_id: str) -> list[str]:
     return [r["id"] for r in rows]
 
 
+def _active_team_ids(db: Client, user_id: str) -> list[str]:
+    """Non-archived teams the caller is a member of."""
+    memberships = db.table("team_members").select("team_id").eq("user_id", user_id).execute().data or []
+    team_ids = [m["team_id"] for m in memberships]
+    if not team_ids:
+        return []
+    rows = db.table("teams").select("id").in_("id", team_ids).is_("archived_at", "null").execute().data or []
+    return [t["id"] for t in rows]
+
+
+def _team_board_ids(db: Client, team_ids: list[str]) -> list[str]:
+    """Non-archived boards belonging to the given teams. Callers gate membership first."""
+    if not team_ids:
+        return []
+    rows = db.table("boards").select("id").in_("team_id", team_ids).eq("archived", False).execute().data or []
+    return [r["id"] for r in rows]
+
+
 def _calendar_board_ids(db: Client, user_id: str) -> list[str]:
     """Every board whose tasks belong on the workspace calendar: the caller's personal
     boards PLUS the non-archived boards of every non-archived team they're a member of.
@@ -261,17 +279,7 @@ def _calendar_board_ids(db: Client, user_id: str) -> list[str]:
     Unlike _resolve_read_board_ids' personal-only default, the calendar is cross-board by
     design. Membership is still the gate — no board the caller can't already read is added.
     """
-    ids = _personal_board_ids(db, user_id)
-    memberships = db.table("team_members").select("team_id").eq("user_id", user_id).execute().data or []
-    team_ids = [m["team_id"] for m in memberships]
-    if not team_ids:
-        return ids
-    active = db.table("teams").select("id").in_("id", team_ids).is_("archived_at", "null").execute().data or []
-    active_ids = [t["id"] for t in active]
-    if not active_ids:
-        return ids
-    rows = db.table("boards").select("id").in_("team_id", active_ids).eq("archived", False).execute().data or []
-    return ids + [r["id"] for r in rows]
+    return _personal_board_ids(db, user_id) + _team_board_ids(db, _active_team_ids(db, user_id))
 
 
 def _stamp_team_context(db: Client, tasks: list) -> list:
@@ -690,10 +698,15 @@ async def get_tasks_by_date_range(
         board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
     else:
         board_ids = _calendar_board_ids(supabase, user_id)
+    return _tasks_in_range(supabase, user_id, board_ids, start, end)
+
+
+def _tasks_in_range(db: Client, user_id: str, board_ids: list[str], start: str, end: str) -> list:
+    """Non-parent tasks in the given boards whose due_date falls inside [start, end]."""
     if not board_ids:
         return []
     due_result = (
-        supabase.table("board_tasks")
+        db.table("board_tasks")
         .select("*")
         .in_("board_id", board_ids)
         .or_("is_parent.eq.false,is_parent.is.null")
@@ -701,8 +714,67 @@ async def get_tasks_by_date_range(
         .lte("due_date", end)
         .execute()
     )
+    return _stamp_team_context(db, _enrich_tasks(db, due_result.data or [], user_id))
 
-    return _stamp_team_context(supabase, _enrich_tasks(supabase, due_result.data or [], user_id))
+
+# --- Calendar subscription feeds (.ics) ---
+
+
+ALL_FEED_NAME = "Msanii platform - All Tasks Calendar"
+PERSONAL_FEED_NAME = "Msanii platform - Personal Calendar"
+
+
+def _team_feed_name(team_name: str) -> str:
+    return f"Msanii platform - Team {team_name} Calendar"
+
+
+def feed_name(db: Client, scope: str) -> str:
+    """Display name for a feed scope — this becomes the calendar's name in Google/Apple."""
+    if scope == "all":
+        return ALL_FEED_NAME
+    if scope == "personal":
+        return PERSONAL_FEED_NAME
+    row = db.table("teams").select("name").eq("id", scope).limit(1).execute().data or []
+    # An unresolvable scope serves an empty feed (get_feed_tasks gates it), so it just needs a name.
+    return _team_feed_name(row[0]["name"]) if row else "Msanii platform - Calendar"
+
+
+async def list_calendar_feeds(db: Client, user_id: str) -> list[dict]:
+    """Calendar scopes the caller can subscribe to: everything, personal, one per active team.
+
+    With no teams, "everything" and "personal" are the same set of boards — offering both
+    would just be two identical links, so a solo user gets one calendar.
+    """
+    team_ids = _active_team_ids(db, user_id)
+    if not team_ids:
+        return [{"scope": "all", "name": ALL_FEED_NAME, "team_name": None}]
+
+    feeds = [
+        {"scope": "all", "name": ALL_FEED_NAME, "team_name": None},
+        {"scope": "personal", "name": PERSONAL_FEED_NAME, "team_name": None},
+    ]
+    rows = db.table("teams").select("id, name").in_("id", team_ids).execute().data or []
+    # team_name is sent alongside the full name so the picker can label rows by the one
+    # part that differs between them, instead of repeating the branded name four times.
+    feeds += [
+        {"scope": r["id"], "name": _team_feed_name(r["name"]), "team_name": r["name"]}
+        for r in sorted(rows, key=lambda r: (r.get("name") or "").lower())
+    ]
+    return feeds
+
+
+async def get_feed_tasks(db: Client, user_id: str, scope: str, start: str, end: str) -> list:
+    """Tasks for one calendar feed scope. A team scope resolves only for an active member,
+    so a tampered scope can never widen what the feed exposes."""
+    if scope == "personal":
+        board_ids = _personal_board_ids(db, user_id)
+    elif scope == "all":
+        board_ids = _calendar_board_ids(db, user_id)
+    elif scope in _active_team_ids(db, user_id):
+        board_ids = _team_board_ids(db, [scope])
+    else:
+        board_ids = []
+    return _tasks_in_range(db, user_id, board_ids, start, end)
 
 
 # --- Period-based Tasks ---
