@@ -308,7 +308,7 @@ class AdminService:
             "zoe_enabled": True,
             "oneclick_enabled": True,
             "registry_enabled": True,
-            "integrations_allowed": ["google_drive", "slack"],
+            "integrations_allowed": ["google_drive"],
             "reason": normalized_reason,
             "expires_at": expires_at,
             "granted_at": datetime.now(UTC).isoformat(),

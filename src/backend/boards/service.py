@@ -1,10 +1,12 @@
 """Business logic for the Kanban board feature."""
 
+import asyncio
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 from supabase import Client
 
+from boards import calendar_import
 from confirm import ConfirmationError, normalize_name
 from integrations import events
 from pagination import PaginatedResponse, paginate_query
@@ -27,7 +29,7 @@ def _merge_junction(
     preserving co-owners' rows (and their labels) untouched. Caller must skip this entirely
     when the link field was absent from the payload (absent = no-op).
     RETURNS the editor's accessible inserted ids — the caller sets these on the returned task
-    dict before emitting the event (Slack routing reads task['project_ids']; see below)."""
+    dict before emitting the event (event consumers route via task['project_ids'])."""
     existing = supabase.table(table).select(fk_column).eq("task_id", task_id).execute().data or []
     existing_ids = [r[fk_column] for r in existing]
     # of the EXISTING rows, which may the editor replace?  (their accessible partition)
@@ -441,7 +443,7 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
         task_id = task["id"]
 
         # Merge-on-write: preserve co-owners' rows, snapshot labels. Re-set the accessible ids
-        # on the task dict BEFORE emit — the Slack bridge routes via task["project_ids"][0].
+        # on the task dict BEFORE emit — event consumers route via task["project_ids"][0].
         task["artist_ids"] = _merge_junction(
             supabase,
             task_id,
@@ -1233,3 +1235,107 @@ async def create_default_columns(
         if result.data:
             columns.append(result.data[0])
     return columns
+
+
+# --- External calendar subscriptions (import) ---
+
+
+async def list_subscriptions(db: Client, user_id: str) -> list[dict]:
+    """The caller's subscribed external calendars. The URL is a bearer credential for
+    someone's private calendar, so it is never returned to the client."""
+    rows = (
+        db.table("calendar_subscriptions")
+        .select("id, name, last_fetched_at, last_error, created_at")
+        .eq("user_id", user_id)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+    return rows
+
+
+async def add_subscription(db: Client, user_id: str, url: str, name: str | None = None) -> dict:
+    """Store a subscription after proving the URL actually resolves to a calendar —
+    validating on add means a typo surfaces immediately instead of as a silently
+    empty calendar later."""
+    normalized = calendar_import.normalize_url(url)
+    calendar_import.forget(normalized)
+    text = await calendar_import.fetch_feed(normalized, use_cache=False)
+
+    row = {
+        "user_id": user_id,
+        "url": normalized,
+        "name": (name or "").strip() or _calendar_name_from_ics(text) or "Imported calendar",
+        "last_fetched_at": datetime.now(UTC).isoformat(),
+        "last_error": None,
+    }
+    result = db.table("calendar_subscriptions").upsert(row, on_conflict="user_id,url").execute()
+    saved = (result.data or [row])[0]
+    return {k: saved.get(k) for k in ("id", "name", "last_fetched_at", "last_error", "created_at")}
+
+
+def _calendar_name_from_ics(text: str) -> str | None:
+    """Use the feed's own X-WR-CALNAME so the subscription is labelled the way the
+    source calendar labels itself."""
+    for line in text.splitlines():
+        if line.upper().startswith("X-WR-CALNAME:"):
+            return line.partition(":")[2].strip()[:120] or None
+    return None
+
+
+async def delete_subscription(db: Client, user_id: str, subscription_id: str) -> bool:
+    existing = (
+        db.table("calendar_subscriptions").select("url").eq("id", subscription_id).eq("user_id", user_id).execute().data
+        or []
+    )
+    if not existing:
+        return False
+    db.table("calendar_subscriptions").delete().eq("id", subscription_id).eq("user_id", user_id).execute()
+    calendar_import.forget(existing[0]["url"])
+    return True
+
+
+async def get_external_events(db: Client, user_id: str, start: str, end: str) -> list[dict]:
+    """Every subscribed calendar's events in the window, tagged with their source.
+
+    One dead feed must not blank out the others, so each is fetched independently and
+    a failure is recorded on that subscription instead of raising.
+    """
+    subs = db.table("calendar_subscriptions").select("id, name, url").eq("user_id", user_id).execute().data or []
+    if not subs:
+        return []
+
+    settings = db.table("workspace_settings").select("timezone").eq("user_id", user_id).execute().data or []
+    timezone = (settings[0] if settings else {}).get("timezone")
+    lo, hi = date.fromisoformat(start), date.fromisoformat(end)
+
+    results = await asyncio.gather(
+        *(calendar_import.load_events(s["url"], lo, hi, timezone) for s in subs),
+        return_exceptions=True,
+    )
+
+    events: list[dict] = []
+    for sub, result in zip(subs, results, strict=True):
+        if isinstance(result, Exception):
+            message = str(result) if isinstance(result, calendar_import.FeedError) else "Could not load this calendar"
+            _record_feed_error(db, user_id, sub["id"], message)
+            continue
+        _record_feed_error(db, user_id, sub["id"], None)
+        for event in result:
+            events.append({**event, "source_id": sub["id"], "source_name": sub["name"]})
+    return events
+
+
+def _record_feed_error(db: Client, user_id: str, subscription_id: str, message: str | None) -> None:
+    """Best-effort status write — a failed status update must never break the calendar.
+
+    Scoped by user_id as well as id: the backend's service-role client bypasses RLS, so
+    the query filter is the only thing standing between this and another user's row.
+    """
+    try:
+        db.table("calendar_subscriptions").update(
+            {"last_fetched_at": datetime.now(UTC).isoformat(), "last_error": message}
+        ).eq("id", subscription_id).eq("user_id", user_id).execute()
+    except Exception:
+        pass

@@ -28,7 +28,6 @@ const FREE_FEATURES: Feature[] = [
   { included: true, label: "Google Drive integration" },
   { included: false, label: "Zoe AI contract analysis" },
   { included: false, label: "Metadata Registry" },
-  { included: false, label: "Slack integration" },
 ];
 
 // "basic" DB tier.
@@ -39,7 +38,7 @@ const BASIC_FEATURES: Feature[] = [
   { included: true, label: "Zoe AI contract analysis" },
   { included: true, label: "Unlimited OneClick royalty calculations" },
   { included: true, label: "Metadata Registry" },
-  { included: true, label: "All integrations: Drive, Slack" },
+  { included: true, label: "Google Drive integration" },
 ];
 
 // "pro" DB tier.
@@ -62,7 +61,6 @@ const FREE_FEATURES_CREDITS: Feature[] = [
   { included: true, label: "1 GB storage" },
   { included: true, label: "5 split sheets per month" },
   { included: true, label: "Google Drive integration" },
-  { included: false, label: "Slack integration" },
 ];
 
 const BASIC_FEATURES_CREDITS: Feature[] = [
@@ -71,7 +69,7 @@ const BASIC_FEATURES_CREDITS: Feature[] = [
   { included: true, label: "Unlimited artists, projects, and tasks" },
   { included: true, label: "100 GB storage" },
   { included: true, label: "Unlimited split sheets" },
-  { included: true, label: "All integrations: Drive, Slack" },
+  { included: true, label: "Google Drive integration" },
 ];
 
 const PRO_FEATURES_CREDITS: Feature[] = [

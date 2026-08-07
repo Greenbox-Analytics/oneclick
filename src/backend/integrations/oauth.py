@@ -32,13 +32,6 @@ PROVIDER_CONFIGS = {
             "https://www.googleapis.com/auth/drive.readonly",
         ],
     },
-    "slack": {
-        "client_id": lambda: os.getenv("SLACK_CLIENT_ID"),
-        "client_secret": lambda: os.getenv("SLACK_CLIENT_SECRET"),
-        "auth_url": "https://slack.com/oauth/v2/authorize",
-        "token_url": "https://slack.com/api/oauth.v2.access",
-        "scopes": ["channels:read", "chat:write", "commands", "incoming-webhook"],
-    },
 }
 
 
@@ -103,13 +96,10 @@ def build_auth_url(provider: str, user_id: str) -> str:
         "response_type": "code",
     }
 
-    if provider == "slack":
-        params["scope"] = ",".join(config["scopes"])
-    else:
-        params["scope"] = " ".join(config["scopes"])
-        if provider == "google_drive":
-            params["access_type"] = "offline"
-            params["prompt"] = "consent"
+    params["scope"] = " ".join(config["scopes"])
+    if provider == "google_drive":
+        params["access_type"] = "offline"
+        params["prompt"] = "consent"
 
     query = "&".join(f"{k}={v}" for k, v in params.items() if v)
     return f"{config['auth_url']}?{query}"
@@ -140,10 +130,6 @@ async def refresh_access_token(provider: str, refresh_token: str) -> dict:
     config = PROVIDER_CONFIGS.get(provider)
     if not config:
         raise ValueError(f"Unknown provider: {provider}")
-
-    # Slack doesn't use refresh tokens the same way
-    if provider == "slack":
-        return {}
 
     payload = {
         "client_id": config["client_id"](),
@@ -247,11 +233,6 @@ async def store_connection(
     if tokens.get("expires_in"):
         expiry = datetime.now(UTC) + timedelta(seconds=tokens["expires_in"])
         data["token_expires_at"] = expiry.isoformat()
-
-    # Provider-specific metadata
-    if provider == "slack":
-        data["provider_workspace_id"] = tokens.get("team", {}).get("id")
-        data["provider_user_id"] = tokens.get("authed_user", {}).get("id")
 
     if tokens.get("scope"):
         data["scopes"] = tokens["scope"].split(",") if isinstance(tokens["scope"], str) else tokens["scope"]

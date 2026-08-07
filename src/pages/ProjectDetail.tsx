@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Music, ArrowLeft, Loader2,
-  FileText, Volume2, Users, Settings, StickyNote, MessageSquare, Receipt,
+  FileText, Volume2, Users, Settings, StickyNote, Receipt,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -23,9 +23,6 @@ import ExpenseTrackerTab from "@/components/project/ExpenseTrackerTab";
 import SettingsTab from "@/components/project/SettingsTab";
 import NotesView from "@/components/notes/NotesView";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
-import { useProjectSlackChannel } from "@/hooks/useProjectIntegrations";
-import { useSlackChannels } from "@/hooks/useSlackSettings";
-import { useIntegrations } from "@/hooks/useIntegrations";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
@@ -60,12 +57,6 @@ const ProjectDetail = () => {
     : "files";
   const [activeTab, setActiveTab] = useState(initialTab);
   const isMobile = useIsMobile();
-
-  const { connections } = useIntegrations();
-  const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
-  const { channelId } = useProjectSlackChannel(projectId);
-  const { data: channels } = useSlackChannels(slackConnected && !!channelId);
-  const linkedChannel = channels?.find(c => c.id === channelId);
 
   // Tour
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
@@ -181,16 +172,6 @@ const ProjectDetail = () => {
                     >
                       {userRole}
                     </Badge>
-                  )}
-                  {slackConnected && linkedChannel && (
-                    <a
-                      href={`slack://channel?id=${channelId}`}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-[#4A154B]/10 text-[#4A154B] hover:bg-[#4A154B]/20 transition-colors"
-                      title={`Open #${linkedChannel.name} in Slack`}
-                    >
-                      <MessageSquare className="w-3 h-3" />
-                      #{linkedChannel.name}
-                    </a>
                   )}
                 </div>
                 <p className="text-sm text-muted-foreground">

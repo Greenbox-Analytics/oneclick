@@ -1,4 +1,4 @@
-export type IntegrationProvider = "google_drive" | "slack";
+export type IntegrationProvider = "google_drive";
 
 export type ConnectionStatus = "active" | "expired" | "revoked" | "disconnected";
 
@@ -108,13 +108,6 @@ export interface DriveFile {
   size?: string;
   iconLink?: string;
   webViewLink?: string;
-}
-
-// Slack types
-export interface SlackChannel {
-  id: string;
-  name: string;
-  is_private: boolean;
 }
 
 export interface WorkspaceSettings {

@@ -26,7 +26,7 @@ class TestFeatures:
             zoe_enabled=False, oneclick_enabled=False, registry_enabled=False, integrations_allowed=["google_drive"]
         )
         assert "google_drive" in f.integrations_allowed
-        assert "slack" not in f.integrations_allowed
+        assert "google_drive" in f.integrations_allowed
 
 
 class TestEntitlements:
@@ -67,7 +67,7 @@ class TestEntitlements:
             tier="pro",
             status="active",
             caps=Caps(-1, -1, -1, -1, -1, -1),
-            features=Features(True, True, True, ["google_drive", "slack"]),
+            features=Features(True, True, True, ["google_drive"]),
             usage=Usage(0, 0, 0, 0, datetime.now(UTC)),
             has_overrides=False,
             stripe_subscription_id="sub_abc123",
@@ -231,7 +231,7 @@ class TestCreditModels:
                 max_works=-1,
                 included_storage_bytes=268435456000,
             ),
-            features=Features(True, True, True, ["google_drive", "slack"]),
+            features=Features(True, True, True, ["google_drive"]),
             usage=Usage(0, 0, 0, 0, datetime(2026, 8, 1, tzinfo=UTC)),
             has_overrides=False,
             credits=CreditsInfo(

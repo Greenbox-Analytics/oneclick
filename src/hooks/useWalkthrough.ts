@@ -32,7 +32,7 @@ export const WALKTHROUGH_STEPS: WalkthroughStep[] = [
     targetSelector: '[data-walkthrough="workspace"]',
     title: "Workspace",
     description:
-      "Organize tasks on Kanban boards with monthly iterations. Connect Google Drive and Slack to keep everything in sync.",
+      "Organize tasks on Kanban boards with monthly iterations. Connect Google Drive to keep everything in sync.",
     placement: "bottom",
   },
   {

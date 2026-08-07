@@ -24,8 +24,6 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useRemoveProjectMember, useProjectMembers } from "@/hooks/useProjectMembers";
-import { useIntegrations } from "@/hooks/useIntegrations";
-import { ProjectSlackSettings } from "./integrations/ProjectSlackSettings";
 import { useDeleteProjectRoyalties } from "@/hooks/useRoyalties";
 
 interface SettingsTabProps {
@@ -139,8 +137,6 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
   const deleteProjectRoyalties = useDeleteProjectRoyalties();
 
   const isOwner = userRole === "owner";
-  const { connections } = useIntegrations();
-  const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -188,13 +184,6 @@ export default function SettingsTab({ projectId, userRole, project }: SettingsTa
         )}
       </Card>
 
-
-      {slackConnected && (
-        <>
-          <Separator />
-          <ProjectSlackSettings projectId={projectId} />
-        </>
-      )}
 
       <Separator />
 

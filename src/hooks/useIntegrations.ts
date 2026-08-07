@@ -6,13 +6,11 @@ import type { IntegrationConnection, IntegrationProvider } from "@/types/integra
 
 const PROVIDER_NAMES: Record<IntegrationProvider, string> = {
   google_drive: "Google Drive",
-  slack: "Slack",
 };
 
 // Map provider key to backend URL segment
 const PROVIDER_URL_SEGMENT: Record<IntegrationProvider, string> = {
   google_drive: "google-drive",
-  slack: "slack",
 };
 
 export function useIntegrations() {

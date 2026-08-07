@@ -15,12 +15,13 @@ if str(BACKEND_DIR) not in sys.path:
 
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
-from boards import ics, service
+from boards import calendar_import, ics, service
 from boards.models import (
     AssigneeAdd,
     BatchReorder,
     BoardCreate,
     BoardUpdate,
+    CalendarSubscriptionCreate,
     ColumnCreate,
     ColumnUpdate,
     CommentCreate,
@@ -241,6 +242,45 @@ async def calendar_feeds(user_id: str = Depends(get_current_user_id)):
         feed["url"] = ics.feed_url(user_id, feed["scope"])
         feed["webcal_url"] = re.sub(r"^https?://", "webcal://", feed["url"])
     return {"feeds": feeds}
+
+
+# --- External calendar subscriptions (import) ---
+
+
+@router.get("/calendar/subscriptions")
+async def list_calendar_subscriptions(user_id: str = Depends(get_current_user_id)):
+    """The caller's imported calendars. URLs are never returned — they're credentials."""
+    return {"subscriptions": await service.list_subscriptions(_get_supabase(), user_id)}
+
+
+@router.post("/calendar/subscriptions")
+async def add_calendar_subscription(body: CalendarSubscriptionCreate, user_id: str = Depends(get_current_user_id)):
+    """Subscribe to an external .ics calendar. Validates the URL by fetching it once."""
+    try:
+        return await service.add_subscription(_get_supabase(), user_id, body.url, body.name)
+    except calendar_import.FeedError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/calendar/subscriptions/{subscription_id}")
+async def remove_calendar_subscription(subscription_id: str, user_id: str = Depends(get_current_user_id)):
+    if not await service.delete_subscription(_get_supabase(), user_id, subscription_id):
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return {"success": True}
+
+
+@router.get("/calendar/external")
+async def external_calendar_events(
+    user_id: str = Depends(get_current_user_id),
+    start: str = Query(..., description="Start date YYYY-MM-DD"),
+    end: str = Query(..., description="End date YYYY-MM-DD"),
+):
+    """Read-only events from the caller's imported calendars, for the calendar overlay.
+
+    Separate from /calendar on purpose: a slow or dead external feed must not delay
+    or break the user's own tasks.
+    """
+    return {"events": await service.get_external_events(_get_supabase(), user_id, start, end)}
 
 
 @router.get("/calendar/{feed_user_id}/{scope}/{token}.ics", include_in_schema=False)

@@ -333,7 +333,7 @@ class TestEnterpriseShape:
         assert ent.caps.included_storage_bytes == 12345
         # All features on regardless of the (free) personal tier.
         assert ent.features.zoe_enabled and ent.features.oneclick_enabled and ent.features.registry_enabled
-        assert ent.features.integrations_allowed == ["google_drive", "slack"]
+        assert ent.features.integrations_allowed == ["google_drive"]
 
     def test_available_contexts_lists_personal_plus_active_seat(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")
@@ -708,7 +708,7 @@ class TestToDictRegressionSnapshot:
                 zoe_enabled=True,
                 oneclick_enabled=True,
                 registry_enabled=True,
-                integrations_allowed=["google_drive", "slack"],
+                integrations_allowed=["google_drive"],
             ),
             usage=Usage(
                 total_storage_bytes=0,
@@ -747,7 +747,7 @@ class TestToDictRegressionSnapshot:
                 "zoeEnabled": True,
                 "oneclickEnabled": True,
                 "registryEnabled": True,
-                "integrationsAllowed": ["google_drive", "slack"],
+                "integrationsAllowed": ["google_drive"],
             },
             "usage": {
                 "totalStorageBytes": 0,

@@ -2,7 +2,6 @@ import { useRegistryNotifications, useMarkAllRead } from "@/hooks/useRegistryNot
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Bell, CheckCheck, Shield } from "lucide-react";
-import { SlackMentions } from "./SlackMentions";
 import { NotificationRow } from "./NotificationRow";
 
 export function RegistryNotifications() {
@@ -32,7 +31,6 @@ export function RegistryNotifications() {
 
   return (
     <div className="space-y-4">
-      <SlackMentions />
       <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">

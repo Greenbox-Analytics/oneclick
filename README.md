@@ -70,7 +70,7 @@ Edit `.env` and fill in at minimum:
   - `DATABASE_PW` — Database password (Settings → Database)
 - **Backend:** `VITE_BACKEND_API_URL` (default: `http://localhost:8000`)
 - **OpenAI:** `OPENAI_API_KEY` (for Zoe contract analysis)
-- **Integrations (optional):** Google Drive, Slack OAuth credentials — see `.env.example` sections
+- **Integrations (optional):** Google Drive OAuth credentials — see `.env.example` sections
 
 For the full variable catalog (required vs optional, where to source each), see [docs/secrets.md](docs/secrets.md).
 
@@ -166,22 +166,9 @@ Enables importing contracts/files from Drive into projects, and exporting docume
 
 **OAuth flow:** User clicks "Connect" → redirected to Google consent screen → grants Drive access → redirected back to `/workspace?connected=google_drive` → token encrypted and stored in `integration_connections` table.
 
-### Slack
-
-Enables per-project Slack channel linking, rich Block Kit notifications (task updates, contract uploads, royalty calculations), and inbound @mention notifications.
-
-**Setup:**
-1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
-2. Add OAuth scopes: `channels:read`, `chat:write`, `commands`, `incoming-webhook`
-3. Enable Event Subscriptions → subscribe to `app_mention` event → set request URL to `{BACKEND_URL}/integrations/slack/webhook`
-4. Set authorized redirect URI to: `{BACKEND_URL}/integrations/slack/callback`
-5. Add to `.env`: `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`
-
-**OAuth flow:** Same pattern as Drive — user clicks "Connect" → Slack consent → token stored. The app then sends notifications to linked channels and receives @mention webhooks.
-
 ### Shared Integration Config
 
-Both integrations require encryption keys for secure token storage:
+Integrations require encryption keys for secure token storage:
 
 ```bash
 # Generate encryption key (one-time)
@@ -210,7 +197,6 @@ The tests mock the Supabase client and OAuth tokens — they verify endpoint beh
 - Connection listing returns correct fields and omits encrypted tokens
 - OAuth auth endpoints return redirect URLs
 - Disconnect endpoints clean up properly
-- Slack webhook handles URL verification challenges and `app_mention` events
 - OneClick share validates required fields and returns correct responses
 
 ### Frontend Build Check
@@ -227,7 +213,7 @@ oneclick/
 │   ├── backend/               # FastAPI server (Python, Poetry, Docker)
 │   │   ├── main.py            # App entry, all routers mounted here
 │   │   ├── boards/            # Kanban board management
-│   │   ├── integrations/      # Google Drive, Slack
+│   │   ├── integrations/      # Google Drive
 │   │   ├── oneclick/          # Royalty calculator + PDF share
 │   │   ├── registry/          # Metadata registry
 │   │   ├── splitsheet/        # Split sheet generator

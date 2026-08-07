@@ -207,7 +207,7 @@ class Action(StrEnum):
                         pass that owner's user_id. Storage is then checked
                         against the OWNER's cap, not yours (storage is owner-scoped).
       USE_INTEGRATION:
-          name: str — integration identifier (e.g. 'slack').
+          name: str — integration identifier (e.g. 'google_drive').
           host_user_id: if acting on a host's project, pass the host's user_id.
                         Allowed if either you or the host has the integration.
       USE_ZOE / USE_ONECLICK / USE_REGISTRY:

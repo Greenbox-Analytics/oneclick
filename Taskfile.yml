@@ -250,11 +250,6 @@ tasks:
         try_gsm "GOOGLE_DRIVE_CLIENT_SECRET"
         end_section
 
-        start_section "SLACK INTEGRATION"
-        try_gsm "SLACK_CLIENT_ID"
-        try_gsm "SLACK_CLIENT_SECRET"
-        end_section
-
         start_section "SPOTIFY INTEGRATION"
         try_gsm "SPOTIFY_CLIENT_ID"
         try_gsm "SPOTIFY_CLIENT_SECRET"

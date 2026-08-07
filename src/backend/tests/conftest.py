@@ -142,7 +142,7 @@ _PRO_TIER_ROW = {
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
-    "integrations_allowed": ["google_drive", "slack"],
+    "integrations_allowed": ["google_drive"],
     "monthly_credits": 3000,
     "max_works": -1,
     "included_storage_bytes": 107374182400,

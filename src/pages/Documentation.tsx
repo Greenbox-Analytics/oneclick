@@ -77,7 +77,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   "split-sheet": "Create split sheet agreements and generate clean PDF or Word documents ready for signing.",
   "artist-management": "Manage your roster with profiles, streaming links, and organized projects.",
   workspace: "Your project-management hub with Kanban boards, a calendar, and integrations.",
-  integrations: "Connect Msanii to Google Drive and Slack — and see what's coming next.",
+  integrations: "Connect Msanii to Google Drive — and see what's coming next.",
   "best-practices": "Tips for getting the most out of Msanii.",
 };
 
@@ -264,7 +264,7 @@ const TOOLKIT = [
   { target: "oneclick", name: "OneClick", icon: Calculator, desc: "Cross-reference contracts against a statement to calculate who's owed what." },
   { target: "zoe", name: "Zoe", icon: Bot, desc: "Ask plain-language questions of any contract and get cited answers." },
   { target: "split-sheet", name: "Split Sheet", icon: Scale, desc: "Generate balanced publishing & master splits as a PDF or DOCX." },
-  { target: "workspace", name: "Workspace", icon: LayoutGrid, desc: "Boards and a calendar wired into Drive and Slack." },
+  { target: "workspace", name: "Workspace", icon: LayoutGrid, desc: "Boards and a calendar wired into Drive." },
 ];
 
 function ToolGrid() {
@@ -719,7 +719,7 @@ const OneClickContent = () => (
         <Step num={2} title="Upload or select contracts">Upload contract PDFs or pick from existing files. OneClick's AI reads them to extract parties, works, and royalty split percentages for each revenue type. Contracts can come from a project's files, files linked to a work, or an artist's profile documents.</Step>
         <Step num={3} title="Upload a royalty statement">Add the statement with the actual revenue figures — <strong>CSV or Excel</strong>. OneClick auto-detects the columns.</Step>
         <Step num={4} title="Calculate">OneClick applies the contract terms to the statement and produces a breakdown of what each party is owed, <strong>per song and per payee</strong>. It streams its progress as it downloads files, extracts parties, works, and splits, and runs the numbers.</Step>
-        <Step num={5} title="Export & share" isLast>Download the results as <strong>CSV</strong> or <strong>Excel</strong>, view the payout distribution chart, or send the result straight to <strong>Google Drive</strong> or <strong>Slack</strong>.</Step>
+        <Step num={5} title="Export & share" isLast>Download the results as <strong>CSV</strong> or <strong>Excel</strong>, view the payout distribution chart, or send the result straight to <strong>Google Drive</strong>.</Step>
       </div>
     </div>
     <Callout type="tip" title="Best results">
@@ -851,7 +851,7 @@ const WorkspaceContent = () => (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FeatureCard icon={LayoutGrid} title="Kanban boards" description="Drag-and-drop task boards with columns you define. Create tasks with titles, descriptions, priority, due dates, labels, and color coding." color="sky" />
         <FeatureCard icon={Zap} title="Calendar view" description="See tasks on a timeline (day, week, month, or year). Track deadlines, release dates, and contract expirations at a glance." color="amber" />
-        <FeatureCard icon={Plug} title="Integrations" description="Connect Google Drive and Slack to move files, send notifications, and sync tasks." color="blue" />
+        <FeatureCard icon={Plug} title="Integrations" description="Connect Google Drive to move files into and out of your projects." color="blue" />
         <FeatureCard icon={Settings} title="Settings" description="Configure timezone and time format (12h/24h). Preferences apply across the Dashboard and Workspace." color="emerald" />
       </div>
     </div>
@@ -871,7 +871,6 @@ const IntegrationsContent = () => (
       <PropTable
         rows={[
           ["Google Drive", "Connected", "Import files into a project, export files back to Drive, and set up folder sync."],
-          ["Slack", "Coming soon", "Send task and royalty notifications to a channel, share OneClick breakdowns, and capture @mentions."],
         ]}
       />
     </div>
@@ -879,14 +878,13 @@ const IntegrationsContent = () => (
       <SectionHeading>How to connect</SectionHeading>
       <CodeBlock label="Workspace → Settings → Integrations">{`Connect a service in two clicks:
 
-  ✓ Google Drive          connected
-  + Slack                 coming soon`}</CodeBlock>
+  ✓ Google Drive          connected`}</CodeBlock>
     </div>
     <Callout type="tip" title="Spotify metadata — no setup needed">
       When you mark a work as <strong>Released</strong>, Msanii can pull its ISRC, UPC, release date, and cover art from Spotify automatically. There's nothing to connect — it's built into the Metadata Registry.
     </Callout>
     <Callout type="info" title="What's live today">
-      Google Drive is connected today — import files into a project and export them back to Drive. Slack is on the way. There's no public API; everything happens inside Msanii.
+      Google Drive is connected today — import files into a project and export them back to Drive. There's no public API; everything happens inside Msanii.
     </Callout>
   </div>
 );

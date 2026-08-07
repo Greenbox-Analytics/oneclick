@@ -67,7 +67,7 @@ def licensing_enabled() -> bool:
 # retune it without a redeploy of this constant.
 # ---------------------------------------------------------------------------
 
-ENTERPRISE_SHAPE_INTEGRATIONS = ["google_drive", "slack"]
+ENTERPRISE_SHAPE_INTEGRATIONS = ["google_drive"]
 
 
 def _enterprise_seat_storage_bytes() -> int:
@@ -125,7 +125,7 @@ def _patch_for_max_pro(ent: Entitlements) -> Entitlements:
         zoe_enabled=True,
         oneclick_enabled=True,
         registry_enabled=True,
-        integrations_allowed=["google_drive", "slack"],
+        integrations_allowed=["google_drive"],
     )
     return replace(ent, caps=max_caps, features=max_features)
 
@@ -298,7 +298,7 @@ class EntitlementsService:
                 zoe_enabled=True,
                 oneclick_enabled=True,
                 registry_enabled=True,
-                integrations_allowed=["google_drive", "slack"],
+                integrations_allowed=["google_drive"],
             )
 
         # availableContexts is included for ALL users when licensing is on (personal

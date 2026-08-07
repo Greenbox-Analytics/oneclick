@@ -6,7 +6,7 @@ The Workspace (`/workspace`) is the operational hub — integrations, Kanban boa
 
 # Integrations
 
-Msanii connects to external services — Google Drive and Slack — through a shared OAuth layer. Each integration stores encrypted tokens in Supabase, fires named events through an internal event bus, and exposes FastAPI routers under `/integrations/<provider>`. Google Drive and Slack are the two fully implemented integrations.
+Msanii connects to external services through a shared OAuth layer. Each integration stores encrypted tokens in Supabase, fires named events through an internal event bus, and exposes FastAPI routers under `/integrations/<provider>`. Google Drive is the only implemented integration (Slack was removed in `20260806000000_remove_slack_integration.sql`).
 
 ---
 
@@ -37,27 +37,13 @@ Mounted at `/integrations/google-drive` (`src/backend/integrations/google_drive/
 | POST | `/integrations/google-drive/sync/setup` | Configure sync for a project folder. Body: `DriveSyncSetup` (`project_id`, `drive_folder_id`, `sync_direction`). |
 | GET | `/integrations/google-drive/sync/status` | Return all `drive_sync_mappings` rows for the current user. |
 
-### Slack
-
-Mounted at `/integrations/slack` (`src/backend/integrations/slack/router.py`).
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/integrations/slack/auth` | Start the OAuth flow. Returns `{ auth_url }`. |
-| GET | `/integrations/slack/callback` | OAuth callback. Exchanges code for tokens, stores the connection, redirects to `/workspace?connected=slack`. |
-| DELETE | `/integrations/slack/disconnect` | Remove the Slack connection and delete all rows from `notification_settings` for this user. |
-| GET | `/integrations/slack/channels` | List public and private channels the bot can access (up to 200). Returns `{ channels: [{ id, name, is_private }] }`. |
-| GET | `/integrations/slack/settings` | Get all workspace-level notification settings for the current user. Returns `{ settings }`. |
-| PUT | `/integrations/slack/settings` | Create or update a notification setting. Body: `{ event_type, enabled, channel_id? }`. |
-| POST | `/integrations/slack/webhook` | Inbound Slack events endpoint. Handles `url_verification` challenge and `app_mention` events. |
-
 ### OneClick Share
 
 Mounted at `/oneclick` (`src/backend/oneclick/share.py`).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/oneclick/share` | Generate a PDF royalty report and deliver it to Drive or Slack. Body: `ShareRequest` (`target`: `"drive"` or `"slack"`, `artist_name`, `payments`, `total_payments`, optional `channel_id`, optional `folder_id`). |
+| POST | `/oneclick/share` | Generate a PDF royalty report and deliver it to Drive. Body: `ShareRequest` (`target`: `"drive"`, `artist_name`, `payments`, `total_payments`, optional `folder_id`). |
 
 ## OAuth Flow
 
@@ -88,12 +74,7 @@ The same flow applies to all four providers. State is a short-lived signed JWT (
 | `TASK_UPDATED` | `"task_updated"` |
 | `TASK_COMPLETED` | `"task_completed"` |
 
-**Notification routing** (`slack/service.py:notify_for_event`):
-1. Checks if event's project has a linked Slack channel → sends Block Kit message there
-2. Falls back to workspace-level notification settings
-3. Sends nothing if neither is configured
-
-**Block Kit messages** (`slack/blocks.py`): Each event type has a builder returning `(fallback_text, blocks_list)` with header, context, and "View in Msanii" action button.
+**Subscribers: none.** Slack was the only consumer and was removed, so `emit()` currently runs zero handlers — the calls are cheap no-ops kept in place for the next integration. Register a handler in `main.py` to revive it.
 
 ## Integrations — Frontend
 
@@ -105,14 +86,7 @@ The same flow applies to all four providers. State is a short-lived signed JWT (
 | `useDriveBrowse(folderId?, enabled?)` | `useGoogleDrive.ts` | `QueryResult<DriveFile[]>` |
 | `useDriveImport` | `useGoogleDrive.ts` | Mutation: `{ drive_file_id, project_id }` |
 | `useDriveExport` | `useGoogleDrive.ts` | Mutation: `{ project_file_id }` |
-| `useSlackChannels(enabled?)` | `useSlackSettings.ts` | `QueryResult<SlackChannel[]>` |
-| `useSlackSettings(enabled?)` | `useSlackSettings.ts` | `{ settings, updateSetting, isUpdating }` |
-| `useProjectSlackChannel(projectId?)` | `useProjectIntegrations.ts` | `{ channelId, updateChannel }` |
 | `useProjectNotificationSettings(projectId?)` | `useProjectIntegrations.ts` | `{ isEventEnabled, toggleEvent }` |
-| `useSlackNotifications(unreadOnly?)` | `useSlackNotifications.ts` | `QueryResult<SlackNotification[]>` |
-| `useSlackUnreadCount` | `useSlackNotifications.ts` | `number` |
-| `useMarkSlackRead` | `useSlackNotifications.ts` | Mutation: mark single as read |
-| `useMarkAllSlackRead` | `useSlackNotifications.ts` | Mutation: mark all as read |
 
 ### Components
 
@@ -121,10 +95,7 @@ The same flow applies to all four providers. State is a short-lived signed JWT (
 | `IntegrationHub` | `src/components/workspace/IntegrationHub.tsx` | Card grid of all integrations + panel toggle |
 | `IntegrationCard` | `src/components/workspace/IntegrationCard.tsx` | Single card (connect/disconnect/configure) |
 | `DrivePanel` | `src/components/workspace/integrations/DrivePanel.tsx` | Workspace-level Drive file browser |
-| `SlackPanel` | `src/components/workspace/integrations/SlackPanel.tsx` | Workspace-level notification settings |
 | `DriveImportDialog` | `src/components/project/integrations/DriveImportDialog.tsx` | Project-level Drive import dialog |
-| `ProjectSlackSettings` | `src/components/project/integrations/ProjectSlackSettings.tsx` | Project-level Slack channel + event config |
-| `SlackMentions` | `src/components/workspace/SlackMentions.tsx` | Inbound @mention list in Notifications tab |
 
 ## Integrations — Database Tables
 
@@ -133,7 +104,7 @@ The same flow applies to all four providers. State is a short-lived signed JWT (
 | `integration_connections` | `user_id, provider, status, access_token_encrypted` | OAuth token storage (encrypted) |
 | `notification_settings` | `user_id, provider, event_type, enabled, channel_id` | Workspace-level notification prefs |
 | `project_notification_settings` | `project_id, event_type, enabled` | Per-project event toggles |
-| `slack_notifications` | `user_id, project_id, sender_name, message_text, is_read` | Inbound @mentions (90-day retention) |
+| ~~`slack_notifications`~~ | — | Dormant: kept by `20260806000000_remove_slack_integration.sql` but no longer read or written |
 | `drive_sync_mappings` | `user_id, project_id, drive_file_id, sync_direction` | Drive file sync tracking |
 | `sync_log` | `user_id, provider, direction, status, metadata` | Audit trail for all sync ops |
 
@@ -145,16 +116,6 @@ BASE="http://localhost:8000"
 
 # List connections
 curl -H "Authorization: Bearer $TOKEN" "$BASE/integrations/connections"
-
-# Slack webhook URL verification
-curl -X POST "$BASE/integrations/slack/webhook" \
-  -H "Content-Type: application/json" \
-  -d '{"type": "url_verification", "challenge": "test123"}'
-
-# Update Slack setting
-curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  "$BASE/integrations/slack/settings" \
-  -d '{"event_type": "task_created", "enabled": true, "channel_id": "C12345"}'
 ```
 
 ```bash

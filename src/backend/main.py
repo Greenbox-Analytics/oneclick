@@ -46,7 +46,6 @@ from credentials.router import router as credentials_router
 from expenses.router import router as expenses_router
 from integrations.connections_router import router as connections_router
 from integrations.google_drive.router import router as google_drive_router
-from integrations.slack.router import router as slack_router
 from integrations.spotify.router import router as spotify_router
 from oneclick.breakdown import router as oneclick_breakdown_router
 from oneclick.royalties.analytics_router import router as royalties_analytics_router
@@ -68,7 +67,6 @@ from teams.router import router as teams_router
 from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
-app.include_router(slack_router, prefix="/integrations/slack", tags=["Slack"])
 app.include_router(spotify_router, prefix="/integrations/spotify", tags=["Spotify"])
 app.include_router(connections_router, prefix="/integrations", tags=["Integrations"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
@@ -96,29 +94,9 @@ app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["adm
 app.include_router(teams_router, prefix="/teams", tags=["Teams"])
 app.include_router(orgs_router, prefix="/orgs", tags=["Organizations"])
 
-# --- Register Slack notification handlers on events ---
-from integrations import events
-from integrations.slack.service import notify_for_event as slack_notify
-
-
-async def _slack_event_handler(event_name: str, payload: dict):
-    """Bridge between event bus and Slack notification service."""
-    user_id = payload.get("user_id")
-    if not user_id:
-        return
-    await slack_notify(get_supabase_client(), user_id, event_name, payload)
-
-
-# Register for all notifiable events
-for _event in [
-    events.TASK_CREATED,
-    events.TASK_UPDATED,
-    events.TASK_COMPLETED,
-    events.CONTRACT_UPLOADED,
-    events.CONTRACT_DELETED,
-    events.ROYALTY_CALCULATED,
-]:
-    events.on(_event, _slack_event_handler)
+# The internal event bus (integrations/events.py) currently has NO subscribers — Slack was
+# the only one. emit() calls throughout the app are cheap no-ops until an integration
+# registers a handler here again.
 
 
 def _convert_pdf_background(
@@ -747,7 +725,7 @@ async def bootstrap_tester(
         "zoe_enabled": True,
         "oneclick_enabled": True,
         "registry_enabled": True,
-        "integrations_allowed": ["google_drive", "slack"],
+        "integrations_allowed": ["google_drive"],
         "reason": "tester_env",
         "expires_at": None,
         "granted_at": granted_at,
@@ -1110,7 +1088,7 @@ async def upload_file(
                 )
             raise db_error
 
-        # Emit event for integrations (Slack notifications) — never break upload on failure
+        # Emit event for integrations — never break upload on failure
         try:
             from integrations import events
 
@@ -1415,7 +1393,7 @@ async def _upload_contract_impl(
             file_path=file_path,
         )
 
-        # Emit event for integrations (Slack notifications) — never break upload on failure
+        # Emit event for integrations — never break upload on failure
         try:
             from integrations import events
 
@@ -1681,7 +1659,7 @@ async def delete_contract(contract_id: str, user_id: str = Depends(get_current_u
         # 4. Delete from Database
         get_supabase_client().table("project_files").delete().eq("id", contract_id).execute()
 
-        # Emit event for integrations (Slack notifications) — never break delete on failure
+        # Emit event for integrations — never break delete on failure
         try:
             from integrations import events
 

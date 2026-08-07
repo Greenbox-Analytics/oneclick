@@ -704,7 +704,7 @@ const numToInputOrEmpty = (v: number | null | undefined): string =>
 const boolToSelect = (v: boolean | null | undefined): "" | "true" | "false" =>
   v === null || v === undefined ? "" : v ? "true" : "false";
 
-const ALL_INTEGRATIONS = ["google_drive", "slack"] as const;
+const ALL_INTEGRATIONS = ["google_drive"] as const;
 
 const OverrideEditor = ({ userId, currentOverride, onDone }: OverrideEditorProps) => {
   const { applyOverride } = useAdminMutations();

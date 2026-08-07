@@ -275,7 +275,7 @@ export function useStorageStatus(): {
   return { used, cap, pct, nearLimit: pct >= 0.8, loading: false, error: null };
 }
 
-export type IntegrationName = "google_drive" | "slack";
+export type IntegrationName = "google_drive";
 
 export function useIntegrationAllowed(
   name: IntegrationName,

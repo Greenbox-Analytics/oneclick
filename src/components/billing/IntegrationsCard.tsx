@@ -8,11 +8,10 @@ export function IntegrationsCard() {
   const isConn = (provider: string) =>
     connections.some((c) => c.provider === provider && (c.status ? c.status === "active" : true));
 
-  // Google Drive + Slack are real integrations; Spotify + Apple Music are
+  // Google Drive is a real integration; Spotify + Apple Music are
   // placeholders (not yet available) shown dashed, matching the mockup.
   const chips: { label: string; connected: boolean; available: boolean }[] = [
     { label: "Google Drive", connected: isConn("google_drive"), available: true },
-    { label: "Slack", connected: isConn("slack"), available: true },
     { label: "Spotify", connected: false, available: false },
     { label: "Apple Music", connected: false, available: false },
   ];

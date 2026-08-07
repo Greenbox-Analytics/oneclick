@@ -104,8 +104,7 @@ src/
 │   │   ├── events.py       # Internal event bus (emit/subscribe for notifications)
 │   │   ├── connections_router.py  # GET /integrations/connections (list user's connections)
 │   │   ├── google_drive/   # OAuth, file browse, import/export, PDF upload
-│   │   └── slack/          # OAuth, channels, Block Kit notifications, webhook (@mentions)
-│   ├── oneclick/           # Royalty calculation tool + PDF share to Drive/Slack
+│   ├── oneclick/           # Royalty calculation tool + PDF share to Drive
 │   ├── registry/           # Metadata registry (works, stakes, collaborators, licensing, PDF)
 │   ├── splitsheet/         # Split sheet PDF/DOCX generator
 │   ├── settings/           # User/workspace settings
@@ -116,12 +115,12 @@ src/
 │   ├── ui/                 # shadcn base components
 │   ├── oneclick/           # OneClick calculation results, contract/statement selectors
 │   ├── project/            # Project detail tabs (works, files, audio, members, settings)
-│   │   └── integrations/   # Drive import dialog, project Slack settings
+│   │   └── integrations/   # Drive import dialog
 │   ├── profile/            # User profile components
 │   ├── registry/           # Metadata registry panels
 │   ├── workspace/          # Workspace tabs, integration hub, boards
 │   │   ├── boards/         # Kanban board, calendar view, task detail panel
-│   │   └── integrations/   # DrivePanel, SlackPanel (workspace-level config)
+│   │   └── integrations/   # DrivePanel (workspace-level config)
 │   ├── notes/              # BlockNote rich text editor
 │   ├── walkthrough/        # Tool onboarding/walkthrough system
 │   ├── onboarding/         # Onboarding flow steps
@@ -158,13 +157,12 @@ All routers are mounted in `src/backend/main.py`:
 |--------|--------|---------|
 | `/integrations` | Connections | List user's integration connections |
 | `/integrations/google-drive` | Google Drive | OAuth, file browse, import/export, PDF upload |
-| `/integrations/slack` | Slack | OAuth, channels, notification settings, webhook |
 | `/boards` | Boards | Kanban board CRUD |
 | `/settings` | Settings | Workspace settings |
 | `/splitsheet` | Split Sheet | PDF/DOCX generation |
 | `/registry` | Registry | Works, stakes, collaborators, licensing |
 | `/projects` | Projects | Project management |
-| `/oneclick` | OneClick Share | PDF generation + share to Drive/Slack |
+| `/oneclick` | OneClick Share | PDF generation + share to Drive |
 
 Additional endpoints (file upload, Zoe chat, OneClick calculation) are defined directly in `main.py`.
 

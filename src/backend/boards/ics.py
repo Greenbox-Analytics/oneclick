@@ -1,17 +1,24 @@
-"""iCalendar (RFC 5545) feed for workspace tasks.
+"""iCalendar (RFC 5545) support for the workspace calendar — both directions.
 
-Google Calendar, Apple Calendar and Outlook all natively subscribe to an .ics URL
-and re-poll it on their own schedule, so one public read-only feed covers every
-client — no per-provider OAuth and no task→event id bookkeeping to keep in sync.
+EXPORT (build_ics): Google Calendar, Apple Calendar and Outlook all natively
+subscribe to an .ics URL and re-poll it on their own schedule, so one public
+read-only feed covers every client — no per-provider OAuth and no task→event id
+bookkeeping to keep in sync. The feed URL is the credential (calendar clients
+send no auth headers), so it carries an HMAC of the user id that only the server
+can produce.
 
-The feed URL is the credential (calendar clients send no auth headers), so it
-carries an HMAC of the user id that only the server can produce.
+IMPORT (parse_ics): the same trick in reverse — the user pastes the secret iCal
+URL their calendar already publishes and we render those events read-only. No
+OAuth, and nothing is persisted, so there is no sync state to reconcile.
 """
 
 import hmac
 import os
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
+
+from dateutil import tz
+from dateutil.rrule import rrulestr
 
 # ponytail: feed tokens are derived, not stored, so revoking one means rotating
 # INTEGRATION_OAUTH_STATE_SECRET (which invalidates every feed). Add a per-user
@@ -113,3 +120,156 @@ def build_ics(tasks: list[dict], cal_name: str = "Msanii platform - Calendar") -
         lines.append("END:VEVENT")
     lines.append("END:VCALENDAR")
     return "\r\n".join(_fold(line) for line in lines) + "\r\n"
+
+
+# --- Import: parsing a subscribed .ics feed ---------------------------------
+
+# A hostile or just badly-configured feed can declare a rule that expands to
+# millions of instances; these bound the work regardless of what arrives.
+MAX_EVENTS = 2000
+MAX_OCCURRENCES_PER_RULE = 400
+
+# Order matters: "\\\\" must be tried alongside the others in a single left-to-right
+# scan, or an escaped backslash would be re-read as the start of the next escape.
+_UNESCAPE = [("\\N", "\n"), ("\\n", "\n"), ("\\,", ","), ("\\;", ";"), ("\\\\", "\\")]
+
+
+def _unescape(value: str) -> str:
+    out = []
+    i = 0
+    while i < len(value):
+        pair = value[i : i + 2]
+        for token, repl in _UNESCAPE:
+            if pair == token:
+                out.append(repl)
+                i += 2
+                break
+        else:
+            out.append(value[i])
+            i += 1
+    return "".join(out)
+
+
+def _unfold(text: str) -> list[str]:
+    """Reverse RFC 5545 line folding: a leading space/tab continues the line above."""
+    lines: list[str] = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if raw[:1] in (" ", "\t") and lines:
+            lines[-1] += raw[1:]
+        else:
+            lines.append(raw)
+    return lines
+
+
+def _split_property(line: str) -> tuple[str, dict[str, str], str]:
+    """ "DTSTART;TZID=America/New_York:20260805T140000" → ("DTSTART", {"TZID": ...}, "20260805T140000")."""
+    head, _, value = line.partition(":")
+    name, *param_parts = head.split(";")
+    params = {}
+    for part in param_parts:
+        key, _, val = part.partition("=")
+        params[key.upper()] = val.strip('"')
+    return name.upper(), params, value
+
+
+def _parse_dt(value: str, params: dict[str, str], default_tz) -> tuple[datetime | None, bool]:
+    """Return (aware datetime, is_all_day). All-day values carry no meaningful time."""
+    value = value.strip()
+    if params.get("VALUE", "").upper() == "DATE" or (len(value) == 8 and value.isdigit()):
+        try:
+            return datetime.strptime(value, "%Y%m%d").replace(tzinfo=default_tz), True
+        except ValueError:
+            return None, True
+    fmt = "%Y%m%dT%H%M%SZ" if value.endswith("Z") else "%Y%m%dT%H%M%S"
+    try:
+        parsed = datetime.strptime(value, fmt)
+    except ValueError:
+        return None, False
+    if value.endswith("Z"):
+        return parsed.replace(tzinfo=UTC), False
+    # A TZID we don't recognise falls back to the viewer's timezone rather than
+    # being dropped — a slightly-off time beats a missing event.
+    zone = tz.gettz(params["TZID"]) if params.get("TZID") else None
+    return parsed.replace(tzinfo=zone or default_tz), False
+
+
+def _occurrences(dtstart: datetime, rrule_value: str, window_start: datetime, window_end: datetime):
+    """Expand an RRULE inside the window. dateutil does the calendar maths — hand-rolling
+    BYDAY/BYSETPOS/leap-year handling is exactly the kind of thing that quietly gets it wrong."""
+    try:
+        rule = rrulestr(rrule_value, dtstart=dtstart)
+    except (ValueError, TypeError, OverflowError):
+        return [dtstart]
+    try:
+        found = rule.between(window_start, window_end, inc=True)
+    except (ValueError, OverflowError):
+        return [dtstart]
+    return found[:MAX_OCCURRENCES_PER_RULE]
+
+
+def parse_ics(text: str, window_start: date, window_end: date, timezone: str | None = None) -> list[dict]:
+    """Parse a subscribed .ics feed into events overlapping [window_start, window_end].
+
+    Returns dicts shaped for the calendar overlay: {uid, title, date, time, all_day}.
+    `date` is the local date the event falls on — the calendar grid is date-keyed —
+    and `time` is a display string ("2:00 PM") or None for all-day events.
+
+    Malformed events are skipped rather than failing the whole feed: a single bad
+    VEVENT in someone's calendar should not blank out the other 200.
+    """
+    default_tz = (tz.gettz(timezone) if timezone else None) or UTC
+    lo = datetime.combine(window_start, datetime.min.time(), tzinfo=default_tz)
+    hi = datetime.combine(window_end, datetime.max.time(), tzinfo=default_tz)
+
+    events: list[dict] = []
+    current: dict | None = None
+    for line in _unfold(text):
+        if line.startswith("BEGIN:VEVENT"):
+            current = {}
+            continue
+        if line.startswith("END:VEVENT"):
+            if current is not None:
+                events.extend(_expand_event(current, lo, hi, default_tz))
+            current = None
+            if len(events) >= MAX_EVENTS:
+                break
+            continue
+        if current is None or ":" not in line:
+            continue
+        name, params, value = _split_property(line)
+        if name in ("SUMMARY", "UID", "RRULE", "DTSTART", "DTEND", "STATUS"):
+            current[name] = (params, value)
+
+    return sorted(events, key=lambda e: (e["date"], e["time"] or ""))[:MAX_EVENTS]
+
+
+def _expand_event(props: dict, lo: datetime, hi: datetime, default_tz) -> list[dict]:
+    if "DTSTART" not in props:
+        return []
+    if (props.get("STATUS") or (None, ""))[1].upper() == "CANCELLED":
+        return []
+
+    start, all_day = _parse_dt(props["DTSTART"][1], props["DTSTART"][0], default_tz)
+    if start is None:
+        return []
+
+    title = _unescape(props.get("SUMMARY", ({}, "Untitled"))[1]).strip() or "Untitled"
+    uid = props.get("UID", ({}, ""))[1] or f"{title}-{start.isoformat()}"
+
+    starts = _occurrences(start, props["RRULE"][1], lo, hi) if "RRULE" in props else [start]
+
+    out = []
+    for occurrence in starts:
+        if not (lo <= occurrence <= hi):
+            continue
+        local = occurrence.astimezone(default_tz)
+        out.append(
+            {
+                "uid": f"{uid}@{local.date().isoformat()}",
+                "title": title,
+                "date": local.date().isoformat(),
+                "time": None if all_day else local.strftime("%-I:%M %p"),
+                "all_day": all_day,
+            }
+        )
+    return out

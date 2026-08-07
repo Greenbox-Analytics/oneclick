@@ -411,7 +411,6 @@ const LOGOS: readonly LogoEntry[] = [
   { name: "Apple Music", src: "/apple_music.png" },
   { name: "SoundCloud", src: "/soundcloud.png" },
   { name: "Google Drive", src: "/drive.webp" },
-  { name: "Slack", src: "/slack.png" },
   { name: "PayPal", src: "/paypal.png" },
 ];
 
