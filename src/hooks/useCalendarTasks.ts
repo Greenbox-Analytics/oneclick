@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tansta
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import type { BoardTask } from "@/types/integrations";
-import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 
 export function useCalendarTasks(start: string, end: string, boardId?: string) {
   const { user } = useAuth();
@@ -26,6 +26,47 @@ export function useCalendarTasks(start: string, end: string, boardId?: string) {
   };
 }
 
+/**
+ * Download a single task as a .ics file. Every desktop and mobile OS knows how to
+ * open one, so this covers Apple/Outlook/anything without a per-provider integration.
+ *
+ * Fetched rather than linked because the endpoint needs the auth header — a plain
+ * <a href> would arrive unauthenticated and 401.
+ */
+export async function downloadTaskIcs(taskId: string, title: string) {
+  const response = await fetch(`${API_URL}/boards/tasks/${taskId}/calendar.ics`, {
+    headers: await getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.detail || "Could not build the calendar file");
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${title.replace(/[^\w.-]+/g, "_").slice(0, 60) || "task"}.ics`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * One-click "add this to Google Calendar" via Google's own template URL — no file
+ * download, no import step. All-day event on the due date, matching the .ics.
+ */
+export function googleCalendarUrl(title: string, dueDate: string, description?: string) {
+  const start = dueDate.replace(/-/g, "");
+  const end = new Date(`${dueDate}T12:00:00`);
+  end.setDate(end.getDate() + 1);
+  const endStr = `${end.getFullYear()}${String(end.getMonth() + 1).padStart(2, "0")}${String(end.getDate()).padStart(2, "0")}`;
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: title,
+    dates: `${start}/${endStr}`,
+  });
+  if (description) params.set("details", description);
+  return `https://calendar.google.com/calendar/render?${params}`;
+}
+
 /** A read-only event from a subscribed external calendar. Never a task. */
 export type ExternalEvent = {
   uid: string;
@@ -40,7 +81,6 @@ export type ExternalEvent = {
 export type CalendarSubscription = {
   id: string;
   name: string;
-  last_fetched_at: string | null;
   last_error: string | null;
 };
 

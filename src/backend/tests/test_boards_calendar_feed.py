@@ -130,3 +130,21 @@ def test_long_lines_are_folded_without_splitting_characters():
         assert len(line.encode("utf-8")) <= 75
     # Unfolding (drop CRLF + one leading space) must restore the original title.
     assert "é" * 200 in out.replace("\r\n ", "")
+
+
+# --- Single-task .ics export ---
+
+
+def test_single_task_ics_has_one_event():
+    """The per-task download reuses the feed renderer, so a task looks identical
+    whether it arrives via the subscription or a one-off file."""
+    out = ics.build_ics([{"id": "t1", "title": "Deliver stems", "due_date": "2026-08-05"}])
+    assert out.count("BEGIN:VEVENT") == 1
+    assert "SUMMARY:Deliver stems" in out
+    assert "DTSTART;VALUE=DATE:20260805" in out
+
+
+def test_single_task_without_due_date_yields_no_event():
+    """The endpoint 400s on a dateless task; the renderer independently emits nothing,
+    so a regression can't silently produce an empty calendar file."""
+    assert ics.build_ics([{"id": "t1", "title": "No date"}]).count("BEGIN:VEVENT") == 0

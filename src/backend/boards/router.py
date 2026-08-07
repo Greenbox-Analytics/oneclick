@@ -369,6 +369,27 @@ async def create_task(body: TaskCreate, user_id: str = Depends(get_current_user_
     return task
 
 
+@router.get("/tasks/{task_id}/calendar.ics")
+async def task_calendar_file(task_id: str, user_id: str = Depends(get_current_user_id)):
+    """Download ONE task as a .ics file — for adding a single deadline to a calendar
+    without subscribing to the whole feed. Same renderer as the feed, so a task looks
+    identical either way it arrives."""
+    # get_task_detail runs require_board_access, which already raises 404 for a task
+    # the caller can't see — so no access check is needed here.
+    task = await service.get_task_detail(_get_supabase(), user_id, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.get("due_date"):
+        raise HTTPException(status_code=400, detail="Add a due date before sending this task to a calendar")
+
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", task.get("title") or "task")[:60] or "task"
+    return Response(
+        content=ics.build_ics([task]),
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.ics"'},
+    )
+
+
 @router.get("/tasks/{task_id}/detail")
 async def get_task_detail(task_id: str, user_id: str = Depends(get_current_user_id)):
     """Get a single task with full detail (artists, projects, documents, comments)."""

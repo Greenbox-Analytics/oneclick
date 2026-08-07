@@ -14,6 +14,7 @@ OAuth, and nothing is persisted, so there is no sync state to reconcile.
 
 import hmac
 import os
+import re
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 
@@ -124,30 +125,14 @@ def build_ics(tasks: list[dict], cal_name: str = "Msanii platform - Calendar") -
 
 # --- Import: parsing a subscribed .ics feed ---------------------------------
 
-# A hostile or just badly-configured feed can declare a rule that expands to
-# millions of instances; these bound the work regardless of what arrives.
-MAX_EVENTS = 2000
+# A rule like FREQ=DAILY with no UNTIL expands without bound; this caps it.
 MAX_OCCURRENCES_PER_RULE = 400
-
-# Order matters: "\\\\" must be tried alongside the others in a single left-to-right
-# scan, or an escaped backslash would be re-read as the start of the next escape.
-_UNESCAPE = [("\\N", "\n"), ("\\n", "\n"), ("\\,", ","), ("\\;", ";"), ("\\\\", "\\")]
 
 
 def _unescape(value: str) -> str:
-    out = []
-    i = 0
-    while i < len(value):
-        pair = value[i : i + 2]
-        for token, repl in _UNESCAPE:
-            if pair == token:
-                out.append(repl)
-                i += 2
-                break
-        else:
-            out.append(value[i])
-            i += 1
-    return "".join(out)
+    r"""Reverse RFC 5545 TEXT escaping. One left-to-right pass over non-overlapping
+    matches, so a literal \\ can't be re-read as the start of the next escape."""
+    return re.sub(r"\\(.)", lambda m: "\n" if m[1] in "nN" else m[1], value)
 
 
 def _unfold(text: str) -> list[str]:
@@ -231,16 +216,14 @@ def parse_ics(text: str, window_start: date, window_end: date, timezone: str | N
             if current is not None:
                 events.extend(_expand_event(current, lo, hi, default_tz))
             current = None
-            if len(events) >= MAX_EVENTS:
-                break
             continue
         if current is None or ":" not in line:
             continue
         name, params, value = _split_property(line)
-        if name in ("SUMMARY", "UID", "RRULE", "DTSTART", "DTEND", "STATUS"):
+        if name in ("SUMMARY", "UID", "RRULE", "DTSTART", "STATUS"):
             current[name] = (params, value)
 
-    return sorted(events, key=lambda e: (e["date"], e["time"] or ""))[:MAX_EVENTS]
+    return sorted(events, key=lambda e: (e["date"], e["time"] or ""))
 
 
 def _expand_event(props: dict, lo: datetime, hi: datetime, default_tz) -> list[dict]:

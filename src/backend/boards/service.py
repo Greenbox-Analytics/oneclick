@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 
 from supabase import Client
 
-from boards import calendar_import
+from boards import calendar_import, ics
 from confirm import ConfirmationError, normalize_name
 from integrations import events
 from pagination import PaginatedResponse, paginate_query
@@ -1245,7 +1245,7 @@ async def list_subscriptions(db: Client, user_id: str) -> list[dict]:
     someone's private calendar, so it is never returned to the client."""
     rows = (
         db.table("calendar_subscriptions")
-        .select("id, name, last_fetched_at, last_error, created_at")
+        .select("id, name, last_error, created_at")
         .eq("user_id", user_id)
         .order("created_at")
         .execute()
@@ -1261,18 +1261,17 @@ async def add_subscription(db: Client, user_id: str, url: str, name: str | None 
     empty calendar later."""
     normalized = calendar_import.normalize_url(url)
     calendar_import.forget(normalized)
-    text = await calendar_import.fetch_feed(normalized, use_cache=False)
+    text = await calendar_import.fetch_feed(normalized)
 
     row = {
         "user_id": user_id,
         "url": normalized,
         "name": (name or "").strip() or _calendar_name_from_ics(text) or "Imported calendar",
-        "last_fetched_at": datetime.now(UTC).isoformat(),
         "last_error": None,
     }
     result = db.table("calendar_subscriptions").upsert(row, on_conflict="user_id,url").execute()
     saved = (result.data or [row])[0]
-    return {k: saved.get(k) for k in ("id", "name", "last_fetched_at", "last_error", "created_at")}
+    return {k: saved.get(k) for k in ("id", "name", "last_error", "created_at")}
 
 
 def _calendar_name_from_ics(text: str) -> str | None:
@@ -1310,19 +1309,16 @@ async def get_external_events(db: Client, user_id: str, start: str, end: str) ->
     timezone = (settings[0] if settings else {}).get("timezone")
     lo, hi = date.fromisoformat(start), date.fromisoformat(end)
 
-    results = await asyncio.gather(
-        *(calendar_import.load_events(s["url"], lo, hi, timezone) for s in subs),
-        return_exceptions=True,
-    )
+    feeds = await asyncio.gather(*(calendar_import.fetch_feed(s["url"]) for s in subs), return_exceptions=True)
 
     events: list[dict] = []
-    for sub, result in zip(subs, results, strict=True):
-        if isinstance(result, Exception):
-            message = str(result) if isinstance(result, calendar_import.FeedError) else "Could not load this calendar"
+    for sub, text in zip(subs, feeds, strict=True):
+        if isinstance(text, Exception):
+            message = str(text) if isinstance(text, calendar_import.FeedError) else "Could not load this calendar"
             _record_feed_error(db, user_id, sub["id"], message)
             continue
         _record_feed_error(db, user_id, sub["id"], None)
-        for event in result:
+        for event in ics.parse_ics(text, lo, hi, timezone):
             events.append({**event, "source_id": sub["id"], "source_name": sub["name"]})
     return events
 
@@ -1334,8 +1330,8 @@ def _record_feed_error(db: Client, user_id: str, subscription_id: str, message: 
     the query filter is the only thing standing between this and another user's row.
     """
     try:
-        db.table("calendar_subscriptions").update(
-            {"last_fetched_at": datetime.now(UTC).isoformat(), "last_error": message}
-        ).eq("id", subscription_id).eq("user_id", user_id).execute()
+        db.table("calendar_subscriptions").update({"last_error": message}).eq("id", subscription_id).eq(
+            "user_id", user_id
+        ).execute()
     except Exception:
         pass

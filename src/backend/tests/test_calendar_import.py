@@ -143,6 +143,22 @@ def test_escapes_are_restored():
     assert events[0]["title"] == "Mix; master, take 2"
 
 
+def test_escaped_backslash_does_not_swallow_the_next_escape():
+    """An escaped backslash must not be re-read as the start of the next escape.
+
+    This is the single-pass property _unescape depends on — spelled out with an
+    explicit BS constant because the nested quoting is otherwise unreadable.
+    """
+    BS = chr(92)  # one literal backslash
+
+    # BS BS -> one backslash; the trailing "n" is then just a letter.
+    assert ics._unescape("a" + BS + BS + "nb") == "a" + BS + "nb"
+    # BS BS BS n -> one backslash, then the \n escape -> backslash + newline.
+    assert ics._unescape("a" + BS * 3 + "nb") == "a" + BS + "\nb"
+    # A lone trailing backslash escapes nothing and survives untouched.
+    assert ics._unescape("trailing" + BS) == "trailing" + BS
+
+
 def test_folded_long_line_is_rejoined():
     """A title over 75 octets arrives split across lines with a leading space;
     unfolding must rebuild it exactly (RFC 5545 §3.1)."""

@@ -4,11 +4,13 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Trash2, Loader2 } from "lucide-react";
+import { Trash2, Loader2, CalendarPlus, Download } from "lucide-react";
 import { format } from "date-fns";
 import { parseDateString, getTodayString } from "@/lib/dateUtils";
 import { toast } from "sonner";
 import { useTaskDetail } from "@/hooks/useTaskDetail";
+import { downloadTaskIcs, googleCalendarUrl } from "@/hooks/useCalendarTasks";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useBoards, type OptimisticTaskContext } from "@/hooks/useBoards";
 import { useParentTasks } from "@/hooks/useParentTasks";
 import { useArtistsList } from "@/hooks/useArtistsList";
@@ -392,15 +394,18 @@ export function TaskDetailPanel({
                   </Button>
                 </div>
               ) : (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleDelete}
-                  className="w-full"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete Task
-                </Button>
+                <div className="space-y-2">
+                  <AddToCalendar task={task} />
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleDelete}
+                    className="w-full"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Task
+                  </Button>
+                </div>
               )}
             </div>
           </>
@@ -409,5 +414,58 @@ export function TaskDetailPanel({
     </Sheet>
     {taskPaywallElement}
     </>
+  );
+}
+
+/**
+ * Send one task to a personal calendar without subscribing to the whole feed.
+ * Reached by clicking a task anywhere it appears, including a calendar pill.
+ *
+ * Hidden without a due date — there is no date to put the event on, and offering
+ * an action that can only fail is worse than not offering it.
+ */
+function AddToCalendar({ task }: { task: BoardTaskDetail | null | undefined }) {
+  const [busy, setBusy] = useState(false);
+  if (!task?.due_date) return null;
+
+  const handleDownload = async () => {
+    setBusy(true);
+    try {
+      await downloadTaskIcs(task.id, task.title);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="w-full" disabled={busy}>
+          {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CalendarPlus className="h-4 w-4 mr-2" />}
+          Add to calendar
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-1" align="end">
+        <Button variant="ghost" size="sm" className="w-full justify-start" asChild>
+          <a
+            href={googleCalendarUrl(task.title, task.due_date, task.description || undefined)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <CalendarPlus className="h-4 w-4 mr-2" />
+            Google Calendar
+          </a>
+        </Button>
+        <Button variant="ghost" size="sm" className="w-full justify-start" onClick={handleDownload}>
+          <Download className="h-4 w-4 mr-2" />
+          Download .ics
+        </Button>
+        <p className="px-2 py-1.5 text-[11px] text-muted-foreground">
+          Apple Calendar and Outlook: download, then open the file.
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }

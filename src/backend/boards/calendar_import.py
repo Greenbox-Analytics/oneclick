@@ -10,13 +10,10 @@ hop is re-checked, and the response is size-capped while streaming.
 
 import ipaddress
 import socket
-from datetime import date
 from urllib.parse import urlparse, urlunparse
 
 import httpx
 from cachetools import TTLCache
-
-from boards import ics
 
 # Feeds are re-fetched at most this often. Google/Apple publish on a slow cadence
 # anyway, so a short cache keeps calendar paging instant without going stale.
@@ -24,6 +21,12 @@ _CACHE_TTL_SECONDS = 900
 _MAX_BYTES = 5 * 1024 * 1024
 _TIMEOUT_SECONDS = 10.0
 _MAX_REDIRECTS = 3
+
+_STATUS_MESSAGES = {
+    401: "That calendar is private — use the secret iCal address",
+    403: "That calendar is private — use the secret iCal address",
+    404: "That calendar link no longer exists (404)",
+}
 
 # url -> raw ics text. Per-process; a cold start just refetches.
 _feed_cache: TTLCache = TTLCache(maxsize=512, ttl=_CACHE_TTL_SECONDS)
@@ -77,10 +80,12 @@ async def _read_capped(response: httpx.Response) -> str:
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
-async def fetch_feed(url: str, use_cache: bool = True) -> str:
+async def fetch_feed(url: str) -> str:
     """Fetch a calendar feed's raw .ics text, following redirects one validated hop
-    at a time (httpx's own redirect handling would skip the per-hop SSRF check)."""
-    if use_cache and url in _feed_cache:
+    at a time (httpx's own redirect handling would skip the per-hop SSRF check).
+
+    Callers wanting a guaranteed-fresh read call forget(url) first."""
+    if url in _feed_cache:
         return _feed_cache[url]
 
     current = url
@@ -100,12 +105,9 @@ async def fetch_feed(url: str, use_cache: bool = True) -> str:
                         raise FeedError("That calendar link redirects nowhere")
                     current = normalize_url(str(response.next_request.url) if response.next_request else location)
                     continue
-                if response.status_code == 404:
-                    raise FeedError("That calendar link no longer exists (404)")
-                if response.status_code in (401, 403):
-                    raise FeedError("That calendar is private — use the secret iCal address")
                 if response.status_code >= 400:
-                    raise FeedError(f"That calendar returned an error ({response.status_code})")
+                    code = response.status_code
+                    raise FeedError(_STATUS_MESSAGES.get(code) or f"That calendar returned an error ({code})")
                 text = await _read_capped(response)
             finally:
                 await response.aclose()
@@ -116,11 +118,6 @@ async def fetch_feed(url: str, use_cache: bool = True) -> str:
             return text
 
     raise FeedError("That calendar link redirects too many times")
-
-
-async def load_events(url: str, start: date, end: date, timezone: str | None = None) -> list[dict]:
-    """Fetch + parse one subscription into overlay events for the given window."""
-    return ics.parse_ics(await fetch_feed(url), start, end, timezone)
 
 
 def forget(url: str) -> None:
