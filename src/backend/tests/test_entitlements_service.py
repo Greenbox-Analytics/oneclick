@@ -38,7 +38,7 @@ PRO_TIER_ROW = {
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
-    "integrations_allowed": ["google_drive", "slack"],
+    "integrations_allowed": ["google_drive"],
     "updated_at": "2026-05-09T00:00:00+00:00",
 }
 FREE_SUB_ROW = {
@@ -185,7 +185,7 @@ class TestProUserDefaults:
         assert ent.tier == "pro"
         assert ent.caps.max_artists == -1
         assert ent.features.zoe_enabled is True
-        assert "slack" in ent.features.integrations_allowed
+        assert "google_drive" in ent.features.integrations_allowed
         assert ent.has_overrides is False
 
 
@@ -245,7 +245,7 @@ class TestOverrideMerging:
                         "zoe_enabled": None,
                         "oneclick_enabled": None,
                         "registry_enabled": None,
-                        "integrations_allowed": ["slack"],
+                        "integrations_allowed": ["dropbox"],
                         "reason": None,
                         "granted_at": "2026-05-09T00:00:00+00:00",
                         "expires_at": None,
@@ -258,7 +258,7 @@ class TestOverrideMerging:
 
         ent = svc.get_for_user(TEST_USER_ID)
 
-        assert ent.features.integrations_allowed == ["slack"]
+        assert ent.features.integrations_allowed == ["dropbox"]
         assert "google_drive" not in ent.features.integrations_allowed
 
     def test_expired_override_ignored(self):
@@ -670,7 +670,7 @@ class TestCanFeatureHostWins:
         result = svc.can(TEST_USER_ID, Action.USE_INTEGRATION, name="google_drive")
         assert result.allowed is True
 
-    def test_can_use_integration_slack_blocked_on_free(self):
+    def test_can_use_integration_unknown_blocked_on_free(self):
         from subscriptions.models import Action
         from subscriptions.service import EntitlementsService
 
@@ -683,17 +683,36 @@ class TestCanFeatureHostWins:
             }
         )
         svc = EntitlementsService(sb)
-        result = svc.can(TEST_USER_ID, Action.USE_INTEGRATION, name="slack")
+        result = svc.can(TEST_USER_ID, Action.USE_INTEGRATION, name="dropbox")
         assert result.allowed is False
 
-    def test_can_use_integration_slack_allowed_via_pro_host(self):
-        """Host-wins: Free user can use Slack integration on Pro host's project."""
+    def test_can_use_integration_allowed_via_pro_host(self):
+        """Host-wins: a user whose own tier allows no integrations can still use the
+        host's on the host's project."""
         from subscriptions.models import Action
         from subscriptions.service import EntitlementsService
 
-        sb = _free_acting_pro_host_supabase()
+        no_integrations_free = {**FREE_TIER_ROW, "integrations_allowed": []}
+        sb = _make_supabase_per_user_rows(
+            {
+                TEST_USER_ID: {
+                    "subscriptions": [FREE_SUB_ROW],
+                    "tier_entitlements": [no_integrations_free, PRO_TIER_ROW],
+                    "tier_overrides": [],
+                    "usage_counters": [ZERO_USAGE_ROW],
+                },
+                HOST_USER_ID: {
+                    "subscriptions": [PRO_HOST_SUB_ROW],
+                    "tier_entitlements": [no_integrations_free, PRO_TIER_ROW],
+                    "tier_overrides": [],
+                    "usage_counters": [HOST_USAGE_ROW],
+                },
+            }
+        )
         svc = EntitlementsService(sb)
-        result = svc.can(TEST_USER_ID, Action.USE_INTEGRATION, name="slack", host_user_id=HOST_USER_ID)
+        # Denied on their own; allowed on the host's project.
+        assert svc.can(TEST_USER_ID, Action.USE_INTEGRATION, name="google_drive").allowed is False
+        result = svc.can(TEST_USER_ID, Action.USE_INTEGRATION, name="google_drive", host_user_id=HOST_USER_ID)
         assert result.allowed is True
 
 
@@ -992,7 +1011,7 @@ class TestBypassPaywalls:
         assert ent.features.zoe_enabled is True
         assert ent.features.oneclick_enabled is True
         assert ent.features.registry_enabled is True
-        assert set(ent.features.integrations_allowed) == {"google_drive", "slack"}
+        assert set(ent.features.integrations_allowed) == {"google_drive", "dropbox"}
         # Usage, tier string, status, user_id must be preserved
         assert ent.tier == "free"
         assert ent.user_id == TEST_USER_ID
@@ -1011,7 +1030,7 @@ class TestBypassPaywalls:
         assert ent.caps.max_oneclick_runs_per_month == -1
         assert ent.features.zoe_enabled is True
         assert ent.features.registry_enabled is True
-        assert "slack" in ent.features.integrations_allowed
+        assert "google_drive" in ent.features.integrations_allowed
 
     def test_non_admin_user_normal_caps_when_bypass_off(self, monkeypatch):
         """is_admin=False + BYPASS_PAYWALLS unset → normal Free caps (no accidental elevation)."""

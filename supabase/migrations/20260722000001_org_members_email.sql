@@ -1,0 +1,35 @@
+-- supabase/migrations/20260722000001_org_members_email.sql
+-- ============================================================================
+-- Licensing follow-ups Task 4 — denormalize org_members.email to kill the
+-- N+1 auth.admin.get_user_by_id lookups in orgs.service.get_org_usage's
+-- per-seat rollup (org_members has no email column today; only user_id).
+--
+-- Plan: docs/superpowers/plans/2026-07-22-licensing-followups.md Task 4
+--
+-- Populated going forward at invite-accept time (orgs/service.py
+-- accept_invite), on BOTH the fresh-insert path and the invite-driven
+-- reactivation of a removed/suspended row — the invite row is the only
+-- place this backend already holds a verified email for the member.
+--
+-- NO SQL BACKFILL, BY DESIGN: there is no valid join from an existing
+-- org_members row back to an email. pending_org_invites is keyed by email
+-- (an invite is sent before the invitee has a user_id at all) and
+-- org_members is keyed by user_id — the only bridge between the two is
+-- this very column being populated, so a backfill UPDATE ... FROM
+-- pending_org_invites would silently mismatch on re-invites, race any
+-- other pending invite for the same address, or simply have nothing to
+-- join for creator rows (see below). Pre-existing rows are left NULL and
+-- heal lazily: orgs.service.get_org_usage falls back to the existing
+-- _resolve_user_email() auth lookup for any NULL-email row it encounters
+-- and writes the resolved value back (best-effort, non-raising) — so each
+-- legacy row costs at most one lookup, ever.
+--
+-- Creator rows (inserted by the auto_create_org_admin trigger on
+-- organizations insert, migration 20260721000001_licensing_core.sql) never
+-- go through accept_invite — no invite exists for the org creator — so
+-- they stay NULL until healed the same lazy way.
+--
+-- This migration is WRITTEN ONLY — never run it from this task.
+-- ============================================================================
+
+ALTER TABLE org_members ADD COLUMN IF NOT EXISTS email TEXT;

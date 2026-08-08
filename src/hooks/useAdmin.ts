@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 import { useAuth } from "@/contexts/AuthContext";
 import { peekCachedAnalyticsContext } from "@/hooks/useAnalyticsContext";
 import { ApiError, API_URL, apiFetch } from "@/lib/apiFetch";
+import type { TierKey } from "@/lib/tiers";
 
 // ---------------------------------------------------------------------------
 // useIsAdmin — returns { isAdmin, loading }
@@ -66,7 +67,7 @@ export function useIsAdmin(): { isAdmin: boolean; loading: boolean } {
 export interface AdminUserRow {
   id: string;
   email: string | null;
-  tier: "free" | "pro";
+  tier: TierKey;
   has_override: boolean;
   is_admin: boolean;
   is_env_admin: boolean;

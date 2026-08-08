@@ -101,11 +101,15 @@ def require_admin(
     user_email: str = Depends(get_current_user_email),
     user_id: str = Depends(get_current_user_id),
 ) -> str:
-    """FastAPI dependency. Returns caller email if admin, else raises 403.
+    """FastAPI dependency. Returns the caller's email if admin, else raises 403.
 
-    Raises 500 only when BOTH conditions hold: env allowlist is empty AND
-    no DB admin exists. (An empty env is still fine if at least one DB
-    admin exists.)
+    ALWAYS 403 to the caller, never 500. An environment with no admins at all
+    (empty ADMIN_EMAILS and no profiles.is_admin row) is an operator misconfig,
+    but it is not the caller's fault and not a server fault they can act on —
+    surfacing it as 500 made every /admin/* route look broken on a fresh
+    environment, and put a red herring in front of anyone debugging it. The
+    operator signal it existed for is preserved as an ERROR log, which is where
+    an operator actually looks.
     """
     from main import get_supabase_client
 
@@ -116,25 +120,20 @@ def require_admin(
     if is_db_admin(sb, user_id):
         return user_email
 
-    # Not admin via either path. Distinguish operator misconfig (no admins
-    # at all) from "not authorized" so operators get a loud signal on
-    # fresh deploys with no bootstrap set.
+    # Not admin via either path. Detect the "no admins exist anywhere" case so
+    # a fresh deploy without a bootstrap admin is loud in the logs, then deny
+    # exactly as any other non-admin would be denied.
     if not env_admin_emails():
-        # Check if ANY DB admin exists. If not, this is fail-loud config error.
         try:
             res = sb.table("profiles").select("id").eq("is_admin", True).limit(1).execute()
             if not (res.data or []):
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        "No admins configured — set ADMIN_EMAILS or grant at least one user is_admin=true to bootstrap."
-                    ),
+                logger.error(
+                    "No admins configured — every /admin/* route will deny. Set ADMIN_EMAILS "
+                    "or grant at least one user profiles.is_admin=true to bootstrap."
                 )
-        except HTTPException:
-            raise
-        except Exception:
-            # If the bootstrap check itself fails, fall through to 403 —
-            # we can't tell if there are DB admins, so don't lie with 500.
-            pass
+        except Exception as exc:
+            # The bootstrap probe is diagnostics only; a failed read must never
+            # change the answer we give the caller.
+            logger.warning("admin bootstrap probe failed: %s", exc)
 
     raise HTTPException(status_code=403, detail="Admin access required")

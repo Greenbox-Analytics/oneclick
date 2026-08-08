@@ -41,7 +41,6 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
-  BookOpen,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useGatedAction } from "@/hooks/useGatedAction";
@@ -316,15 +315,6 @@ const Portfolio = () => {
       <PageHeader
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }

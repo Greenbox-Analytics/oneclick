@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, BookOpen, Info, Calculator, Wallet } from "lucide-react";
+import { AlertCircle, Info, Calculator, Wallet } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -101,17 +101,6 @@ const OneClick = () => {
       <div className="min-h-screen bg-background">
         <PageHeader
           backTo="/tools"
-          actions={
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate("/docs")}
-            title="Documentation"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <BookOpen className="w-4 h-4" />
-          </Button>
-        }
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">

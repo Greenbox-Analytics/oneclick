@@ -7,7 +7,6 @@ export const TOOL_REGISTRY = [
   { id: "boards",     label: "Boards",           status: "live", category: "workspace" },
   { id: "calendar",   label: "Calendar",         status: "live", category: "workspace" },
   { id: "drive",      label: "Google Drive",     status: "live", category: "integration" },
-  { id: "slack",      label: "Slack",            status: "live", category: "integration" },
 ] as const;
 
 export type ToolId = (typeof TOOL_REGISTRY)[number]["id"];

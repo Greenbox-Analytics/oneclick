@@ -135,9 +135,9 @@ def _chain(data):
 
 
 async def test_create_task_emit_payload_carries_accessible_project_ids(monkeypatch):
-    """Slack-routing contract: create_task re-sets task['project_ids'] to the ACCESSIBLE
+    """Event-routing contract: create_task re-sets task['project_ids'] to the ACCESSIBLE
     project ids (foreign ones dropped) on the emitted TASK_CREATED payload, before emit —
-    the Slack bridge routes a new task via task['project_ids'][0]."""
+    event consumers route a new task via task['project_ids'][0]."""
 
     def _table(name):
         return {

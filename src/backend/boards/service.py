@@ -1,10 +1,12 @@
 """Business logic for the Kanban board feature."""
 
+import asyncio
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 from supabase import Client
 
+from boards import calendar_import, ics
 from confirm import ConfirmationError, normalize_name
 from integrations import events
 from pagination import PaginatedResponse, paginate_query
@@ -27,7 +29,7 @@ def _merge_junction(
     preserving co-owners' rows (and their labels) untouched. Caller must skip this entirely
     when the link field was absent from the payload (absent = no-op).
     RETURNS the editor's accessible inserted ids — the caller sets these on the returned task
-    dict before emitting the event (Slack routing reads task['project_ids']; see below)."""
+    dict before emitting the event (event consumers route via task['project_ids'])."""
     existing = supabase.table(table).select(fk_column).eq("task_id", task_id).execute().data or []
     existing_ids = [r[fk_column] for r in existing]
     # of the EXISTING rows, which may the editor replace?  (their accessible partition)
@@ -254,6 +256,24 @@ def _personal_board_ids(db: Client, user_id: str) -> list[str]:
     return [r["id"] for r in rows]
 
 
+def _active_team_ids(db: Client, user_id: str) -> list[str]:
+    """Non-archived teams the caller is a member of."""
+    memberships = db.table("team_members").select("team_id").eq("user_id", user_id).execute().data or []
+    team_ids = [m["team_id"] for m in memberships]
+    if not team_ids:
+        return []
+    rows = db.table("teams").select("id").in_("id", team_ids).is_("archived_at", "null").execute().data or []
+    return [t["id"] for t in rows]
+
+
+def _team_board_ids(db: Client, team_ids: list[str]) -> list[str]:
+    """Non-archived boards belonging to the given teams. Callers gate membership first."""
+    if not team_ids:
+        return []
+    rows = db.table("boards").select("id").in_("team_id", team_ids).eq("archived", False).execute().data or []
+    return [r["id"] for r in rows]
+
+
 def _calendar_board_ids(db: Client, user_id: str) -> list[str]:
     """Every board whose tasks belong on the workspace calendar: the caller's personal
     boards PLUS the non-archived boards of every non-archived team they're a member of.
@@ -261,17 +281,7 @@ def _calendar_board_ids(db: Client, user_id: str) -> list[str]:
     Unlike _resolve_read_board_ids' personal-only default, the calendar is cross-board by
     design. Membership is still the gate — no board the caller can't already read is added.
     """
-    ids = _personal_board_ids(db, user_id)
-    memberships = db.table("team_members").select("team_id").eq("user_id", user_id).execute().data or []
-    team_ids = [m["team_id"] for m in memberships]
-    if not team_ids:
-        return ids
-    active = db.table("teams").select("id").in_("id", team_ids).is_("archived_at", "null").execute().data or []
-    active_ids = [t["id"] for t in active]
-    if not active_ids:
-        return ids
-    rows = db.table("boards").select("id").in_("team_id", active_ids).eq("archived", False).execute().data or []
-    return ids + [r["id"] for r in rows]
+    return _personal_board_ids(db, user_id) + _team_board_ids(db, _active_team_ids(db, user_id))
 
 
 def _stamp_team_context(db: Client, tasks: list) -> list:
@@ -433,7 +443,7 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
         task_id = task["id"]
 
         # Merge-on-write: preserve co-owners' rows, snapshot labels. Re-set the accessible ids
-        # on the task dict BEFORE emit — the Slack bridge routes via task["project_ids"][0].
+        # on the task dict BEFORE emit — event consumers route via task["project_ids"][0].
         task["artist_ids"] = _merge_junction(
             supabase,
             task_id,
@@ -690,10 +700,15 @@ async def get_tasks_by_date_range(
         board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
     else:
         board_ids = _calendar_board_ids(supabase, user_id)
+    return _tasks_in_range(supabase, user_id, board_ids, start, end)
+
+
+def _tasks_in_range(db: Client, user_id: str, board_ids: list[str], start: str, end: str) -> list:
+    """Non-parent tasks in the given boards whose due_date falls inside [start, end]."""
     if not board_ids:
         return []
     due_result = (
-        supabase.table("board_tasks")
+        db.table("board_tasks")
         .select("*")
         .in_("board_id", board_ids)
         .or_("is_parent.eq.false,is_parent.is.null")
@@ -701,8 +716,67 @@ async def get_tasks_by_date_range(
         .lte("due_date", end)
         .execute()
     )
+    return _stamp_team_context(db, _enrich_tasks(db, due_result.data or [], user_id))
 
-    return _stamp_team_context(supabase, _enrich_tasks(supabase, due_result.data or [], user_id))
+
+# --- Calendar subscription feeds (.ics) ---
+
+
+ALL_FEED_NAME = "Msanii platform - All Tasks Calendar"
+PERSONAL_FEED_NAME = "Msanii platform - Personal Calendar"
+
+
+def _team_feed_name(team_name: str) -> str:
+    return f"Msanii platform - Team {team_name} Calendar"
+
+
+def feed_name(db: Client, scope: str) -> str:
+    """Display name for a feed scope — this becomes the calendar's name in Google/Apple."""
+    if scope == "all":
+        return ALL_FEED_NAME
+    if scope == "personal":
+        return PERSONAL_FEED_NAME
+    row = db.table("teams").select("name").eq("id", scope).limit(1).execute().data or []
+    # An unresolvable scope serves an empty feed (get_feed_tasks gates it), so it just needs a name.
+    return _team_feed_name(row[0]["name"]) if row else "Msanii platform - Calendar"
+
+
+async def list_calendar_feeds(db: Client, user_id: str) -> list[dict]:
+    """Calendar scopes the caller can subscribe to: everything, personal, one per active team.
+
+    With no teams, "everything" and "personal" are the same set of boards — offering both
+    would just be two identical links, so a solo user gets one calendar.
+    """
+    team_ids = _active_team_ids(db, user_id)
+    if not team_ids:
+        return [{"scope": "all", "name": ALL_FEED_NAME, "team_name": None}]
+
+    feeds = [
+        {"scope": "all", "name": ALL_FEED_NAME, "team_name": None},
+        {"scope": "personal", "name": PERSONAL_FEED_NAME, "team_name": None},
+    ]
+    rows = db.table("teams").select("id, name").in_("id", team_ids).execute().data or []
+    # team_name is sent alongside the full name so the picker can label rows by the one
+    # part that differs between them, instead of repeating the branded name four times.
+    feeds += [
+        {"scope": r["id"], "name": _team_feed_name(r["name"]), "team_name": r["name"]}
+        for r in sorted(rows, key=lambda r: (r.get("name") or "").lower())
+    ]
+    return feeds
+
+
+async def get_feed_tasks(db: Client, user_id: str, scope: str, start: str, end: str) -> list:
+    """Tasks for one calendar feed scope. A team scope resolves only for an active member,
+    so a tampered scope can never widen what the feed exposes."""
+    if scope == "personal":
+        board_ids = _personal_board_ids(db, user_id)
+    elif scope == "all":
+        board_ids = _calendar_board_ids(db, user_id)
+    elif scope in _active_team_ids(db, user_id):
+        board_ids = _team_board_ids(db, [scope])
+    else:
+        board_ids = []
+    return _tasks_in_range(db, user_id, board_ids, start, end)
 
 
 # --- Period-based Tasks ---
@@ -1161,3 +1235,103 @@ async def create_default_columns(
         if result.data:
             columns.append(result.data[0])
     return columns
+
+
+# --- External calendar subscriptions (import) ---
+
+
+async def list_subscriptions(db: Client, user_id: str) -> list[dict]:
+    """The caller's subscribed external calendars. The URL is a bearer credential for
+    someone's private calendar, so it is never returned to the client."""
+    rows = (
+        db.table("calendar_subscriptions")
+        .select("id, name, last_error, created_at")
+        .eq("user_id", user_id)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+    return rows
+
+
+async def add_subscription(db: Client, user_id: str, url: str, name: str | None = None) -> dict:
+    """Store a subscription after proving the URL actually resolves to a calendar —
+    validating on add means a typo surfaces immediately instead of as a silently
+    empty calendar later."""
+    normalized = calendar_import.normalize_url(url)
+    calendar_import.forget(normalized)
+    text = await calendar_import.fetch_feed(normalized)
+
+    row = {
+        "user_id": user_id,
+        "url": normalized,
+        "name": (name or "").strip() or _calendar_name_from_ics(text) or "Imported calendar",
+        "last_error": None,
+    }
+    result = db.table("calendar_subscriptions").upsert(row, on_conflict="user_id,url").execute()
+    saved = (result.data or [row])[0]
+    return {k: saved.get(k) for k in ("id", "name", "last_error", "created_at")}
+
+
+def _calendar_name_from_ics(text: str) -> str | None:
+    """Use the feed's own X-WR-CALNAME so the subscription is labelled the way the
+    source calendar labels itself."""
+    for line in text.splitlines():
+        if line.upper().startswith("X-WR-CALNAME:"):
+            return line.partition(":")[2].strip()[:120] or None
+    return None
+
+
+async def delete_subscription(db: Client, user_id: str, subscription_id: str) -> bool:
+    existing = (
+        db.table("calendar_subscriptions").select("url").eq("id", subscription_id).eq("user_id", user_id).execute().data
+        or []
+    )
+    if not existing:
+        return False
+    db.table("calendar_subscriptions").delete().eq("id", subscription_id).eq("user_id", user_id).execute()
+    calendar_import.forget(existing[0]["url"])
+    return True
+
+
+async def get_external_events(db: Client, user_id: str, start: str, end: str) -> list[dict]:
+    """Every subscribed calendar's events in the window, tagged with their source.
+
+    One dead feed must not blank out the others, so each is fetched independently and
+    a failure is recorded on that subscription instead of raising.
+    """
+    subs = db.table("calendar_subscriptions").select("id, name, url").eq("user_id", user_id).execute().data or []
+    if not subs:
+        return []
+
+    settings = db.table("workspace_settings").select("timezone").eq("user_id", user_id).execute().data or []
+    timezone = (settings[0] if settings else {}).get("timezone")
+    lo, hi = date.fromisoformat(start), date.fromisoformat(end)
+
+    feeds = await asyncio.gather(*(calendar_import.fetch_feed(s["url"]) for s in subs), return_exceptions=True)
+
+    events: list[dict] = []
+    for sub, text in zip(subs, feeds, strict=True):
+        if isinstance(text, Exception):
+            message = str(text) if isinstance(text, calendar_import.FeedError) else "Could not load this calendar"
+            _record_feed_error(db, user_id, sub["id"], message)
+            continue
+        _record_feed_error(db, user_id, sub["id"], None)
+        for event in ics.parse_ics(text, lo, hi, timezone):
+            events.append({**event, "source_id": sub["id"], "source_name": sub["name"]})
+    return events
+
+
+def _record_feed_error(db: Client, user_id: str, subscription_id: str, message: str | None) -> None:
+    """Best-effort status write — a failed status update must never break the calendar.
+
+    Scoped by user_id as well as id: the backend's service-role client bypasses RLS, so
+    the query filter is the only thing standing between this and another user's row.
+    """
+    try:
+        db.table("calendar_subscriptions").update({"last_error": message}).eq("id", subscription_id).eq(
+            "user_id", user_id
+        ).execute()
+    except Exception:
+        pass

@@ -13,8 +13,41 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Detect which side of the repo the diff touches so PRs only run the suites
+  # they can affect. Job-level `if` (not workflow-level `paths:`) on purpose:
+  # a job skipped by `if` still reports a conclusion, so branch-protection
+  # required checks stay satisfied — workflow-level paths would leave required
+  # checks pending forever on filtered-out PRs.
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'src/backend/**'
+              - '.github/workflows/ci.yml'
+            # Fail-open: anything that is not clearly backend-only, migrations,
+            # or docs counts as frontend. When in doubt, the suite runs.
+            frontend:
+              - '**'
+              - '!src/backend/**'
+              - '!supabase/**'
+              - '!docs/**'
+              - '!**.md'
+
   backend:
     name: Backend (Python)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -57,6 +90,8 @@ jobs:
 
   frontend:
     name: Frontend (TypeScript)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

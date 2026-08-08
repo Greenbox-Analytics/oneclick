@@ -18,7 +18,7 @@ export const ANALYTICS_CONTEXT_UPDATED_EVENT = CONTEXT_UPDATED_EVENT;
 export interface AnalyticsContext {
   is_tester: boolean;
   is_admin: boolean; // server-derived (don't leak ADMIN_EMAILS into the JS bundle)
-  plan: string; // "free" | "pro"
+  plan: string; // "free" | "basic" | "pro"
   role: string | null;
   email: string | null;
   signed_up_at: string | null;
@@ -91,7 +91,7 @@ function clearCache(): void {
 
 /**
  * Force-refresh the cached analytics context. Call after a successful Stripe
- * checkout so the cached `plan: "free"` is replaced with `plan: "pro"` before
+ * checkout so the cached `plan: "free"` is replaced with the paid key before
  * any consumer (e.g. the dashboard UpgradeBanner) re-renders against the
  * stale value. Safe to call without an active mount of useAnalyticsContext.
  */

@@ -1,30 +1,14 @@
-"""Tests for integration endpoints (connections, Google Drive, Slack, OneClick share).
+"""Tests for integration endpoints (connections, Google Drive, OneClick share).
 
 Acceptance criteria:
 1. GET /integrations/connections - list connections (no secrets)
 2. Google Drive auth/disconnect
-3. Slack channels, settings, webhook
-4. OneClick share validation
+3. OneClick share validation
 """
 
-import hashlib
-import hmac
-import json
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.conftest import TEST_USER_ID, MockQueryBuilder
-
-_WEBHOOK_TEST_SECRET = "test-signing-secret"
-
-
-def _slack_headers(body: bytes, secret: str = _WEBHOOK_TEST_SECRET) -> dict:
-    """Return X-Slack-Signature and X-Slack-Request-Timestamp headers for a body."""
-    ts = str(int(time.time()))
-    base = f"v0:{ts}:".encode() + body
-    sig = "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
-    return {"X-Slack-Signature": sig, "X-Slack-Request-Timestamp": ts}
-
 
 # ---------------------------------------------------------------------------
 # Shared constants
@@ -42,25 +26,6 @@ SAMPLE_CONNECTION = {
     "scopes": ["https://www.googleapis.com/auth/drive.file"],
     "created_at": "2026-04-10T00:00:00+00:00",
     "updated_at": "2026-04-10T00:00:00+00:00",
-}
-
-SAMPLE_SLACK_CONNECTION = {
-    **SAMPLE_CONNECTION,
-    "id": "conn-0000-0000-0000-0000-000000000002",
-    "provider": "slack",
-    "provider_workspace_id": "T12345",
-    "scopes": ["channels:read", "chat:write"],
-}
-
-SAMPLE_CHANNEL = {"id": "C12345", "name": "general", "is_private": False}
-
-SAMPLE_NOTIFICATION_SETTING = {
-    "id": "ns-0000-0000-0000-0000-000000000001",
-    "user_id": TEST_USER_ID,
-    "provider": "slack",
-    "event_type": "task_created",
-    "enabled": True,
-    "channel_id": "C12345",
 }
 
 
@@ -111,18 +76,6 @@ class TestListConnections:
         assert "access_token_encrypted" not in conn
         assert "refresh_token_encrypted" not in conn
 
-    def test_returns_multiple_providers(self, client, mock_supabase):
-        """GET /integrations/connections returns connections for multiple providers."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[SAMPLE_CONNECTION, SAMPLE_SLACK_CONNECTION])
-        mock_supabase.table.side_effect = lambda name: builder
-
-        response = client.get("/integrations/connections")
-
-        assert response.status_code == 200
-        providers = {c["provider"] for c in response.json()["connections"]}
-        assert providers == {"google_drive", "slack"}
-
 
 # ============================================================
 # Google Drive endpoints
@@ -167,153 +120,6 @@ class TestGoogleDriveBrowse:
         assert response.status_code == 401
 
 
-# ============================================================
-# Slack endpoints
-# ============================================================
-
-
-class TestSlackDisconnect:
-    def test_disconnect_returns_success(self, client, mock_supabase):
-        """DELETE /integrations/slack/disconnect returns {"success": true}."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.side_effect = lambda name: builder
-
-        response = client.delete("/integrations/slack/disconnect")
-
-        assert response.status_code == 200
-        assert response.json() == {"success": True}
-
-
-class TestSlackSettings:
-    def test_get_settings_returns_settings_key(self, client, mock_supabase):
-        """GET /integrations/slack/settings returns {"settings": [...]}."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[SAMPLE_NOTIFICATION_SETTING])
-        mock_supabase.table.side_effect = lambda name: builder
-
-        response = client.get("/integrations/slack/settings")
-
-        assert response.status_code == 200
-        body = response.json()
-        assert "settings" in body
-        assert isinstance(body["settings"], list)
-
-    def test_get_settings_empty(self, client, mock_supabase):
-        """GET /integrations/slack/settings returns empty list when none configured."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.side_effect = lambda name: builder
-
-        response = client.get("/integrations/slack/settings")
-
-        assert response.status_code == 200
-        assert response.json()["settings"] == []
-
-    def test_update_settings_returns_success(self, client, mock_supabase):
-        """PUT /integrations/slack/settings returns {"success": true}."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.side_effect = lambda name: builder
-
-        response = client.put(
-            "/integrations/slack/settings",
-            json={
-                "event_type": "task_created",
-                "enabled": True,
-                "channel_id": "C12345",
-            },
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"success": True}
-
-    def test_update_settings_disable_event(self, client, mock_supabase):
-        """PUT /integrations/slack/settings with enabled=false."""
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[SAMPLE_NOTIFICATION_SETTING])
-        mock_supabase.table.side_effect = lambda name: builder
-
-        response = client.put(
-            "/integrations/slack/settings",
-            json={
-                "event_type": "task_created",
-                "enabled": False,
-            },
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"success": True}
-
-
-class TestSlackChannels:
-    @patch("integrations.slack.router.get_valid_token", new_callable=AsyncMock)
-    def test_channels_returns_401_when_not_connected(self, mock_token, client):
-        """GET /integrations/slack/channels returns 401 when Slack not connected."""
-        mock_token.return_value = None
-
-        response = client.get("/integrations/slack/channels")
-
-        assert response.status_code == 401
-
-
-class TestSlackWebhook:
-    def test_url_verification_challenge(self, client, monkeypatch):
-        """POST /integrations/slack/webhook handles URL verification."""
-        monkeypatch.setenv("SLACK_SIGNING_SECRET", _WEBHOOK_TEST_SECRET)
-        body = json.dumps({"type": "url_verification", "challenge": "test-challenge-string"}).encode()
-        response = client.post(
-            "/integrations/slack/webhook",
-            content=body,
-            headers=_slack_headers(body),
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"challenge": "test-challenge-string"}
-
-    def test_event_callback_returns_ok(self, client, mock_supabase, monkeypatch):
-        """POST /integrations/slack/webhook returns ok for event_callback."""
-        monkeypatch.setenv("SLACK_SIGNING_SECRET", _WEBHOOK_TEST_SECRET)
-        builder = MockQueryBuilder()
-        builder.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.side_effect = lambda name: builder
-
-        body = json.dumps(
-            {
-                "type": "event_callback",
-                "event": {
-                    "type": "app_mention",
-                    "channel": "C12345",
-                    "user": "U12345",
-                    "text": "Hey <@BOT> check this out",
-                    "ts": "1234567890.123456",
-                },
-            }
-        ).encode()
-        response = client.post(
-            "/integrations/slack/webhook",
-            content=body,
-            headers=_slack_headers(body),
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"ok": True}
-
-    def test_unknown_event_type_returns_ok(self, client, monkeypatch):
-        """POST /integrations/slack/webhook returns ok for unknown event types."""
-        monkeypatch.setenv("SLACK_SIGNING_SECRET", _WEBHOOK_TEST_SECRET)
-        body = json.dumps({"type": "some_other_type"}).encode()
-        response = client.post(
-            "/integrations/slack/webhook",
-            content=body,
-            headers=_slack_headers(body),
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"ok": True}
-
-
-# ============================================================
 # OneClick Share
 # ============================================================
 
@@ -335,41 +141,6 @@ class TestOneClickShare:
         )
 
         assert response.status_code == 401
-
-    @patch("oneclick.share.get_valid_token", new_callable=AsyncMock)
-    def test_share_to_slack_returns_401_when_not_connected(self, mock_token, client):
-        """POST /oneclick/share returns 401 when Slack not connected."""
-        mock_token.return_value = None
-
-        response = client.post(
-            "/oneclick/share",
-            json={
-                "target": "slack",
-                "artist_name": "Test Artist",
-                "payments": [],
-                "total_payments": 0,
-                "channel_id": "C12345",
-            },
-        )
-
-        assert response.status_code == 401
-
-    @patch("oneclick.share.get_valid_token", new_callable=AsyncMock)
-    def test_share_to_slack_requires_channel_id(self, mock_token, client):
-        """POST /oneclick/share returns 400 when no channel_id for Slack."""
-        mock_token.return_value = "xoxb-fake-token"
-
-        response = client.post(
-            "/oneclick/share",
-            json={
-                "target": "slack",
-                "artist_name": "Test Artist",
-                "payments": [],
-                "total_payments": 0,
-            },
-        )
-
-        assert response.status_code == 400
 
     def test_share_invalid_target_returns_422(self, client):
         """POST /oneclick/share with missing required fields returns 422."""
@@ -411,29 +182,6 @@ class TestOneClickShare:
         assert body["success"] is True
         assert body["target"] == "drive"
 
-    @patch("oneclick.share.get_valid_token", new_callable=AsyncMock)
-    @patch("integrations.slack.service.upload_file_to_channel", new_callable=AsyncMock)
-    def test_share_to_slack_success(self, mock_upload, mock_token, client):
-        """POST /oneclick/share target=slack returns success when connected."""
-        mock_token.return_value = "xoxb-fake-token"
-        mock_upload.return_value = {"ok": True, "file": {"id": "F12345"}}
-
-        response = client.post(
-            "/oneclick/share",
-            json={
-                "target": "slack",
-                "artist_name": "Test Artist",
-                "payments": [],
-                "total_payments": 0,
-                "channel_id": "C12345",
-            },
-        )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["success"] is True
-        assert body["target"] == "slack"
-
 
 # ============================================================
 # SP3 Integration OAuth gating
@@ -441,7 +189,7 @@ class TestOneClickShare:
 
 
 class TestIntegrationGated:
-    """SP3: Free users cannot start OAuth for Slack; Drive is ungated."""
+    """SP3: Drive OAuth start is ungated."""
 
     def _denied_service(self, name: str):
         from subscriptions.models import CheckResult
@@ -453,17 +201,6 @@ class TestIntegrationGated:
             upgrade_required=True,
         )
         return svc
-
-    def test_slack_oauth_start_free_returns_402(self, client, monkeypatch):
-        """Free user -> GET /integrations/slack/auth returns 402."""
-        from subscriptions import enforcement
-
-        monkeypatch.setattr(enforcement, "_service", lambda: self._denied_service("slack"))
-
-        resp = client.get("/integrations/slack/auth")
-        assert resp.status_code == 402
-        detail = resp.json()["detail"].lower()
-        assert "slack" in detail or "integration" in detail or "pro" in detail
 
     @patch("integrations.google_drive.router.build_auth_url")
     def test_drive_oauth_start_free_succeeds(self, mock_build, client, monkeypatch):

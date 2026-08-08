@@ -42,15 +42,6 @@ const Registry = () => {
           actions={
             <>
               <ToolHelpButton onClick={() => walkthrough.replay()} />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => navigate("/docs")}
-                title="Documentation"
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <BookOpen className="w-4 h-4" />
-              </Button>
               <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
                 Back to Tools
               </Button>

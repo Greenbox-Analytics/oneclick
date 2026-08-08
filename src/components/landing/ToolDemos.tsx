@@ -348,10 +348,6 @@ function DemoOneClickInner({ playing, height }: DemoBodyProps) {
                       <span style={{ width: 12, height: 12, borderRadius: 3, background: "#1a73e8" }} />
                       Save to Google Drive
                     </span>
-                    <span style={SHARE_CHIP}>
-                      <span style={{ width: 12, height: 12, borderRadius: 3, background: "#611f69" }} />
-                      Share to Slack
-                    </span>
                   </div>
                 </div>
                 <OneClickPie />
@@ -981,7 +977,6 @@ const WORKSPACE_COL_BASE = [
 
 const WORKSPACE_INTEGRATIONS = [
   { l: "Google Drive", d: "#1a73e8" },
-  { l: "Slack", d: "#611f69" },
 ];
 
 const TRAVELING_CARD = "Cold Mornings · Master";
@@ -1485,7 +1480,7 @@ export const TOOLS: Tool[] = [
     bullets: [
       "Task management",
       "Track various initiatives in one area",
-      "Connect files and contents from Google Drive, Slack and more",
+      "Connect files and contents from Google Drive and more",
       "Calendar synced to the project board",
     ],
     cta: "Open Workspace",

@@ -1,5 +1,6 @@
-import { useMutation } from "@tanstack/react-query";
-import { API_URL, getAuthHeaders, ApiError } from "@/lib/apiFetch";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { API_URL, getAuthHeaders, apiErrorFromBody } from "@/lib/apiFetch";
+import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 
 export interface ParsedParty {
   name: string;
@@ -31,7 +32,10 @@ interface ParseInput {
  * branches so the backend can switch on `file` vs `contract_file_id`.
  */
 export function useParseContractSplits() {
+  const queryClient = useQueryClient();
   return useMutation<ParseContractSplitsResponse, Error, ParseInput>({
+    // Parses are credit-metered — refresh the ticker/chips once one lands.
+    onSuccess: () => invalidateCreditSurfaces(queryClient),
     mutationFn: async ({ file, contractFileId, mainArtistName }) => {
       if (!!file === !!contractFileId) {
         throw new Error("Provide exactly one of file or contractFileId");
@@ -48,7 +52,7 @@ export function useParseContractSplits() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new ApiError(body.detail || `Request failed: ${res.status}`, res.status);
+        throw apiErrorFromBody(body, res.status);
       }
       return res.json();
     },

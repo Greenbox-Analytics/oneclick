@@ -1,9 +1,12 @@
 """FastAPI router for the Kanban board feature."""
 
+import re
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 # Ensure backend dir is in path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -12,12 +15,13 @@ if str(BACKEND_DIR) not in sys.path:
 
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
-from boards import service
+from boards import calendar_import, ics, service
 from boards.models import (
     AssigneeAdd,
     BatchReorder,
     BoardCreate,
     BoardUpdate,
+    CalendarSubscriptionCreate,
     ColumnCreate,
     ColumnUpdate,
     CommentCreate,
@@ -229,6 +233,70 @@ async def calendar_tasks(
     return {"tasks": tasks}
 
 
+@router.get("/calendar/feeds")
+async def calendar_feeds(user_id: str = Depends(get_current_user_id)):
+    """The caller's private .ics subscription URLs — one per calendar they can subscribe to
+    (everything, personal, and each of their teams). Google/Apple/Outlook all read these."""
+    feeds = await service.list_calendar_feeds(_get_supabase(), user_id)
+    for feed in feeds:
+        feed["url"] = ics.feed_url(user_id, feed["scope"])
+        feed["webcal_url"] = re.sub(r"^https?://", "webcal://", feed["url"])
+    return {"feeds": feeds}
+
+
+# --- External calendar subscriptions (import) ---
+
+
+@router.get("/calendar/subscriptions")
+async def list_calendar_subscriptions(user_id: str = Depends(get_current_user_id)):
+    """The caller's imported calendars. URLs are never returned — they're credentials."""
+    return {"subscriptions": await service.list_subscriptions(_get_supabase(), user_id)}
+
+
+@router.post("/calendar/subscriptions")
+async def add_calendar_subscription(body: CalendarSubscriptionCreate, user_id: str = Depends(get_current_user_id)):
+    """Subscribe to an external .ics calendar. Validates the URL by fetching it once."""
+    try:
+        return await service.add_subscription(_get_supabase(), user_id, body.url, body.name)
+    except calendar_import.FeedError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/calendar/subscriptions/{subscription_id}")
+async def remove_calendar_subscription(subscription_id: str, user_id: str = Depends(get_current_user_id)):
+    if not await service.delete_subscription(_get_supabase(), user_id, subscription_id):
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return {"success": True}
+
+
+@router.get("/calendar/external")
+async def external_calendar_events(
+    user_id: str = Depends(get_current_user_id),
+    start: str = Query(..., description="Start date YYYY-MM-DD"),
+    end: str = Query(..., description="End date YYYY-MM-DD"),
+):
+    """Read-only events from the caller's imported calendars, for the calendar overlay.
+
+    Separate from /calendar on purpose: a slow or dead external feed must not delay
+    or break the user's own tasks.
+    """
+    return {"events": await service.get_external_events(_get_supabase(), user_id, start, end)}
+
+
+@router.get("/calendar/{feed_user_id}/{scope}/{token}.ics", include_in_schema=False)
+async def calendar_feed(feed_user_id: str, scope: str, token: str):
+    """Public read-only task feed. The HMAC in the path is the only credential —
+    calendar clients send no auth headers — so a bad token is a plain 404."""
+    if not ics.verify_feed_token(feed_user_id, scope, token):
+        raise HTTPException(status_code=404, detail="Not found")
+    supabase = _get_supabase()
+    today = datetime.now(UTC).date()
+    window = timedelta(days=ics.FEED_WINDOW_DAYS)
+    tasks = await service.get_feed_tasks(supabase, feed_user_id, scope, str(today - window), str(today + window))
+    body = ics.build_ics(tasks, cal_name=service.feed_name(supabase, scope))
+    return Response(content=body, media_type="text/calendar; charset=utf-8")
+
+
 # --- Period-based Tasks (must come before /tasks/{task_id} routes) ---
 
 
@@ -299,6 +367,27 @@ async def create_task(body: TaskCreate, user_id: str = Depends(get_current_user_
         raise HTTPException(status_code=500, detail="Failed to create task")
     analytics_capture(user_id, "task_created", {"tool": "boards", "source": "manual"})
     return task
+
+
+@router.get("/tasks/{task_id}/calendar.ics")
+async def task_calendar_file(task_id: str, user_id: str = Depends(get_current_user_id)):
+    """Download ONE task as a .ics file — for adding a single deadline to a calendar
+    without subscribing to the whole feed. Same renderer as the feed, so a task looks
+    identical either way it arrives."""
+    # get_task_detail runs require_board_access, which already raises 404 for a task
+    # the caller can't see — so no access check is needed here.
+    task = await service.get_task_detail(_get_supabase(), user_id, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.get("due_date"):
+        raise HTTPException(status_code=400, detail="Add a due date before sending this task to a calendar")
+
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", task.get("title") or "task")[:60] or "task"
+    return Response(
+        content=ics.build_ics([task]),
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.ics"'},
+    )
 
 
 @router.get("/tasks/{task_id}/detail")

@@ -1,23 +1,26 @@
 import { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, CreditCard, Music } from "lucide-react";
+import { ArrowLeft, Home, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSmartBack } from "@/hooks/useSmartBack";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { NotificationBell } from "@/components/layout/NotificationBell";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
+import { HeaderCreditsTicker } from "@/components/billing/HeaderCreditsTicker";
 import { cn } from "@/lib/utils";
 
 interface PageHeaderProps {
   title?: string;
   subtitle?: string;
   backTo?: string | (() => void);
-  /** Page-specific actions (docs link, search, etc.) — rendered first. */
+  /** Genuinely page-specific actions (search, tool help, etc.) — rendered
+   * first. Docs/home/credits are built in; don't pass them here. */
   actions?: ReactNode;
-  /** The user/profile dropdown — rendered LAST, after the auto-injected
-   * billing icon. Use this slot (instead of stuffing the profile menu into
-   * `actions`) so the order stays consistent: actions → billing → profile. */
+  /** The user/profile dropdown — rendered LAST. Use this slot (instead of
+   * stuffing the profile menu into `actions`) so the order stays consistent:
+   * actions → credits → home → docs → notifications → profile. */
   userMenu?: ReactNode;
   showLogo?: boolean;
   showBack?: boolean;
@@ -38,21 +41,24 @@ export function PageHeader({
   const isMobile = useIsMobile();
   const { user } = useAuth();
 
-  // Renders globally for authenticated users only — appears in the actions
-  // slot, positioned after page-specific actions (so it lands right of "docs"
-  // on pages that include the docs icon there, and left of any profile
-  // dropdown that lives further right).
-  const billingButton = user ? (
+  // House icon next to the bell — one-click route to the landing page
+  // (replaces the avatar-dropdown "View landing page" hop).
+  const homeButton = user ? (
     <Button
       variant="ghost"
       size="icon"
-      onClick={() => navigate("/subscription")}
-      title="Billing & subscription"
+      onClick={() => navigate("/")}
+      aria-label="Home page"
+      title="Landing page"
       className="text-muted-foreground hover:text-foreground"
     >
-      <CreditCard className="w-4 h-4" />
+      <Home className="w-4 h-4" />
     </Button>
   ) : null;
+
+  const creditsTicker = user ? <HeaderCreditsTicker /> : null;
+
+  const docsButton = user ? <HeaderDocsButton /> : null;
 
   const notificationBell = user ? <NotificationBell /> : null;
 
@@ -90,11 +96,13 @@ export function PageHeader({
               </div>
             ) : null}
           </div>
-          {(actions || notificationBell || billingButton || userMenu) && (
+          {(actions || homeButton || notificationBell || userMenu) && (
             <div className="flex items-center gap-1 shrink-0">
               {actions}
+              {creditsTicker}
+              {homeButton}
+              {docsButton}
               {notificationBell}
-              {billingButton}
               {userMenu}
             </div>
           )}
@@ -138,11 +146,13 @@ export function PageHeader({
             </div>
           )}
         </div>
-        {(actions || notificationBell || billingButton || userMenu) && (
+        {(actions || homeButton || notificationBell || userMenu) && (
           <div className="flex items-center gap-2 shrink-0">
             {actions}
+            {creditsTicker}
+            {homeButton}
+            {docsButton}
             {notificationBell}
-            {billingButton}
             {userMenu}
           </div>
         )}

@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { BookOpen, Plus, Receipt, ChevronRight, Loader2, Download, FileText, FileSpreadsheet } from "lucide-react";
+import { Plus, Receipt, ChevronRight, Loader2, Download, FileText, FileSpreadsheet } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 import {
   ChartContainer,
@@ -203,17 +203,6 @@ const ExpenseTracker = () => {
     <div className="min-h-screen bg-background">
       <PageHeader
         backTo="/tools"
-        actions={
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate("/docs")}
-            title="Documentation"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <BookOpen className="w-4 h-4" />
-          </Button>
-        }
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">

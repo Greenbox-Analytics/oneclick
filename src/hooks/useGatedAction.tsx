@@ -40,6 +40,16 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
 ): UseGatedActionResult<TData, TVars> {
   const [paywallOpen, setPaywallOpen] = useState(false);
   const [paywallReason, setPaywallReason] = useState<string | undefined>(undefined);
+  // Licensing Phase B (plan Task 13): a credit-402's structured `detail` can
+  // carry `managedByOrg`/`requestUrl` (subscriptions/enforcement.py's
+  // gated_credits) — threaded through to the modal so it can swap the
+  // upgrade CTA for a "Request credits" one instead of losing that signal
+  // down to just `reason`'s plain text.
+  const [paywallDetail, setPaywallDetail] = useState<{
+    managedByOrg?: boolean;
+    capReached?: boolean;
+    requestUrl?: string;
+  }>({});
 
   const mutation = useMutation<TData, Error, TVars, TContext>({
     mutationFn: opts.mutationFn,
@@ -54,7 +64,7 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
         const afterPct = after / cap;
         if (afterPct >= 0.8 && beforePct < 0.8 && !_toastedResources.has(opts.resource)) {
           _toastedResources.add(opts.resource);
-          toast(`You're at ${after}/${cap} ${opts.resource}s — upgrade to Pro for unlimited.`);
+          toast(`You're at ${after}/${cap} ${opts.resource}s — upgrade your plan for more.`);
         }
       }
       opts.onSuccess?.(data, vars, context);
@@ -68,11 +78,20 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
 
       if (err instanceof ApiError && err.status === 402) {
         setPaywallReason(err.message);
+        const detail = err.detail as
+          | { managedByOrg?: boolean; capReached?: boolean; requestUrl?: string }
+          | undefined;
+        setPaywallDetail({
+          managedByOrg: detail?.managedByOrg === true,
+          capReached: detail?.capReached === true,
+          requestUrl: typeof detail?.requestUrl === "string" ? detail.requestUrl : undefined,
+        });
         setPaywallOpen(true);
         return; // swallow: paywall surfaces in the modal, not via consumer toast
       }
       if (looksLikeStorageCap) {
-        setPaywallReason("Upload would exceed your storage cap. Upgrade to Pro for unlimited.");
+        setPaywallReason("Upload would exceed your storage limit. Upgrade your plan for more storage.");
+        setPaywallDetail({});
         setPaywallOpen(true);
         return;
       }
@@ -90,6 +109,9 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
       reason={paywallReason}
       feature={opts.feature}
       resource={opts.resource}
+      managedByOrg={paywallDetail.managedByOrg}
+      capReached={paywallDetail.capReached}
+      requestUrl={paywallDetail.requestUrl}
     />
   );
 

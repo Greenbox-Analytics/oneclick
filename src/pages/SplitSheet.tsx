@@ -34,7 +34,6 @@ import {
   Users,
   CheckCircle,
   Folder,
-  BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -386,15 +385,6 @@ const SplitSheet = () => {
       <PageHeader
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
             <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
               <ArrowLeft className="w-4 h-4 mr-2" />

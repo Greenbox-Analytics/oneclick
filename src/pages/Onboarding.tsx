@@ -186,7 +186,7 @@ const Onboarding = () => {
   /** Pro path — save profile, then redirect to Stripe Checkout.
    * Profile is saved FIRST so a cancelled checkout returns the user to a
    * fully-onboarded state (they just stay on the Free plan). */
-  const handleChoosePro = async (plan: "monthly" | "annual") => {
+  const handleChooseBasic = async (plan: "monthly" | "annual") => {
     captureOnboardingStepCompleted(STEP_NAMES[3]);
     const { error } = await persistProfile();
     if (error) {
@@ -196,9 +196,9 @@ const Onboarding = () => {
     if (user) markOnboardedCached(user.id);
     try {
       const url = await createCheckout({
-        plan,
+        plan: plan === "annual" ? "basic_annual" : "basic_monthly",
         cancel_path: "/onboarding?upgrade=cancelled",
-        // success_path stays default → /subscription?stripe_session_id=...&welcome=true
+        // success_path stays default → /profile?stripe_session_id=...&welcome=true
       });
       window.location.href = url;
     } catch (e) {
@@ -259,7 +259,7 @@ const Onboarding = () => {
         {currentStep === 3 && (
           <StepPlan
             onChooseFree={handleChooseFree}
-            onChoosePro={handleChoosePro}
+            onChoosePro={handleChooseBasic}
             onBack={() => setCurrentStep(2)}
           />
         )}

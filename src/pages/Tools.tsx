@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calculator, ArrowRight, Bot, FileText, Shield, BookOpen, Receipt } from "lucide-react";
+import { Calculator, ArrowRight, Bot, FileText, Shield, Receipt } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
@@ -58,17 +58,6 @@ const Tools = () => {
     <div className="min-h-screen bg-background">
       <PageHeader
         backTo="/dashboard"
-        actions={
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate("/docs")}
-            title="Documentation"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <BookOpen className="w-4 h-4" />
-          </Button>
-        }
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">

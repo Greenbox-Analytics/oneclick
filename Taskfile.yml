@@ -250,9 +250,9 @@ tasks:
         try_gsm "GOOGLE_DRIVE_CLIENT_SECRET"
         end_section
 
-        start_section "SLACK INTEGRATION"
-        try_gsm "SLACK_CLIENT_ID"
-        try_gsm "SLACK_CLIENT_SECRET"
+        start_section "DROPBOX AUTH MSANII BACKEND"
+        try_gsm "DROPBOX_APP_KEY"
+        try_gsm "DROPBOX_APP_SECRET"
         end_section
 
         start_section "SPOTIFY INTEGRATION"
@@ -304,6 +304,19 @@ tasks:
         try_gsm "RESEND_API_KEY"
         try_gsm "RESEND_FROM_EMAIL"
         end_section
+
+        # DEV-only: turn on credits + licensing so they can be exercised locally.
+        # Gated to DEV so a PROD refill never silently flips these feature flags on.
+        if [[ "{{.ENV_SUFFIX}}" == "DEV" ]]; then
+          start_section "CREDIT SYSTEM & LICENSING (local testing)"
+          try_literal "CREDITS_ENABLED" "true"
+          try_literal "CREDIT_OVERAGE_USD" "0.02"
+          try_literal "STORAGE_OVERAGE_USD_PER_GB" "0.05"
+          try_literal "LICENSING_ENABLED" "true"
+          try_literal "ENTERPRISE_MIN_INITIAL_CREDITS" "10000"
+          try_literal "ENTERPRISE_SEAT_STORAGE_BYTES" "536870912000"
+          end_section
+        fi
 
         start_section "LOCAL TESTING VARS & LOCAL ADMIN RIGHTS"
         try_gsm "ADMIN_EMAILS"

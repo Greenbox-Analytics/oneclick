@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { useDriveBrowse, useDriveImport } from "@/hooks/useGoogleDrive";
 import { toast } from "sonner";
-import type { DriveFile } from "@/types/integrations";
+import type { DriveFile, IntegrationProvider } from "@/types/integrations";
 
 const CATEGORY_ALLOWED_TYPES: Record<string, { mimeTypes: string[]; label: string }> = {
   contract: {
@@ -89,20 +89,34 @@ interface DriveImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
+  provider?: IntegrationProvider;
 }
 
-export function DriveImportDialog({ open, onOpenChange, projectId }: DriveImportDialogProps) {
+const PROVIDER_LABELS: Record<IntegrationProvider, { title: string; root: string; searchPlaceholder: string }> = {
+  google_drive: { title: "Import from Google Drive", root: "My Drive", searchPlaceholder: "Search all of Drive..." },
+  dropbox: { title: "Import from Dropbox", root: "Dropbox", searchPlaceholder: "Search all of Dropbox..." },
+};
+
+export function DriveImportDialog({ open, onOpenChange, projectId, provider = "google_drive" }: DriveImportDialogProps) {
+  const labels = PROVIDER_LABELS[provider];
   const [folderStack, setFolderStack] = useState<{ id: string; name: string }[]>([
-    { id: "root", name: "My Drive" },
+    { id: "root", name: labels.root },
   ]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<DriveFile[]>([]);
   const [importing, setImporting] = useState(false);
   const [category, setCategory] = useState("contract");
 
+  // Dialog instance is reused across providers (FilesTab swaps `provider` on
+  // the same mounted dialog) — reset the breadcrumb + selection when it changes.
+  useEffect(() => {
+    setFolderStack([{ id: "root", name: PROVIDER_LABELS[provider].root }]);
+    setSelectedFiles([]);
+  }, [provider]);
+
   const currentFolder = folderStack[folderStack.length - 1];
-  const { data: files, isLoading } = useDriveBrowse(currentFolder.id, open, searchQuery);
-  const importMutation = useDriveImport();
+  const { data: files, isLoading } = useDriveBrowse(currentFolder.id, open, searchQuery, provider);
+  const importMutation = useDriveImport(provider);
 
   const navigateToFolder = (file: DriveFile) => {
     setFolderStack((prev) => [...prev, { id: file.id, name: file.name }]);
@@ -133,7 +147,7 @@ export function DriveImportDialog({ open, onOpenChange, projectId }: DriveImport
     for (const file of selectedFiles) {
       try {
         await importMutation.mutateAsync({
-          drive_file_id: file.id,
+          file_id: file.id,
           project_id: projectId,
           file_type: category,
         });
@@ -160,6 +174,7 @@ export function DriveImportDialog({ open, onOpenChange, projectId }: DriveImport
     }
   };
 
+  // Shared folder sentinel: the Dropbox backend normalizes its folders to this same mimeType, so this check governs BOTH providers.
   const isFolder = (mimeType: string) =>
     mimeType === "application/vnd.google-apps.folder";
 
@@ -168,7 +183,7 @@ export function DriveImportDialog({ open, onOpenChange, projectId }: DriveImport
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            Import from Google Drive
+            {labels.title}
             {selectedFiles.length > 0 && (
               <Badge variant="secondary" className="text-xs">
                 {selectedFiles.length} selected
@@ -194,7 +209,7 @@ export function DriveImportDialog({ open, onOpenChange, projectId }: DriveImport
           <div className="relative flex-1">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search all of Drive..."
+              placeholder={labels.searchPlaceholder}
               className="pl-9 h-9"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}

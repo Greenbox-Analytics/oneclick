@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Msanii — Per-Tool Pricing & Credit Model</title>
+<title>Msanii — Credit &amp; Licensing Economics</title>
 <style>
   :root{
     --ground:#F7F8F9; --surface:#FFFFFF; --surface-2:#FBFCFC;
@@ -48,58 +48,28 @@
   *{box-sizing:border-box}
   body{margin:0}
   .wrap{font-family:var(--sans);background:var(--ground);color:var(--ink);-webkit-font-smoothing:antialiased;line-height:1.5;padding:clamp(20px,4vw,56px) clamp(16px,4vw,40px)}
-  .page{max-width:1080px;margin:0 auto}
+  .page{max-width:1120px;margin:0 auto}
   .eyebrow{font-size:11.5px;font-weight:650;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
   h1{font-size:clamp(26px,4vw,36px);line-height:1.08;letter-spacing:-.02em;font-weight:720;margin:0 0 12px;text-wrap:balance}
-  .lede{font-size:clamp(15px,1.6vw,17px);color:var(--muted);max-width:66ch;margin:0}
+  .lede{font-size:clamp(15px,1.6vw,17px);color:var(--muted);max-width:70ch;margin:0}
   .lede b{color:var(--ink-soft);font-weight:640}
   .disclaim{margin-top:20px;display:flex;gap:12px;align-items:flex-start;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);border-radius:11px;padding:13px 16px;font-size:13.5px;color:var(--ink-soft)}
   .disclaim .dot{color:var(--warn);font-weight:700;flex:0 0 auto}
-  section{margin-top:clamp(30px,5vw,52px)}
+  section{margin-top:clamp(26px,4vw,44px)}
   .sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
   h2{font-size:13px;font-weight:680;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:0}
   .sec-note{font-size:12.5px;color:var(--faint)}
+  code{font-family:var(--mono);font-size:.92em;background:var(--surface-2);border:1px solid var(--hair);border-radius:5px;padding:1px 5px;color:var(--ink-soft)}
 
-  /* plans */
-  .plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
-  .plan{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);padding:clamp(18px,2.4vw,26px)}
-  .plan.pro{border-color:var(--accent-line);box-shadow:0 0 0 1px var(--accent-line),var(--shadow)}
-  .plan .pname{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
-  .plan .pname b{font-size:16px;font-weight:700;letter-spacing:-.01em}
-  .plan .price{font-family:var(--mono);font-size:26px;font-weight:680;letter-spacing:-.02em;margin:6px 0 2px;font-variant-numeric:tabular-nums}
-  .plan .price small{font-size:13px;color:var(--muted);font-weight:500}
-  .plan .psub{font-size:12.5px;color:var(--faint);margin-bottom:14px}
-  .plan ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-  .plan li{font-size:13.5px;color:var(--ink-soft);display:flex;gap:9px;align-items:flex-start}
-  .plan li .mk{flex:0 0 auto;font-weight:700;line-height:1.4}
-  .plan li.on .mk{color:var(--accent)} .plan li.off .mk{color:var(--faint)}
-  .plan li.off{color:var(--faint)}
-  .plan li b{color:var(--ink);font-weight:640;font-variant-numeric:tabular-nums}
+  /* tabs */
+  .tabs{display:flex;gap:4px;margin-top:26px;border-bottom:1px solid var(--hair);flex-wrap:wrap}
+  .tabs button{font:inherit;font-size:13.5px;font-weight:620;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;padding:10px 15px;cursor:pointer;margin-bottom:-1px}
+  .tabs button.active{color:var(--ink);border-bottom-color:var(--accent)}
+  .tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .tab-panel[hidden]{display:none}
 
-  /* tool cards */
-  .tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
-  .tcard{background:var(--surface);border:1px solid var(--hair);border-radius:13px;box-shadow:var(--shadow);padding:16px 18px;display:flex;flex-direction:column;gap:11px}
-  .tcard .th{display:flex;align-items:center;justify-content:space-between;gap:10px}
-  .tcard .tn{font-size:14.5px;font-weight:680;letter-spacing:-.01em}
-  .tcard .tiers{display:flex;gap:8px}
-  .tier{flex:1;background:var(--surface-2);border:1px solid var(--hair);border-radius:9px;padding:8px 10px;min-width:0}
-  .tier .tl{font-size:10px;font-weight:680;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:3px}
-  .tier .tv{font-size:13px;font-weight:640;color:var(--ink);font-variant-numeric:tabular-nums}
-  .tier.pro{border-color:var(--accent-line);background:var(--accent-soft)}
-  .tcard .costline{font-size:12.5px;color:var(--muted);border-top:1px solid var(--hair-2);padding-top:9px;margin-top:auto}
-  .tcard .costline b{color:var(--accent);font-weight:680;font-family:var(--mono);font-variant-numeric:tabular-nums}
-  .tcard .costline.flat b{color:var(--ink-soft)}
-
-  .badge{display:inline-block;font-size:10px;font-weight:680;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:100px;white-space:nowrap}
-  .badge.ai{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line)}
-  .badge.plan{background:var(--surface-2);color:var(--muted);border:1px solid var(--hair)}
-  .toggle{display:inline-flex;background:var(--surface-2);border:1px solid var(--hair);border-radius:9px;padding:3px;gap:2px}
-  .toggle button{font:inherit;font-size:12.5px;font-weight:600;color:var(--muted);background:none;border:none;padding:6px 14px;border-radius:7px;cursor:pointer}
-  .toggle button.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
-  .toggle button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-
-  /* assumptions */
-  .assume{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);padding:clamp(16px,2.4vw,24px);display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:clamp(14px,2vw,22px)}
+  /* knobs */
+  .assume{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);padding:clamp(16px,2.4vw,24px);display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:clamp(14px,2vw,22px)}
   .field{display:flex;flex-direction:column;gap:7px;min-width:0}
   .field label{font-size:12px;font-weight:600;color:var(--ink-soft);display:flex;justify-content:space-between;gap:8px;align-items:baseline}
   .field .val{font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums}
@@ -112,226 +82,425 @@
   .prefix{position:relative}
   .prefix span{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--faint);font-family:var(--mono);font-size:13px;pointer-events:none}
   .prefix input{padding-left:22px}
+  .prefix.suffix span{left:auto;right:10px}
+  .prefix.suffix input{padding-left:10px;padding-right:26px}
 
-  /* table */
+  /* tables */
   .tablecard{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
   .tscroll{overflow-x:auto}
-  table{border-collapse:collapse;width:100%;min-width:640px;font-size:13.5px}
+  table{border-collapse:collapse;width:100%;min-width:620px;font-size:13.5px}
   thead th{text-align:left;font-size:11px;font-weight:640;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);padding:14px 14px 11px;border-bottom:1px solid var(--hair);white-space:nowrap}
   th.num,td.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
   tbody td{padding:12px 14px;border-bottom:1px solid var(--hair-2);vertical-align:middle}
   tbody tr:last-child td{border-bottom:none}
   tbody tr:hover td{background:var(--surface-2)}
+  tfoot td{padding:12px 14px;border-top:1px solid var(--hair);font-weight:640;background:var(--surface-2)}
   .tool{font-weight:640;color:var(--ink);white-space:nowrap}
   .scen{font-size:12px;color:var(--muted);margin-top:2px}
   .models{font-family:var(--mono);font-size:11.5px;color:var(--ink-soft);white-space:nowrap}
   .cost{font-weight:640;color:var(--ink)}
   .credits{font-weight:700;color:var(--accent)}
   .creditsFree{color:var(--free);font-weight:600}
+  .bad{color:var(--crit);font-weight:700}
+  .delta{font-size:11.5px;color:var(--faint);font-family:var(--mono)}
   .chip{display:inline-block;font-size:10.5px;font-weight:680;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:100px;white-space:nowrap}
   .chip.free{background:var(--surface-2);color:var(--free);border:1px solid var(--hair)}
   .chip.low{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line)}
   .chip.med{background:var(--warn-soft);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}
   .chip.high{background:var(--crit-soft);color:var(--crit);border:1px solid color-mix(in srgb,var(--crit) 35%,transparent)}
-  .bar-wrap{display:flex;align-items:center;gap:9px;min-width:120px}
+  .bar-wrap{display:flex;align-items:center;gap:9px;min-width:110px}
   .bar-track{flex:1;height:7px;border-radius:4px;background:var(--hair-2);overflow:hidden}
   .bar-fill{height:100%;border-radius:4px;background:var(--accent);transition:width .25s ease}
   .bar-fill.med{background:var(--warn)} .bar-fill.high{background:var(--crit)} .bar-fill.free{background:var(--hair)}
 
-  /* storage readout */
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:16px}
+  /* stat tiles */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:16px}
   .stat{background:var(--surface);border:1px solid var(--hair);border-radius:12px;box-shadow:var(--shadow);padding:15px 16px}
   .stat .sl{font-size:11px;font-weight:640;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin-bottom:7px}
   .stat .sv{font-family:var(--mono);font-size:22px;font-weight:680;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
   .stat .sv.pos{color:var(--accent)} .stat .sv.neg{color:var(--crit)}
   .stat .snote{font-size:11.5px;color:var(--muted);margin-top:6px}
+  .stat.hero{grid-column:span 2;min-width:0}
+  @media (max-width:640px){.stat.hero{grid-column:span 1}}
 
-  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
   .card{background:var(--surface);border:1px solid var(--hair);border-radius:13px;box-shadow:var(--shadow);padding:18px 20px}
   .card h3{margin:0 0 8px;font-size:14.5px;font-weight:680;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .card p{margin:0;font-size:13.5px;color:var(--muted)}
   .card p+p{margin-top:9px}
-  .card code{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--hair);border-radius:5px;padding:1px 5px;color:var(--ink-soft)}
+  .card ul{margin:9px 0 0;padding-left:18px;font-size:13px;color:var(--muted)}
+  .card li+li{margin-top:5px}
   .tag{font-size:10.5px;font-weight:680;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:5px}
-  .tag.save{background:var(--accent-soft);color:var(--accent)} .tag.watch{background:var(--crit-soft);color:var(--crit)}
+  .tag.live{background:var(--accent-soft);color:var(--accent)}
+  .tag.watch{background:var(--crit-soft);color:var(--crit)}
+  .tag.flag{background:var(--warn-soft);color:var(--warn)}
+  .badge{display:inline-block;font-size:10px;font-weight:680;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:100px;white-space:nowrap}
+  .badge.ai{background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-line)}
+  .badge.plan{background:var(--surface-2);color:var(--muted);border:1px solid var(--hair)}
+  .toggle{display:inline-flex;background:var(--surface-2);border:1px solid var(--hair);border-radius:9px;padding:3px;gap:2px}
+  .toggle button{font:inherit;font-size:12.5px;font-weight:600;color:var(--muted);background:none;border:none;padding:6px 14px;border-radius:7px;cursor:pointer}
+  .toggle button.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+  .toggle button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  /* licensing diagram */
+  .diagram{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);padding:clamp(14px,2vw,22px);overflow-x:auto}
+  .diagram svg{display:block;min-width:900px;width:100%;height:auto}
+  .dg-frame{fill:none;stroke:var(--hair);stroke-width:1.5}
+  .dg-box.gap{fill:var(--warn-soft);stroke:color-mix(in srgb,var(--warn) 45%,transparent);stroke-dasharray:5 3}
+  .dg-gapt{fill:var(--warn);font:700 9.5px var(--sans);letter-spacing:.05em}
+  .dg-b{fill:var(--ink-soft);font:400 11px var(--sans)}
+
+  /* manipulable org example */
+  .flow{display:grid;grid-template-columns:auto auto 1fr;gap:14px;align-items:center;margin-top:16px}
+  @media (max-width:760px){.flow{grid-template-columns:1fr}}
+  .fnode{background:var(--surface);border:1px solid var(--hair);border-radius:12px;box-shadow:var(--shadow);padding:14px 16px;min-width:0}
+  .fnode.pool{border-color:var(--accent-line);background:var(--accent-soft)}
+  .fnode .fl{font-size:10.5px;font-weight:680;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+  .fnode .fv{font-family:var(--mono);font-size:19px;font-weight:680;font-variant-numeric:tabular-nums;line-height:1.1}
+  .fnode .fn{font-size:11.5px;color:var(--muted);margin-top:5px}
+  .fseats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .fseat{background:var(--surface-2);border:1px solid var(--hair);border-radius:10px;padding:10px 12px}
+  .fseat .sn{font-size:12px;font-weight:640;color:var(--ink)}
+  .fseat .sc{font-family:var(--mono);font-size:13.5px;color:var(--accent);font-variant-numeric:tabular-nums;margin-top:3px}
+  .fseat .sp{font-size:11px;color:var(--faint);margin-top:2px}
+  .fseat.over{border-color:color-mix(in srgb,var(--crit) 45%,transparent);background:var(--crit-soft)}
+  .farrow{color:var(--faint);font-size:18px;text-align:center}
+  @media (max-width:760px){.farrow{transform:rotate(90deg)}}
+  .dg-box{fill:var(--surface-2);stroke:var(--hair);stroke-width:1.25}
+  .dg-box.accent{fill:var(--accent-soft);stroke:var(--accent-line)}
+  .dg-box.warnbox{fill:var(--warn-soft);stroke:color-mix(in srgb,var(--warn) 35%,transparent)}
+  .dg-t{fill:var(--ink);font:640 13px var(--sans)}
+  .dg-s{fill:var(--muted);font:400 11px var(--sans)}
+  .dg-m{fill:var(--ink-soft);font:600 11.5px var(--mono)}
+  .dg-line{stroke:var(--hair);stroke-width:1.5;fill:none}
+  .dg-line.flow{stroke:var(--accent);stroke-width:2}
+  .dg-line.back{stroke:var(--muted);stroke-dasharray:4 3}
+  .dg-cap{fill:var(--faint);font:600 10px var(--sans);letter-spacing:.06em;text-transform:uppercase}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:12px;color:var(--muted)}
+  .legend i{display:inline-block;width:22px;height:0;border-top:2px solid var(--accent);vertical-align:middle;margin-right:6px}
+  .legend i.back{border-top:2px dashed var(--muted)}
+  .legend i.plain{border-top:1.5px solid var(--hair)}
 
   footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--hair);font-size:12px;color:var(--faint);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
   a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-line)}
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
-
 </head>
 <body>
 <div class="wrap">
 <div class="page">
 
   <p class="eyebrow">Msanii · Unit economics</p>
-  <h1>Per-tool pricing &amp; credit model</h1>
-  <p class="lede">How each tool and integration is priced — the <b>plan limits</b> that gate the non-AI features, and the <b>credit cost</b> the AI tools rack up per use. Plan caps are the <b>live values from the code</b>; AI costs are modeled from the call graph; the storage overage / add-on economics are a <b>proposal</b> for you to tune.</p>
+  <h1>Credit &amp; licensing economics</h1>
+  <p class="lede">Turn one dial — <b>the price of a credit</b> — and watch it fall through the whole model: what each tool costs to run, how many credits a plan must include, what that plan has to charge to hold its margin, and what an enterprise pool earns per credit. Baselines are the <b>live values in the code</b>; every field is editable.</p>
 
   <div class="disclaim">
     <span class="dot">▲</span>
-    <div><b>Two things are live, one is a proposal.</b> The plan caps (Free vs Pro) are exactly what the app enforces today. AI token costs are <em>modeled</em> — the backend doesn't yet log <code style="font-family:var(--mono)">response.usage</code>. Storage <b>overage &amp; add-on bundles do not exist yet</b> — that section models what you'd add to cover Supabase.</div>
+    <div><b>Token counts are modeled, prices are live.</b> Credit prices, plan grants, plan prices and pack prices are the values shipped in <code>credit_prices</code> / <code>tier_entitlements</code> / <code>credit_packs</code>. Token counts per call are still <em>estimates</em> from the call graph — <code>ai_usage_log</code> now records real spend, so reconcile against it before locking anything in. Credits and licensing both sit behind flags (<code>CREDITS_ENABLED</code>, <code>LICENSING_ENABLED</code>).</div>
   </div>
 
-  <!-- PLANS -->
-  <section>
-    <div class="sec-head"><h2>The two plans (live)</h2><span class="sec-note">Enforced today — from <code style="font-family:var(--mono);font-size:11px">tier_entitlements</code></span></div>
-    <div class="plans">
-      <div class="plan">
-        <div class="pname"><b>Free</b><span class="badge plan">solo, getting started</span></div>
-        <div class="price">$0<small>/month</small></div>
-        <div class="psub">Hard-capped; uploads/actions past a limit return HTTP 402.</div>
-        <ul>
-          <li class="on"><span class="mk">✓</span><span><b>3</b> artists · <b>3</b> projects · <b>50</b> tasks</span></li>
-          <li class="on"><span class="mk">✓</span><span><b>1 GB</b> storage</span></li>
-          <li class="on"><span class="mk">✓</span><span><b>5</b> split sheets / month</span></li>
-          <li class="on"><span class="mk">✓</span><span>OneClick — <b>1 run</b> / month</span></li>
-          <li class="on"><span class="mk">✓</span><span>Google Drive integration</span></li>
-          <li class="off"><span class="mk">✗</span><span>Zoe AI · Metadata Registry · Slack</span></li>
-        </ul>
-      </div>
-      <div class="plan pro">
-        <div class="pname"><b>Pro</b><span class="badge ai">most popular</span></div>
-        <div class="price">$25<small>/mo &nbsp;·&nbsp; $250/yr</small></div>
-        <div class="psub">Annual ≈ $20.83/mo (save 2 months).</div>
-        <ul>
-          <li class="on"><span class="mk">✓</span><span><b>Unlimited</b> artists · projects · tasks</span></li>
-          <li class="on"><span class="mk">✓</span><span><b>Unlimited</b> split sheets &amp; OneClick runs</span></li>
-          <li class="on"><span class="mk">✓</span><span>Zoe AI contract analysis · Metadata Registry</span></li>
-          <li class="on"><span class="mk">✓</span><span>Google Drive <b>+</b> Slack</span></li>
-          <li class="on"><span class="mk">✓</span><span>Storage: <b>100 GB</b> included, then overage / add-on <span style="color:var(--faint)">(proposed)</span></span></li>
-        </ul>
-      </div>
-    </div>
-  </section>
+  <div class="tabs" id="tabs" role="tablist">
+    <button type="button" data-tab="cost" class="active" role="tab">1 · Cost per action</button>
+    <button type="button" data-tab="plans" role="tab">2 · Plans &amp; margins</button>
+    <button type="button" data-tab="ent" role="tab">3 · Licensing (Enterprise)</button>
+    <button type="button" data-tab="rates" role="tab">Model rates</button>
+  </div>
 
-  <!-- PER-TOOL -->
-  <section>
-    <div class="sec-head"><h2>Per tool &amp; integration</h2>
-      <div class="toggle" id="modelToggle" role="group" aria-label="pricing model">
-        <button type="button" data-m="live" class="active">Live caps</button>
-        <button type="button" data-m="proposed">Proposed</button>
+  <!-- ============================ TAB 1: COST ============================ -->
+  <div class="tab-panel" id="tab-cost">
+
+    <section>
+      <div class="sec-head"><h2>The two dials everything hangs off</h2><span class="sec-note">Everything below is derived from these</span></div>
+      <div class="assume">
+        <div class="field"><label>Price per credit <span class="sub">what you sell 1 for</span></label><div class="prefix"><span>$</span><input type="number" id="creditPrice" min="0.001" max="1" step="0.001" value="0.02"></div><span class="sub" id="v_cpNote"></span></div>
+        <div class="field"><label>Target markup on COGS <span class="val" id="v_markup">3.0×</span></label><input type="range" id="markup" min="1" max="10" step="0.25" value="3"><span class="sub">sets credits per action</span></div>
+        <div class="field"><label>Contract length <span class="val" id="v_pages">15 pg</span></label><input type="range" id="pages" min="3" max="45" step="1" value="15"><span class="sub">≈ 650 tokens / page</span></div>
+        <div class="field"><label>Contracts / OneClick run <span class="val" id="v_contracts">1</span></label><input type="range" id="contracts" min="1" max="8" step="1" value="1"><span class="sub">1 is the common case</span></div>
+        <div class="field"><label>Parse-cache hit rate <span class="val" id="v_hit">70%</span></label><input type="range" id="hit" min="0" max="100" step="5" value="70"><span class="sub">cached extraction is free</span></div>
       </div>
-    </div>
-    <p class="sec-note" id="modelNote" style="margin:-4px 0 14px;max-width:74ch"></p>
-    <div class="tools" id="tools"></div>
-  </section>
+      <div class="stats" id="dialStats"></div>
+    </section>
 
-  <!-- AI ASSUMPTIONS -->
-  <section>
-    <div class="sec-head"><h2>AI credit assumptions</h2><span class="sec-note">Drives the credit cost of Zoe / OneClick / Registry</span></div>
-    <div class="assume">
-      <div class="field"><label>Contract length <span class="val" id="v_pages">15 pg</span></label><input type="range" id="pages" min="3" max="45" step="1" value="15"><span class="sub">≈ 650 tokens / page</span></div>
-      <div class="field"><label>Contracts / run <span class="val" id="v_contracts">3</span></label><input type="range" id="contracts" min="2" max="8" step="1" value="3"><span class="sub">multi-contract OneClick</span></div>
-      <div class="field"><label>Retail price / credit <span class="sub">what you sell 1 for</span></label><div class="prefix"><span>$</span><input type="number" id="creditPrice" min="0.005" max="1" step="0.005" value="0.02"></div></div>
-      <div class="field"><label>Markup on COGS <span class="val" id="v_markup">4.0×</span></label><input type="range" id="markup" min="1" max="10" step="0.5" value="4"><span class="sub">margin + infra</span></div>
-      <div class="field"><label>Parse-cache hit rate <span class="val" id="v_hit">70%</span></label><input type="range" id="hit" min="0" max="100" step="5" value="70"><span class="sub">OneClick extraction cached</span></div>
-    </div>
-  </section>
+    <section>
+      <div class="sec-head"><h2>What each tool should cost, in credits</h2><span class="sec-note">Modeled COGS × markup ÷ price per credit — compared with the price shipped in <code>credit_prices</code></span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Action</th><th class="num">Real COGS</th><th class="num">Suggested credits</th><th class="num">Live price</th><th class="num">Charged</th><th class="num">Margin</th><th style="min-width:110px">Margin %</th></tr></thead>
+        <tbody id="actionRows"></tbody>
+      </table></div></div>
+      <p class="sec-note" style="margin-top:11px;max-width:80ch;line-height:1.6">Drop the price per credit and the <b style="color:var(--ink-soft)">suggested credits</b> per action rise to keep the same dollar margin — the live prices stay where they are until you change <code>credit_prices</code>, so the <b style="color:var(--ink-soft)">Margin</b> column is what actually happens today. Negative means that action loses money at every use.</p>
+    </section>
 
-  <!-- AI COST TABLE -->
-  <section>
-    <div class="sec-head"><h2>AI credit cost per use</h2><span class="sec-note"><span id="ocHeadline"></span> · <span id="stamp"></span></span></div>
-    <div class="tablecard"><div class="tscroll"><table>
-      <thead><tr><th>Tool &amp; scenario</th><th>Load</th><th class="num">Calls</th><th>Models</th><th class="num">Tok in/out</th><th class="num">$ / use</th><th style="min-width:120px">Relative</th><th class="num">Credits</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table></div></div>
-  </section>
+    <section>
+      <div class="sec-head"><h2>Scenario detail</h2><span class="sec-note"><span id="ocHeadline"></span></span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Tool &amp; scenario</th><th>Load</th><th class="num">Calls</th><th>Models</th><th class="num">Tok in/out</th><th class="num">$ / use</th><th style="min-width:110px">Relative</th><th class="num">Credits</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div></div>
+    </section>
+  </div>
 
-  <!-- MODEL RATES -->
-  <section>
-    <div class="sec-head"><h2>OpenAI model rates</h2><span class="sec-note">USD per 1M tokens · standard tier · source: <a href="https://platform.openai.com/docs/pricing" target="_blank" rel="noopener">OpenAI pricing</a></span></div>
-    <div class="tablecard"><div class="tscroll"><table>
-      <thead><tr><th>Model</th><th>Used for</th><th class="num">Input / 1M</th><th class="num">Cached input / 1M</th><th class="num">Output / 1M</th></tr></thead>
-      <tbody id="rateRows"></tbody>
-    </table></div></div>
-  </section>
+  <!-- ============================ TAB 2: PLANS ============================ -->
+  <div class="tab-panel" id="tab-plans" hidden>
 
-  <!-- CREDIT ALLOWANCE -->
-  <section>
-    <div class="sec-head"><h2>Credits instead of AI caps <span class="badge plan" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent)">proposed</span></h2><span class="sec-note">Drop the per-tool AI limits — each plan just includes a monthly credit balance</span></div>
-    <div class="assume">
-      <div class="field"><label>Free credits / mo <span class="val" id="v_fc">50</span></label><input type="range" id="freeCredits" min="0" max="500" step="10" value="50"><span class="sub">replaces "1 OneClick run · Zoe/Registry off"</span></div>
-      <div class="field"><label>Pro credits / mo <span class="val" id="v_pc">3000</span></label><input type="range" id="proCredits" min="200" max="12000" step="100" value="3000"><span class="sub">replaces "unlimited AI" — and caps your COGS</span></div>
-    </div>
-    <div class="tablecard" style="margin-top:16px"><div class="tscroll"><table>
-      <thead><tr><th>Plan</th><th class="num">Credits / mo</th><th class="num">≈ OneClick runs</th><th class="num">≈ Zoe messages</th><th class="num">≈ Registry parses</th><th class="num">Max OpenAI COGS</th></tr></thead>
-      <tbody id="allowRows"></tbody>
-    </table></div></div>
-    <p class="sec-note" style="margin-top:11px;max-width:74ch;line-height:1.6">Under this model AI tools have <b style="color:var(--ink-soft)">no separate on/off or run cap</b> — the credit balance <em>is</em> the limit, and running out just pauses AI until next period (or a top-up). It also <b style="color:var(--ink-soft)">caps your runaway AI spend</b> — today Pro is "unlimited", so one power user's OneClick loop is uncapped COGS. Pair it with dropping the zero-cost paywalls (projects, tasks, split-sheets, artists) — flip the tool cards to <b style="color:var(--ink-soft)">Proposed</b> — and the only things you meter are <b style="color:var(--ink-soft)">AI (credits)</b> and <b style="color:var(--ink-soft)">storage (GB)</b>: the two things that actually cost you money.</p>
-  </section>
-
-  <!-- STORAGE ECONOMICS -->
-  <section>
-    <div class="sec-head"><h2>Storage economics <span class="badge plan" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent)">proposed</span></h2><span class="sec-note">Cover Supabase: $25 Pro base includes 100 GB, then ~$0.0213/GB/mo</span></div>
-    <div class="assume">
-      <div class="field"><label>A Pro user's storage <span class="val" id="v_gb">250 GB</span></label><input type="range" id="gb" min="0" max="2000" step="10" value="250"><span class="sub">total used</span></div>
-      <div class="field"><label>Included in Pro <span class="val" id="v_incl">100 GB</span></label><input type="range" id="incl" min="0" max="500" step="10" value="100"><span class="sub">covered by the $25 base</span></div>
-      <div class="field"><label>Your overage charge <span class="sub">per GB / mo</span></label><div class="prefix"><span>$</span><input type="number" id="ovRate" min="0" max="1" step="0.005" value="0.05"></div></div>
-      <div class="field"><label>Supabase cost <span class="sub">per GB / mo (fixed)</span></label><div class="prefix"><span>$</span><input type="number" id="sbRate" min="0" max="1" step="0.001" value="0.0213"></div></div>
-    </div>
-    <div class="stats" id="storeStats"></div>
-    <div class="sec-head" style="margin-top:22px"><h2 style="letter-spacing:.06em">Or: add-on bundles</h2><span class="sec-note">Fixed +GB packs — edit prices/sizes to taste</span></div>
-    <div class="tablecard"><div class="tscroll"><table>
-      <thead><tr><th>Bundle</th><th class="num">Extra storage</th><th class="num">Your price / mo</th><th class="num">Supabase cost / mo</th><th class="num">Margin / mo</th><th class="num">Margin %</th></tr></thead>
-      <tbody id="bundleRows"></tbody>
-    </table></div></div>
-  </section>
-
-  <!-- CUSTOMER CALC -->
-  <section>
-    <div class="sec-head"><h2>Per-customer P&amp;L</h2>
-      <div class="toggle" id="planToggle" role="group" aria-label="plan">
-        <button type="button" data-p="free">Free</button>
-        <button type="button" data-p="pro" class="active">Pro</button>
+    <section>
+      <div class="sec-head"><h2>Plan shape</h2><span class="sec-note">Grants and prices as shipped — edit to test a repricing</span></div>
+      <div class="assume">
+        <div class="field"><label>Free credits / mo <span class="val" id="v_fc">150</span></label><input type="range" id="freeCredits" min="0" max="1000" step="10" value="150"><span class="sub">pure COGS — no card on file</span></div>
+        <div class="field"><label>Basic credits / mo <span class="val" id="v_bc">3000</span></label><input type="range" id="basicCredits" min="200" max="12000" step="100" value="3000"></div>
+        <div class="field"><label>Pro credits / mo <span class="val" id="v_pc">8000</span></label><input type="range" id="proCredits" min="500" max="30000" step="250" value="8000"></div>
+        <div class="field"><label>Basic price <span class="sub">$ / mo</span></label><div class="prefix"><span>$</span><input type="number" id="basicPrice" min="0" step="1" value="25"></div></div>
+        <div class="field"><label>Pro price <span class="sub">$ / mo</span></label><div class="prefix"><span>$</span><input type="number" id="proPrice" min="0" step="1" value="50"></div></div>
       </div>
-    </div>
-    <p class="sec-note" style="margin:-4px 0 14px;max-width:80ch">One customer's monthly usage → your direct cost, what you bill, and margin. Non-AI features (split sheets, projects, artists…) are $0 marginal, so only AI + storage move the number. Assumes the credit model, using the rates / allowances / storage prices set above.</p>
-    <div class="assume">
-      <div class="field"><label>OneClick runs / mo</label><input type="number" id="cRuns" min="0" step="1" value="20"></div>
-      <div class="field"><label>Zoe messages / mo</label><input type="number" id="cZoe" min="0" step="1" value="60"></div>
-      <div class="field"><label>Registry parses / mo</label><input type="number" id="cReg" min="0" step="1" value="10"></div>
-      <div class="field"><label>Storage used <span class="sub">GB</span></label><input type="number" id="cGB" min="0" step="1" value="120"></div>
-      <div class="field"><label>Pro base <span class="sub">$ / mo</span></label><div class="prefix"><span>$</span><input type="number" id="cProPrice" min="0" step="1" value="25"></div></div>
-    </div>
-    <div class="stats" id="calcStats"></div>
-    <p class="sec-note" id="calcBreak" style="margin-top:12px;max-width:80ch;line-height:1.6"></p>
-  </section>
+    </section>
 
-  <!-- LEVERS -->
-  <section>
-    <div class="sec-head"><h2>Notes &amp; levers</h2></div>
-    <div class="grid2">
-      <div class="card">
-        <h3><span class="tag save">✓ shipped</span> Unified parse cache</h3>
-        <p>OneClick + Registry share one canonical-text cache. The extraction call is served from cache on repeat/cross-tool runs, so a <b>warm</b> OneClick run drops 3→2 gpt-5.2 calls. Drag <b>cache hit rate</b> to see the blend.</p>
+    <section>
+      <div class="sec-head"><h2>Utilization &amp; fixed cost</h2><span class="sec-note">How much of the grant an average subscriber actually burns</span></div>
+      <div class="assume">
+        <div class="field"><label>Free utilization <span class="val" id="v_uf">60%</span></label><input type="range" id="utilFree" min="0" max="100" step="5" value="60"><span class="sub">of the free grant</span></div>
+        <div class="field"><label>Basic utilization <span class="val" id="v_ub">45%</span></label><input type="range" id="utilBasic" min="0" max="100" step="5" value="45"></div>
+        <div class="field"><label>Pro utilization <span class="val" id="v_up">55%</span></label><input type="range" id="utilPro" min="0" max="100" step="5" value="55"></div>
+        <div class="field"><label>Fixed infra / user <span class="sub">$ / mo — Supabase, Cloud Run, Resend</span></label><div class="prefix"><span>$</span><input type="number" id="fixedPerUser" min="0" step="0.05" value="0.35"></div></div>
+        <div class="field"><label>Target gross margin <span class="val" id="v_tm">80%</span></label><input type="range" id="targetMargin" min="0" max="95" step="5" value="80"><span class="sub">drives "price needed"</span></div>
       </div>
-      <div class="card">
-        <h3><span class="tag watch">next win</span> Cache/downgrade the advisory passes</h3>
-        <p>With extraction cached, <b>basis + split-verify</b> are the whole warm-run bill — 2 gpt-5.2 calls that are log-only/advisory. Cache or downgrade them and a warm OneClick approaches free.</p>
+      <div class="stats" id="freeStats"></div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Margin per user, per plan</h2><span class="sec-note">Revenue − (credits burned × real cost per credit) − fixed infra</span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Plan</th><th class="num">Credits / mo</th><th class="num">Burned</th><th class="num">Credit COGS</th><th class="num">+ Fixed</th><th class="num">Revenue</th><th class="num">Margin</th><th class="num">Margin %</th><th class="num">Price needed</th></tr></thead>
+        <tbody id="planRows"></tbody>
+        <tfoot id="planFoot"></tfoot>
+      </table></div></div>
+      <p class="sec-note" style="margin-top:11px;max-width:82ch;line-height:1.6"><b style="color:var(--ink-soft)">Price needed</b> is what the plan must charge to hit the target margin at <em>full</em> grant consumption — the worst case, where a subscriber burns everything they are entitled to. If it exceeds the actual price, the plan is underwater for power users even while the average subscriber is profitable. Free's revenue is <b style="color:var(--ink-soft)">$0</b> by definition, so its margin is the acquisition cost you're choosing to pay.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Blended P&amp;L across a user base</h2><span class="sec-note">Mix the plans to see the whole-business number</span></div>
+      <div class="assume">
+        <div class="field"><label>Free users <span class="val" id="v_nf">900</span></label><input type="range" id="nFree" min="0" max="5000" step="50" value="900"></div>
+        <div class="field"><label>Basic users <span class="val" id="v_nb">80</span></label><input type="range" id="nBasic" min="0" max="2000" step="10" value="80"></div>
+        <div class="field"><label>Pro users <span class="val" id="v_np">20</span></label><input type="range" id="nPro" min="0" max="1000" step="5" value="20"></div>
       </div>
-      <div class="card">
-        <h3><span class="tag watch">to build</span> Credits ledger replaces AI caps</h3>
-        <p>Today AI is gated by on/off flags + per-period counters. The proposed model swaps those for a <code>credits</code> balance the AI tools debit per use — no more `oneclick_enabled` / `max_oneclick_runs`. Needs a ledger column + measured <code>response.usage</code> so debits reflect real spend, not estimates.</p>
+      <div class="stats" id="mixStats"></div>
+    </section>
+  </div>
+
+  <!-- ============================ TAB 3: LICENSING ============================ -->
+  <div class="tab-panel" id="tab-ent" hidden>
+
+    <section>
+      <div class="sec-head"><h2>The structure, as drawn vs as built</h2><span class="sec-note">Solid = in the code today · dashed amber = in the diagram, not built</span></div>
+      <div class="diagram">
+        <svg viewBox="0 0 980 560" role="img" aria-label="Organization credit balance, admins, per-user caps and permissions on the left; Msanii bundles, pay-as-you-go and subscription actions on the right">
+          <!-- contract wrapper -->
+          <rect class="dg-box gap" x="196" y="8" width="580" height="26" rx="8"/>
+          <text class="dg-t" x="218" y="26" style="font-size:12px">12-month contract · monthly payments</text>
+          <text class="dg-gapt" x="612" y="26">TERM/BILLING NOT BUILT</text>
+
+          <!-- ORG container -->
+          <rect class="dg-frame" x="14" y="48" width="592" height="498" rx="14"/>
+          <text class="dg-cap" x="32" y="72">Organization (client)</text>
+
+          <rect class="dg-box accent" x="32" y="86" width="238" height="52" rx="10"/>
+          <text class="dg-t" x="48" y="106">Credit balance · org-wide</text>
+          <text class="dg-m" x="48" y="124">credit_wallets · owner_type='org'</text>
+          <text class="dg-s" x="48" y="138" style="font-size:10px">every user spends from HERE</text>
+
+          <rect class="dg-box" x="32" y="176" width="238" height="56" rx="10"/>
+          <text class="dg-t" x="48" y="198">Admin(s)</text>
+          <text class="dg-s" x="48" y="217">allocate · reclaim · invite · approve</text>
+          <path class="dg-line" d="M96 176 L96 142" marker-end="url(#arp)"/>
+          <text class="dg-s" x="104" y="162" style="font-size:10.5px">controls</text>
+
+          <!-- users container -->
+          <rect class="dg-frame" x="32" y="256" width="556" height="272" rx="12"/>
+          <text class="dg-cap" x="50" y="280">Users · per-user basis</text>
+
+          <rect class="dg-box accent" x="50" y="294" width="200" height="58" rx="10"/>
+          <text class="dg-t" x="66" y="314">Credit usage cap</text>
+          <text class="dg-s" x="66" y="332">ceiling on the pool, e.g. 300 cr/mo</text>
+          <text class="dg-m" x="66" y="348">org_members.monthly_cap</text>
+
+          <rect class="dg-box" x="286" y="294" width="200" height="58" rx="10"/>
+          <text class="dg-t" x="302" y="314">Usage this month</text>
+          <text class="dg-s" x="302" y="330">counter, not a balance</text>
+          <text class="dg-m" x="302" y="346">moved inside debit_credits</text>
+          <path class="dg-line flow" d="M250 322 L278 322" marker-end="url(#ar)"/>
+
+          <path class="dg-line flow" d="M180 232 L180 268 L150 268 L150 288" marker-end="url(#ar)"/>
+          <text class="dg-s" x="196" y="262" style="font-size:10.5px">admin raises the cap on request — pool unchanged</text>
+          <path class="dg-line flow" d="M498 322 L556 322 L556 130 L276 112" marker-end="url(#ar)"/>
+          <text class="dg-s" x="502" y="238" style="font-size:10.5px" transform="rotate(-90 502 238)">draws the org balance</text>
+
+          <rect class="dg-box" x="50" y="376" width="518" height="138" rx="10"/>
+          <text class="dg-t" x="66" y="398">Permissions</text>
+          <text class="dg-b" x="66" y="418">· Project-based roles: editor / viewer / admin  —  built</text>
+          <text class="dg-b" x="66" y="436">· Default open; admin assigns gates  —  built</text>
+          <text class="dg-b" x="66" y="454">· Contract-based scoping  —  derives from project + work links</text>
+          <text class="dg-b" x="66" y="472" fill="var(--warn)">· Time-gated permissions  —  NOT BUILT (only invites expire, 7d)</text>
+          <text class="dg-b" x="66" y="490" fill="var(--warn)">· Non-admins draft payments only, admins notified  —  NOT BUILT</text>
+          <text class="dg-s" x="66" y="506" style="font-size:10.5px">payout rows already carry status 'draft' | 'paid' — no role gate on who confirms</text>
+
+          <!-- MSANII container -->
+          <rect class="dg-frame" x="640" y="48" width="326" height="498" rx="14"/>
+          <text class="dg-cap" x="658" y="72">Msanii (our org)</text>
+
+          <rect class="dg-box accent" x="658" y="86" width="290" height="66" rx="10"/>
+          <text class="dg-t" x="674" y="106">Monthly dispersal</text>
+          <text class="dg-s" x="674" y="124">negotiated volume, delivered</text>
+          <text class="dg-s" x="674" y="140">monthly · expires each period</text>
+          <text class="dg-m" x="674" y="152">sweep → rollover_wallet</text>
+          <path class="dg-line flow" d="M648 112 L580 112" marker-end="url(#ar)"/>
+          <text class="dg-s" x="592" y="104" style="font-size:10.5px">tops up the pool</text>
+
+          <rect class="dg-box accent" x="658" y="160" width="290" height="52" rx="10"/>
+          <text class="dg-t" x="674" y="182">One-time credit packs</text>
+          <text class="dg-m" x="674" y="200">/billing/create-topup-session — built</text>
+
+          <rect class="dg-box gap" x="658" y="222" width="290" height="58" rx="10"/>
+          <text class="dg-t" x="674" y="244">Base-rate pay-as-you-go</text>
+          <text class="dg-s" x="674" y="262">$0.02 / credit past the dispersal</text>
+          <text class="dg-gapt" x="674" y="276">PERSONAL PLANS ONLY — A SEAT 402s</text>
+
+          <rect class="dg-box gap" x="658" y="286" width="290" height="60" rx="10"/>
+          <text class="dg-t" x="674" y="310">Upgrade subscription</text>
+          <text class="dg-gapt" x="674" y="332">NO ORG SUBSCRIPTION OBJECT EXISTS</text>
+
+          <rect class="dg-box gap" x="658" y="376" width="290" height="94" rx="10"/>
+          <text class="dg-t" x="674" y="400">Cancel subscription</text>
+          <text class="dg-s" x="674" y="418">1-month grace · 3-month migration</text>
+          <text class="dg-s" x="674" y="436">remaining term still owed</text>
+          <text class="dg-gapt" x="674" y="458">NOT BUILT — archive_org is all there is</text>
+          <path class="dg-line back" d="M588 440 L648 420" marker-end="url(#arb)"/>
+
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+            <marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--hair)"/></marker>
+            <marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+          </defs>
+        </svg>
+        <div class="legend">
+          <span><i></i>credits moving</span>
+          <span><i class="back"></i>credits returning / re-buying</span>
+          <span><i class="plain"></i>control, not money</span>
+          <span style="color:var(--warn)">▭ dashed — drawn but not implemented</span>
+        </div>
       </div>
-      <div class="card">
-        <h3><span class="tag watch">gap</span> No storage overage today</h3>
-        <p>Pro storage is <code>-1</code> (unlimited) — a hard binary cap on Free (1 GB), nothing metered on Pro. The economics above are a <b>proposal</b> to recover Supabase's ~$0.0213/GB above 100 GB.</p>
+      <div class="grid2" style="margin-top:16px">
+        <div class="card">
+          <h3><span class="tag live">built</span> What the code does now</h3>
+          <ul>
+            <li><b>One pool, per-member caps.</b> Members hold no wallet; they spend from the org pool bounded by <code>monthly_cap</code> (falling back to the org default, then uncapped).</li>
+            <li><b>The cap moves inside the debit.</b> <code>debit_credits</code> takes the pool lock and the member row together, so two concurrent actions can't both slip under the ceiling. An over-cap debit is recorded and flagged, never rejected — charge-on-success means the work already happened.</li>
+            <li><b>Monthly dispersal expires.</b> The sweep rolls the pool each period: this month's volume lands in the expiring bucket, purchased packs sit in reserve and survive.</li>
+            <li><b>Request → approve raises a cap.</b> No credits move, so approving is idempotent by nature and costs the pool nothing until someone spends.</li>
+            <li><b>Offboarding reclaims nothing</b> — there was never a balance to take back, just a ceiling.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><span class="tag watch">still open</span> What the contract wrapper needs</h3>
+          <p>The credit mechanics are built; the <b>commercial</b> terms are not. There is no org subscription object, so the 12-month term, the monthly payment, the cancellation grace period and the "remaining months still owed" rule live in the contract you sign, not in the app — an admin buys credits or an operator sets the dispersal.</p>
+          <p>Also unbuilt: time-gated permissions (only invites expire, after 7 days), and role-gated payment drafting (payouts carry <code>draft</code>/<code>paid</code> but nothing restricts who confirms).</p>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Enterprise deal shape</h2><span class="sec-note">The contract as you've drawn it — monthly payment against a committed term</span></div>
+      <div class="assume">
+        <div class="field"><label>Seats <span class="val" id="v_seats">10</span></label><input type="range" id="seats" min="1" max="200" step="1" value="10"></div>
+        <div class="field"><label>Cap / seat / mo <span class="val" id="v_alw">2000</span></label><input type="range" id="allowance" min="0" max="8000" step="50" value="2000"><span class="sub">per-user credit cap</span></div>
+        <div class="field"><label>Admin's own cap <span class="val" id="v_adm">4000</span></label><input type="range" id="adminCap" min="0" max="20000" step="100" value="4000"></div>
+        <div class="field"><label>Seat utilization <span class="val" id="v_ue">70%</span></label><input type="range" id="utilEnt" min="0" max="100" step="5" value="70"><span class="sub">of the cap actually burned</span></div>
+        <div class="field"><label>Contract length <span class="val" id="v_term">12 mo</span></label><input type="range" id="termMonths" min="1" max="36" step="1" value="12"></div>
+        <div class="field"><label>Monthly dispersal <span class="sub">credits added to the pool / mo</span></label><input type="number" id="dispersal" min="0" step="500" value="10000"></div>
+        <div class="field"><label>Negotiated $ / credit <span class="sub">sets the monthly payment</span></label><div class="prefix"><span>$</span><input type="number" id="lumpRate" min="0.001" step="0.001" value="0.011"></div></div>
+        <div class="field"><label>PAYG credits / mo <span class="val" id="v_payg">0</span></label><input type="range" id="paygCredits" min="0" max="20000" step="250" value="0"><span class="sub">billed at the base rate on top</span></div>
+        <div class="field"><label>Unspent dispersal <span class="sub">at month end</span></label>
+          <div class="toggle" id="expiryToggle" role="group" aria-label="unspent credits">
+            <button type="button" data-x="expires" class="active">Expires</button>
+            <button type="button" data-x="rolls">Rolls over</button>
+          </div><span class="sub">rollover turns unspent credits into deferred cost</span></div>
+      </div>
+      <div class="stats" id="entStats"></div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Example org · live from the dials above</h2><span class="sec-note">The pool splitting into admin + seat caps, and whether it covers them</span></div>
+      <div class="flow" id="orgFlow"></div>
+      <p class="sec-note" id="flowNote" style="margin-top:12px;max-width:82ch;line-height:1.6"></p>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Contract P&amp;L</h2><span class="sec-note">Monthly, and across the committed term</span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Line</th><th class="num">Credits</th><th class="num">Revenue</th><th class="num">COGS</th><th class="num">Margin</th><th class="num">Margin %</th><th class="num">Per seat</th></tr></thead>
+        <tbody id="contractRows"></tbody>
+        <tfoot id="contractFoot"></tfoot>
+      </table></div></div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Margin per entry point</h2><span class="sec-note">Every way credits enter a wallet, priced against real COGS</span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Entry point</th><th class="num">Credits</th><th class="num">You charge</th><th class="num">$ / credit</th><th class="num">Your COGS</th><th class="num">Margin</th><th class="num">Margin %</th><th style="min-width:110px">vs list</th></tr></thead>
+        <tbody id="entryRows"></tbody>
+      </table></div></div>
+      <p class="sec-note" style="margin-top:11px;max-width:82ch;line-height:1.6">COGS assumes every credit is spent at the blended cost per credit from tab 1 — the worst case. Unspent credits are pure margin, which is why the <b style="color:var(--ink-soft)">seat utilization</b> dial above moves the deal economics more than the discount does. <b style="color:var(--ink-soft)">vs list</b> compares each entry point's effective rate to the $0.02 pay-per-use rate.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Sensitivity to utilization</h2><span class="sec-note">The dial that moves the deal more than any discount — highlighted row is your current setting</span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Utilization</th><th class="num">Wanted</th><th class="num">Burned</th><th class="num">Unspent</th><th class="num">Revenue / mo</th><th class="num">COGS / mo</th><th class="num">Margin / mo</th><th class="num">Margin %</th></tr></thead>
+        <tbody id="burnRows"></tbody>
+      </table></div></div>
+    </section>
+  </div>
+
+  <!-- ============================ TAB 4: RATES ============================ -->
+  <div class="tab-panel" id="tab-rates" hidden>
+    <section>
+      <div class="sec-head"><h2>OpenAI model rates</h2><span class="sec-note">USD per 1M tokens · standard tier · source: <a href="https://platform.openai.com/docs/pricing" target="_blank" rel="noopener">OpenAI pricing</a></span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Model</th><th>Used for</th><th class="num">Input / 1M</th><th class="num">Cached input / 1M</th><th class="num">Output / 1M</th></tr></thead>
+        <tbody id="rateRows"></tbody>
+      </table></div></div>
+      <div class="grid2" style="margin-top:16px">
+        <div class="card">
+          <h3>Keeping these honest</h3>
+          <p>This map is a copy — the authoritative table is <code>subscriptions/ai_pricing.py</code>. <code>open.py</code> diffs the two and refuses to open this page when they disagree, so a stale dashboard can't quietly hand you wrong advice.</p>
+          <p>Real per-call spend is recorded in <code>ai_usage_log</code> via the <code>TrackedOpenAI</code> proxy. Once there's a month of it, replace the modeled token counts below with measured medians.</p>
+        </div>
+        <div class="card">
+          <h3>Where the modeled counts come from</h3>
+          <ul>
+            <li><b>OneClick cold:</b> extraction + basis + split-verify on gpt-5.2, plus a mini payable-column detect.</li>
+            <li><b>OneClick warm:</b> extraction served from the shared parse cache — the two advisory passes are the whole bill.</li>
+            <li><b>Zoe:</b> routing + answer + citations on mini, escalating to gpt-5 for multi-contract questions.</li>
+            <li><b>Registry parse:</b> one extraction call, capped at <code>CONTRACT_PARSE_MAX_CHARS</code> (250k ≈ 96 pages).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </div>
 
   <footer>
-    <span>Plan caps: live from <code style="font-family:var(--mono);font-size:11px">tier_entitlements</code>. AI cost: modeled. Storage: proposed.</span>
+    <span>Prices &amp; grants: live from <code>credit_prices</code> / <code>tier_entitlements</code> / <code>credit_packs</code>. Token counts: modeled.</span>
     <span id="foot-rates"></span>
   </footer>
 
 </div>
 </div>
 
-<script>
-(function(){
+<script id="pricing-math">
+// Pure model — no DOM. Kept separate so it can be evaluated headlessly:
+//   node -e "eval(require('fs').readFileSync('index.html','utf8').split('<script id=\"pricing-math\">')[1].split('</'+'script>')[0]); console.log(PricingMath.selfCheck())"
+// (open.py also diffs MODELS against subscriptions/ai_pricing.py before opening.)
+var PricingMath = (function(){
+  // NOTE: planning-tool copy. The authoritative rates for real cost logging live in
+  // src/backend/subscriptions/ai_pricing.py — open.py fails if these drift apart.
   var MODELS = {
     'gpt-5.2':     {in:1.75, out:14,  cached:0.175, label:'gpt-5.2',   name:'gpt-5.2',              use:'Contract extraction · basis · split-verify'},
     'gpt-5':       {in:1.25, out:10,  cached:0.125, label:'gpt-5',     name:'gpt-5',                use:'Zoe answer (2+ contracts)'},
@@ -340,188 +509,525 @@
     'embed':       {in:0.02, out:0,   cached:null,  label:'embed-3-sm',name:'text-embedding-3-small',use:'Zoe / OneClick retrieval'}
   };
   var RATE_ORDER=['gpt-5.2','gpt-5','gpt-5-mini','gpt-5.4-mini','embed'];
-  var TPP = 650;
-  function el(id){return document.getElementById(id);}
-  var pages=el('pages'),contracts=el('contracts'),creditPrice=el('creditPrice'),markup=el('markup'),hit=el('hit');
-  var gb=el('gb'),incl=el('incl'),ovRate=el('ovRate'),sbRate=el('sbRate');
-  var freeCredits=el('freeCredits'),proCredits=el('proCredits');
-  var model='live';
-  var cRuns=el('cRuns'),cZoe=el('cZoe'),cReg=el('cReg'),cGB=el('cGB'),cProPrice=el('cProPrice');
-  var plan='pro';
+  var TPP = 650;   // tokens per contract page (pdf→markdown average)
+
+  // Shipped values, for the "live vs suggested" comparisons.
+  var LIVE = {
+    prices:{oneclick_run:21, zoe_message:3, registry_parse:12},   // credit_prices
+    grants:{free:150, basic:3000, pro:8000},                       // tier_entitlements
+    planPrice:{basic:25, pro:50},                                  // lib/tiers.ts
+    overageUsd:0.02,                                               // CREDIT_OVERAGE_USD
+    minOrgCredits:10000,                                           // ENTERPRISE_MIN_INITIAL_CREDITS
+    packs:[{key:'pack_500',credits:500,usd:10},{key:'pack_2000',credits:2000,usd:36},
+           {key:'pack_10000',credits:10000,usd:150},{key:'pack_50000',credits:50000,usd:600}]
+  };
 
   function cost(calls){var c=0;for(var i=0;i<calls.length;i++){var k=calls[i],m=MODELS[k.m];c+=(k.tin*m.in+k.tout*m.out)/1e6;}return c;}
   function tokens(calls){var ti=0,to=0;calls.forEach(function(k){ti+=k.tin;to+=k.tout;});return{ti:ti,to:to};}
   function modelSet(calls){var s=[];calls.forEach(function(k){var l=MODELS[k.m].label;if(s.indexOf(l)<0)s.push(l);});return s.length?s.join(', '):'—';}
-  function fmtTok(n){if(n>=1000)return(n/1000).toFixed(n>=10000?0:1)+'k';return String(n);}
-  function fmtUSD(n){if(n===0)return'$0';if(n<0.1)return'$'+n.toFixed(4);return'$'+n.toFixed(3);}
-  function fmtMoney(n){return'$'+n.toFixed(2);}
 
+  // Call graphs (modeled — see the Model rates tab).
   function ocSingle(ct,warm){var c=[];if(!warm)c.push({m:'gpt-5.2',tin:ct+2100,tout:2500});c.push({m:'gpt-5.2',tin:ct+350,tout:1500});c.push({m:'gpt-5.2',tin:ct+500,tout:2000});c.push({m:'gpt-5.4-mini',tin:300,tout:200});return c;}
   function ocMulti(ct,N,warm){var c=[{m:'gpt-5.4-mini',tin:300,tout:200}];for(var i=0;i<N;i++){if(!warm)c.push({m:'gpt-5.2',tin:ct+2100,tout:2500});c.push({m:'gpt-5.2',tin:ct+500,tout:2000});}return c;}
   function zoe1(ct){return[{m:'gpt-5-mini',tin:800,tout:500},{m:'gpt-5-mini',tin:1500+ct+2000,tout:2000},{m:'gpt-5-mini',tin:ct+2000,tout:1000},{m:'embed',tin:20,tout:0}];}
   function zoeN(ct,N){return[{m:'gpt-5-mini',tin:800,tout:500},{m:'gpt-5',tin:1500+N*ct+2000,tout:2000},{m:'gpt-5-mini',tin:N*ct+2000,tout:1000},{m:'embed',tin:20,tout:0}];}
   function registry(ct){return[{m:'gpt-5.2',tin:ct+2100,tout:2500}];}
 
-  function toCredits(c,mk,cp){return c===0?0:Math.max(1,Math.ceil(c*mk/cp));}
+  /** Credits an action SHOULD cost: COGS x markup, converted at the credit price.
+   *  Lower the credit price and this rises — the dollar margin is what's held constant.
+   *  Rounded to 6dp before the ceiling: 0.10*3/0.02 is 15.000000000000002 in binary
+   *  floating point, and a naive ceil turns that into 16 — a whole credit of
+   *  invented price on every action. */
+  function toCredits(usd,markup,creditPrice){
+    if(usd===0) return 0;
+    return Math.max(1,Math.ceil(+(usd*markup/creditPrice).toFixed(6)));
+  }
 
-  function scenarios(a){
-    var ct=a.pages*TPP,N=a.contracts,h=a.hit;
-    var coldS=ocSingle(ct,false),warmS=ocSingle(ct,true);
-    var blendS=cost(coldS)*(1-h)+cost(warmS)*h;
+  /** The three metered actions, with modeled COGS and the live credit price. */
+  function actions(a){
+    var ct=a.pages*TPP;
+    var blended=cost(ocSingle(ct,false))*(1-a.hit)+cost(ocSingle(ct,true))*a.hit;
     return [
-      {tool:'Zoe',scen:'chat message · 1 contract',sev:'low',calls:zoe1(ct)},
-      {tool:'Zoe',scen:'chat message · '+N+' contracts',sev:'med',calls:zoeN(ct,N)},
-      {tool:'Registry',scen:'add work · new contract',sev:'low',calls:registry(ct)},
-      {tool:'Registry / OneClick',scen:'contract seen before (cache hit)',sev:'free',calls:[]},
-      {tool:'OneClick',scen:'single · cold (extraction miss)',sev:'high',calls:coldS},
-      {tool:'OneClick',scen:'single · warm (extraction cached)',sev:'med',calls:warmS},
-      {tool:'OneClick',scen:'single · blended @ '+Math.round(h*100)+'% hit',sev:'med',costOverride:blendS,highlight:true,calls:[]},
-      {tool:'OneClick',scen:'result-cache hit (unchanged re-run)',sev:'free',calls:[]},
-      {tool:'OneClick',scen:N+' contracts · warm',sev:'med',calls:ocMulti(ct,N,true)}
+      {key:'oneclick_run',  name:'OneClick run',     note:'blended at '+Math.round(a.hit*100)+'% cache hit', usd:blended},
+      {key:'registry_parse',name:'Registry parse',   note:'one extraction call',                             usd:cost(registry(ct))},
+      {key:'zoe_message',   name:'Zoe message',      note:'single-contract question',                        usd:cost(zoe1(ct))}
     ];
   }
 
-  // per-tool cards — Free/Pro behaviour depends on the model (live caps vs proposed)
-  function toolCards(a,mk,cp,model){
-    var ct=a.pages*TPP, P=(model==='proposed'), un='no marginal cost — unmetered';
-    var warm=toCredits(cost(ocSingle(ct,true)),mk,cp), cold=toCredits(cost(ocSingle(ct,false)),mk,cp);
-    var zc=toCredits(cost(zoe1(ct)),mk,cp), rc=toCredits(cost(registry(ct)),mk,cp);
-    return [
-      {n:'OneClick',ai:true,free:P?'credits':'1 run / mo',pro:P?'credits':'unlimited',cost:'≈ <b>'+warm+' cr</b> warm · '+cold+' cold · 0 cached'},
-      {n:'Zoe',ai:true,free:P?'credits':'off',pro:P?'credits':'unlimited',cost:'≈ <b>'+zc+' cr</b> / message'},
-      {n:'Registry',ai:true,free:P?'credits':'off',pro:P?'credits':'unlimited',cost:'≈ <b>'+rc+' cr</b> / new contract · 0 cached'},
-      {n:'Split sheet',ai:false,free:P?'unlimited':'5 / mo',pro:'unlimited',flat:true,cost:P?un:'no LLM — <b>$0</b> marginal'},
-      {n:'Artists',ai:false,free:P?'unlimited':'3',pro:'unlimited',flat:true,cost:P?un:'cap defined, not yet enforced'},
-      {n:'Projects',ai:false,free:P?'unlimited':'3',pro:'unlimited',flat:true,cost:P?un:'hard cap · 402 on exceed'},
-      {n:'Tasks',ai:false,free:P?'unlimited':'50',pro:'unlimited',flat:true,cost:P?un:'hard cap · 402 on exceed'},
-      {n:'Storage',ai:false,free:'1 GB',pro:'100 GB +',flat:true,cost:'metered — Supabase ~$0.0213/GB'},
-      {n:'Google Drive',ai:false,free:'✓',pro:'✓',flat:true,cost:'free · no per-use cost'},
-      {n:'Slack',ai:false,free:P?'✓':'✗',pro:'✓',flat:true,cost:P?'no cost — available to all':'Pro-only · no per-use cost'}
-    ];
+  /** Blended real cost of ONE credit: what the average spent credit costs us.
+   *  Weighted by an assumed action mix, because a credit spent on OneClick and a
+   *  credit spent on Zoe do not cost the same. */
+  function costPerCredit(a,mix){
+    mix = mix || {oneclick_run:1, zoe_message:6, registry_parse:1};
+    var acts=actions(a), usd=0, credits=0;
+    acts.forEach(function(x){
+      var n=mix[x.key]||0;
+      usd += n*x.usd;
+      credits += n*(LIVE.prices[x.key]||0);
+    });
+    return credits>0 ? usd/credits : 0;
   }
 
-  var BUNDLES=[{n:'Starter +',gb:100,price:5},{n:'Studio +',gb:500,price:20},{n:'Label +',gb:2000,price:50}];
+  /** Per-plan economics. `revenue` is 0 for free by construction. */
+  function planPL(o){
+    var burned = o.grant*o.util;
+    var credCogs = burned*o.costPerCredit;
+    var cogs = credCogs + o.fixed;
+    var margin = o.revenue - cogs;
+    // Price that hits the target margin at FULL grant consumption (worst case).
+    var worstCogs = o.grant*o.costPerCredit + o.fixed;
+    var needed = o.targetMargin >= 1 ? Infinity : worstCogs/(1-o.targetMargin);
+    return {burned:burned, credCogs:credCogs, cogs:cogs, margin:margin,
+            marginPct:o.revenue>0?margin/o.revenue:null, needed:needed};
+  }
+
+  /** One way credits enter a wallet: pack, negotiated lump sum, or pay-per-use. */
+  function entry(o){
+    var rate = o.credits>0 ? o.usd/o.credits : 0;
+    var cogs = o.credits*o.costPerCredit*(o.utilization==null?1:o.utilization);
+    var margin = o.usd-cogs;
+    return {rate:rate, cogs:cogs, margin:margin, marginPct:o.usd>0?margin/o.usd:null,
+            vsList:LIVE.overageUsd>0?rate/LIVE.overageUsd-1:0};
+  }
+
+  /** Enterprise CONTRACT — the dispersal model.
+   *
+   *  The org negotiates a monthly credit dispersal (e.g. 10,000 cr/mo) against a
+   *  committed term and pays monthly. Credits land in ONE org pool. Admins set a
+   *  per-user monthly CAP; users spend straight out of the pool and are cut off
+   *  at their own cap, at which point they ask for a raise.
+   *
+   *  The cap is a CEILING, not an allocation — so caps may sum to more than the
+   *  dispersal (deliberate overcommit: most users never reach their cap). What
+   *  actually bounds spend is the pool. `overcommit` is that ratio, and
+   *  `poolShortfall` is what happens when expected burn exceeds the dispersal.
+   *
+   *  NOT what the code implements today: it moves credits into per-seat wallets
+   *  and tops them up to an allowance, one wallet per member.
+   */
+  function contract(o){
+    var capped = o.seats*o.capPerSeat + o.adminCap;   // ceiling if EVERY user maxed out
+    var dispersal = o.dispersal;                      // credits added to the pool per month
+    var wantBurn = capped*o.util;                     // what users would spend, uncapped by pool
+    var burned = Math.min(wantBurn, dispersal + (o.carriedIn||0));
+    var creditCogs = burned*o.costPerCredit;
+    var fixed = o.fixedPerSeat*(o.seats+1);           // admins hold a seat too
+    var paygRev = (o.paygCredits||0)*o.paygRate;
+    var paygCogs = (o.paygCredits||0)*o.costPerCredit;
+    var revenue = o.monthlyUsd + paygRev;
+    var cogs = creditCogs + fixed + paygCogs;
+    var margin = revenue - cogs;
+    var unspent = Math.max(0, dispersal - burned);
+    return {capped:capped, dispersal:dispersal, wantBurn:wantBurn, burned:burned,
+            creditCogs:creditCogs, fixed:fixed, paygRev:paygRev, paygCogs:paygCogs,
+            revenue:revenue, cogs:cogs, margin:margin,
+            marginPct:revenue>0?margin/revenue:null,
+            perSeat:o.seats>0?margin/o.seats:0,
+            // What the org pays per credit dispersed, vs per credit actually used.
+            effRate:dispersal>0?o.monthlyUsd/dispersal:0,
+            realizedRate:burned>0?o.monthlyUsd/burned:0,
+            overcommit:dispersal>0?capped/dispersal:Infinity,
+            poolShortfall:Math.max(0, wantBurn-dispersal-(o.carriedIn||0)),
+            unspent:unspent,
+            // Unspent dispersal is only margin if it EXPIRES. If it rolls over it is
+            // deferred COGS: the org banks credits and can burn them all in one month.
+            deferredCogs:o.expires?0:unspent*o.costPerCredit,
+            bankedAfterTerm:o.expires?0:unspent*o.months,
+            tcv:o.monthlyUsd*o.months, termMargin:margin*o.months,
+            // Their rule: cancel early and the remaining months are still owed.
+            remainingOwed:function(cancelAfter){return o.monthlyUsd*Math.max(0,o.months-cancelAfter);}};
+  }
+
+  /** Enterprise pool: seats x allowance drives burn; the pool is a prepaid balance. */
+  function pool(o){
+    var monthlyAllocated = o.seats*o.allowance;
+    var monthlyBurn = monthlyAllocated*o.util;
+    var runway = monthlyAllocated>0 ? o.credits/monthlyAllocated : Infinity;
+    // Prepaid revenue recognized over the runway; COGS follows actual burn.
+    var revPerMonth = runway>0 && isFinite(runway) ? o.usd/runway : 0;
+    var cogsPerMonth = monthlyBurn*o.costPerCredit;
+    return {monthlyAllocated:monthlyAllocated, monthlyBurn:monthlyBurn, runway:runway,
+            revPerMonth:revPerMonth, cogsPerMonth:cogsPerMonth,
+            marginPerMonth:revPerMonth-cogsPerMonth,
+            perSeat:o.seats>0?(revPerMonth-cogsPerMonth)/o.seats:0};
+  }
+
+  /** Smallest useful regression check — asserts the directional invariants the
+   *  whole page rests on. Run headlessly (see the comment at the top). */
+  function selfCheck(){
+    var a={pages:15,contracts:3,hit:0.7}, out=[];
+    function ok(name,cond){out.push((cond?'PASS  ':'FAIL  ')+name); if(!cond) out.failed=true;}
+    var c1=toCredits(0.10,3,0.02), c2=toCredits(0.10,3,0.01);
+    ok('halving the credit price doubles credits per action', c2===c1*2);
+    ok('markup raises credits per action', toCredits(0.10,6,0.02) > c1);
+    ok('zero-cost action is zero credits', toCredits(0,3,0.02)===0);
+    ok('a cache hit is cheaper than a cold run', cost(ocSingle(9750,true)) < cost(ocSingle(9750,false)));
+    ok('cost per credit is positive', costPerCredit(a) > 0);
+    var pl=planPL({grant:3000,util:0.45,costPerCredit:0.004,fixed:0.35,revenue:25,targetMargin:0.8});
+    ok('plan margin = revenue - cogs', Math.abs(pl.margin-(25-pl.cogs))<1e-9);
+    ok('price needed covers full-grant worst case', pl.needed > 3000*0.004);
+    var free=planPL({grant:150,util:0.6,costPerCredit:0.004,fixed:0.35,revenue:0,targetMargin:0.8});
+    ok('free margin is negative (it is a cost)', free.margin < 0);
+    var e=entry({credits:10000,usd:150,costPerCredit:0.004,utilization:1});
+    ok('pack margin = charge - burn cost', Math.abs(e.margin-(150-40))<1e-9);
+    ok('pack rate is below list', e.vsList < 0);
+    var p=pool({credits:100000,usd:1100,seats:10,allowance:800,util:0.7,costPerCredit:0.004});
+    ok('runway = credits / allocated per month', Math.abs(p.runway-12.5)<1e-9);
+    ok('unspent allocation improves margin',
+       pool({credits:100000,usd:1100,seats:10,allowance:800,util:0.4,costPerCredit:0.004}).marginPerMonth
+       > p.marginPerMonth);
+    var cArgs={seats:10,capPerSeat:2000,adminCap:4000,util:0.7,costPerCredit:0.004,
+               fixedPerSeat:0.35,monthlyUsd:250,dispersal:10000,paygCredits:0,
+               paygRate:0.02,months:12,expires:true};
+    var c=contract(cArgs);
+    ok('caps sum to seats x cap + admin cap', c.capped===24000);
+    ok('caps may overcommit the dispersal', c.overcommit===2.4);
+    ok('the pool bounds burn, not the caps', c.burned===10000 && c.wantBurn===16800);
+    ok('shortfall is what the caps wanted beyond the pool', c.poolShortfall===6800);
+    ok('contract margin = revenue - cogs', Math.abs(c.margin-(c.revenue-c.cogs))<1e-9);
+    ok('term value = monthly x months', c.tcv===3000);
+    ok('early cancel still owes the remainder', c.remainingOwed(3)===250*9);
+    ok('payg adds margin while its rate beats cost',
+       contract(Object.assign({},cArgs,{paygCredits:1000})).margin > c.margin);
+    var light=contract(Object.assign({},cArgs,{util:0.2}));
+    ok('light usage leaves the pool unspent', light.unspent > 0 && light.burned < c.burned);
+    ok('expiring dispersal books no deferred cost', light.deferredCogs===0);
+    var rolls=contract(Object.assign({},cArgs,{util:0.2,expires:false}));
+    ok('rolled-over dispersal defers COGS instead', rolls.deferredCogs > 0);
+    ok('rollover banks credits across the term', rolls.bankedAfterTerm===rolls.unspent*12);
+    return out.join('\n')+(out.failed?'\n\nSOME CHECKS FAILED':'\n\nAll checks passed');
+  }
+
+  return {MODELS:MODELS, RATE_ORDER:RATE_ORDER, TPP:TPP, LIVE:LIVE,
+          cost:cost, tokens:tokens, modelSet:modelSet,
+          ocSingle:ocSingle, ocMulti:ocMulti, zoe1:zoe1, zoeN:zoeN, registry:registry,
+          toCredits:toCredits, actions:actions, costPerCredit:costPerCredit,
+          planPL:planPL, entry:entry, pool:pool, contract:contract, selfCheck:selfCheck};
+})();
+if (typeof module !== 'undefined') { module.exports = PricingMath; }
+</script>
+
+<script>
+(function(){
+  var M=PricingMath, LIVE=M.LIVE;
+  function el(id){return document.getElementById(id);}
+  var expiry='expires';
+  var IN=['creditPrice','markup','pages','contracts','hit',
+          'freeCredits','basicCredits','proCredits','basicPrice','proPrice',
+          'utilFree','utilBasic','utilPro','fixedPerUser','targetMargin',
+          'nFree','nBasic','nPro',
+          'seats','allowance','adminCap','utilEnt','termMonths',
+          'paygCredits','dispersal','lumpRate'].map(el);
+
+  function n(id){return +el(id).value;}
+  function fmtTok(v){if(v>=1000)return(v/1000).toFixed(v>=10000?0:1)+'k';return String(v);}
+  function usd(v){if(v===0)return'$0';if(Math.abs(v)<0.01)return'$'+v.toFixed(4);if(Math.abs(v)<1)return'$'+v.toFixed(3);return'$'+v.toFixed(2);}
+  function money(v){return (v<0?'−$':'$')+Math.abs(v).toFixed(2);}
+  function pct(v){return v==null?'—':Math.round(v*100)+'%';}
+  function stat(label,val,note,cls){return '<div class="stat'+(cls&&cls.indexOf('hero')>=0?' hero':'')+'"><div class="sl">'+label+'</div><div class="sv'+(cls?' '+cls.replace('hero','').trim():'')+'">'+val+'</div><div class="snote">'+note+'</div></div>';}
+  var MO='<span style="font-size:12px;color:var(--muted)">/mo</span>';
+
+  function bar(value,max,cls){
+    var w=max>0?Math.max(value>0?4:0,Math.min(100,value/max*100)):0;
+    return '<div class="bar-wrap"><div class="bar-track"><div class="bar-fill '+(cls||'')+'" style="width:'+w+'%"></div></div></div>';
+  }
 
   function render(){
-    var a={pages:+pages.value,contracts:+contracts.value,hit:(+hit.value)/100};
-    el('v_pages').textContent=a.pages+' pg';el('v_contracts').textContent=a.contracts;
-    el('v_markup').textContent=(+markup.value).toFixed(1)+'×';el('v_hit').textContent=(+hit.value)+'%';
-    var cp=Math.max(.001,+creditPrice.value),mk=+markup.value;
+    var a={pages:n('pages'),contracts:n('contracts'),hit:n('hit')/100};
+    var cp=Math.max(0.001,n('creditPrice')), mk=n('markup');
+    el('v_pages').textContent=a.pages+' pg'; el('v_contracts').textContent=a.contracts;
+    el('v_markup').textContent=mk.toFixed(2).replace(/0$/,'')+'×'; el('v_hit').textContent=Math.round(a.hit*100)+'%';
+    el('v_cpNote').textContent='list is $'+LIVE.overageUsd.toFixed(3)+' (pay-per-use)';
 
-    // per-tool cards
-    el('modelNote').innerHTML = model==='proposed'
-      ? 'Meter only what costs you money — <b style="color:var(--ink-soft)">AI usage (credits)</b> and <b style="color:var(--ink-soft)">storage (GB)</b>. Everything with zero marginal cost is unlimited on both plans; Free vs Pro differ by credit allowance + storage (+ priority support).'
-      : 'Free is hard-capped today — projects, tasks, uploads, split-sheets and OneClick runs return HTTP 402 past their limit; Zoe / Registry / Slack are Pro-only.';
-    el('tools').innerHTML=toolCards(a,mk,cp,model).map(function(t){
-      return '<div class="tcard">'+
-        '<div class="th"><span class="tn">'+t.n+'</span><span class="badge '+(t.ai?'ai">AI':'plan">plan')+'</span></div>'+
-        '<div class="tiers"><div class="tier"><div class="tl">Free</div><div class="tv">'+t.free+'</div></div>'+
-        '<div class="tier pro"><div class="tl">Pro</div><div class="tv">'+t.pro+'</div></div></div>'+
-        '<div class="costline'+(t.flat?' flat':'')+'">'+t.cost+'</div>'+
-      '</div>';
-    }).join('');
+    // ---------- tab 1: dials ----------
+    var cpc=M.costPerCredit(a);
+    var acts=M.actions(a);
+    el('dialStats').innerHTML=
+      stat('Real cost of 1 credit',usd(cpc),'blended over the action mix',cpc<cp?'pos':'neg')+
+      stat('Gross margin per credit',pct(cp>0?(cp-cpc)/cp:null),'at $'+cp.toFixed(3)+' sell price',(cp-cpc)>=0?'pos':'neg')+
+      stat('Markup achieved',(cpc>0?(cp/cpc).toFixed(1):'∞')+'×','vs '+mk.toFixed(2).replace(/0$/,'')+'× target',(cpc>0&&cp/cpc>=mk)?'pos':'neg')+
+      stat('Credits per $1',(cp>0?Math.floor(1/cp):0)+' cr','what a dollar buys the customer',null);
 
-    // AI cost table
-    var rows=scenarios(a).map(function(s){var c=(s.costOverride!=null)?s.costOverride:cost(s.calls);return{s:s,c:c,tk:tokens(s.calls),credits:toCredits(c,mk,cp)};});
-    var maxC=Math.max.apply(null,rows.map(function(r){return r.c;}))||1;
-    el('rows').innerHTML=rows.map(function(r){
-      var s=r.s,w=Math.max(r.c>0?4:0,r.c/maxC*100),over=(s.costOverride!=null),callN=s.calls.length;
-      var credCls=r.credits===0?'creditsFree':'credits',credTxt=r.credits===0?'free':r.credits;
-      var rowAttr=s.highlight?' style="background:var(--accent-soft)"':'';
-      return '<tr'+rowAttr+'>'+
-        '<td><div class="tool">'+s.tool+'</div><div class="scen">'+s.scen+'</div></td>'+
-        '<td><span class="chip '+s.sev+'">'+({free:'none',low:'light',med:'medium',high:'heavy'}[s.sev])+'</span></td>'+
-        '<td class="num">'+(over?'~':(callN||'0'))+'</td>'+
-        '<td class="models">'+(over?'gpt-5.2 mix':modelSet(s.calls))+'</td>'+
-        '<td class="num">'+(over?'—':(callN?fmtTok(r.tk.ti)+' / '+fmtTok(r.tk.to):'—'))+'</td>'+
-        '<td class="num cost">'+fmtUSD(r.c)+'</td>'+
-        '<td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill '+s.sev+'" style="width:'+w+'%"></div></div></div></td>'+
-        '<td class="num '+credCls+'">'+credTxt+'</td>'+
+    var maxMargin=0;
+    var rows=acts.map(function(x){
+      var suggested=M.toCredits(x.usd,mk,cp), live=LIVE.prices[x.key];
+      var charged=live*cp, margin=charged-x.usd;
+      maxMargin=Math.max(maxMargin,Math.abs(margin));
+      return {x:x,suggested:suggested,live:live,charged:charged,margin:margin,
+              marginPct:charged>0?margin/charged:null};
+    });
+    el('actionRows').innerHTML=rows.map(function(r){
+      var short=r.suggested>r.live, cls=r.margin<0?'bad':'credits';
+      return '<tr>'+
+        '<td><div class="tool">'+r.x.name+'</div><div class="scen">'+r.x.note+'</div></td>'+
+        '<td class="num cost">'+usd(r.x.usd)+'</td>'+
+        '<td class="num credits">'+r.suggested+' cr</td>'+
+        '<td class="num">'+r.live+' cr'+(short?' <span class="delta">−'+(r.suggested-r.live)+'</span>':'')+'</td>'+
+        '<td class="num cost">'+usd(r.charged)+'</td>'+
+        '<td class="num '+cls+'">'+money(r.margin)+'</td>'+
+        '<td>'+bar(Math.max(0,r.margin),maxMargin,r.margin<0?'high':'')+' <span class="delta">'+pct(r.marginPct)+'</span></td>'+
       '</tr>';
     }).join('');
 
-    var _ct=a.pages*TPP,coldC=cost(ocSingle(_ct,false)),warmC=cost(ocSingle(_ct,true));
-    var blend=coldC*(1-a.hit)+warmC*a.hit;
-    el('ocHeadline').innerHTML='OneClick ≈ <b>'+toCredits(blend,mk,cp)+' cr</b> @ '+(+hit.value)+'% hit';
-    el('stamp').textContent='1 cr = $'+cp.toFixed(3)+' · '+mk.toFixed(1)+'× markup';
-    el('foot-rates').textContent='Rates: OpenAI platform pricing · Supabase storage $0.0213/GB/mo';
+    // scenario detail
+    var ct=a.pages*M.TPP, N=a.contracts;
+    var coldS=M.ocSingle(ct,false), warmS=M.ocSingle(ct,true);
+    var blend=M.cost(coldS)*(1-a.hit)+M.cost(warmS)*a.hit;
+    var scen=[
+      {tool:'Zoe',scen:'chat message · 1 contract',sev:'low',calls:M.zoe1(ct)},
+      {tool:'Registry',scen:'add work · new contract',sev:'low',calls:M.registry(ct)},
+      {tool:'Any tool',scen:'contract seen before (parse-cache hit)',sev:'free',calls:[]},
+      {tool:'OneClick',scen:'single · cold (extraction miss)',sev:'high',calls:coldS},
+      {tool:'OneClick',scen:'single · warm (extraction cached)',sev:'med',calls:warmS},
+      {tool:'OneClick',scen:'single · blended @ '+Math.round(a.hit*100)+'% hit',sev:'med',costOverride:blend,highlight:true,calls:[]},
+      {tool:'OneClick',scen:'result-cache hit (unchanged re-run)',sev:'free',calls:[]}
+    ];
+    // Multi-contract rows only when the slider is above 1 — at N=1 they'd restate
+    // the single-contract rows, and Zoe's gpt-5 escalation only fires on 2+.
+    if(N>1) scen.push(
+      {tool:'Zoe',scen:'chat message · '+N+' contracts (escalates to gpt-5)',sev:'med',calls:M.zoeN(ct,N)},
+      {tool:'OneClick',scen:N+' contracts · warm',sev:'med',calls:M.ocMulti(ct,N,true)}
+    );
+    scen=scen.map(function(s){var c=(s.costOverride!=null)?s.costOverride:M.cost(s.calls);
+      return {s:s,c:c,tk:M.tokens(s.calls),credits:M.toCredits(c,mk,cp)};});
+    var maxC=Math.max.apply(null,scen.map(function(r){return r.c;}))||1;
+    el('rows').innerHTML=scen.map(function(r){
+      var s=r.s,over=(s.costOverride!=null),callN=s.calls.length;
+      return '<tr'+(s.highlight?' style="background:var(--accent-soft)"':'')+'>'+
+        '<td><div class="tool">'+s.tool+'</div><div class="scen">'+s.scen+'</div></td>'+
+        '<td><span class="chip '+s.sev+'">'+({free:'none',low:'light',med:'medium',high:'heavy'}[s.sev])+'</span></td>'+
+        '<td class="num">'+(over?'~':(callN||'0'))+'</td>'+
+        '<td class="models">'+(over?'gpt-5.2 mix':M.modelSet(s.calls))+'</td>'+
+        '<td class="num">'+(over?'—':(callN?fmtTok(r.tk.ti)+' / '+fmtTok(r.tk.to):'—'))+'</td>'+
+        '<td class="num cost">'+usd(r.c)+'</td>'+
+        '<td>'+bar(r.c,maxC,s.sev==='high'?'high':(s.sev==='med'?'med':(s.sev==='free'?'free':'')))+'</td>'+
+        '<td class="num '+(r.credits===0?'creditsFree':'credits')+'">'+(r.credits===0?'free':r.credits)+'</td>'+
+      '</tr>';
+    }).join('');
+    el('ocHeadline').innerHTML='OneClick ≈ <b>'+M.toCredits(blend,mk,cp)+' cr</b> suggested vs <b>'+LIVE.prices.oneclick_run+' cr</b> live · 1 cr = $'+cp.toFixed(3);
+    el('foot-rates').textContent='1 credit = $'+cp.toFixed(3)+' sell · '+usd(cpc)+' cost';
 
-    // OpenAI model rates table
-    el('rateRows').innerHTML=RATE_ORDER.map(function(k){var m=MODELS[k];
+    // ---------- tab 2: plans ----------
+    var grants={free:n('freeCredits'),basic:n('basicCredits'),pro:n('proCredits')};
+    var utils={free:n('utilFree')/100,basic:n('utilBasic')/100,pro:n('utilPro')/100};
+    var prices={free:0,basic:n('basicPrice'),pro:n('proPrice')};
+    var fixed=n('fixedPerUser'), tm=n('targetMargin')/100;
+    el('v_fc').textContent=grants.free; el('v_bc').textContent=grants.basic; el('v_pc').textContent=grants.pro;
+    el('v_uf').textContent=Math.round(utils.free*100)+'%'; el('v_ub').textContent=Math.round(utils.basic*100)+'%';
+    el('v_up').textContent=Math.round(utils.pro*100)+'%'; el('v_tm').textContent=Math.round(tm*100)+'%';
+
+    var PLANS=[{k:'free',label:'Free'},{k:'basic',label:'Basic'},{k:'pro',label:'Pro'}];
+    var pl={};
+    PLANS.forEach(function(p){
+      pl[p.k]=M.planPL({grant:grants[p.k],util:utils[p.k],costPerCredit:cpc,fixed:fixed,
+                        revenue:prices[p.k],targetMargin:tm});
+    });
+
+    var freeCost=-pl.free.margin;
+    el('freeStats').innerHTML=
+      stat('Cost per free user',money(freeCost)+MO,Math.round(pl.free.burned)+' cr burned + '+money(fixed)+' fixed','neg')+
+      stat('Worst-case free user',money(grants.free*cpc+fixed)+MO,'burns the whole '+grants.free+' cr grant','neg')+
+      stat('Free users per Basic sub',(freeCost>0?Math.floor(Math.max(0,pl.basic.margin)/freeCost):'∞'),'paid for by one Basic margin',null)+
+      stat('Free users per Pro sub',(freeCost>0?Math.floor(Math.max(0,pl.pro.margin)/freeCost):'∞'),'paid for by one Pro margin',null);
+
+    el('planRows').innerHTML=PLANS.map(function(p){
+      var r=pl[p.k], needed=r.needed, short=isFinite(needed)&&needed>prices[p.k]&&p.k!=='free';
+      return '<tr>'+
+        '<td><div class="tool">'+p.label+'</div><div class="scen">'+(p.k==='free'?'acquisition cost':'$'+prices[p.k]+'/mo')+'</div></td>'+
+        '<td class="num">'+grants[p.k]+'</td>'+
+        '<td class="num">'+Math.round(r.burned)+'</td>'+
+        '<td class="num cost">'+money(r.credCogs)+'</td>'+
+        '<td class="num">'+money(fixed)+'</td>'+
+        '<td class="num cost">'+money(prices[p.k])+'</td>'+
+        '<td class="num '+(r.margin>=0?'credits':'bad')+'">'+money(r.margin)+'</td>'+
+        '<td class="num">'+pct(r.marginPct)+'</td>'+
+        '<td class="num '+(short?'bad':'')+'">'+(p.k==='free'?'—':(isFinite(needed)?money(needed):'∞'))+
+          (short?' <span class="delta">+'+money(needed-prices[p.k]).replace('$','')+'</span>':'')+'</td>'+
+      '</tr>';
+    }).join('');
+
+    var counts={free:n('nFree'),basic:n('nBasic'),pro:n('nPro')};
+    el('v_nf').textContent=counts.free; el('v_nb').textContent=counts.basic; el('v_np').textContent=counts.pro;
+    var totRev=0,totCogs=0,totUsers=0;
+    PLANS.forEach(function(p){
+      totRev+=counts[p.k]*prices[p.k];
+      totCogs+=counts[p.k]*pl[p.k].cogs;
+      totUsers+=counts[p.k];
+    });
+    var totMargin=totRev-totCogs;
+    el('planFoot').innerHTML='<tr><td colspan="5">Blended across '+totUsers+' users</td>'+
+      '<td class="num">'+money(totRev)+'</td>'+
+      '<td class="num '+(totMargin>=0?'credits':'bad')+'">'+money(totMargin)+'</td>'+
+      '<td class="num">'+pct(totRev>0?totMargin/totRev:null)+'</td><td></td></tr>';
+    el('mixStats').innerHTML=
+      stat('Revenue',money(totRev)+MO,counts.basic+' Basic · '+counts.pro+' Pro',null)+
+      stat('COGS',money(totCogs)+MO,'credits + fixed, all plans',null)+
+      stat('Gross margin',money(totMargin)+MO,pct(totRev>0?totMargin/totRev:null)+' of revenue',totMargin>=0?'pos':'neg')+
+      stat('Free tier drag',money(counts.free*freeCost)+MO,counts.free+' free users at '+money(freeCost)+' each','neg')+
+      stat('Margin per paying user',money((counts.basic+counts.pro)>0?totMargin/(counts.basic+counts.pro):0)+MO,'after carrying the free tier',null,'hero');
+
+    // ---------- tab 3: licensing ----------
+    var seats=n('seats'), allowance=n('allowance'), adminCap=n('adminCap'), utilE=n('utilEnt')/100;
+    var term=n('termMonths'), dispersal=Math.max(0,n('dispersal')), paygCr=n('paygCredits');
+    var lumpRate=Math.max(0.0001,n('lumpRate'));
+    var monthlyUsd=dispersal*lumpRate;
+    el('v_seats').textContent=seats; el('v_alw').textContent=allowance;
+    el('v_adm').textContent=adminCap; el('v_ue').textContent=Math.round(utilE*100)+'%';
+    el('v_term').textContent=term+' mo'; el('v_payg').textContent=paygCr.toLocaleString();
+
+    var ct2=M.contract({seats:seats,capPerSeat:allowance,adminCap:adminCap,util:utilE,
+      costPerCredit:cpc,fixedPerSeat:fixed,monthlyUsd:monthlyUsd,dispersal:dispersal,
+      paygCredits:paygCr,paygRate:LIVE.overageUsd,months:term,expires:(expiry==='expires')});
+    var activated=dispersal>=LIVE.minOrgCredits;
+    el('entStats').innerHTML=
+      stat('Monthly payment',money(monthlyUsd)+MO,dispersal.toLocaleString()+' cr at $'+lumpRate.toFixed(4)+'/cr',null)+
+      stat('Contract value',money(ct2.tcv),term+' months — margin '+money(ct2.termMargin),ct2.termMargin>=0?'pos':'neg')+
+      stat('Margin / mo',money(ct2.margin)+MO,pct(ct2.marginPct)+' of '+money(ct2.revenue)+' revenue',ct2.margin>=0?'pos':'neg')+
+      stat('Margin / seat / mo',money(ct2.perSeat)+MO,seats+' seats at '+Math.round(utilE*100)+'% of cap',ct2.perSeat>=0?'pos':'neg')+
+      stat('Overcommit',(isFinite(ct2.overcommit)?ct2.overcommit.toFixed(1):'∞')+'×',
+           'caps total '+ct2.capped.toLocaleString()+' cr vs '+dispersal.toLocaleString()+' dispersed',
+           ct2.overcommit>1?null:'pos')+
+      stat('Realized $ / credit',(ct2.realizedRate>0?'$'+ct2.realizedRate.toFixed(4):'—'),
+           'on '+Math.round(ct2.burned).toLocaleString()+' cr actually burned · cost '+usd(cpc),
+           ct2.realizedRate>cpc?'pos':'neg')+
+      stat(expiry==='rolls'?'Banked credits by term end':'Unspent each month',
+           expiry==='rolls'?Math.round(ct2.bankedAfterTerm).toLocaleString()+' cr':Math.round(ct2.unspent).toLocaleString()+' cr',
+           expiry==='rolls'?'deferred cost of '+money(ct2.deferredCogs*term)+' — they can burn it all at once'
+                           :'expires — this is what carries the margin',
+           expiry==='rolls'?'neg':'pos')+
+      stat('If they cancel at month 3',money(ct2.remainingOwed(3)),'contractually still owed (not enforced in code)','hero');
+
+    // manipulable org example — one pool, per-user caps drawing from it
+    var seatCards='';
+    var shown=Math.min(seats,8);
+    for(var i=0;i<shown;i++){
+      seatCards+='<div class="fseat"><div class="sn">User '+(i+1)+'</div>'+
+        '<div class="sc">'+allowance.toLocaleString()+' cr cap</div>'+
+        '<div class="sp">≈'+Math.round(allowance*utilE).toLocaleString()+' cr used · asks for a raise at the cap</div></div>';
+    }
+    if(seats>shown) seatCards+='<div class="fseat"><div class="sn">+'+(seats-shown)+' more</div>'+
+      '<div class="sc">'+allowance.toLocaleString()+' cr cap each</div><div class="sp">same shape</div></div>';
+    el('orgFlow').innerHTML=
+      '<div class="fnode pool"><div class="fl">Dispersed monthly</div><div class="fv">'+dispersal.toLocaleString()+' cr</div>'+
+        '<div class="fn">'+money(monthlyUsd)+'/mo at $'+lumpRate.toFixed(4)+'/cr</div></div>'+
+      '<div class="farrow">→</div>'+
+      '<div class="fnode"><div class="fl">Admin(s) · own cap</div><div class="fv">'+adminCap.toLocaleString()+' cr</div>'+
+        '<div class="fn">sets everyone else\'s cap</div></div>'+
+      '<div class="fnode" style="grid-column:1/-1"><div class="fl">Caps on the shared pool · '+seats+' users × '+allowance.toLocaleString()+' cr/mo</div>'+
+        '<div class="fseats">'+seatCards+'</div></div>';
+    var short=ct2.poolShortfall>0;
+    el('flowNote').innerHTML='Caps total <b style="color:var(--ink-soft)">'+ct2.capped.toLocaleString()+' cr/mo</b> '+
+      '('+adminCap.toLocaleString()+' admin + '+seats+'×'+allowance.toLocaleString()+') against '+
+      dispersal.toLocaleString()+' cr dispersed — an overcommit of <b style="color:var(--ink-soft)">'+
+      (isFinite(ct2.overcommit)?ct2.overcommit.toFixed(1):'∞')+'×</b>, which is fine as long as usage stays below the pool. '+
+      'At '+Math.round(utilE*100)+'% of cap they want <b style="color:var(--ink-soft)">'+Math.round(ct2.wantBurn).toLocaleString()+' cr</b>'+
+      (short?', which is <b style="color:var(--crit)">'+Math.round(ct2.poolShortfall).toLocaleString()+' cr more than the pool holds</b> — whoever spends first wins and the rest hit an empty pool, not their cap. Raise the dispersal or lower the caps.'
+            :' and the pool holds '+dispersal.toLocaleString()+' — everyone stays inside their cap. Unspent: <b style="color:var(--ink-soft)">'+Math.round(ct2.unspent).toLocaleString()+' cr</b>.')+
+      ' Realized price per credit burned: <b style="color:var(--ink-soft)">$'+(ct2.realizedRate||0).toFixed(4)+'</b>'+
+      (activated?'':' · under the '+LIVE.minOrgCredits.toLocaleString()+' cr activation floor, so seats would confer nothing today')+'.';
+
+    // contract P&L rows
+    var crows=[
+      {n:'Included credits',note:dispersal.toLocaleString()+' cr dispersed into the pool · '+Math.round(ct2.burned).toLocaleString()+' burned',
+       credits:ct2.dispersal,rev:monthlyUsd,cogs:ct2.creditCogs,perSeat:seats>0?(monthlyUsd-ct2.creditCogs)/seats:0},
+      {n:'Pay-as-you-go',note:paygCr>0?'at $'+LIVE.overageUsd.toFixed(3)+'/cr — not implemented for seats':'none this month',
+       credits:paygCr,rev:ct2.paygRev,cogs:ct2.paygCogs,perSeat:seats>0?(ct2.paygRev-ct2.paygCogs)/seats:0},
+      {n:'Fixed infra',note:money(fixed)+' × '+(seats+1)+' users',credits:0,rev:0,cogs:ct2.fixed,
+       perSeat:seats>0?-ct2.fixed/seats:0}
+    ];
+    el('contractRows').innerHTML=crows.map(function(r){
+      var m=r.rev-r.cogs;
+      return '<tr><td><div class="tool">'+r.n+'</div><div class="scen">'+r.note+'</div></td>'+
+        '<td class="num">'+(r.credits?r.credits.toLocaleString():'—')+'</td>'+
+        '<td class="num cost">'+money(r.rev)+'</td>'+
+        '<td class="num">'+money(r.cogs)+'</td>'+
+        '<td class="num '+(m>=0?'credits':'bad')+'">'+money(m)+'</td>'+
+        '<td class="num">'+pct(r.rev>0?m/r.rev:null)+'</td>'+
+        '<td class="num">'+money(r.perSeat)+'</td></tr>';
+    }).join('');
+    el('contractFoot').innerHTML='<tr><td>Per month</td><td class="num">'+ct2.dispersal.toLocaleString()+'</td>'+
+      '<td class="num">'+money(ct2.revenue)+'</td><td class="num">'+money(ct2.cogs)+'</td>'+
+      '<td class="num '+(ct2.margin>=0?'credits':'bad')+'">'+money(ct2.margin)+'</td>'+
+      '<td class="num">'+pct(ct2.marginPct)+'</td><td class="num">'+money(ct2.perSeat)+'</td></tr>'+
+      '<tr><td>Over the '+term+'-month term</td><td class="num">'+(ct2.dispersal*term).toLocaleString()+'</td>'+
+      '<td class="num">'+money(ct2.revenue*term)+'</td><td class="num">'+money(ct2.cogs*term)+'</td>'+
+      '<td class="num '+(ct2.termMargin>=0?'credits':'bad')+'">'+money(ct2.termMargin)+'</td>'+
+      '<td class="num">'+pct(ct2.marginPct)+'</td><td class="num">'+money(ct2.perSeat*term)+'</td></tr>';
+
+    var entries=LIVE.packs.map(function(p){
+      return {name:'Pack · '+p.credits.toLocaleString()+' cr',note:p.key,credits:p.credits,usd:p.usd,util:1};
+    });
+    entries.push({name:'Monthly dispersal',note:'enterprise contract, at full burn',credits:dispersal,usd:monthlyUsd,util:1});
+    entries.push({name:'Monthly dispersal · realized',note:'at '+Math.round(utilE*100)+'% of cap actually burned',credits:dispersal,usd:monthlyUsd,util:Math.min(1,ct2.burned/Math.max(1,dispersal))});
+    entries.push({name:'Pay-per-use overage',note:'personal plans only — never a seat',credits:1000,usd:1000*LIVE.overageUsd,util:1});
+    entries.push({name:'Included in Basic',note:'grant bundled into the $'+prices.basic+' plan',credits:grants.basic,usd:prices.basic,util:utils.basic});
+    entries.push({name:'Included in Pro',note:'grant bundled into the $'+prices.pro+' plan',credits:grants.pro,usd:prices.pro,util:utils.pro});
+    var maxEntryMargin=0;
+    var entryRows=entries.map(function(e){
+      var r=M.entry({credits:e.credits,usd:e.usd,costPerCredit:cpc,utilization:e.util});
+      maxEntryMargin=Math.max(maxEntryMargin,Math.abs(r.margin));
+      return {e:e,r:r};
+    });
+    el('entryRows').innerHTML=entryRows.map(function(x){
+      var e=x.e,r=x.r, cheaper=r.vsList<0;
+      return '<tr>'+
+        '<td><div class="tool">'+e.name+'</div><div class="scen">'+e.note+'</div></td>'+
+        '<td class="num">'+e.credits.toLocaleString()+'</td>'+
+        '<td class="num cost">'+money(e.usd)+'</td>'+
+        '<td class="num">$'+r.rate.toFixed(4)+'</td>'+
+        '<td class="num">'+money(r.cogs)+'</td>'+
+        '<td class="num '+(r.margin>=0?'credits':'bad')+'">'+money(r.margin)+'</td>'+
+        '<td class="num">'+pct(r.marginPct)+'</td>'+
+        '<td>'+bar(Math.max(0,r.margin),maxEntryMargin,r.margin<0?'high':'')+
+          ' <span class="delta">'+(cheaper?'−':'+')+Math.abs(Math.round(r.vsList*100))+'%</span></td>'+
+      '</tr>';
+    }).join('');
+
+    var scenarios=[0.25,0.5,0.75,1].map(function(u){
+      return {u:u,c:M.contract({seats:seats,capPerSeat:allowance,adminCap:adminCap,util:u,
+        costPerCredit:cpc,fixedPerSeat:fixed,monthlyUsd:monthlyUsd,dispersal:dispersal,
+        paygCredits:paygCr,paygRate:LIVE.overageUsd,months:term,expires:(expiry==='expires')})};
+    });
+    el('burnRows').innerHTML=scenarios.map(function(s){
+      var c=s.c, capped=c.poolShortfall>0;
+      return '<tr'+(Math.abs(s.u-utilE)<0.01?' style="background:var(--accent-soft)"':'')+'>'+
+        '<td><div class="tool">'+Math.round(s.u*100)+'% of cap</div><div class="scen">'+
+          (capped?'pool runs out — '+Math.round(c.poolShortfall).toLocaleString()+' cr of demand unmet':'inside the pool')+'</div></td>'+
+        '<td class="num">'+Math.round(c.wantBurn).toLocaleString()+'</td>'+
+        '<td class="num">'+Math.round(c.burned).toLocaleString()+'</td>'+
+        '<td class="num">'+Math.round(c.unspent).toLocaleString()+'</td>'+
+        '<td class="num cost">'+money(c.revenue)+'</td>'+
+        '<td class="num">'+money(c.cogs)+'</td>'+
+        '<td class="num '+(c.margin>=0?'credits':'bad')+'">'+money(c.margin)+'</td>'+
+        '<td class="num">'+pct(c.marginPct)+'</td>'+
+      '</tr>';
+    }).join('');
+
+    // ---------- tab 4: rates ----------
+    el('rateRows').innerHTML=M.RATE_ORDER.map(function(k){var m=M.MODELS[k];
       return '<tr><td class="tool" style="font-family:var(--mono);font-size:12.5px">'+m.name+'</td>'+
         '<td style="color:var(--muted);font-size:12.5px">'+m.use+'</td>'+
         '<td class="num cost">$'+m.in.toFixed(2)+'</td>'+
         '<td class="num">'+(m.cached!=null?'$'+m.cached.toFixed(3):'—')+'</td>'+
         '<td class="num cost">'+(m.out>0?'$'+m.out.toFixed(2):'—')+'</td></tr>';
     }).join('');
-
-    // credit allowance — what a monthly balance buys per AI tool
-    el('v_fc').textContent=+freeCredits.value; el('v_pc').textContent=+proCredits.value;
-    var warmCr=toCredits(warmC,mk,cp), zoeCr=toCredits(cost(zoe1(_ct)),mk,cp), regCr=toCredits(cost(registry(_ct)),mk,cp);
-    var allow=function(name,credits){
-      return '<tr><td class="tool">'+name+'</td><td class="num">'+credits+'</td>'+
-        '<td class="num">'+Math.floor(credits/warmCr)+'</td>'+
-        '<td class="num">'+Math.floor(credits/zoeCr)+'</td>'+
-        '<td class="num">'+Math.floor(credits/regCr)+'</td>'+
-        '<td class="num cost">'+fmtMoney(credits*cp/mk)+'</td></tr>';
-    };
-    el('allowRows').innerHTML=allow('Free',+freeCredits.value)+allow('Pro',+proCredits.value);
-
-    // storage economics
-    var used=+gb.value,inc=+incl.value,ov=Math.max(0,+ovRate.value),sb=Math.max(0,+sbRate.value);
-    el('v_gb').textContent=used+' GB';el('v_incl').textContent=inc+' GB';
-    var overGB=Math.max(0,used-inc);
-    var youCharge=overGB*ov, youPay=overGB*sb, margin=youCharge-youPay;
-    var pct=youCharge>0?Math.round(margin/youCharge*100):0;
-    el('storeStats').innerHTML=
-      stat('Storage over 100 GB',overGB.toFixed(0)+' GB', overGB>0?'billable overage':'within included',null)+
-      stat('You charge (overage)',fmtMoney(youCharge)+'<span style="font-size:12px;color:var(--muted)">/mo</span>','at $'+ov.toFixed(3)+'/GB',null)+
-      stat('Supabase costs you',fmtMoney(youPay)+'<span style="font-size:12px;color:var(--muted)">/mo</span>','at $'+sb.toFixed(4)+'/GB',null)+
-      stat('Your margin',fmtMoney(margin)+'<span style="font-size:12px;color:var(--muted)">/mo</span>',pct+'% of overage revenue',margin>=0?'pos':'neg');
-
-    el('bundleRows').innerHTML=BUNDLES.map(function(b){
-      var sbCost=b.gb*sb, m=b.price-sbCost, mp=b.price>0?Math.round(m/b.price*100):0;
-      return '<tr><td class="tool">'+b.n+'</td>'+
-        '<td class="num">+'+b.gb+' GB</td>'+
-        '<td class="num cost">'+fmtMoney(b.price)+'</td>'+
-        '<td class="num">'+fmtMoney(sbCost)+'</td>'+
-        '<td class="num '+(m>=0?'credits':'creditsFree')+'" style="'+(m<0?'color:var(--crit)':'')+'">'+fmtMoney(m)+'</td>'+
-        '<td class="num">'+mp+'%</td></tr>';
-    }).join('');
-
-    // per-customer P&L
-    var pl=(plan==='pro');
-    var base=pl?(+cProPrice.value||0):0, allowance=pl?(+proCredits.value):(+freeCredits.value), storeIncl=pl?inc:1;
-    var ocCr=toCredits(blend,mk,cp), zC=cost(zoe1(_ct)), rC=cost(registry(_ct));
-    var R=+cRuns.value||0,Z=+cZoe.value||0,G=+cReg.value||0,GBu=+cGB.value||0;
-    var aiCogs=R*blend+Z*zC+G*rC, creditsUsed=R*ocCr+Z*zoeCr+G*regCr;
-    var oGB=Math.max(0,GBu-storeIncl), storeCogs=oGB*sb, totalCogs=aiCogs+storeCogs;
-    var topup=Math.max(0,creditsUsed-allowance), topupRev=topup*cp, storeRev=oGB*ov;
-    var bill=base+topupRev+storeRev, margin=bill-totalCogs;
-    var mo='<span style="font-size:12px;color:var(--muted)">/mo</span>';
-    el('calcStats').innerHTML=
-      stat('Direct cost (COGS)',fmtMoney(totalCogs)+mo,'AI '+fmtMoney(aiCogs)+' · storage '+fmtMoney(storeCogs),null)+
-      stat('You bill',fmtMoney(bill)+mo,(pl?'$'+base.toFixed(0)+' base':'free plan')+' + top-ups + overage',null)+
-      stat('Margin',fmtMoney(margin)+mo,(bill>0?Math.round(margin/bill*100)+'% of revenue':'no plan revenue'),margin>=0?'pos':'neg')+
-      stat('Credits used',Math.round(creditsUsed)+' / '+allowance,topup>0?'over by '+Math.round(topup)+' → top-up':'within allowance',topup>0?'neg':'pos');
-    el('calcBreak').innerHTML='This <b style="color:var(--ink-soft)">'+(pl?'Pro':'Free')+'</b> customer draws <b style="color:var(--ink-soft)">'+Math.round(creditsUsed)+' credits</b>'+(topup>0?' ('+Math.round(topup)+' over allowance → '+fmtMoney(topupRev)+' top-up)':' (within allowance)')+' and <b style="color:var(--ink-soft)">'+GBu+' GB</b>'+(oGB>0?' ('+oGB+' GB overage → '+fmtMoney(storeRev)+')':'')+'. You bill <b style="color:var(--ink-soft)">'+fmtMoney(bill)+'</b>, it costs you <b style="color:var(--ink-soft)">'+fmtMoney(totalCogs)+'</b> → <b style="color:'+(margin>=0?'var(--accent)':'var(--crit)')+'">'+fmtMoney(margin)+' margin'+(bill>0?' ('+Math.round(margin/bill*100)+'%)':'')+'</b>.';
-  }
-  function stat(label,val,note,cls){
-    return '<div class="stat"><div class="sl">'+label+'</div><div class="sv'+(cls?' '+cls:'')+'">'+val+'</div><div class="snote">'+note+'</div></div>';
   }
 
-  [pages,contracts,creditPrice,markup,hit,gb,incl,ovRate,sbRate,freeCredits,proCredits,cRuns,cZoe,cReg,cGB,cProPrice].forEach(function(i){i.addEventListener('input',render);});
-  function wireToggle(sel,set){
-    Array.prototype.forEach.call(document.querySelectorAll(sel+' button'),function(b){
-      b.addEventListener('click',function(){
-        set(b.getAttribute('data-m')||b.getAttribute('data-p'));
-        Array.prototype.forEach.call(document.querySelectorAll(sel+' button'),function(x){x.classList.toggle('active',x===b);});
-        render();
-      });
+  IN.forEach(function(i){i.addEventListener('input',render);});
+  Array.prototype.forEach.call(document.querySelectorAll('#expiryToggle button'),function(b){
+    b.addEventListener('click',function(){
+      expiry=b.getAttribute('data-x');
+      Array.prototype.forEach.call(document.querySelectorAll('#expiryToggle button'),function(x){x.classList.toggle('active',x===b);});
+      render();
     });
-  }
-  wireToggle('#modelToggle',function(v){model=v;});
-  wireToggle('#planToggle',function(v){plan=v;});
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('#tabs button'),function(b){
+    b.addEventListener('click',function(){
+      var t=b.getAttribute('data-tab');
+      Array.prototype.forEach.call(document.querySelectorAll('#tabs button'),function(x){x.classList.toggle('active',x===b);});
+      ['cost','plans','ent','rates'].forEach(function(k){el('tab-'+k).hidden=(k!==t);});
+    });
+  });
   render();
 })();
 </script>

@@ -77,18 +77,16 @@ Without these, the "Pay with PayPal" button is hidden and payout capture fails. 
 
 ---
 
-## 🟡 Required for OAuth integrations (Google Drive, Slack)
+## 🟡 Required for OAuth integrations (Google Drive)
 
 Each integration is independently optional — the feature is hidden in the UI if its credentials are missing.
 
 | Var | Source |
 |-----|--------|
 | `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET` | [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials) → OAuth 2.0 Client ID |
-| `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | [api.slack.com/apps](https://api.slack.com/apps) → your app → Basic Information |
 
 OAuth callback URLs to register in each console (replace host as appropriate):
 - Google Drive: `{BACKEND_URL}/integrations/google-drive/callback`
-- Slack: `{BACKEND_URL}/integrations/slack/callback`
 
 OAuth tokens are encrypted at rest with the next two keys.
 
@@ -112,6 +110,20 @@ Generate once per environment and stash in GSM. **Rotating these invalidates eve
 |-----|---------|-------|
 | `ADMIN_EMAILS` | empty | Comma-separated email allowlist. Bootstraps admin access; additional admins managed via `/admin/users` UI. See [admin-roles.md](admin-roles.md) |
 | `BYPASS_PAYWALLS` | `false` (in code, `.env.example`, and `setup:secrets:dev`/`prod`) | When `true`, all users get Pro-shaped entitlements at runtime. Flip on locally only to demo the full-Pro UX; never in prod |
+
+---
+
+## 🟢 Feature flags (credits, licensing / teams)
+
+Both default to **off**. Off is a true rollback, not a partial one: `/orgs/*` 404s at the router, no billing derivation runs, and no team affordance renders in the UI.
+
+| Var | Source | Notes |
+|-----|--------|-------|
+| `CREDITS_ENABLED` | — | `"true"` turns on the credit-wallet model. Off = legacy per-tier gating; the stored feature flags are bypassed in code, never mutated |
+| `LICENSING_ENABLED` | — | `"true"` turns on organizations, team-owned artists and org billing. See [Licensing & Teams](licensing.md) |
+| `ENTERPRISE_SEAT_STORAGE_BYTES` | Default `536870912000` (500 GiB) | **Per seat.** A team's storage cap is this × its active seats |
+
+`src/backend/tests/conftest.py` clears the first two, so backend tests must set them explicitly with `monkeypatch.setenv` — a developer's `.env` can never leak into a test run.
 
 ---
 
@@ -154,7 +166,7 @@ These work but aren't documented in `.env.example` — usually because they're o
 
 | Var | Read by | Notes |
 |-----|---------|-------|
-| `VITE_FRONTEND_URL` | Backend (`projects/emails.py`, `users/emails.py`, `registry/emails.py`, `integrations/oauth.py`, `integrations/slack/blocks.py`) | Default `http://localhost:8080`. Distinct from `FRONTEND_URL` — both exist; one was added later and unifying them is a TODO |
+| `VITE_FRONTEND_URL` | Backend (`projects/emails.py`, `users/emails.py`, `registry/emails.py`, `integrations/oauth.py`) | Default `http://localhost:8080`. Distinct from `FRONTEND_URL` — both exist; one was added later and unifying them is a TODO |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | Backend tests only (`test_subscription_triggers.py`) — fallback for `VITE_SUPABASE_ANON_KEY` | Safe to ignore unless you're running those tests |
 | `VITE_ACCESS_CODE` | Frontend `src/components/AccessGate.tsx` | If set, gates the entire app behind a single shared access code. Used for closed beta. Leave unset to disable the gate |
 
@@ -188,7 +200,7 @@ Most prod values live in GSM, but the per-environment **URLs and deploy targets*
 | `VERCEL_PROJECT_ID` | the **dev** Vercel project | — |
 | `VERCEL_PROD_PROJECT_ID` | the **prod** Vercel project | — |
 
-**No trailing slash on any URL secret.** Every consumer appends a path — `f"{frontend_url}{success_path}"` in [billing_router.py](../src/backend/subscriptions/billing_router.py), `f"{FRONTEND_URL}/workspace?..."` in the Slack blocks and OAuth redirects, and the same pattern in all nine `VITE_FRONTEND_URL` readers. A trailing slash produces `//path`, which React Router does not match — the link loads the app on a route that doesn't exist. For `ALLOWED_ORIGINS` it's worse: a trailing slash fails CORS outright.
+**No trailing slash on any URL secret.** Every consumer appends a path — `f"{frontend_url}{success_path}"` in [billing_router.py](../src/backend/subscriptions/billing_router.py), `f"{FRONTEND_URL}/workspace?..."` in the OAuth redirects, and the same pattern in all nine `VITE_FRONTEND_URL` readers. A trailing slash produces `//path`, which React Router does not match — the link loads the app on a route that doesn't exist. For `ALLOWED_ORIGINS` it's worse: a trailing slash fails CORS outright.
 
 ### Two Vercel projects
 
@@ -197,9 +209,13 @@ Most prod values live in GSM, but the per-environment **URLs and deploy targets*
 | | Project secret | Deploy trigger | Rebuild after an env change |
 |---|---|---|---|
 | dev | `VERCEL_PROJECT_ID` | Vercel Git integration, on push to `main` | dashboard "Redeploy" works |
-| prod | `VERCEL_PROD_PROJECT_ID` | `deploy-frontend-prod.yml` on a `v*` tag | dashboard "Redeploy" **cannot** rebuild (deployed `--prebuilt`, so Vercel has no source) — you must re-run the workflow or push a new tag |
+| prod | `VERCEL_PROD_PROJECT_ID` | `deploy-frontend-prod.yml` on a `v*` tag or manual dispatch | dashboard "Redeploy" works — both projects now build **on Vercel** from source |
 
-A `VITE_*` var that is missing or misscoped at prod build time is inlined as `undefined`. That fails loudly for Supabase (`Invalid supabaseUrl` before the app renders) and silently for others — `VITE_PAYPAL_CLIENT_ID` just hides the "Pay with PayPal" button. To check what a live deployment actually built with, grep the served bundle rather than the dashboard:
+### Do not reintroduce `--prebuilt`
+
+`deploy-frontend-prod.yml` used to run `vercel build` in CI and upload the output with `vercel deploy --prebuilt`. That broke prod on 2026-07-30 in a way that took hours to find, because a prebuilt build gets its env from `vercel pull` — and **`vercel pull` cannot read values marked Sensitive in the Vercel UI.** `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` were present and correctly scoped in the dashboard the whole time, yet inlined as `undefined`, shipping a bundle that threw `Invalid supabaseUrl` before the app rendered. Prebuilt also disables the dashboard Redeploy button, so the only recovery was another release. Vercel's own builders read Sensitive vars fine, so building from source avoids both traps. The release gate did not change: prod still deploys only on a `v*` tag or manual dispatch, never on a merge to `main`.
+
+A `VITE_*` var that is missing, misscoped, or unreadable at build time is inlined as `undefined`. That fails loudly for Supabase (`Invalid supabaseUrl` before the app renders) and silently for everything else — `VITE_PAYPAL_CLIENT_ID` just hides the "Pay with PayPal" button with no error. **The dashboard is not evidence of what a deployment built with**; grep the served bundle instead:
 
 ```bash
 curl -s https://www.msanii-beta.com/ | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js'

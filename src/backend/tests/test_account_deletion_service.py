@@ -4,6 +4,9 @@ import pytest
 
 from users.account_deletion_service import (
     LastAdminError,
+    _archive_sole_admin_orgs,
+    _remove_own_memberships,
+    _teardown_archived_org_grants,
     cancel_user_stripe,
     delete_user_account,
     list_user_storage_paths,
@@ -13,9 +16,25 @@ from users.account_deletion_service import (
 
 def test_list_user_storage_paths_empty_user():
     sb = MagicMock()
-    sb.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+    sb.table.return_value.select.return_value.eq.return_value.is_.return_value.execute.return_value.data = []
     paths = list_user_storage_paths(sb, "user-1")
     assert paths == []
+
+
+def test_list_user_storage_paths_excludes_team_owned_artists():
+    """artists.user_id keeps holding the CREATOR after an artist is handed to a
+    team, so the artist walk MUST filter team_id IS NULL. Without it, a member
+    deleting their own account enumerates — and the caller then deletes — the
+    label's masters."""
+    sb = MagicMock()
+    artists_tbl = MagicMock()
+    artists_tbl.select.return_value.eq.return_value.is_.return_value.execute.return_value.data = []
+    sb.table.side_effect = lambda name: artists_tbl
+
+    assert list_user_storage_paths(sb, "user-1") == []
+
+    artists_tbl.select.return_value.eq.assert_called_once_with("user_id", "user-1")
+    artists_tbl.select.return_value.eq.return_value.is_.assert_called_once_with("team_id", None)
 
 
 def test_list_user_storage_paths_collects_project_and_audio_files():
@@ -31,7 +50,7 @@ def test_list_user_storage_paths_collects_project_and_audio_files():
         "audio_folders": MagicMock(),
         "audio_files": MagicMock(),
     }
-    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["artists"].select.return_value.eq.return_value.is_.return_value.execute.return_value.data = [{"id": "a1"}]
     tables["projects"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "p1"}]
     tables["project_files"].select.return_value.in_.return_value.execute.return_value.data = [
         {"file_path": "a1/p1/contracts/foo.pdf"},
@@ -66,7 +85,7 @@ def test_list_user_storage_paths_user_with_no_projects_still_walks_audio():
         "audio_folders": MagicMock(),
         "audio_files": MagicMock(),
     }
-    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["artists"].select.return_value.eq.return_value.is_.return_value.execute.return_value.data = [{"id": "a1"}]
     tables["projects"].select.return_value.in_.return_value.execute.return_value.data = []
     tables["audio_folders"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "f1"}]
     tables["audio_files"].select.return_value.in_.return_value.execute.return_value.data = [
@@ -88,7 +107,7 @@ def test_list_user_storage_paths_user_with_no_audio_folders():
         "audio_folders": MagicMock(),
         "audio_files": MagicMock(),
     }
-    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["artists"].select.return_value.eq.return_value.is_.return_value.execute.return_value.data = [{"id": "a1"}]
     tables["projects"].select.return_value.in_.return_value.execute.return_value.data = [{"id": "p1"}]
     tables["project_files"].select.return_value.in_.return_value.execute.return_value.data = [
         {"file_path": "a1/p1/foo.pdf"},
@@ -108,7 +127,7 @@ def test_list_user_storage_paths_user_with_no_projects_or_audio():
         "projects": MagicMock(),
         "audio_folders": MagicMock(),
     }
-    tables["artists"].select.return_value.eq.return_value.execute.return_value.data = [{"id": "a1"}]
+    tables["artists"].select.return_value.eq.return_value.is_.return_value.execute.return_value.data = [{"id": "a1"}]
     tables["projects"].select.return_value.in_.return_value.execute.return_value.data = []
     tables["audio_folders"].select.return_value.in_.return_value.execute.return_value.data = []
     sb.table.side_effect = lambda name: tables[name]
@@ -310,3 +329,476 @@ def test_delete_user_account_no_storage_objects():
         delete_user_account(sb, "user-1", "u1@test.com")
     sb.storage.from_.assert_not_called()
     sb.auth.admin.delete_user.assert_called_once_with("user-1")
+
+
+# ---------------------------------------------------------------------------
+# Licensing Phase B — soft-remove the deleting user's memberships / tear down a
+# sole-admin org BEFORE account deletion. Nothing is reclaimed: a member holds a
+# monthly CAP on the org pool, never credits of their own, so offboarding is a
+# status transition. Reimplemented locally rather than calling orgs.service
+# because _offboard is gated on authz.require_admin — inapplicable to a
+# system-initiated cleanup of the deleting user's own memberships.
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveOwnMemberships:
+    """`_remove_own_memberships` takes pre-fetched `own_rows` + the set of orgs
+    already handled by `_archive_sole_admin_orgs`."""
+
+    def test_soft_removes_with_revoked_at(self):
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        own_rows = [
+            {"id": "m1", "org_id": "org1", "user_id": "u1", "status": "active", "role": "member", "revoked_at": None}
+        ]
+
+        _remove_own_memberships(sb, "u1", own_rows, set())
+
+        payload = om.update.call_args[0][0]
+        assert payload["status"] == "removed"
+        assert payload["revoked_at"]  # stamped as the offboarding audit timestamp
+        # No money RPC: there is nothing to move.
+        sb.rpc.assert_not_called()
+
+    def test_already_removed_membership_is_skipped(self):
+        """A retry of a prior attempt: the row is already removed with a
+        revoked_at, so re-stamping would only churn the audit timestamp."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        own_rows = [
+            {
+                "id": "m1",
+                "org_id": "org1",
+                "user_id": "u1",
+                "status": "removed",
+                "role": "member",
+                "revoked_at": "2026-07-20T00:00:00+00:00",
+            }
+        ]
+
+        _remove_own_memberships(sb, "u1", own_rows, set())
+
+        om.update.assert_not_called()
+
+    def test_update_failure_never_blocks_deletion(self):
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        om.update.side_effect = Exception("boom")
+        own_rows = [
+            {"id": "m1", "org_id": "org1", "user_id": "u1", "status": "active", "role": "member", "revoked_at": None}
+        ]
+
+        _remove_own_memberships(sb, "u1", own_rows, set())  # must not raise
+
+    def test_no_memberships_is_noop(self):
+        sb = MagicMock()
+        _remove_own_memberships(sb, "u1", [], set())
+        sb.table.assert_not_called()
+
+    def test_skips_membership_whose_org_is_already_archived(self):
+        """A membership whose org_id is in the archived set must be skipped
+        ENTIRELY — no status-flip UPDATE, which would trip
+        org_members_admin_guard for a sole active admin (see
+        supabase/migrations/20260721000001_licensing_core.sql)."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        own_rows = [
+            {"id": "m1", "org_id": "org1", "user_id": "u1", "status": "active", "role": "admin", "revoked_at": None}
+        ]
+
+        _remove_own_memberships(sb, "u1", own_rows, {"org1"})
+
+        om.update.assert_not_called()
+
+    def test_archived_org_skipped_while_other_org_still_processed(self):
+        """Mixed case: one membership belongs to an already-archived sole-admin
+        org (skip) and the other is a normal membership (soft-remove)."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        own_rows = [
+            {
+                "id": "m_admin",
+                "org_id": "org1",
+                "user_id": "u1",
+                "status": "active",
+                "role": "admin",
+                "revoked_at": None,
+            },
+            {
+                "id": "m_member",
+                "org_id": "org2",
+                "user_id": "u1",
+                "status": "active",
+                "role": "member",
+                "revoked_at": None,
+            },
+        ]
+
+        _remove_own_memberships(sb, "u1", own_rows, {"org1"})
+
+        # Exactly one membership was touched — the one whose org wasn't archived.
+        assert om.update.call_count == 1
+        eq_ids = [c.args[1] for c in om.update.return_value.eq.call_args_list if c.args[0] == "id"]
+        assert eq_ids == ["m_member"]
+
+
+class TestArchiveSoleAdminOrgs:
+    """_archive_sole_admin_orgs runs BEFORE _remove_own_memberships, returns the
+    set of org_ids it archived, and never writes to org_members at all. Nothing
+    is reclaimed — whatever the POOL holds survives archiving for support to
+    dispose of, exactly as with an in-app archive."""
+
+    def test_sole_admin_archives_org_without_touching_members_or_money(self):
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        orgs_tbl = tables.setdefault("organizations", MagicMock())
+
+        # other_admins query (role=admin, status=active, user_id != caller) -> none.
+        om.select.return_value.eq.return_value.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = []
+
+        # organizations.archived_at: not yet archived.
+        orgs_tbl.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data=None
+        )
+
+        own_rows = [{"org_id": "org1", "role": "admin", "status": "active"}]
+
+        archived = _archive_sole_admin_orgs(sb, "u1", own_rows)
+
+        assert archived == {"org1"}
+        orgs_tbl.update.assert_called_once()
+        assert "archived_at" in orgs_tbl.update.call_args[0][0]
+        om.update.assert_not_called()  # org_members is NEVER written by this function
+        sb.rpc.assert_not_called()  # and no money moves
+
+    def test_skips_when_another_active_admin_exists(self):
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        orgs_tbl = tables.setdefault("organizations", MagicMock())
+
+        om.select.return_value.eq.return_value.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = [
+            {"id": "m_other_admin"}
+        ]
+
+        own_rows = [{"org_id": "org1", "role": "admin", "status": "active"}]
+
+        archived = _archive_sole_admin_orgs(sb, "u1", own_rows)
+
+        assert archived == set()
+        orgs_tbl.update.assert_not_called()
+
+    def test_non_admin_own_rows_are_never_considered(self):
+        """own_rows entries that aren't an active admin seat must not even
+        trigger the other-admins lookup — the set of admin_org_ids is empty."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        orgs_tbl = tables.setdefault("organizations", MagicMock())
+
+        own_rows = [
+            {"org_id": "org1", "role": "member", "status": "active"},
+            {"org_id": "org2", "role": "admin", "status": "removed"},
+        ]
+
+        archived = _archive_sole_admin_orgs(sb, "u1", own_rows)
+
+        assert archived == set()
+        om.select.assert_not_called()
+        orgs_tbl.update.assert_not_called()
+
+    def test_retry_reuses_existing_archived_at_without_restamping(self):
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        orgs_tbl = tables.setdefault("organizations", MagicMock())
+
+        om.select.return_value.eq.return_value.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = []
+        orgs_tbl.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "archived_at": "2026-07-01T00:00:00+00:00"
+        }
+        # sole member of the org is the admin themselves.
+        om.select.return_value.eq.return_value.execute.return_value.data = [{"id": "m1"}]
+
+        own_rows = [{"org_id": "org1", "role": "admin", "status": "active"}]
+
+        archived = _archive_sole_admin_orgs(sb, "u1", own_rows)
+
+        assert archived == {"org1"}
+        # Already archived by a prior attempt — the timestamp is left alone.
+        orgs_tbl.update.assert_not_called()
+
+    def test_fresh_archive_calls_teardown_for_the_archived_org(self):
+        """Licensing Phase C, Task 4 (rule 12): a FRESH archive (this call
+        actually flips archived_at) must also run
+        `_teardown_archived_org_grants` for that org, so a sole-admin
+        deletion never leaves a live grant or a tombstone link behind."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        orgs_tbl = tables.setdefault("organizations", MagicMock())
+
+        om.select.return_value.eq.return_value.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = []
+        orgs_tbl.select.return_value.eq.return_value.maybe_single.return_value.execute.side_effect = [
+            MagicMock(data=None),
+            MagicMock(data={"archived_at": "2026-07-20T12:00:00+00:00"}),
+        ]
+        om.select.return_value.eq.return_value.execute.return_value.data = [{"id": "m1"}]
+
+        own_rows = [{"org_id": "org1", "role": "admin", "status": "active"}]
+
+        with patch("users.account_deletion_service._teardown_archived_org_grants") as mock_teardown:
+            archived = _archive_sole_admin_orgs(sb, "u1", own_rows)
+
+        assert archived == {"org1"}
+        mock_teardown.assert_called_once_with(sb, "org1")
+
+    def test_retry_already_archived_org_still_calls_teardown(self):
+        """A retry-detected already-archived org (the archive itself is a
+        no-op, reusing the stored archived_at) must ALSO re-run the
+        teardown — a prior attempt may have archived the org but crashed
+        before the grant/link cleanup ran; re-running it is idempotent."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        orgs_tbl = tables.setdefault("organizations", MagicMock())
+
+        om.select.return_value.eq.return_value.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = []
+        orgs_tbl.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "archived_at": "2026-07-01T00:00:00+00:00"
+        }
+        om.select.return_value.eq.return_value.execute.return_value.data = [{"id": "m1"}]
+
+        own_rows = [{"org_id": "org1", "role": "admin", "status": "active"}]
+
+        with patch("users.account_deletion_service._teardown_archived_org_grants") as mock_teardown:
+            archived = _archive_sole_admin_orgs(sb, "u1", own_rows)
+
+        assert archived == {"org1"}
+        orgs_tbl.update.assert_not_called()
+        mock_teardown.assert_called_once_with(sb, "org1")
+
+    def test_skipped_org_never_calls_teardown(self):
+        """Not the sole admin -> no archive, no teardown either."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+
+        om.select.return_value.eq.return_value.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = [
+            {"id": "m_other_admin"}
+        ]
+
+        own_rows = [{"org_id": "org1", "role": "admin", "status": "active"}]
+
+        with patch("users.account_deletion_service._teardown_archived_org_grants") as mock_teardown:
+            archived = _archive_sole_admin_orgs(sb, "u1", own_rows)
+
+        assert archived == set()
+        mock_teardown.assert_not_called()
+
+
+class TestTeardownArchivedOrgGrants:
+    """Standalone coverage of `_teardown_archived_org_grants` (Licensing
+    Phase C, Task 4, rule 12) — mirrors `orgs.service._teardown_archived_org_
+    grants`'s own test coverage in tests/test_orgs_service.py. The cleanup
+    (revoke org-granted memberships) is best-effort and may never raise out of
+    this function: account deletion must never be blocked by it.
+
+    There is no link row to delete any more — org_project_links was retired in
+    20260804000001, and an archived org's artists.team_id rows are deliberately
+    left attached (can_access_artist already denies on archived_at)."""
+
+    def test_calls_revoke_org_scoped(self):
+        sb = MagicMock()
+        sb.table.side_effect = lambda name: MagicMock()
+
+        with patch("orgs.projects.revoke_org_granted_memberships") as mock_revoke:
+            _teardown_archived_org_grants(sb, "org1")
+
+        mock_revoke.assert_called_once_with(sb, "org1")
+
+    def test_revoke_failure_is_logged_and_does_not_raise(self):
+        sb = MagicMock()
+        sb.table.side_effect = lambda name: MagicMock()
+
+        with patch("orgs.projects.revoke_org_granted_memberships", side_effect=RuntimeError("boom")):
+            _teardown_archived_org_grants(sb, "org1")  # must not raise
+
+    def test_team_owned_artists_are_left_attached(self):
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+
+        with patch("orgs.projects.revoke_org_granted_memberships"):
+            _teardown_archived_org_grants(sb, "org1")
+
+        assert "artists" not in tables, "the roster must survive the archive"
+
+    def test_organic_and_other_org_rows_survive_through_real_revoke_helper(self):
+        """End-to-end through the REAL orgs.projects.revoke_org_granted_
+        memberships (not mocked): the delete is filtered on org_id only,
+        never project_id/user_id, matching archive's "every grant this org
+        ever made" scope while still never touching organic or other-org
+        rows (the org_id filter is the entire safety mechanism)."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        pm_tbl = tables.setdefault("project_members", MagicMock())
+        pm_tbl.delete.return_value.eq.return_value.execute.return_value.data = [
+            {"id": "pm1", "org_id": "org1"},
+            {"id": "pm2", "org_id": "org1"},
+        ]
+
+        _teardown_archived_org_grants(sb, "org1")
+
+        pm_tbl.delete.return_value.eq.assert_called_once_with("org_id", "org1")
+
+
+class TestDeleteUserAccountOrgIntegration:
+    """Integration-level: verifies delete_user_account wires the two helpers
+    above in the right order (Phase B review finding 1 requires
+    archive-then-reclaim, NOT the reverse), passes data through correctly,
+    and never lets an org-reclaim failure block the underlying account
+    deletion."""
+
+    def test_archive_runs_before_membership_removal_and_auth_delete(self):
+        sb = MagicMock()
+        call_order: list[str] = []
+        with (
+            patch("users.account_deletion_service.would_be_last_admin", return_value=False),
+            patch("users.account_deletion_service.cancel_user_stripe"),
+            patch("users.account_deletion_service.list_user_storage_paths", return_value=[]),
+            patch("users.account_deletion_service.analytics_capture"),
+            patch(
+                "users.account_deletion_service._archive_sole_admin_orgs",
+                side_effect=lambda *a, **k: (call_order.append("archive"), set())[1],
+            ),
+            patch(
+                "users.account_deletion_service._remove_own_memberships",
+                side_effect=lambda *a, **k: call_order.append("remove"),
+            ),
+        ):
+            sb.auth.admin.delete_user.side_effect = lambda *a, **k: call_order.append("delete_user")
+            delete_user_account(sb, "user-1", "u1@test.com")
+
+        assert call_order == ["archive", "remove", "delete_user"]
+
+    def test_own_rows_and_archived_ids_flow_into_removal_step(self):
+        """own_rows is fetched ONCE by delete_user_account and handed to
+        BOTH helpers; the archived-id set _archive_sole_admin_orgs returns
+        flows straight into _remove_own_memberships' 4th argument (the
+        "archived-set plumbing" that lets it skip those orgs)."""
+        sb = MagicMock()
+        own_rows_from_db = [{"org_id": "org1", "role": "admin", "status": "active", "id": "m1", "user_id": "user-1"}]
+        sb.table.return_value.select.return_value.eq.return_value.execute.return_value.data = own_rows_from_db
+        archived_ids = {"org1"}
+        with (
+            patch("users.account_deletion_service.would_be_last_admin", return_value=False),
+            patch("users.account_deletion_service.cancel_user_stripe"),
+            patch("users.account_deletion_service.list_user_storage_paths", return_value=[]),
+            patch("users.account_deletion_service.analytics_capture"),
+            patch("users.account_deletion_service._archive_sole_admin_orgs", return_value=archived_ids) as mock_archive,
+            patch("users.account_deletion_service._remove_own_memberships") as mock_reclaim,
+        ):
+            delete_user_account(sb, "user-1", "u1@test.com")
+
+        mock_archive.assert_called_once_with(sb, "user-1", own_rows_from_db)
+        mock_reclaim.assert_called_once_with(sb, "user-1", own_rows_from_db, archived_ids)
+        sb.auth.admin.delete_user.assert_called_once_with("user-1")
+
+    def test_removal_failure_is_logged_and_never_blocks_deletion(self):
+        sb = MagicMock()
+        with (
+            patch("users.account_deletion_service.would_be_last_admin", return_value=False),
+            patch("users.account_deletion_service.cancel_user_stripe"),
+            patch("users.account_deletion_service.list_user_storage_paths", return_value=[]),
+            patch("users.account_deletion_service.analytics_capture") as analytics,
+            patch("users.account_deletion_service._remove_own_memberships", side_effect=RuntimeError("boom")),
+        ):
+            delete_user_account(sb, "user-1", "u1@test.com")
+
+        sb.auth.admin.delete_user.assert_called_once_with("user-1")
+        event_names = [c.args[1] for c in analytics.call_args_list]
+        assert event_names == ["account_delete_started", "account_deleted"]
+
+    def test_archive_failure_is_logged_and_never_blocks_deletion(self):
+        sb = MagicMock()
+        with (
+            patch("users.account_deletion_service.would_be_last_admin", return_value=False),
+            patch("users.account_deletion_service.cancel_user_stripe"),
+            patch("users.account_deletion_service.list_user_storage_paths", return_value=[]),
+            patch("users.account_deletion_service.analytics_capture") as analytics,
+            patch("users.account_deletion_service._remove_own_memberships", return_value=[]),
+            patch("users.account_deletion_service._archive_sole_admin_orgs", side_effect=RuntimeError("boom")),
+        ):
+            delete_user_account(sb, "user-1", "u1@test.com")
+
+        sb.auth.admin.delete_user.assert_called_once_with("user-1")
+        event_names = [c.args[1] for c in analytics.call_args_list]
+        assert event_names == ["account_delete_started", "account_deleted"]
+
+    def test_sole_admin_deletion_archives_without_status_flip(self):
+        """End-to-end, exercising the REAL _archive_sole_admin_orgs +
+        _remove_own_memberships (neither mocked away): a sole admin deleting
+        their account gets the org archived and NO org_members UPDATE is ever
+        attempted for that membership — the direct status flip that would trip
+        org_members_admin_guard
+        (supabase/migrations/20260721000001_licensing_core.sql) for a sole active
+        admin never happens. No money moves either: members hold no credits."""
+        sb = MagicMock()
+        tables: dict = {}
+        sb.table.side_effect = lambda name: tables.setdefault(name, MagicMock())
+        om = tables.setdefault("org_members", MagicMock())
+        orgs_tbl = tables.setdefault("organizations", MagicMock())
+
+        own_row = {
+            "id": "m_self",
+            "org_id": "org1",
+            "user_id": "u1",
+            "status": "active",
+            "role": "admin",
+            "revoked_at": None,
+        }
+        om.select.return_value.eq.return_value.execute.return_value.data = [own_row]
+        # other_admins query -> none (sole admin).
+        om.select.return_value.eq.return_value.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = []
+        # organizations.archived_at: not yet archived.
+        orgs_tbl.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data=None
+        )
+
+        with (
+            patch("users.account_deletion_service.would_be_last_admin", return_value=False),
+            patch("users.account_deletion_service.cancel_user_stripe"),
+            patch("users.account_deletion_service.list_user_storage_paths", return_value=[]),
+            patch("users.account_deletion_service.analytics_capture"),
+        ):
+            delete_user_account(sb, "u1", "u1@test.com")
+
+        # Org archived.
+        orgs_tbl.update.assert_called_once()
+        assert "archived_at" in orgs_tbl.update.call_args[0][0]
+
+        # No status-flip UPDATE on org_members, and no money RPC.
+        om.update.assert_not_called()
+        sb.rpc.assert_not_called()
+
+        sb.auth.admin.delete_user.assert_called_once_with("u1")

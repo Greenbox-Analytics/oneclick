@@ -1,7 +1,7 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, HardDrive, CalendarDays, Settings, BookOpen, Users } from "lucide-react";
+import { LayoutGrid, HardDrive, CalendarDays, Settings, Users } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -75,7 +75,7 @@ const Workspace = () => {
     if (connected) {
       const providerNames: Record<string, string> = {
         google_drive: "Google Drive",
-        slack: "Slack",
+        dropbox: "Dropbox",
       };
       toast.success(`${providerNames[connected] || connected} connected successfully!`);
       queryClient.invalidateQueries({ queryKey: ["integrations"] });
@@ -124,15 +124,6 @@ const Workspace = () => {
       <PageHeader
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }

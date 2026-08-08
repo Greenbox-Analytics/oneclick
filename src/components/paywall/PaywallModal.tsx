@@ -8,6 +8,10 @@ interface PaywallModalProps {
   reason?: string;
   feature?: GatedFeature;
   resource?: CountableResource;
+  /** Licensing Phase B (plan Task 13) — see PaywallCard. */
+  managedByOrg?: boolean;
+  capReached?: boolean;
+  requestUrl?: string;
 }
 
 export const PaywallModal = ({
@@ -16,6 +20,9 @@ export const PaywallModal = ({
   reason,
   feature,
   resource,
+  managedByOrg,
+  capReached,
+  requestUrl,
 }: PaywallModalProps) => (
   <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
     <DialogContent className="sm:max-w-md">
@@ -24,6 +31,9 @@ export const PaywallModal = ({
         resource={resource}
         reason={reason}
         variant="modal"
+        managedByOrg={managedByOrg}
+        capReached={capReached}
+        requestUrl={requestUrl}
       />
     </DialogContent>
   </Dialog>

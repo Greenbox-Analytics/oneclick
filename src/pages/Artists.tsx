@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, FileText, Trash2, CheckCircle, BookOpen, Users } from "lucide-react";
+import { Plus, Search, FileText, Trash2, CheckCircle, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -35,6 +35,9 @@ interface Artist {
   has_contract: boolean;
   avatar_url: string | null;
   verified?: boolean;
+  /** NOT NULL = owned by that organization (both fetch paths select * on
+   * artists, so the column is already in the payload). */
+  team_id?: string | null;
   teamcard?: {
     display_name?: string;
     avatar_url?: string;
@@ -126,15 +129,6 @@ const Artists = () => {
         backTo="/dashboard"
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }
@@ -220,6 +214,11 @@ const Artists = () => {
                           {artist.has_contract && (
                             <Badge variant="outline" className="text-xs gap-1 text-primary border-primary/30">
                               <FileText className="w-3 h-3" /> Contract
+                            </Badge>
+                          )}
+                          {artist.team_id && (
+                            <Badge variant="outline" className="text-xs gap-1">
+                              <Users className="w-3 h-3" /> Team
                             </Badge>
                           )}
                         </div>

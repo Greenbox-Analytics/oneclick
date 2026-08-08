@@ -108,3 +108,11 @@ class AssigneeAdd(BaseModel):
 
 class DeleteConfirm(BaseModel):
     confirm_name: str
+
+
+class CalendarSubscriptionCreate(BaseModel):
+    """Subscribe to an external .ics calendar. `url` is validated server-side
+    (scheme, public host, and that it actually parses as a calendar)."""
+
+    url: str
+    name: str | None = None

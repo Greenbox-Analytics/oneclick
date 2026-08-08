@@ -13,9 +13,7 @@ import {
   CheckCircle2,
   Loader2,
   RefreshCw,
-  Share2,
   HardDrive,
-  MessageSquare,
   Wallet,
   AlertTriangle,
   ShieldCheck,
@@ -318,7 +316,6 @@ const CalculationResults = ({
 
   const { connections } = useIntegrations();
   const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
-  const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
   const [sharing, setSharing] = useState(false);
 
   // Distribution panel state
@@ -332,7 +329,7 @@ const CalculationResults = ({
   const [sortKey, setSortKey] = useState<SortKey>("amount");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  const handleShare = async (target: "drive" | "slack") => {
+  const handleShare = async () => {
     if (!calculationResult) return;
     setSharing(true);
     try {
@@ -340,7 +337,7 @@ const CalculationResults = ({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          target,
+          target: "drive",
           artist_name: "Artist",
           payments: calculationResult.payments,
           // Real dollars owed — total_payments on the result object is the
@@ -349,7 +346,7 @@ const CalculationResults = ({
           message: calculationResult.message,
         }),
       });
-      toast.success(target === "drive" ? "Results saved to Google Drive" : "Results shared to Slack");
+      toast.success("Results saved to Google Drive");
     } catch (err) {
       toast.error(`Share failed: ${(err as Error).message}`);
     } finally {
@@ -388,7 +385,7 @@ const CalculationResults = ({
     if (!calculationResult) return;
     setExportingPdf(true);
     try {
-      // Backend builds the PDF with the same generator used for Drive/Slack shares.
+      // Backend builds the PDF with the same generator used for Drive shares.
       const headers = await getAuthHeaders();
       const res = await fetch(`${API_URL}/oneclick/export-pdf`, {
         method: "POST",
@@ -676,39 +673,11 @@ const CalculationResults = ({
                   <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
                   Recalculate
                 </Button>
-                {(driveConnected || slackConnected) && (
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" size="sm" disabled={sharing}>
-                        <Share2 className="w-4 h-4 mr-2" />
-                        Share
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-48 p-1">
-                      {driveConnected && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full justify-start"
-                          onClick={() => handleShare("drive")}
-                        >
-                          <HardDrive className="w-4 h-4 mr-2" />
-                          Save to Drive
-                        </Button>
-                      )}
-                      {slackConnected && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full justify-start"
-                          onClick={() => handleShare("slack")}
-                        >
-                          <MessageSquare className="w-4 h-4 mr-2" />
-                          Send to Slack
-                        </Button>
-                      )}
-                    </PopoverContent>
-                  </Popover>
+                {driveConnected && (
+                  <Button variant="outline" size="sm" onClick={handleShare} disabled={sharing}>
+                    <HardDrive className="w-4 h-4 mr-2" />
+                    Save to Drive
+                  </Button>
                 )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>

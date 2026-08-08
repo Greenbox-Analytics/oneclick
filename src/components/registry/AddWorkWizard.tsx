@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -40,7 +40,9 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
+import { parseCreditWallDetail } from "@/components/paywall/creditWall";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
 import {
@@ -99,6 +101,13 @@ interface QueuedContract {
   displayName: string;
   status: "pending" | "parsing" | "done" | "error";
   error?: string;
+  /** Licensing Phase B (plan Task 13) — set when `error` came from a
+   * credit-402 billed to an organization. `capReached` = the member's own
+   * monthly limit (remedy: ask an admin for a raise via `requestUrl`); a dry
+   * pool has no member-side remedy, so no link renders for it. */
+  managedByOrg?: boolean;
+  capReached?: boolean;
+  requestUrl?: string;
   parties?: ParsedParty[]; // raw parse result, kept for provenance + re-merge
   mainArtistFound?: boolean;
 }
@@ -449,7 +458,12 @@ export function AddWorkWizard({
         });
         done.push(parsed);
       } catch (e) {
-        patchQueued(qc.id, { status: "error", error: (e as Error).message || "Parse failed" });
+        const cw = parseCreditWallDetail(e instanceof ApiError ? e.detail : undefined);
+        patchQueued(qc.id, {
+          status: "error",
+          error: (e as Error).message || "Parse failed",
+          ...cw,
+        });
       }
     }
     if (done.length === 0) {
@@ -1809,6 +1823,16 @@ function RoyaltyStep({
                       {q.status === "done" &&
                         `Parsed · ${q.parties?.length ?? 0} ${(q.parties?.length ?? 0) === 1 ? "party" : "parties"} found`}
                       {q.status === "error" && (q.error || "Parse failed")}
+                      {/* Cap wall only — a dry pool has no member-side remedy,
+                          so no link there (only an admin buying credits helps). */}
+                      {q.status === "error" && q.managedByOrg && q.capReached && (
+                        <>
+                          {" · "}
+                          <Link to={q.requestUrl || "/organization"} className="underline underline-offset-2">
+                            Ask for a higher limit
+                          </Link>
+                        </>
+                      )}
                     </div>
                   </div>
                   <button
@@ -1848,6 +1872,7 @@ function RoyaltyStep({
                     ? "Add splits from contract"
                     : `Read ${queuedContracts.length} contracts`}
               </Button>
+              <CreditsChip />
             </div>
             {queuedContracts.length === 0 && (
               <p className="mt-1.5 text-[11px] text-muted-foreground">
