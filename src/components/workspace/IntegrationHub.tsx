@@ -8,8 +8,9 @@ import { PaywallModal } from "@/components/paywall/PaywallModal";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
 // Map backend provider key to the analytics tool id used in the registry.
-const PROVIDER_TO_TOOL: Record<IntegrationProvider, "drive"> = {
+const PROVIDER_TO_TOOL: Record<IntegrationProvider, "drive" | "dropbox"> = {
   google_drive: "drive",
+  dropbox: "dropbox",
 };
 
 type IntegrationItem = {
@@ -29,6 +30,17 @@ const INTEGRATIONS: IntegrationItem[] = [
     icon: <img src="/drive.webp" alt="Google Drive" className="w-6 h-6 object-contain" />,
     color: "#4285F4",
   },
+  {
+    provider: "dropbox",
+    name: "Dropbox",
+    description: "Import files from Dropbox and save project files back with shareable links",
+    icon: (
+      <svg viewBox="0 0 24 24" className="w-6 h-6" fill="#0061FF" aria-label="Dropbox">
+        <path d="M6 2 0 5.9l6 3.8 6-3.8L6 2zm12 0-6 3.9 6 3.8 6-3.8L18 2zM0 13.6l6 3.8 6-3.8-6-3.9-6 3.9zm18-3.9-6 3.9 6 3.8 6-3.8-6-3.9zM6.1 18.7l6 3.8 5.9-3.8-5.9-3.8-6 3.8z" />
+      </svg>
+    ),
+    color: "#0061FF",
+  },
 ];
 
 export function IntegrationHub() {
@@ -39,6 +51,7 @@ export function IntegrationHub() {
 
   const integrationAllowed: Record<string, boolean> = {
     google_drive: true, // Drive is always allowed; no paywall
+    dropbox: true, // Same — free on every tier
   };
 
   const integrationLabel: Record<string, string> = {};

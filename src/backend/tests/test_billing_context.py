@@ -333,7 +333,7 @@ class TestEnterpriseShape:
         assert ent.caps.included_storage_bytes == 12345
         # All features on regardless of the (free) personal tier.
         assert ent.features.zoe_enabled and ent.features.oneclick_enabled and ent.features.registry_enabled
-        assert ent.features.integrations_allowed == ["google_drive"]
+        assert ent.features.integrations_allowed == ["google_drive", "dropbox"]
 
     def test_available_contexts_lists_personal_plus_active_seat(self, monkeypatch):
         monkeypatch.setenv("LICENSING_ENABLED", "true")

@@ -32,6 +32,23 @@ PROVIDER_CONFIGS = {
             "https://www.googleapis.com/auth/drive.readonly",
         ],
     },
+    "dropbox": {
+        # Dropbox's console calls these the App key / App secret; they ARE the
+        # OAuth2 client_id / client_secret sent below. Env + GSM names match the
+        # console so there's no translation layer.
+        "client_id": lambda: os.getenv("DROPBOX_APP_KEY"),
+        "client_secret": lambda: os.getenv("DROPBOX_APP_SECRET"),
+        "auth_url": "https://www.dropbox.com/oauth2/authorize",
+        "token_url": "https://api.dropboxapi.com/oauth2/token",
+        "scopes": [
+            "account_info.read",
+            "files.metadata.read",
+            "files.content.read",
+            "files.content.write",
+            "sharing.read",
+            "sharing.write",
+        ],
+    },
 }
 
 
@@ -100,6 +117,9 @@ def build_auth_url(provider: str, user_id: str) -> str:
     if provider == "google_drive":
         params["access_type"] = "offline"
         params["prompt"] = "consent"
+    if provider == "dropbox":
+        # Without this Dropbox never issues a refresh token.
+        params["token_access_type"] = "offline"
 
     query = "&".join(f"{k}={v}" for k, v in params.items() if v)
     return f"{config['auth_url']}?{query}"

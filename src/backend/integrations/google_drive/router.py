@@ -115,9 +115,12 @@ async def import_file(body: DriveImportRequest, user_id: str = Depends(get_curre
         raise HTTPException(status_code=401, detail="Google Drive not connected")
 
     from integrations.google_drive.service import import_drive_file
+    from integrations.storage_import import StorageCapExceededError
 
     try:
         result = await import_drive_file(token, _get_supabase(), user_id, body.model_dump())
+    except StorageCapExceededError as e:
+        raise HTTPException(status_code=402, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 

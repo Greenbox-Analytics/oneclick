@@ -45,6 +45,7 @@ from contact.router import router as contact_router
 from credentials.router import router as credentials_router
 from expenses.router import router as expenses_router
 from integrations.connections_router import router as connections_router
+from integrations.dropbox.router import router as dropbox_router
 from integrations.google_drive.router import router as google_drive_router
 from integrations.spotify.router import router as spotify_router
 from oneclick.breakdown import router as oneclick_breakdown_router
@@ -67,6 +68,7 @@ from teams.router import router as teams_router
 from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
+app.include_router(dropbox_router, prefix="/integrations/dropbox", tags=["Dropbox"])
 app.include_router(spotify_router, prefix="/integrations/spotify", tags=["Spotify"])
 app.include_router(connections_router, prefix="/integrations", tags=["Integrations"])
 app.include_router(boards_router, prefix="/boards", tags=["Project Boards"])
@@ -725,7 +727,7 @@ async def bootstrap_tester(
         "zoe_enabled": True,
         "oneclick_enabled": True,
         "registry_enabled": True,
-        "integrations_allowed": ["google_drive"],
+        "integrations_allowed": ["google_drive", "dropbox"],
         "reason": "tester_env",
         "expires_at": None,
         "granted_at": granted_at,

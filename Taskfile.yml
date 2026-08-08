@@ -250,6 +250,11 @@ tasks:
         try_gsm "GOOGLE_DRIVE_CLIENT_SECRET"
         end_section
 
+        start_section "DROPBOX AUTH MSANII BACKEND"
+        try_gsm "DROPBOX_APP_KEY"
+        try_gsm "DROPBOX_APP_SECRET"
+        end_section
+
         start_section "SPOTIFY INTEGRATION"
         try_gsm "SPOTIFY_CLIENT_ID"
         try_gsm "SPOTIFY_CLIENT_SECRET"

@@ -76,6 +76,7 @@ const Workspace = () => {
     if (connected) {
       const providerNames: Record<string, string> = {
         google_drive: "Google Drive",
+        dropbox: "Dropbox",
       };
       toast.success(`${providerNames[connected] || connected} connected successfully!`);
       queryClient.invalidateQueries({ queryKey: ["integrations"] });

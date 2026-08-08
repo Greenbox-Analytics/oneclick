@@ -1,4 +1,4 @@
-export type IntegrationProvider = "google_drive";
+export type IntegrationProvider = "google_drive" | "dropbox";
 
 export type ConnectionStatus = "active" | "expired" | "revoked" | "disconnected";
 

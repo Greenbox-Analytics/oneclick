@@ -1011,7 +1011,7 @@ class TestBypassPaywalls:
         assert ent.features.zoe_enabled is True
         assert ent.features.oneclick_enabled is True
         assert ent.features.registry_enabled is True
-        assert set(ent.features.integrations_allowed) == {"google_drive"}
+        assert set(ent.features.integrations_allowed) == {"google_drive", "dropbox"}
         # Usage, tier string, status, user_id must be preserved
         assert ent.tier == "free"
         assert ent.user_id == TEST_USER_ID
