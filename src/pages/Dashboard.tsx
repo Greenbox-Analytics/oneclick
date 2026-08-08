@@ -1,6 +1,5 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, Shield, Receipt, type LucideIcon } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -208,9 +207,6 @@ const Dashboard = () => {
     <div className="min-h-screen bg-background">
       <PageHeader
         showBack={false}
-        actions={
-          <HeaderDocsButton />
-        }
         userMenu={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

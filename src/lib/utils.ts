@@ -14,6 +14,15 @@ export function fmtDate(iso?: string | null): string {
     : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** Format an ISO date as e.g. "Jul 22" (no year). Returns "" for null/invalid. */
+export function fmtDay(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 /** Human-readable byte size, e.g. "1.5 MB". Returns "0 B" for falsy/negative. */
 export function formatBytes(bytes: number): string {
   if (!bytes || bytes < 0) return "0 B";

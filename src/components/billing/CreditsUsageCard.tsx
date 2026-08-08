@@ -19,7 +19,7 @@ import { useSetBillingPrefs } from "@/hooks/useBilling";
 import { CreditRing, type RingSegment } from "@/components/billing/CreditRing";
 import { TopUpCreditsDialog } from "@/components/billing/TopUpCreditsDialog";
 import { isPaidTier, tierLabel, ENTERPRISE_LABEL } from "@/lib/tiers";
-import { fmtDate } from "@/lib/utils";
+import { fmtDate, fmtDay } from "@/lib/utils";
 
 type ToolMeta = { label: string; color: string; note?: string };
 const TOOL_META: Record<CreditAction, ToolMeta> = {
@@ -29,12 +29,6 @@ const TOOL_META: Record<CreditAction, ToolMeta> = {
 };
 // Ring/list order matches the mockup.
 const ORDER: CreditAction[] = ["oneclick_run", "registry_parse", "zoe_message"];
-
-const fmtDay = (iso?: string | null): string => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-};
 
 interface Row {
   label: string;

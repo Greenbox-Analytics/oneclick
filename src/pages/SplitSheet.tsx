@@ -10,7 +10,6 @@ import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
@@ -386,7 +385,6 @@ const SplitSheet = () => {
       <PageHeader
         actions={
           <>
-            <HeaderDocsButton />
             <ToolHelpButton onClick={walkthrough.replay} />
             <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
               <ArrowLeft className="w-4 h-4 mr-2" />

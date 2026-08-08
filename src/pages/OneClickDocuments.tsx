@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Loader2, AlertCircle } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -20,6 +19,7 @@ import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { API_URL, apiFetch, getAuthHeaders, ApiError, apiErrorFromBody } from "@/lib/apiFetch";
 import { parseCreditWallDetail } from "@/components/paywall/creditWall";
 import { CreditsChip } from "@/components/billing/CreditsChip";
+import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
 import CalculationResults from "@/components/oneclick/CalculationResults";
@@ -471,6 +471,8 @@ const OneClickDocuments = () => {
                     streamResult = result;
                     setCalculationResult(result);
                     setShowProgressModal(false);
+                    // Runs are credit-metered (cache hits free — refetch is harmless).
+                    invalidateCreditSurfaces(queryClient);
                     if (needsReview) {
                         setExpenseReview(data.expenses || []);
                         toast.info("Some collaborators are paid on net income — review the expenses to finalize.");
@@ -682,7 +684,6 @@ const OneClickDocuments = () => {
         backTo="/tools/oneclick"
         actions={
           <>
-            <HeaderDocsButton />
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }

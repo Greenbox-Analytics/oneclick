@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, renderHook, cleanup } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // useStreamingChat talks to the backend via raw fetch (it needs a streaming
 // reader, so it can't use apiFetch) but still pulls auth headers from
@@ -29,6 +31,11 @@ vi.mock("@/lib/apiFetch", () => ({
 }));
 
 import { useStreamingChat } from "@/hooks/useStreamingChat";
+
+// The hook invalidates credit queries via useQueryClient — provide a client,
+// same pattern as useBoards.optimistic.test.ts.
+const wrapper = ({ children }: { children: ReactNode }) =>
+  createElement(QueryClientProvider, { client: new QueryClient() }, children);
 
 const baseParams = {
   artistId: "a1",
@@ -95,7 +102,7 @@ describe("useStreamingChat — pre-stream HTTP error handling (licensing follow-
       )
     );
 
-    const { result } = renderHook(() => useStreamingChat());
+    const { result } = renderHook(() => useStreamingChat(), { wrapper });
     await act(async () => {
       await result.current.sendMessage("hi", baseParams);
     });
@@ -121,7 +128,7 @@ describe("useStreamingChat — pre-stream HTTP error handling (licensing follow-
       vi.fn().mockResolvedValue(makeErrorResponse(402, { detail: "Zoe AI is a Pro feature" }))
     );
 
-    const { result } = renderHook(() => useStreamingChat());
+    const { result } = renderHook(() => useStreamingChat(), { wrapper });
     await act(async () => {
       await result.current.sendMessage("hi", baseParams);
     });
@@ -140,7 +147,7 @@ describe("useStreamingChat — pre-stream HTTP error handling (licensing follow-
       )
     );
 
-    const { result } = renderHook(() => useStreamingChat());
+    const { result } = renderHook(() => useStreamingChat(), { wrapper });
     await act(async () => {
       await result.current.sendMessage("hi", baseParams);
     });
@@ -157,7 +164,7 @@ describe("useStreamingChat — pre-stream HTTP error handling (licensing follow-
   it("shows the generic fallback bubble on a network failure (no HTTP response at all)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
 
-    const { result } = renderHook(() => useStreamingChat());
+    const { result } = renderHook(() => useStreamingChat(), { wrapper });
     await act(async () => {
       await result.current.sendMessage("hi", baseParams);
     });
@@ -175,7 +182,7 @@ describe("useStreamingChat — pre-stream HTTP error handling (licensing follow-
     })}\n\n`;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeStreamResponse([sseBody])));
 
-    const { result } = renderHook(() => useStreamingChat());
+    const { result } = renderHook(() => useStreamingChat(), { wrapper });
     await act(async () => {
       await result.current.sendMessage("hi", baseParams);
     });

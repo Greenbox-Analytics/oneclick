@@ -4,7 +4,6 @@ import { useToast } from "@/hooks/use-toast";
 import type { Tables } from "@/integrations/supabase/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -524,7 +523,6 @@ const ArtistProfile = () => {
       <PageHeader
         actions={
           <>
-            <HeaderDocsButton />
             <Button
               variant="outline"
               size="sm"

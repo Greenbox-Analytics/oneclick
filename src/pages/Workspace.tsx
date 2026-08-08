@@ -5,7 +5,6 @@ import { LayoutGrid, HardDrive, CalendarDays, Settings, Users } from "lucide-rea
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuth } from "@/contexts/AuthContext";
@@ -125,7 +124,6 @@ const Workspace = () => {
       <PageHeader
         actions={
           <>
-            <HeaderDocsButton />
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }

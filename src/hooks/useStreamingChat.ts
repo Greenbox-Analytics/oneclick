@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 
 // ── Types ──
 
@@ -146,6 +148,7 @@ export function useStreamingChat() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState("");
   const abortControllerRef = useRef<AbortController | null>(null);
+  const queryClient = useQueryClient();
 
   // ── helpers ──
 
@@ -457,6 +460,9 @@ export function useStreamingChat() {
       } finally {
         setIsStreaming(false);
         abortControllerRef.current = null;
+        // Zoe messages are credit-metered (conversational replies are free, but
+        // the debit is server-side either way) — refresh the ticker/chips.
+        invalidateCreditSurfaces(queryClient);
       }
 
       return {
@@ -467,7 +473,7 @@ export function useStreamingChat() {
         sources: returnSources,
       };
     },
-    []
+    [queryClient]
   );
 
   // ── stop / retry / clear ──

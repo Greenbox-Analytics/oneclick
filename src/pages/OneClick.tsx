@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertCircle, Info, Calculator, Wallet } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -102,9 +101,6 @@ const OneClick = () => {
       <div className="min-h-screen bg-background">
         <PageHeader
           backTo="/tools"
-          actions={
-          <HeaderDocsButton />
-        }
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">

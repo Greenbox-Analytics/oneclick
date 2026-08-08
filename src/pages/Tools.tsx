@@ -1,7 +1,6 @@
 import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Calculator, ArrowRight, Bot, FileText, Shield, Receipt } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -59,9 +58,6 @@ const Tools = () => {
     <div className="min-h-screen bg-background">
       <PageHeader
         backTo="/dashboard"
-        actions={
-          <HeaderDocsButton />
-        }
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">

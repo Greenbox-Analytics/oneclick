@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
@@ -27,12 +27,19 @@ export interface CreditUsage {
   tools?: CreditToolUsage[];
 }
 
-export function useCreditUsage() {
+export function useCreditUsage(enabled = true) {
   const { user } = useAuth();
   return useQuery<CreditUsage>({
     queryKey: ["credit-usage", user?.id],
     queryFn: () => apiFetch<CreditUsage>(`${API_URL}/me/credits/usage`),
-    enabled: !!user?.id,
+    enabled: !!user?.id && enabled,
     staleTime: 30_000,
   });
+}
+
+/** Refresh every credit surface (header ticker, chips, usage card) after a
+ * metered action completes or credits are added. */
+export function invalidateCreditSurfaces(qc: QueryClient): void {
+  qc.invalidateQueries({ queryKey: ["entitlements"] });
+  qc.invalidateQueries({ queryKey: ["credit-usage"] });
 }

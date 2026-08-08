@@ -7,17 +7,20 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useSmartBack } from "@/hooks/useSmartBack";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { NotificationBell } from "@/components/layout/NotificationBell";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
+import { HeaderCreditsTicker } from "@/components/billing/HeaderCreditsTicker";
 import { cn } from "@/lib/utils";
 
 interface PageHeaderProps {
   title?: string;
   subtitle?: string;
   backTo?: string | (() => void);
-  /** Page-specific actions (docs link, search, etc.) — rendered first. */
+  /** Genuinely page-specific actions (search, tool help, etc.) — rendered
+   * first. Docs/home/credits are built in; don't pass them here. */
   actions?: ReactNode;
   /** The user/profile dropdown — rendered LAST. Use this slot (instead of
    * stuffing the profile menu into `actions`) so the order stays consistent:
-   * actions → home → notifications → profile. */
+   * actions → credits → home → docs → notifications → profile. */
   userMenu?: ReactNode;
   showLogo?: boolean;
   showBack?: boolean;
@@ -52,6 +55,10 @@ export function PageHeader({
       <Home className="w-4 h-4" />
     </Button>
   ) : null;
+
+  const creditsTicker = user ? <HeaderCreditsTicker /> : null;
+
+  const docsButton = user ? <HeaderDocsButton /> : null;
 
   const notificationBell = user ? <NotificationBell /> : null;
 
@@ -92,7 +99,9 @@ export function PageHeader({
           {(actions || homeButton || notificationBell || userMenu) && (
             <div className="flex items-center gap-1 shrink-0">
               {actions}
+              {creditsTicker}
               {homeButton}
+              {docsButton}
               {notificationBell}
               {userMenu}
             </div>
@@ -140,7 +149,9 @@ export function PageHeader({
         {(actions || homeButton || notificationBell || userMenu) && (
           <div className="flex items-center gap-2 shrink-0">
             {actions}
+            {creditsTicker}
             {homeButton}
+            {docsButton}
             {notificationBell}
             {userMenu}
           </div>

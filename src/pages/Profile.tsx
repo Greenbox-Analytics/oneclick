@@ -1,13 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Sun, Moon, HelpCircle, Sparkles } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
@@ -200,6 +199,17 @@ const Profile = () => {
     );
   }, [ent, artists, projects, tasks]);
 
+  // #credits-usage etc. — scroll the linked card into view once it renders
+  // (the header credits ticker's "Usage details" lands here).
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!hash) return;
+    const raf = requestAnimationFrame(() => {
+      document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [hash]);
+
   useEffect(() => {
     if (!welcome || !stripeSessionId) return;
     if (isPaid) {
@@ -284,7 +294,6 @@ const Profile = () => {
         actions={
           <>
             <ToolHelpButton onClick={() => walkthrough.replay()} />
-            <HeaderDocsButton />
           </>
         }
       />
@@ -496,7 +505,9 @@ const Profile = () => {
           <PlanCard />
 
           {/* Credits & usage (renders nothing when the flag is off) */}
-          <CreditsUsageCard />
+          <div id="credits-usage" className="scroll-mt-4">
+            <CreditsUsageCard />
+          </div>
 
           {/* Resource limits */}
           <ResourceLimitsCard />

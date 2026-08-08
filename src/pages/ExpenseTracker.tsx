@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -204,9 +203,6 @@ const ExpenseTracker = () => {
     <div className="min-h-screen bg-background">
       <PageHeader
         backTo="/tools"
-        actions={
-          <HeaderDocsButton />
-        }
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
