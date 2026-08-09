@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
 from utils.llm.client import get_openai_client
+from utils.llm.model_garden import model_for
 from utils.text.normalize import normalize_name, normalize_title, simplify_role, split_alias_markers
 
 # Configure logging
@@ -32,8 +33,7 @@ def _normalize_basis(value) -> str | None:
     return v if v in ("net", "gross") else None
 
 
-# Configuration
-LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5.2")
+# Configuration — the extraction model comes from the "contract_parser" garden slot.
 STREAMING_EQUIVALENT_TERMS = [
     # Core streaming/digital terms
     "streaming",
@@ -250,7 +250,7 @@ class MusicContractParser:
             )
 
         start_time = time.time()
-        logger.info(f"📄 Extracting contract data (unified single-call, model={LLM_MODEL_LARGE})")
+        logger.info(f"📄 Extracting contract data (unified single-call, model={model_for('contract_parser')})")
         logger.info(f"   Document length: {len(full_text)} chars")
 
         # Single unified extraction
@@ -374,11 +374,11 @@ Return your answer as a JSON object with this exact structure:
 
 Return ONLY valid JSON."""
 
-        logger.info(f"   🧠 Sending unified extraction request to {LLM_MODEL_LARGE}...")
+        logger.info(f"   🧠 Sending unified extraction request to {model_for('contract_parser')}...")
         t_llm = time.time()
 
         response = self.openai_client.chat.completions.create(
-            model=LLM_MODEL_LARGE,
+            model=model_for("contract_parser"),
             messages=[
                 {
                     "role": "system",

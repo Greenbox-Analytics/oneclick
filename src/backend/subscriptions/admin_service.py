@@ -93,9 +93,15 @@ class AdminService:
         )
         override_uids = {row["user_id"] for row in (overrides_res.data or []) if row.get("reason") != "tester_revoked"}
 
-        # Bulk fetch profiles.is_admin for these user_ids (no N+1)
-        profiles_res = self.supabase.table("profiles").select("id, is_admin").in_("id", user_ids).execute()
-        admin_uids = {row["id"] for row in (profiles_res.data or []) if row.get("is_admin") is True}
+        # Bulk fetch profiles.is_admin + full_name for these user_ids (no N+1).
+        # full_name rides the SAME select as is_admin — same reason
+        # list_tester_grants reads it: profiles is the only place a display
+        # name lives (auth.users has none), and it may be null for an
+        # unfinished onboarding.
+        profiles_res = self.supabase.table("profiles").select("id, is_admin, full_name").in_("id", user_ids).execute()
+        profile_rows = profiles_res.data or []
+        admin_uids = {row["id"] for row in profile_rows if row.get("is_admin") is True}
+        name_by_uid = {row["id"]: row.get("full_name") for row in profile_rows if row.get("full_name")}
 
         env_emails = env_admin_emails()
 
@@ -111,6 +117,7 @@ class AdminService:
                 {
                     "id": uid,
                     "email": email,
+                    "name": name_by_uid.get(uid),
                     "tier": sub.get("tier", "free"),
                     "has_override": uid in override_uids,
                     "is_admin": uid in admin_uids,
@@ -146,11 +153,13 @@ class AdminService:
 
         # Enrich with admin flags (defensive: missing profile row → False)
         try:
-            pr = self.supabase.table("profiles").select("is_admin").eq("id", user_id).limit(1).execute()
+            pr = self.supabase.table("profiles").select("is_admin, full_name").eq("id", user_id).limit(1).execute()
             user["is_admin"] = bool(pr.data and pr.data[0].get("is_admin") is True)
+            user["name"] = (pr.data[0].get("full_name") if pr.data else None) or None
         except Exception as exc:
             logger.warning("get_user_detail profiles lookup failed for %s: %s", user_id, exc)
             user["is_admin"] = False
+            user["name"] = None
 
         user["is_env_admin"] = is_env_admin(user.get("email"))
 
@@ -227,14 +236,34 @@ class AdminService:
     # Tester grants — "tester" reason tier_overrides rows
     # ------------------------------------------------------------------
 
+    def _pending_tester_rows(self) -> list[dict]:
+        """Unclaimed pre-signup designations, keyed by email (no user_id yet)."""
+        pending_res = self.supabase.table("pending_tester_grants").select("*").is_("claimed_at", "null").execute()
+        return [
+            {
+                "user_id": None,
+                "email": row["email"],
+                "name": None,
+                "reason": row.get("reason"),
+                "expires_at": None,
+                "granted_at": row.get("created_at"),
+                "grant_duration_days": row.get("grant_duration_days"),
+                "pending": True,
+            }
+            for row in pending_res.data or []
+        ]
+
     def list_tester_grants(self) -> list[dict]:
         """Returns active tier_overrides rows where reason LIKE 'tester%',
         enriched with the user's `email` (from auth.users) and `name`
-        (from profiles.full_name).
+        (from profiles.full_name), PLUS unclaimed pre-signup pending rows
+        (flagged `pending: true`).
 
         Filters expired rows in Python (expires_at < now) rather than
         composing a Supabase OR filter. Suitable for small admin-facing lists.
         """
+        pending_rows = self._pending_tester_rows()
+
         res = self.supabase.table("tier_overrides").select("*").ilike("reason", "tester%").execute()
         now = datetime.now(UTC).isoformat()
         active = [
@@ -243,7 +272,7 @@ class AdminService:
             if row.get("reason") != "tester_revoked" and (row.get("expires_at") is None or row["expires_at"] > now)
         ]
         if not active:
-            return []
+            return pending_rows
 
         user_ids = [row["user_id"] for row in active if row.get("user_id")]
 
@@ -276,27 +305,39 @@ class AdminService:
             uid = row.get("user_id")
             row["email"] = email_by_id.get(uid) or None
             row["name"] = name_by_id.get(uid) or None
-        return active
+        return active + pending_rows
 
-    def create_tester_grant(
+    def _activate_tester_grant(
         self,
-        email: str,
-        expires_at: str | None = None,
-        reason: str = "tester",
-        credits: int | None = None,
+        user_id: str,
+        email_norm: str,
+        expires_at: str | None,
+        normalized_reason: str,
+        credits: int | None,
+        grant_duration_days: int | None,
     ) -> dict:
-        """Look up user by email, upsert a full-Pro override with reason='tester*'.
-
-        Raises ValueError if no auth user matches the email.
+        """Write the live tester tier_overrides row for `user_id` and return the
+        create_tester_grant response shape. Shared by the normal matched-email
+        path and the not-matched branch's "claimed pending row, but the search
+        RPC false-negatived and the claimed user is still alive" recovery.
         """
-        auth_users = self.supabase.auth.admin.list_users()
-        matched = [u for u in auth_users if (getattr(u, "email", "") or "").lower() == email.lower()]
-        if not matched:
-            raise ValueError(f"User not found: {email}")
-        user = matched[0]
-        user_id = getattr(user, "id", None)
+        # A designation may already exist as a pending row (e.g. designated
+        # pre-signup, then the claim was skipped on an unverified sign-in).
+        # The active grant we're about to write supersedes it — clear it so it
+        # can't linger under "Pending" or re-claim later with stale terms.
+        (
+            self.supabase.table("pending_tester_grants")
+            .delete()
+            .eq("email", email_norm)
+            .is_("claimed_at", "null")
+            .execute()
+        )
 
-        normalized_reason = _normalize_tester_reason(reason)
+        if grant_duration_days is not None:
+            # Days wins over legacy absolute expires_at; claim time == submit
+            # time for an existing user.
+            expires_at = (datetime.now(UTC) + timedelta(days=grant_duration_days)).isoformat()
+
         payload = {
             "user_id": user_id,
             "max_artists": -1,
@@ -331,7 +372,100 @@ class AdminService:
             )
         except Exception as e:
             logger.warning("analytics identify on tester-grant create failed: %s", e)
-        return {"user_id": user_id, "email": email, "expires_at": expires_at, "reason": normalized_reason}
+        return {"user_id": user_id, "email": email_norm, "expires_at": expires_at, "reason": normalized_reason}
+
+    def create_tester_grant(
+        self,
+        email: str,
+        expires_at: str | None = None,
+        reason: str = "tester",
+        credits: int | None = None,
+        grant_duration_days: int | None = None,
+        created_by: str = "",
+    ) -> dict:
+        """Grant tester access to an existing user, or park a PENDING grant for
+        an email with no account yet (claimed by /me/bootstrap-tester on the
+        user's first verified sign-in).
+
+        Lookup goes through the admin_search_users_by_email RPC with
+        p_limit=100 + an exact match here: the RPC is substring-ILIKE with a
+        default limit of 10, so a small window can push the exact match out
+        (the old bare list_users() page-one scan had the same failure worse).
+        """
+        email_norm = email.strip().lower()
+        rpc_res = self.supabase.rpc("admin_search_users_by_email", {"p_search": email_norm, "p_limit": 100}).execute()
+        matched = [r for r in (rpc_res.data or []) if (r.get("email") or "").strip().lower() == email_norm]
+        normalized_reason = _normalize_tester_reason(reason)
+
+        if not matched:
+            # No live user matched. Before parking a plain pending row, check
+            # whether this email already has a CLAIMED row — a claimed row
+            # with no RPC match means either the search false-negatived (the
+            # user changed their email, or fell outside the 100-row window) or
+            # the claimed user's account was deleted. The plain upsert below
+            # deliberately never touches claim columns, so this is the only
+            # place that can tell those two cases apart.
+            existing_res = (
+                self.supabase.table("pending_tester_grants")
+                .select("claimed_at, claimed_user_id")
+                .eq("email", email_norm)
+                .execute()
+            )
+            existing_rows = existing_res.data or []
+            existing = existing_rows[0] if existing_rows else None
+
+            pending_extra: dict = {}
+            if existing and existing.get("claimed_at"):
+                claimed_user_id = existing.get("claimed_user_id")
+                user_gone = True
+                if claimed_user_id:
+                    try:
+                        auth_res = self.supabase.auth.admin.get_user_by_id(claimed_user_id)
+                        # Tolerate both the `.user`-wrapped shape and a bare
+                        # user object (mirrors list_tester_grants' lookup).
+                        user_obj = getattr(auth_res, "user", auth_res)
+                        user_gone = user_obj is None
+                    except Exception:
+                        user_gone = True
+
+                if not user_gone:
+                    # RPC false-negative — the claimed user is still alive.
+                    # Treat this exactly like a normal active re-grant instead
+                    # of parking a second, unreachable pending row.
+                    return self._activate_tester_grant(
+                        claimed_user_id, email_norm, expires_at, normalized_reason, credits, grant_duration_days
+                    )
+
+                # Claimed user's account was deleted. An admin re-designating
+                # this email is a deliberate decision to re-open the claim for
+                # a fresh signup — ONLY in this branch do we touch claim
+                # columns; the normal pending upsert below must never clobber
+                # a live claim.
+                pending_extra = {"claimed_at": None, "claimed_user_id": None}
+
+            # Pre-signup designation. Payload deliberately EXCLUDES
+            # claimed_at/claimed_user_id (outside the deleted-user recovery
+            # above) so a re-POST never clobbers a claim (PostgREST upsert
+            # only touches the columns it's given).
+            pending = {
+                "email": email_norm,
+                "reason": normalized_reason,
+                "grant_duration_days": grant_duration_days,
+                "credits": credits,
+                "created_by": created_by,
+                **pending_extra,
+            }
+            self.supabase.table("pending_tester_grants").upsert(pending, on_conflict="email").execute()
+            return {
+                "email": email_norm,
+                "pending": True,
+                "reason": normalized_reason,
+                "grant_duration_days": grant_duration_days,
+            }
+
+        return self._activate_tester_grant(
+            matched[0]["id"], email_norm, expires_at, normalized_reason, credits, grant_duration_days
+        )
 
     def revoke_tester_grant(self, user_id: str) -> None:
         """Mark the tier_overrides row as 'tester_revoked' so bootstrap-tester
@@ -369,6 +503,17 @@ class AdminService:
             )
         except Exception as e:
             logger.warning("analytics identify on tester-grant revoke failed: %s", e)
+
+    def revoke_pending_tester_grant(self, email: str) -> None:
+        """Delete an UNCLAIMED pre-signup designation. Claimed rows are
+        immutable history (revoke the live grant via revoke_tester_grant)."""
+        (
+            self.supabase.table("pending_tester_grants")
+            .delete()
+            .eq("email", email.strip().lower())
+            .is_("claimed_at", "null")
+            .execute()
+        )
 
     # ------------------------------------------------------------------
     # Admin role management (profiles.is_admin toggle)
@@ -459,6 +604,101 @@ def grant_initial_tester_credits(supabase, user_id: str, amount: int | None = No
     return True
 
 
+def claim_pending_tester_grant(supabase, pending: dict, user_id: str, email_norm: str) -> bool:
+    """Convert a pending_tester_grants row into a live tester override for the
+    user who just signed in. Returns True only when the claim belongs to this
+    user (including losing a race to the SAME user's concurrent sign-in).
+
+    Order is GRANT THEN CLAIM: the override upsert and tester-init credits are
+    both idempotent, so a concurrent double-run is harmless — while
+    claim-then-grant could stamp claimed_at and then fail the grant, leaving a
+    claimed row and no tester (nothing would retry). The conditional update
+    (WHERE claimed_at IS NULL) is the claim mutex; the race loser sees zero
+    rows updated. Third failure mode: the claim UPDATE itself raises (e.g. a
+    transient DB error) after the upsert already landed — the exception
+    propagates out to main.py's catch (sign-in never 500s), the row stays
+    unclaimed, and the next sign-in retries the whole (idempotent) grant +
+    claim.
+
+    Verified-email guard: GoTrue only leaves email_confirmed_at unset when
+    "Confirm email" is ON (verified ON for this project 2026-08-08) — this is
+    what stops a squatter who registered someone else's address from
+    collecting the grant. Unverified → False, row stays pending, next
+    sign-in retries.
+    """
+    auth_user = supabase.auth.admin.get_user_by_id(user_id)
+    user_obj = getattr(auth_user, "user", auth_user)
+    if not getattr(user_obj, "email_confirmed_at", None):
+        logger.info("pending tester claim skipped (unverified email) for %s", user_id)
+        return False
+
+    days = pending.get("grant_duration_days")
+    expires_at = (datetime.now(UTC) + timedelta(days=days)).isoformat() if days else None
+    granted_at = datetime.now(UTC).isoformat()
+
+    # Same shape as create_tester_grant / bootstrap env path — feature gating
+    # must be identical. Upsert on user_id also OVERRIDES a tester_revoked
+    # sticky marker, exactly like an admin re-grant: the admin designating
+    # this email is the later, stronger intent.
+    payload = {
+        "user_id": user_id,
+        "max_artists": -1,
+        "max_projects": -1,
+        "max_tasks": -1,
+        "max_storage_bytes": -1,
+        "max_split_sheets_per_month": -1,
+        "max_oneclick_runs_per_month": -1,
+        "zoe_enabled": True,
+        "oneclick_enabled": True,
+        "registry_enabled": True,
+        "integrations_allowed": ["google_drive", "dropbox"],
+        "reason": _normalize_tester_reason(pending.get("reason")),
+        "expires_at": expires_at,
+        "granted_at": granted_at,
+    }
+    supabase.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
+
+    # Best-effort, at parity with every other tester path: skips (warn) when
+    # CREDITS_ENABLED is off, tester-init:{user_id} is once-ever, and a
+    # transient credits failure must not block the claim — the override is
+    # already live, and an unclaimed row would desync the pending list while
+    # misreporting granted=False (env path in main.py wraps identically).
+    try:
+        grant_initial_tester_credits(supabase, user_id, pending.get("credits"))
+    except Exception as exc:
+        logger.warning("pending tester claim: initial credits failed for %s: %s", user_id, exc)
+
+    claim_res = (
+        supabase.table("pending_tester_grants")
+        .update({"claimed_at": granted_at, "claimed_user_id": user_id})
+        .eq("email", email_norm)
+        .is_("claimed_at", "null")
+        .execute()
+    )
+    if not claim_res.data:
+        # Lost a concurrent race AFTER granting. "Byte-identical, nothing to
+        # undo" only holds for the SAME user's other sign-in — the claim did
+        # happen for them, so report success and let AuthContext refresh. A
+        # cross-user loser is different: THIS call's own tier_overrides
+        # upsert for `user_id` already landed too, so returning False here is
+        # correct (the pending row belongs to the other user) but leaves that
+        # extra upsert behind — harmless since it mirrors what a real grant
+        # would write, and practically unreachable anyway (pending rows are
+        # keyed by email, and GoTrue enforces unique emails).
+        row_res = supabase.table("pending_tester_grants").select("claimed_user_id").eq("email", email_norm).execute()
+        row = (row_res.data or [None])[0]
+        return bool(row and row.get("claimed_user_id") == user_id)
+
+    try:
+        analytics_identify(
+            user_id,
+            {"is_tester": True, "tester_granted_at": granted_at, "tester_expires_at": expires_at},
+        )
+    except Exception as e:
+        logger.warning("analytics identify on pending tester claim failed: %s", e)
+    return True
+
+
 def grant_user_credits(
     supabase, user_id: str, amount: int, reason: str, granted_by: str, request_id: str | None = None
 ) -> dict:
@@ -491,6 +731,55 @@ def grant_user_credits(
         },
     ).execute()
     return res.data if isinstance(res.data, dict) else {"granted": amount}
+
+
+def grant_org_credits(supabase, org_id: str, amount: int, reason: str, granted_by: str, request_id: str) -> dict:
+    """Admin comped-pack grant into an org's POOL (reserve bucket).
+
+    Mirrors stripe_events._handle_org_topup_grant minus Stripe: same wallet
+    helper, same RPC, then the SAME shared activation check — so a comped
+    grant is behaviorally identical to a purchase (counts toward the
+    activation floor via PAID_IN_KINDS, never expires, reclaimable by the
+    reserve-only clawback) while keeping provenance honest
+    (kind='admin_grant', never 'purchase').
+
+    'admin-org-grant:' is its own idempotency namespace — credit_ledger's
+    request_id index is GLOBAL and 'admin-grant:' belongs to user grants; a
+    shared prefix would let one operator key silently no-op the other grant.
+
+    Raises ValueError (-> 404 at the router) when the org doesn't exist.
+    """
+    from orgs.wallets import maybe_activate_org, read_or_create_org_wallet
+
+    # Existence-only check (not status): granting to an archived/suspended
+    # org is deliberate — support use cases like a settled dispute or a
+    # goodwill comp on a paused account. Activation itself still only ever
+    # flips pending -> active, inside maybe_activate_org.
+    org_res = supabase.table("organizations").select("id").eq("id", org_id).execute()
+    if not org_res.data:
+        raise ValueError(f"Organization not found: {org_id}")
+
+    wallet = read_or_create_org_wallet(supabase, org_id)
+    res = supabase.rpc(
+        "grant_credits",
+        {
+            "p_wallet_id": wallet["id"],
+            "p_amount": amount,
+            "p_kind": "admin_grant",
+            "p_bucket": "reserve",
+            "p_metadata": {
+                "reason": reason,
+                "granted_by": granted_by,
+                "org_id": org_id,
+                "source": "admin_grant",
+            },
+            "p_request_id": f"admin-org-grant:{request_id}",
+        },
+    ).execute()
+    activated = maybe_activate_org(supabase, org_id, wallet["id"])
+    result = res.data if isinstance(res.data, dict) else {"granted": amount}
+    result["activated"] = activated
+    return result
 
 
 # Per-owner-type clawback config — the ONLY things that differ between the
@@ -678,6 +967,60 @@ def get_org_pool(supabase, org_id: str) -> dict:
         "cumulativePaidIn": cumulative_paid_in(supabase, wallet_id),
         "ledger": ledger_res.data or [],
     }
+
+
+def list_orgs_admin(supabase) -> list[dict]:
+    """Every org for the admin Organizations tab — INCLUDING suspended and
+    archived (labeled, never hidden: the tooling must not vanish for exactly
+    the orgs an operator needs to inspect).
+
+    Per-org reads are N+1 (wallet + member count + paid-in sum) — deliberate:
+    org count is tens, and reusing orgs.wallets.cumulative_paid_in keeps the
+    activation number definitionally identical to what maybe_activate_org
+    enforces (get_org_pool's docstring makes the same argument).
+    """
+    from orgs.wallets import cumulative_paid_in
+
+    default_floor = int(os.getenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000"))
+    orgs_res = (
+        supabase.table("organizations")
+        .select("id, name, status, archived_at, monthly_dispersal_credits, min_initial_purchase_credits, created_at")
+        .order("created_at")
+        .execute()
+    )
+    out: list[dict] = []
+    for org in orgs_res.data or []:
+        org_id = org["id"]
+        wallet_res = (
+            supabase.table("credit_wallets")
+            .select("id, bundle_balance, reserve_balance")
+            .eq("owner_type", "org")
+            .eq("owner_id", org_id)
+            .execute()
+        )
+        wallet = (wallet_res.data or [None])[0]
+        members_res = (
+            supabase.table("org_members")
+            .select("id", count="exact")
+            .eq("org_id", org_id)
+            .eq("status", "active")
+            .execute()
+        )
+        out.append(
+            {
+                "id": org_id,
+                "name": org.get("name"),
+                "status": org.get("status"),
+                "archivedAt": org.get("archived_at"),
+                "memberCount": members_res.count or 0,
+                "bundleBalance": (wallet or {}).get("bundle_balance") or 0,
+                "reserveBalance": (wallet or {}).get("reserve_balance") or 0,
+                "monthlyDispersalCredits": org.get("monthly_dispersal_credits") or 0,
+                "activationFloor": org.get("min_initial_purchase_credits") or default_floor,
+                "cumulativePaidIn": cumulative_paid_in(supabase, wallet["id"]) if wallet else 0,
+            }
+        )
+    return out
 
 
 def get_user_credit_ledger(supabase, user_id: str, limit: int = 100) -> list[dict]:

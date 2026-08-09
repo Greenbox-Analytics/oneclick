@@ -58,8 +58,9 @@ Without these, the "Pay with PayPal" button is hidden and payout capture fails. 
 | Var | Source | Required? |
 |-----|--------|-----------|
 | `OPENAI_API_KEY` | platform.openai.com → API keys | Yes — without it, Zoe + contract analysis crash on first call |
-| `OPENAI_LLM_MODEL` | Model name override | Optional. Defaults coded in `zoe_chatbot/` and `oneclick/contract_parser.py` |
-| `OPENAI_LLM_MODEL_LARGE` | Large-context model name | Optional |
+| `MODEL_<SLOT>` | Per-job model override (e.g. `MODEL_ZOE`) | Optional. Slots + defaults in `src/backend/config_panel/model_garden.yaml` |
+| `OPENAI_LLM_MODEL` | Legacy override — feeds every `zoe_*` slot | Optional. Prefer `MODEL_ZOE*` |
+| `OPENAI_LLM_MODEL_LARGE` | Legacy override — feeds `zoe_large` **and** `contract_parser` | Optional. Prefer `MODEL_ZOE_LARGE` / `MODEL_CONTRACT_PARSER` |
 | `OPENAI_BASE_URL` | Alternate API host (OpenAI-compatible proxy, Azure, etc.) | Optional. Empty = use OpenAI default |
 
 `CLAUDE_API_KEY`, `CLAUDE_MODEL`, `CLAUDE_BASE_URL` are in `.env.example` but are **not currently read** by any backend code — leftover scaffolding. Safe to leave blank.

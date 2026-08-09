@@ -24,7 +24,11 @@ from subscriptions.service import EntitlementsService
 
 class CreateTesterGrantRequest(BaseModel):
     email: EmailStr
+    # Absolute expiry (legacy). Prefer grant_duration_days; days WINS when both
+    # are sent, and days is the only shape a pending (pre-signup) grant stores —
+    # duration is applied at CLAIM time so day-29 claims still get full terms.
     expires_at: str | None = None
+    grant_duration_days: int | None = Field(None, gt=0, le=3650)
     reason: str = "tester"
     # Initial reserve-credit allocation; None = TESTER_INITIAL_CREDITS default.
     credits: int | None = Field(None, gt=0, le=1_000_000)
@@ -47,6 +51,15 @@ class CreditAdjustPayload(BaseModel):
     # REQUIRED (unlike the grant payload's optional key): a double-submitted
     # clawback removes a real customer's credits twice. Support uses the
     # Stripe refund/dispute id they already have in hand at this moment.
+    idempotency_key: str = Field(min_length=1)
+
+
+class OrgPoolGrantPayload(BaseModel):
+    amount: int = Field(gt=0, le=1_000_000)
+    reason: str
+    # REQUIRED, mirroring CreditAdjustPayload: an org grant is big enough that
+    # "each call is distinct" (the user-grant default) is the wrong failure
+    # mode for a double-submit. The dialog mints a UUID per open.
     idempotency_key: str = Field(min_length=1)
 
 
@@ -238,17 +251,29 @@ async def list_tester_grants(
 @router.post("/tester-grants")
 async def create_tester_grant(
     body: CreateTesterGrantRequest,
-    _admin: str = Depends(require_admin),
+    admin_email: str = Depends(require_admin),
 ) -> dict:
-    try:
-        return _get_admin_service().create_tester_grant(
-            email=body.email,
-            expires_at=body.expires_at,
-            reason=body.reason,
-            credits=body.credits,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    # create_tester_grant no longer raises ValueError for any input — an
+    # unmatched email parks a pending designation instead of 404ing (and the
+    # claimed-row recovery path doesn't raise either). No try/except needed.
+    return _get_admin_service().create_tester_grant(
+        email=body.email,
+        expires_at=body.expires_at,
+        reason=body.reason,
+        credits=body.credits,
+        grant_duration_days=body.grant_duration_days,
+        created_by=admin_email,
+    )
+
+
+@router.delete("/tester-grants/pending", status_code=204)
+async def revoke_pending_tester_grant(
+    email: str,
+    _admin: str = Depends(require_admin),
+) -> Response:
+    """Revoke a pre-signup (unclaimed) tester designation by email."""
+    _get_admin_service().revoke_pending_tester_grant(email)
+    return Response(status_code=204)
 
 
 @router.delete("/tester-grants/{user_id}", status_code=204)
@@ -273,6 +298,31 @@ async def admin_grant_credits(
         result = grant_user_credits(
             get_supabase_client(),
             target_user_id,
+            body.amount,
+            body.reason,
+            admin_email,
+            request_id=body.idempotency_key,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"granted": body.amount, "result": result}
+
+
+@router.post("/orgs/{org_id}/pool/grant")
+async def admin_grant_org_credits(
+    org_id: str,
+    body: OrgPoolGrantPayload,
+    admin_email: str = Depends(require_admin),
+):
+    """Comped-pack grant into an org pool — reserve bucket, counts toward
+    activation. See admin_service.grant_org_credits for semantics."""
+    from main import get_supabase_client
+    from subscriptions.admin_service import grant_org_credits
+
+    try:
+        result = grant_org_credits(
+            get_supabase_client(),
+            org_id,
             body.amount,
             body.reason,
             admin_email,
@@ -338,6 +388,15 @@ async def admin_credit_ledger(
 # org is just flipping that column; there is no separate enforcement path to
 # wire up here.
 # ---------------------------------------------------------------------------
+
+
+@router.get("/orgs")
+async def list_orgs(_admin: str = Depends(require_admin)):
+    """Admin Organizations tab data source. See admin_service.list_orgs_admin."""
+    from main import get_supabase_client
+    from subscriptions.admin_service import list_orgs_admin
+
+    return {"orgs": list_orgs_admin(get_supabase_client())}
 
 
 @router.put("/orgs/{org_id}/dispersal")

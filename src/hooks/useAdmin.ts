@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { peekCachedAnalyticsContext } from "@/hooks/useAnalyticsContext";
+import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 import { ApiError, API_URL, apiFetch } from "@/lib/apiFetch";
 import type { TierKey } from "@/lib/tiers";
 
@@ -67,6 +68,8 @@ export function useIsAdmin(): { isAdmin: boolean; loading: boolean } {
 export interface AdminUserRow {
   id: string;
   email: string | null;
+  /** profiles.full_name — null until the user finishes onboarding. */
+  name: string | null;
   tier: TierKey;
   has_override: boolean;
   is_admin: boolean;
@@ -207,4 +210,76 @@ export function useProRequests(status?: ProRequestStatus): UseQueryResult<ProReq
     },
     staleTime: 30_000,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Per-user credit administration (gift / remove / ledger)
+// ---------------------------------------------------------------------------
+
+export interface AdminLedgerEntry {
+  delta: number;
+  kind: string;
+  created_at?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export function useAdminUserLedger(userId: string | null): UseQueryResult<AdminLedgerEntry[]> {
+  return useQuery({
+    queryKey: ["admin", "users", userId, "ledger"],
+    queryFn: async () =>
+      (await apiFetch<{ entries: AdminLedgerEntry[] }>(
+        `${API_URL}/admin/users/${userId}/credits/ledger`,
+      )).entries,
+    enabled: !!userId,
+    staleTime: 15_000,
+  });
+}
+
+export function useAdminUserCreditMutations(userId: string | null) {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["admin", "users", userId, "detail"] });
+    qc.invalidateQueries({ queryKey: ["admin", "users", userId, "ledger"] });
+    // An admin editing their OWN wallet should see the header ticker move.
+    invalidateCreditSurfaces(qc);
+  };
+
+  const grantCredits = useMutation({
+    mutationFn: (args: { amount: number; reason: string; idempotencyKey: string }) =>
+      apiFetch<{ granted?: number; requested?: number; result: { duplicate?: boolean } }>(
+        `${API_URL}/admin/users/${userId}/credits/grant`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            amount: args.amount,
+            reason: args.reason,
+            idempotency_key: args.idempotencyKey,
+          }),
+        },
+      ),
+    onSuccess: invalidate,
+  });
+
+  const adjustCredits = useMutation({
+    mutationFn: (args: { amount: number; reason: string; idempotencyKey: string }) =>
+      // adjust is reserve-only and clamps at whatever reserve is available —
+      // result carries what actually happened, not just whether it happened.
+      apiFetch<{
+        requested?: number;
+        result: { duplicate?: boolean; removed?: number; shortfall?: number; balance_after?: number };
+      }>(
+        `${API_URL}/admin/users/${userId}/credits/adjust`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            amount: args.amount,
+            reason: args.reason,
+            idempotency_key: args.idempotencyKey,
+          }),
+        },
+      ),
+    onSuccess: invalidate,
+  });
+
+  return { grantCredits, adjustCredits };
 }

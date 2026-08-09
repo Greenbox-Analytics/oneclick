@@ -306,6 +306,8 @@ export interface RawOverride {
 export interface AdminUserDetailUser {
   id: string;
   email: string | null;
+  /** profiles.full_name — null until the user finishes onboarding. */
+  name: string | null;
   created_at: string | null;
   is_admin: boolean;
   is_env_admin: boolean;

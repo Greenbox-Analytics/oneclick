@@ -530,15 +530,18 @@ class TestTesterGrantEndpoints:
         resp = non_admin_client.get("/admin/tester-grants")
         assert resp.status_code == 403
 
-    def test_create_returns_404_when_user_not_found(self, admin_client, mock_supabase):
-        mock_supabase.auth.admin.list_users.return_value = []
+    def test_create_unknown_email_returns_pending(self, admin_client, mock_supabase):
+        """create_tester_grant no longer 404s for an unknown email — it parks
+        a pending pre-signup designation, claimed on first verified sign-in
+        (deliberate behavior change, admin credits & testers spec 2026-08-08)."""
+        mock_supabase.rpc.return_value.execute.return_value.data = []
 
         resp = admin_client.post(
             "/admin/tester-grants",
             json={"email": "nobody@example.com"},
         )
-        assert resp.status_code == 404
-        assert "not found" in resp.json()["detail"].lower()
+        assert resp.status_code == 200
+        assert resp.json()["pending"] is True
 
     def test_create_returns_422_invalid_email(self, admin_client):
         resp = admin_client.post(
@@ -548,8 +551,8 @@ class TestTesterGrantEndpoints:
         assert resp.status_code == 422
 
     def test_create_calls_service_with_correct_args(self, admin_client, mock_supabase):
-        mock_supabase.auth.admin.list_users.return_value = [
-            MagicMock(id=TEST_USER_ID, email="tester@example.com"),
+        mock_supabase.rpc.return_value.execute.return_value.data = [
+            {"id": TEST_USER_ID, "email": "tester@example.com", "created_at": "2026-01-01"},
         ]
         captured = {}
 

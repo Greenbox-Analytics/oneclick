@@ -1,16 +1,19 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { ApiError, API_URL, apiFetch } from "@/lib/apiFetch";
+import { API_URL, apiFetch } from "@/lib/apiFetch";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export interface TesterGrant {
-  user_id: string;
+  // null = pending (pre-signup) row — revoke via useRevokePendingTesterGrant, never by user_id
+  user_id: string | null;
   expires_at: string | null;
   reason: string | null;
   email: string | null;
   name: string | null;
+  pending?: boolean;
+  grant_duration_days?: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -39,6 +42,8 @@ export interface CreateTesterGrantInput {
   email: string;
   expires_at?: string | null;
   reason?: string | null;
+  grant_duration_days?: number | null;
+  credits?: number | null;
 }
 
 export function useCreateTesterGrant() {
@@ -72,4 +77,23 @@ export function useRevokeTesterGrant() {
   });
 }
 
-export { ApiError };
+// ---------------------------------------------------------------------------
+// useRevokePendingTesterGrant — DELETE /admin/tester-grants/pending?email=
+// Revokes an unclaimed pre-signup designation (claimed/active grants use
+// useRevokeTesterGrant by user_id).
+// ---------------------------------------------------------------------------
+
+export function useRevokePendingTesterGrant() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: (email: string) =>
+      apiFetch(`${API_URL}/admin/tester-grants/pending?email=${encodeURIComponent(email)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: TESTER_GRANTS_KEY });
+    },
+  });
+}
+

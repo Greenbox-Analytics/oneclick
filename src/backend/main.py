@@ -684,9 +684,11 @@ async def bootstrap_tester(
     user_id: str = Depends(get_current_user_id),
     user_email: str = Depends(get_current_user_email),
 ):
-    """Auto-grant tester `tier_overrides` row if caller's email is in TESTER_EMAILS.
+    """Auto-grant tester `tier_overrides` row if caller's email is in TESTER_EMAILS,
+    or claim a pre-signup pending_tester_grants row designated via the admin UI.
 
     Called on every SIGNED_IN event from the frontend (see AuthContext). Idempotent:
+    - claims a matching pending_tester_grants row first (admin UI designation wins)
     - skips when email not in TESTER_EMAILS (returns reason=not_in_allowlist)
     - skips when user already has any active tester row (returns reason=already_tester)
     - grants reason='tester_env' on first call to distinguish from manual admin grants
@@ -698,10 +700,28 @@ async def bootstrap_tester(
     from analytics import identify as analytics_identify
     from subscriptions.admin_auth import is_active_tester_row, is_env_tester
 
+    sb = get_supabase_client()
+    email_norm = (user_email or "").strip().lower()
+
+    # UI-designated pre-signup grant — checked BEFORE the TESTER_EMAILS env
+    # allowlist AND before the tester_revoked short-circuit (an admin
+    # deliberately designating this email overrides the marker, same as an
+    # admin re-grant). Never let a claim failure break sign-in.
+    try:
+        from subscriptions.admin_service import claim_pending_tester_grant
+
+        pending_res = (
+            sb.table("pending_tester_grants").select("*").eq("email", email_norm).is_("claimed_at", "null").execute()
+        )
+        pending = (pending_res.data or [None])[0]
+        if pending and claim_pending_tester_grant(sb, pending, user_id, email_norm):
+            return {"granted": True, "source": "pending"}
+    except Exception as exc:
+        logger.warning("bootstrap tester: pending claim failed for %s: %s", user_id, exc)
+
     if not is_env_tester(user_email):
         return {"granted": False, "reason": "not_in_allowlist"}
 
-    sb = get_supabase_client()
     existing = (
         sb.table("tier_overrides")
         .select("reason, expires_at, granted_at")

@@ -33,6 +33,11 @@ def _wire_sb(existing_tester_rows: list[dict]):
         b.select.return_value = b
         b.eq.return_value = b
         b.like.return_value = b
+        # Pending pre-signup designations: no row for any table here, so the
+        # bootstrap-tester pending-claim branch never triggers and the env
+        # path below stays exercised. Without wiring `.is_`, a bare MagicMock
+        # chain's `.data` is a truthy MagicMock, not `[]`.
+        b.is_.return_value = b
         b.execute.return_value = MagicMock(data=existing_tester_rows if name == "tier_overrides" else [])
 
         def _upsert(payload, **kwargs):

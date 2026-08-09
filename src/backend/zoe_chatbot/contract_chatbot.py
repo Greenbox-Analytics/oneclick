@@ -33,6 +33,7 @@ from openai import OpenAI
 from knowledge.reference_search import search_reference
 from utils.ingestion.pdf_markdown import strip_page_markers
 from utils.ingestion.tables import detect_and_extract_tables, linearize_table
+from utils.llm.model_garden import model_for
 from utils.llm.tracking import TrackedOpenAI
 from utils.text.normalize import normalize_name
 
@@ -511,9 +512,8 @@ if not OPENAI_API_KEY:
 
 openai_client = TrackedOpenAI(OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None))
 
-# Configuration
-DEFAULT_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")  # Updated to stable model
-DEFAULT_LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5")  # For multi-contract comparisons
+# Configuration — models come from config_panel.model_garden (slots: zoe,
+# zoe_routing, zoe_citations, zoe_large), never from a constant read at import.
 MIN_SIMILARITY_THRESHOLD = 0.30
 DEFAULT_TOP_K = 10
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
@@ -740,18 +740,29 @@ class ContractChatbot:
         "gross revenue",
     ]
 
-    def __init__(self, llm_model: str = DEFAULT_LLM_MODEL):
+    def __init__(self, llm_model: str | None = None):
         """
         Initialize the contract chatbot
 
         Args:
-            llm_model: LLM model to use for answer generation
+            llm_model: pin the answer model; None (normal) follows the model garden
         """
-        self.llm_model = llm_model
+        self._llm_model = llm_model
         self.memory = _conversation_memory  # Use global memory instance
         self.fact_ledger = _fact_ledger  # Use global fact ledger
         self.assumption_ledger = _assumption_ledger  # Use global assumption ledger
         self.conversation_summary = _conversation_summary  # Use global conversation summary
+
+    # A property, not an attribute: the chatbot is a process-lifetime singleton
+    # (main.py builds one), so an attribute would freeze the model at startup and
+    # defeat the point of the garden. Setter kept for tests that pin a model.
+    @property
+    def llm_model(self) -> str:
+        return self._llm_model or model_for("zoe")
+
+    @llm_model.setter
+    def llm_model(self, value: str) -> None:
+        self._llm_model = value
 
     def _get_current_scope(
         self, artist_id: str | None = None, project_id: str | None = None, contract_id: str | None = None
@@ -1283,7 +1294,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
 
         try:
             response = openai_client.chat.completions.create(
-                model=self.llm_model,
+                model=model_for("zoe_routing"),
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": query}],
                 max_completion_tokens=10,
             )
@@ -1586,7 +1597,7 @@ Rules:
 
         try:
             response = openai_client.chat.completions.create(
-                model=self.llm_model,
+                model=model_for("zoe_routing"),
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 max_completion_tokens=2000,  # reasoning models consume the budget before output; keep it generous
             )
@@ -3654,7 +3665,7 @@ RULES:
         # Larger model whenever 2+ full contracts are in context (selected OR carried) — cross-contract
         # comparisons are usually over splits/royalty terms ("never approximate"), so spend the tokens.
         effective_count = len(contract_markdowns)
-        multi_contract_model = DEFAULT_LLM_MODEL_LARGE if effective_count >= 2 else None
+        multi_contract_model = model_for("zoe_large") if effective_count >= 2 else None
         if multi_contract_model:
             logger.info(f"[Stream] Multi-contract context ({effective_count} contracts) — using {multi_contract_model}")
 
@@ -3822,7 +3833,7 @@ RULES:
             # (NOT the input/context window). A small budget (e.g. 300) is fully consumed by
             # reasoning -> empty output. The actual output here is a tiny JSON array, so this
             # generous cap is almost entirely reasoning headroom; we only pay for tokens used.
-            raw = "".join(self._stream_llm_completion(messages, 16000, model_override=DEFAULT_LLM_MODEL))
+            raw = "".join(self._stream_llm_completion(messages, 16000, model_override=model_for("zoe_citations")))
             citations = parse_page_citations(raw)
         except Exception as e:  # noqa: BLE001 — extraction is best-effort
             logger.warning(f"[Stream][FullDoc] Page citation extraction failed: {e}")

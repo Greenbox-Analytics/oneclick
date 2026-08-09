@@ -180,7 +180,8 @@ def test_cumulative_paid_in_sums_purchase_and_dispersal_kinds():
 
     assert wallets.cumulative_paid_in(db, POOL_WALLET) == 15000
     assert captured["col"] == "kind"
-    assert set(captured["vals"]) == {"purchase", "dispersal", "monthly_grant"}
+    # 'admin_grant' added 2026-08-08 — comped org grants count toward activation (admin credits & testers spec)
+    assert set(captured["vals"]) == {"purchase", "dispersal", "monthly_grant", "admin_grant"}
 
 
 # ---------------------------------------------------------------------------

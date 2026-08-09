@@ -1,0 +1,50 @@
+# THE MODEL GARDEN — one entry per job that calls an LLM.
+# Loader + lookup: utils/llm/model_garden.py. This file is the only place model ids live.
+#
+# Swap a model:            edit `model` below (ships with the next deploy)
+# Swap without a deploy:   set MODEL_<SLOT>, e.g. MODEL_ZOE=gpt-5.4-mini
+# Precedence:              MODEL_<SLOT>  >  legacy_env  >  model
+#
+# Re-read on every call (by file mtime), so editing this file locally takes effect
+# on the next request — no restart.
+#
+# Every model needs a rate in subscriptions/ai_pricing.py, or ai_usage_log.cost_usd
+# goes NULL for its calls. tests/test_model_garden.py enforces that for the values here.
+#
+# NOT here: the embedding model. text-embedding-3-small is pinned to the 1536-d
+# Pinecone indexes, so changing it is a re-ingest migration, not configuration.
+#
+# legacy_env exists because OPENAI_LLM_MODEL / OPENAI_LLM_MODEL_LARGE are already set
+# as GSM secrets and wired into both deploy workflows; dropping them would silently
+# revert a deployed override. Note OPENAI_LLM_MODEL_LARGE drives BOTH zoe_large and
+# contract_parser — that overload is the thing to retire once MODEL_* is set in GSM.
+
+# Zoe: answers, summarization, artist queries
+zoe:
+  model: gpt-5-mini
+  legacy_env: OPENAI_LLM_MODEL
+
+# Zoe: query classification + route decisions
+zoe_routing:
+  model: gpt-5-mini
+  legacy_env: OPENAI_LLM_MODEL
+
+# Zoe: page-citation extraction (cheap second pass over the answer)
+zoe_citations:
+  model: gpt-5-mini
+  legacy_env: OPENAI_LLM_MODEL
+
+# Zoe: comparisons across 2+ contracts
+zoe_large:
+  model: gpt-5
+  legacy_env: OPENAI_LLM_MODEL_LARGE
+
+# Registry + OneClick: contract extraction, basis detection, split review.
+# Also a parse-cache key — repointing this invalidates cached contract parses.
+contract_parser:
+  model: gpt-5.2
+  legacy_env: OPENAI_LLM_MODEL_LARGE
+
+# OneClick: payable-column detection on royalty statements
+oneclick_columns:
+  model: gpt-5.4-mini

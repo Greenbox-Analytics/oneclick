@@ -21,19 +21,20 @@ from collections.abc import Callable
 from dataclasses import asdict
 
 from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
-from utils.contract_parsing.parser import LLM_MODEL_LARGE, MusicContractParser
+from utils.contract_parsing.parser import MusicContractParser
 from utils.ingestion.pdf_markdown import strip_page_markers
+from utils.llm.model_garden import model_for
 
 logger = logging.getLogger(__name__)
 
 # Bump when the extraction PROMPT changes. The OpenAI model is appended automatically,
-# so changing OPENAI_LLM_MODEL_LARGE also invalidates cached entries.
+# so repointing the "contract_parser" garden slot also invalidates cached entries.
 PARSER_PROMPT_VERSION = "v1-2026-07-12"
 
 
 def parser_version() -> str:
     """Cache-invalidation key component: prompt version + active extraction model."""
-    return f"{PARSER_PROMPT_VERSION}:{LLM_MODEL_LARGE}"
+    return f"{PARSER_PROMPT_VERSION}:{model_for('contract_parser')}"
 
 
 def serialize_contract_data(cd: ContractData) -> dict:

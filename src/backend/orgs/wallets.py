@@ -43,7 +43,15 @@ from supabase import Client
 # wallets it is exactly the dispersal component. Kind 'dispersal' is kept in
 # the list for completeness but nothing has ever written it: no code path
 # emits that kind (rollover_wallet emits 'monthly_grant' instead).
-PAID_IN_KINDS = ("purchase", "dispersal", "monthly_grant")
+#
+# 'admin_grant' (added 2026-08-08): comped credits via POST
+# /admin/orgs/{id}/pool/grant. Counts toward activation like a purchased pack
+# while keeping ledger provenance honest (revenue reads filter
+# kind='purchase'). NOTE this list also feeds two CUSTOMER-FACING readers —
+# orgs/service.get_org's remaining_to_activate and the org billing console —
+# so comped credits deliberately appear in an org admin's own activation
+# progress (comped counts as paid-in everywhere or nowhere).
+PAID_IN_KINDS = ("purchase", "dispersal", "monthly_grant", "admin_grant")
 
 
 def _read_wallet(sb: Client, owner_type: str, owner_id: str) -> dict | None:

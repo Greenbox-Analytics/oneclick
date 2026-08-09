@@ -601,8 +601,10 @@ class TestPaidInKinds:
 
         assert "monthly_grant" in PAID_IN_KINDS
         assert "purchase" in PAID_IN_KINDS
+        # 'admin_grant' added 2026-08-08 — comped org grants count toward activation (admin credits & testers spec)
+        assert "admin_grant" in PAID_IN_KINDS
         # NOT paid-in: spend, expiry, and support gifts.
-        for kind in ("debit", "overage_debit", "expiry", "admin_grant", "refund"):
+        for kind in ("debit", "overage_debit", "expiry", "refund"):
             assert kind not in PAID_IN_KINDS
 
 

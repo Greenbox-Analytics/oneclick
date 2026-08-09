@@ -30,8 +30,9 @@ import math
 import re
 from dataclasses import dataclass, field
 
-from utils.contract_parsing.basis_detection import LLM_MODEL_LARGE, _normalize
+from utils.contract_parsing.basis_detection import _normalize
 from utils.contract_parsing.models import ContractData, RoyaltyShare, effective_basis
+from utils.llm.model_garden import model_for
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,7 @@ def verify_royalty_shares(
     pairs = "\n".join(f"- party: {s.party_name} | royalty type: {s.royalty_type}" for s in shares)
     try:
         resp = openai_client.chat.completions.create(
-            model=LLM_MODEL_LARGE,
+            model=model_for("contract_parser"),
             messages=[
                 {
                     "role": "user",
