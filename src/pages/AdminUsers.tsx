@@ -182,7 +182,6 @@ const AdminConsole = () => {
               ⌘K
             </span>
           </button>
-          <Button onClick={() => setView("testers")}>Grant tester access</Button>
         </header>
 
         <div className="min-h-0 flex-1 overflow-auto p-5">
@@ -209,6 +208,7 @@ const AdminConsole = () => {
                 selectedUserId={selectedUserId}
                 onSelectUser={setSelectedUserId}
                 onOpenOrg={openOrg}
+                onGrantTester={() => setView("testers")}
               />
             )}
             {view === "orgs" && (

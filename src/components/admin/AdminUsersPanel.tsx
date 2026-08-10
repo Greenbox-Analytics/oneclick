@@ -60,6 +60,8 @@ interface UsersPanelProps {
   selectedUserId: string | null;
   onSelectUser: (id: string | null) => void;
   onOpenOrg: (orgId: string) => void;
+  /** Jumps to the Beta testers view, where the grant form lives. */
+  onGrantTester: () => void;
 }
 
 export function AdminUsersPanel({
@@ -72,6 +74,7 @@ export function AdminUsersPanel({
   selectedUserId,
   onSelectUser,
   onOpenOrg,
+  onGrantTester,
 }: UsersPanelProps) {
   const usersQuery = useAdminUsers(search, page);
   const grantsQuery = useTesterGrants();
@@ -101,6 +104,9 @@ export function AdminUsersPanel({
           {filtered.length}
           {filter !== "all" ? ` of ${rows.length}` : ""} on this page
         </span>
+        <Button size="sm" onClick={onGrantTester}>
+          Grant tester access
+        </Button>
       </div>
 
       <div className="mb-3 flex flex-wrap gap-1.5">
