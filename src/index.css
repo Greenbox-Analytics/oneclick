@@ -270,13 +270,9 @@ All colors MUST be HSL.
 /* Landing-page responsive overrides — collapse multi-column grids on narrow viewports */
 @media (max-width: 900px) {
   .landing-page .lp-tool-row {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
     gap: 32px !important;
     padding: 24px !important;
-  }
-  .landing-page .lp-tool-row > div:first-child,
-  .landing-page .lp-tool-row > div:last-child {
-    order: unset !important;
   }
   .landing-page .lp-cta {
     grid-template-columns: 1fr !important;

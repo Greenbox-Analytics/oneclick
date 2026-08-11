@@ -6,7 +6,8 @@
 // users search + filter) so a row on Overview or a hit in the palette can
 // deep-link into another view's drawer.
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Beaker,
@@ -21,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAdminUsers } from "@/hooks/useAdmin";
 import { useAdminOrgs, type AdminOrgRow } from "@/hooks/useAdminOrgs";
@@ -54,6 +56,24 @@ const AdminConsole = () => {
   const [filter, setFilter] = useState<UserFilter>("all");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+
+  // Own display name for the sidebar chip — profiles.full_name is what the
+  // Profile page writes from first + last name; email is only the fallback for
+  // accounts that never finished onboarding.
+  const { data: me } = useQuery({
+    queryKey: ["profile", user?.id, "name"],
+    enabled: !!user?.id,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", user!.id)
+        .maybeSingle();
+      return data;
+    },
+  });
+  const displayName = me?.full_name?.trim() || user?.email || "Account";
 
   const orgsQuery = useAdminOrgs();
   const grantsQuery = useTesterGrants();
@@ -98,17 +118,22 @@ const AdminConsole = () => {
     <div className="flex h-screen overflow-hidden bg-muted/40">
       {/* Sidebar — collapses to an icon rail below md */}
       <nav className="flex w-16 shrink-0 flex-col border-r border-border bg-card md:w-[236px]">
-        <div className="flex items-center gap-2.5 px-3 py-4 md:px-4">
+        <Link
+          to="/dashboard"
+          title="Back to Msanii"
+          className="group flex items-center gap-2.5 rounded-lg px-3 py-4 hover:bg-muted/70 md:px-4"
+        >
           <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary text-[13px] font-bold text-primary-foreground">
             M
           </div>
-          <div className="hidden md:block">
+          <div className="hidden min-w-0 md:block">
             <b className="text-[15px] tracking-tight">Msanii</b>
             <span className="block text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Admin
             </span>
           </div>
-        </div>
+          <ArrowLeft className="ml-auto hidden h-4 w-4 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 md:block" />
+        </Link>
 
         <div className="flex flex-col gap-0.5 px-2">
           {nav.map((n) => (
@@ -153,14 +178,21 @@ const AdminConsole = () => {
           <NavButton icon={ArrowLeft} label="Back to app" onClick={() => navigate("/dashboard")} />
         </div>
 
-        <div className="mt-auto flex items-center gap-2.5 border-t border-border/60 p-3">
-          <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
-            {(user?.email ?? "?").slice(0, 2).toUpperCase()}
-          </div>
-          <div className="hidden min-w-0 md:block">
-            <div className="truncate text-[12.5px] font-semibold leading-tight">{user?.email}</div>
-            <div className="text-[11px] text-muted-foreground">Platform admin</div>
-          </div>
+        <div className="mt-auto border-t border-border/60 p-2">
+          <Link
+            to="/profile"
+            title="Profile & billing"
+            className="flex items-center gap-2.5 rounded-lg p-1.5 hover:bg-muted/70"
+          >
+            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+              {initials(displayName)}
+            </div>
+            <div className="hidden min-w-0 flex-1 md:block">
+              <div className="truncate text-[12.5px] font-semibold leading-tight">{displayName}</div>
+              <div className="text-[11px] text-muted-foreground">Platform admin</div>
+            </div>
+            <ChevronRight className="hidden h-4 w-4 shrink-0 text-muted-foreground md:block" />
+          </Link>
         </div>
       </nav>
 
@@ -234,6 +266,13 @@ const AdminConsole = () => {
     </div>
   );
 };
+
+/** "Yash Khapre" → "YK"; falls back to the first two characters of an email. */
+function initials(name: string): string {
+  const words = name.trim().split(/\s+/);
+  if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
 
 function NavButton({
   icon: Icon,
