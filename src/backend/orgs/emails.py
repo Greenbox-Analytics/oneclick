@@ -27,24 +27,32 @@ def _send(subject: str, html_body: str, recipients: list[str]):
 
 
 def send_org_invite_email(
-    recipient_email: str, org_name: str, inviter_name: str, role: str, existing_user: bool = False
+    recipient_email: str, org_name: str, inviter_name: str, role: str, token: str, existing_user: bool = False
 ):
     frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
     safe_org = html.escape(org_name)
     safe_inviter = html.escape(inviter_name)
     safe_role = html.escape(role)
 
-    # NOTE: /notifications is a ProtectedRoute — a logged-OUT recipient bounces to /auth
-    # (and only returns here if redirect-back is wired). Low impact: the invite is ALSO in-app
-    # via the org's pending-invites list, so once they log in they can find it there regardless.
+    # Both branches link to the token'd claim page (OrgInviteClaim.tsx), which is
+    # a PUBLIC route that self-gates: signed out it offers "Sign in / Create
+    # account" with ?redirect back to itself, signed in it Accepts/Declines and
+    # owns the expired / wrong-email / not-found copy.
+    #
+    # It previously pointed at /notifications (existing user) and /auth (new
+    # user). Both dead-ended: nothing writes an in-app row at invite time, the
+    # org's pending-invites list is admin-only so the INVITEE can never see it,
+    # and — unlike teams' process_pending_team_invites_on_signup — there is no
+    # signup trigger converting a pending_org_invites row, so "you'll be added
+    # automatically" was never true. The token is the only thing that carries
+    # the invite; the link has to hold it.
+    cta_href = f"{frontend_url}/orgs/invite/{token}"
     if existing_user:
-        cta_href = f"{frontend_url}/notifications"
-        cta_label = "Open Msanii to accept"
-        footer = "This invite is waiting in your Msanii notifications — Accept or Decline it there."
+        cta_label = "Review invitation"
+        footer = "Accept or Decline this invite from the link above."
     else:
-        cta_href = f"{frontend_url}/auth"
         cta_label = "Sign Up to Join"
-        footer = "Once you create your account with this email, you'll be added to the organization automatically."
+        footer = "Create your account with this email, then accept the invitation to join."
 
     html_body = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">

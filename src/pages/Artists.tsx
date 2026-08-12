@@ -47,6 +47,7 @@ interface Artist {
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useCanCreate } from "@/hooks/useEntitlements";
+import { useContextScopedArtists } from "@/hooks/useArtistTeam";
 
 const Artists = () => {
   const navigate = useNavigate();
@@ -119,7 +120,12 @@ const Artists = () => {
     setArtistToDelete(null);
   };
 
-  const filteredArtists = artists.filter(artist =>
+  // Scope to the active "Working as" context before searching, so the search
+  // box searches what's on screen. Display only — the backend already refused
+  // anything this user can't reach.
+  const scopedArtists = useContextScopedArtists(artists);
+
+  const filteredArtists = scopedArtists.filter(artist =>
     artist.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 

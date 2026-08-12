@@ -66,12 +66,18 @@ function CapDialog({
   const [useDefault, setUseDefault] = useState(false);
   const setCap = useSetMemberCap();
 
+  // "Use the organization default" is only offered when there IS one. With no
+  // org default the fallback chain ends at uncapped, so that checkbox would
+  // read "(no limit)" — one click to let a single member drain the whole pool.
+  // No default => the admin names a number.
+  const canUseDefault = defaultCap != null;
+
   // Re-seed whenever a different member's dialog opens.
   const seatKey = seat?.orgMemberId ?? "";
   const [seededFor, setSeededFor] = useState("");
   if (open && seatKey && seededFor !== seatKey) {
     setSeededFor(seatKey);
-    setUseDefault(seat?.monthlyCap == null);
+    setUseDefault(canUseDefault && seat?.monthlyCap == null);
     setValue(seat?.monthlyCap != null ? String(seat.monthlyCap) : "");
   }
 
@@ -97,17 +103,18 @@ function CapDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="cap-default"
-              checked={useDefault}
-              onCheckedChange={(v) => setUseDefault(v === true)}
-            />
-            <Label htmlFor="cap-default" className="font-normal">
-              Use the organization default
-              {defaultCap != null ? ` (${defaultCap.toLocaleString()} credits)` : " (no limit)"}
-            </Label>
-          </div>
+          {canUseDefault && (
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="cap-default"
+                checked={useDefault}
+                onCheckedChange={(v) => setUseDefault(v === true)}
+              />
+              <Label htmlFor="cap-default" className="font-normal">
+                Use the organization default ({defaultCap.toLocaleString()} credits)
+              </Label>
+            </div>
+          )}
           {!useDefault && (
             <div className="space-y-1.5">
               <Label htmlFor="cap-amount">Credits per month</Label>

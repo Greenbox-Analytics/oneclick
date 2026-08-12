@@ -110,6 +110,37 @@ def _resolve_user_email(db: Client, user_id: str) -> str | None:
         return None
 
 
+def _member_email(db: Client, member: dict) -> str | None:
+    """Email for an `org_members` row, healing a NULL onto the row once.
+
+    `org_members.email` is captured going forward at invite-accept, so the
+    common case reads it straight off the row with zero auth-admin calls. A NULL
+    (a pre-migration row, or a creator row — the auto_create_org_admin trigger
+    never goes through accept_invite) falls back to `_resolve_user_email` ONCE
+    and is written back, best-effort and deliberately non-raising: a failed heal
+    must never break the read that triggered it. Shared by `get_org` (member-
+    visible admin contacts) and `get_org_usage` (the admin seat rollup).
+    """
+    email = member.get("email")
+    if email:
+        return email
+    email = _resolve_user_email(db, member["user_id"])
+    if email:
+        try:
+            db.table("org_members").update({"email": email}).eq("id", member["id"]).execute()
+        except Exception as exc:
+            print(f"Failed to heal org_members.email for id={member['id']}: {exc}")
+    return email
+
+
+def _org_name(db: Client, org_id: str, default: str) -> str:
+    """The org's display name for user-facing copy, or `default` if it can't be
+    read. Callers differ on the fallback wording ("your organization" when
+    addressing a member, "an organization" when describing one)."""
+    res = db.table("organizations").select("name").eq("id", org_id).maybe_single().execute()
+    return ((res.data or {}) if res else {}).get("name") or default
+
+
 def _default_min_initial_purchase_credits() -> int:
     """Platform default activation floor when an org's own
     min_initial_purchase_credits is NULL (spec §4)."""
@@ -197,6 +228,33 @@ async def get_org(db: Client, user_id: str, org_id: str) -> dict:
     )
     member_count = member_count_res.count or 0
 
+    # Admin contacts, visible to EVERY member (this function is member-gated).
+    # A member's only remedy for a reached cap or a dry pool is "ask an admin",
+    # which isn't actionable if they can't see who that is — and the seat
+    # rollup that carries the rest of the roster (get_org_usage) is admin-only
+    # by design. Deliberately admins only, and deliberately identity + email
+    # only: no caps, no spend, no non-admin members.
+    admin_rows = (
+        db.table("org_members")
+        .select("id, user_id, email")
+        .eq("org_id", org_id)
+        .eq("role", "admin")
+        .eq("status", "active")
+        .execute()
+        .data
+        or []
+    )
+    names: dict[str, str] = {}
+    if admin_rows:
+        profile_rows = (
+            db.table("profiles").select("id, full_name").in_("id", [a["user_id"] for a in admin_rows]).execute().data
+            or []
+        )
+        names = {p["id"]: p["full_name"] for p in profile_rows if p.get("full_name")}
+    admins = [
+        {"userId": a["user_id"], "email": _member_email(db, a), "fullName": names.get(a["user_id"])} for a in admin_rows
+    ]
+
     return {
         **org,
         "my_role": my_role,
@@ -204,6 +262,7 @@ async def get_org(db: Client, user_id: str, org_id: str) -> dict:
         "cumulative_paid_in": cumulative_paid_in,
         "remaining_to_activate": remaining_to_activate,
         "member_count": member_count,
+        "admins": admins,
     }
 
 
@@ -354,16 +413,7 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
         if m.get("status") == "removed" and spent == 0:
             continue
 
-        email = m.get("email")
-        if not email:
-            email = _resolve_user_email(db, m["user_id"])
-            if email:
-                try:
-                    db.table("org_members").update({"email": email}).eq("id", m["id"]).execute()
-                except Exception as exc:
-                    # Non-raising by design (see docstring): a healing write
-                    # failure must never break the usage read.
-                    print(f"Failed to heal org_members.email for id={m['id']}: {exc}")
+        email = _member_email(db, m)
 
         effective_cap = m.get("monthly_cap")
         if effective_cap is None:
@@ -564,6 +614,101 @@ async def accept_invite(db: Client, user_id: str, user_email: str, token: str) -
     db.table("profiles").update({"billing_context_org_id": invite["org_id"]}).eq("id", user_id).execute()
 
     return {"type": "accepted", "org_id": invite["org_id"]}
+
+
+def create_org_invite_notification(
+    db: Client, target_user_id: str, org_id: str, inviter_user_id: str, token: str
+) -> None:
+    """In-app Accept/Decline row for an invited EXISTING user, mirroring
+    teams.service.create_team_invite_notification.
+
+    type='invitation' + entity_type='org' is the pair NotificationRow keys the
+    org Accept/Decline buttons off. Deliberately NOT type='team_invite': that
+    type's buttons call the TEAMS endpoints (useAcceptTeamInvite), so an org row
+    carrying it would accept the wrong invite. 'invitation' is already
+    CHECK-allowed (20260629000004), so this needs no migration — registry's
+    'invitation' rows carry entity_type 'work'/NULL and keep rendering as before.
+
+    `metadata.token` is what the buttons submit, same as the team row.
+    """
+    org_name = _org_name(db, org_id, "an organization")
+    inviter = db.table("profiles").select("full_name").eq("id", inviter_user_id).maybe_single().execute()
+    inviter_name = ((inviter.data or {}) if inviter else {}).get("full_name") or "Someone"
+
+    db.table("notifications").insert(
+        {
+            "user_id": target_user_id,
+            "type": "invitation",
+            "title": f"Invited to {org_name}",
+            "message": f'{inviter_name} invited you to join the organization "{org_name}".',
+            "entity_type": "org",
+            "entity_id": org_id,
+            "metadata": {"org_id": org_id, "token": token},
+        }
+    ).execute()
+
+
+def create_org_join_notifications(db: Client, org_id: str, member_user_id: str, member_email: str) -> None:
+    """In-app notifications for a fresh seat acceptance, on the unified
+    `notifications` table (entity_type='org' — same writer shape as
+    teams.service.create_team_invite_notification).
+
+    Two recipients, because acceptance is the one org event both sides act on:
+      - the new member, whose `billing_context_org_id` accept_invite just
+        repointed at the org — the mirror of the billing-reverted notice
+        offboarding sends on the way OUT (orgs/router._notify_billing_reverted_background)
+      - every ACTIVE admin, who now has a roster change and a cap to consider
+
+    Deliberately NOT type 'team_invite': NotificationRow renders that type's
+    Accept/Decline against the TEAMS endpoints (useAcceptTeamInvite), so an org
+    row carrying it would wire its buttons to the wrong API. These are
+    after-the-fact confirmations with no actions, so 'confirmation' is correct.
+
+    Best-effort and never raises — the seat is already active and committed by
+    the time this runs; a notification failure must not fail the acceptance.
+    """
+    org_name = _org_name(db, org_id, "your organization")
+
+    rows = [
+        {
+            "user_id": member_user_id,
+            "type": "confirmation",
+            "title": f"You joined {org_name}",
+            "message": (
+                f"Your Msanii usage now bills to {org_name}'s shared credit pool. "
+                "You can switch back to personal billing from your Profile."
+            ),
+            "entity_type": "org",
+            "entity_id": org_id,
+            "metadata": {"org_id": org_id},
+        }
+    ]
+
+    admins = (
+        db.table("org_members")
+        .select("user_id")
+        .eq("org_id", org_id)
+        .eq("role", "admin")
+        .eq("status", "active")
+        .execute()
+        .data
+        or []
+    )
+    rows += [
+        {
+            "user_id": a["user_id"],
+            "type": "confirmation",
+            "title": "Invite accepted",
+            "message": f"{member_email} joined {org_name}.",
+            "entity_type": "org",
+            "entity_id": org_id,
+            "metadata": {"org_id": org_id, "member_user_id": member_user_id},
+        }
+        for a in admins
+        if a.get("user_id") and a["user_id"] != member_user_id
+    ]
+
+    db.table("notifications").insert(rows).execute()
 
 
 async def decline_invite(db: Client, user_id: str, user_email: str, token: str) -> dict:

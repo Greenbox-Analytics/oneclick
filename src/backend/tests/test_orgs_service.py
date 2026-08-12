@@ -177,24 +177,22 @@ async def test_get_org_computes_remaining_to_activate_with_partial_purchase(monk
     monkeypatch.setattr(service.authz, "is_org_member", lambda *a: True)
     monkeypatch.delenv("ENTERPRISE_MIN_INITIAL_CREDITS", raising=False)
 
-    def _side(name):
-        b = MockQueryBuilder()
-        if name == "organizations":
-            b.execute.return_value = MagicMock(
-                data={"id": ORG, "status": "pending", "min_initial_purchase_credits": None}, count=1
-            )
-        elif name == "org_members":
-            b.execute.return_value = MagicMock(data={"role": "admin"}, count=1)
-        elif name == "credit_wallets":
-            b.execute.return_value = MagicMock(
-                data=[{"id": "w1", "bundle_balance": 0, "reserve_balance": 4000}], count=1
-            )
-        elif name == "credit_ledger":
-            b.execute.return_value = MagicMock(data=[{"delta": 4000}], count=1)
-        return b
-
-    db = MagicMock()
-    db.table.side_effect = _side
+    # get_org reads org_members three times, in order: my_role, member_count,
+    # then the member-visible admin contacts.
+    db = _db_seq(
+        {
+            "organizations": [
+                MagicMock(data={"id": ORG, "status": "pending", "min_initial_purchase_credits": None}, count=1)
+            ],
+            "org_members": [
+                MagicMock(data={"role": "admin"}, count=1),
+                MagicMock(data=[], count=1),
+                MagicMock(data=[], count=0),
+            ],
+            "credit_wallets": [MagicMock(data=[{"id": "w1", "bundle_balance": 0, "reserve_balance": 4000}], count=1)],
+            "credit_ledger": [MagicMock(data=[{"delta": 4000}], count=1)],
+        }
+    )
     result = await service.get_org(db, U1, ORG)
     assert result["cumulative_paid_in"] == 4000
     assert result["pool_balance"] == 4000
@@ -228,24 +226,52 @@ async def test_get_org_uses_org_specific_minimum_over_env_default(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_member", lambda *a: True)
     monkeypatch.setenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000")
 
-    def _side(name):
-        b = MockQueryBuilder()
-        if name == "organizations":
-            b.execute.return_value = MagicMock(
-                data={"id": ORG, "status": "pending", "min_initial_purchase_credits": 2000}, count=1
-            )
-        elif name == "org_members":
-            b.execute.return_value = MagicMock(data={"role": "member"}, count=1)
-        elif name == "credit_wallets":
-            b.execute.return_value = MagicMock(data=[], count=0)
-        return b
-
-    db = MagicMock()
-    db.table.side_effect = _side
+    db = _db_seq(
+        {
+            "organizations": [
+                MagicMock(data={"id": ORG, "status": "pending", "min_initial_purchase_credits": 2000}, count=1)
+            ],
+            "org_members": [
+                MagicMock(data={"role": "member"}, count=1),
+                MagicMock(data=[], count=1),
+                MagicMock(data=[], count=0),
+            ],
+            "credit_wallets": [MagicMock(data=[], count=0)],
+        }
+    )
     result = await service.get_org(db, U1, ORG)
     assert result["pool_balance"] == 0
     assert result["cumulative_paid_in"] == 0
     assert result["remaining_to_activate"] == 2000
+
+
+async def test_get_org_returns_admin_contacts_to_a_plain_member(monkeypatch):
+    """A member's only remedy for a reached cap or a dry pool is "ask an admin",
+    so get_org (member-gated) names them. Admins only — the rest of the roster
+    and every cap/spend figure stay in the admin-only /usage rollup."""
+    monkeypatch.setattr(service.authz, "is_org_member", lambda *a: True)
+
+    db = _db_seq(
+        {
+            "organizations": [
+                MagicMock(data={"id": ORG, "status": "active", "min_initial_purchase_credits": None}, count=1)
+            ],
+            "org_members": [
+                MagicMock(data={"role": "member"}, count=1),  # caller is NOT an admin
+                MagicMock(data=[], count=8),  # member_count
+                MagicMock(data=[{"id": MEMBER, "user_id": U2, "email": "boss@acme.com"}], count=1),
+            ],
+            "credit_wallets": [MagicMock(data=[], count=0)],
+            "profiles": [MagicMock(data=[{"id": U2, "full_name": "Boss Person"}], count=1)],
+        }
+    )
+    result = await service.get_org(db, U1, ORG)
+
+    assert result["my_role"] == "member"
+    assert result["member_count"] == 8
+    assert result["admins"] == [{"userId": U2, "email": "boss@acme.com", "fullName": "Boss Person"}]
+    # Email was on the row, so no auth-admin lookup was needed to resolve it.
+    db.auth.admin.get_user_by_id.assert_not_called()
 
 
 async def test_get_org_zero_balance_when_no_wallet(monkeypatch):
@@ -1263,3 +1289,122 @@ async def test_archive_org_needs_no_balance_precondition(monkeypatch):
     assert result["archived_at"]
     # No credit_wallets read at all — there are no member balances to verify.
     assert not any(c.args[0] == "credit_wallets" for c in db.table.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# create_org_join_notifications
+# ---------------------------------------------------------------------------
+
+
+def test_join_notifications_go_to_the_member_and_every_other_admin():
+    """Acceptance is the one org event both sides act on: the member learns
+    their billing moved to the pool, admins learn the roster changed."""
+    captured = {}
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data={"name": "Acme"}, count=1)
+        elif name == "org_members":
+            b.execute.return_value = MagicMock(data=[{"user_id": U1}, {"user_id": U2}], count=2)
+        elif name == "notifications":
+            original = b.insert
+
+            def _capture(payload, *a, **kw):
+                captured["rows"] = payload
+                return original(payload, *a, **kw)
+
+            b.insert = _capture
+        return b
+
+    db = MagicMock()
+    db.table.side_effect = _side
+    service.create_org_join_notifications(db, ORG, U2, "new@acme.com")
+
+    rows = captured["rows"]
+    # U2 is BOTH the accepting member and an admin — they get the member notice
+    # only, never a duplicate "someone joined" about themselves.
+    assert [r["user_id"] for r in rows] == [U2, U1]
+    assert rows[0]["title"] == "You joined Acme"
+    assert "shared credit pool" in rows[0]["message"]
+    assert rows[1]["message"] == "new@acme.com joined Acme."
+    # 'team_invite' would wire NotificationRow's Accept/Decline at the TEAMS API.
+    assert {r["type"] for r in rows} == {"confirmation"}
+    assert {r["entity_type"] for r in rows} == {"org"}
+    assert {r["entity_id"] for r in rows} == {ORG}
+
+
+def test_join_notification_falls_back_when_org_name_missing():
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data=None, count=0)
+        return b
+
+    db = MagicMock()
+    db.table.side_effect = _side
+    service.create_org_join_notifications(db, ORG, U2, "new@acme.com")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Invite delivery: the emailed link and the in-app row must both carry the token
+# ---------------------------------------------------------------------------
+
+
+def test_invite_email_links_to_the_tokened_claim_page(monkeypatch):
+    """The token is the ONLY thing that carries the invite. /notifications and
+    /auth both dead-ended (no in-app row existed at invite time, the pending
+    list is admin-only, and there is no signup trigger for org invites the way
+    teams has process_pending_team_invites_on_signup)."""
+    from orgs import emails
+
+    monkeypatch.setenv("VITE_FRONTEND_URL", "https://app.msanii.test")
+    sent = {}
+    monkeypatch.setattr(emails, "_send", lambda **kw: sent.update(kw))
+
+    for existing_user in (True, False):
+        sent.clear()
+        emails.send_org_invite_email(
+            recipient_email="new@acme.com",
+            org_name="Acme",
+            inviter_name="Alice",
+            role="member",
+            token=TOKEN,
+            existing_user=existing_user,
+        )
+        assert f"https://app.msanii.test/orgs/invite/{TOKEN}" in sent["html_body"]
+        assert "/notifications" not in sent["html_body"]
+
+
+def test_invite_notification_is_an_org_invitation_not_a_team_one():
+    """type='team_invite' would point NotificationRow's Accept at the TEAMS
+    endpoint — the org row must be invitation + entity_type='org'."""
+    captured = {}
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "organizations":
+            b.execute.return_value = MagicMock(data={"name": "Acme"}, count=1)
+        elif name == "profiles":
+            b.execute.return_value = MagicMock(data={"full_name": "Alice"}, count=1)
+        elif name == "notifications":
+            original = b.insert
+
+            def _capture(payload, *a, **kw):
+                captured["row"] = payload
+                return original(payload, *a, **kw)
+
+            b.insert = _capture
+        return b
+
+    db = MagicMock()
+    db.table.side_effect = _side
+    service.create_org_invite_notification(db, U2, ORG, U1, TOKEN)
+
+    row = captured["row"]
+    assert row["type"] == "invitation"
+    assert row["entity_type"] == "org"
+    assert row["user_id"] == U2
+    assert row["metadata"]["token"] == TOKEN
+    assert row["title"] == "Invited to Acme"
+    assert "Alice" in row["message"]

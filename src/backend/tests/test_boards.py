@@ -223,6 +223,14 @@ def _authz_board_builder(name):
         return _builder([{"id": BOARD_ID, "team_id": None, "owner_id": TEST_USER_ID, "archived": False}])
     if name == "team_members":
         return _builder([])
+    if name == "org_members":
+        # artist_access.live_org_ids (reached via _owned_artist_ids /
+        # _accessible_project_ids) reads seats before deciding artist
+        # visibility. These tests all exercise PERSONAL boards and artists, so
+        # answer "no active seats" here rather than letting the read consume a
+        # slot in every test's positional table() sequence. An empty result
+        # short-circuits before `organizations` is ever queried.
+        return _builder([])
     return None
 
 

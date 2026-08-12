@@ -63,7 +63,7 @@ def _get_supabase():
 
 
 def _send_org_invite_email_background(
-    db_url: str, db_key: str, org_id: str, user_id: str, email: str, role: str, existing_user: bool = False
+    db_url: str, db_key: str, org_id: str, user_id: str, email: str, role: str, token: str, existing_user: bool = False
 ):
     """Runs on a FastAPI BackgroundTask — its own service-role client, not
     the request's (mirrors teams.router._send_team_invite_email_background)."""
@@ -80,6 +80,7 @@ def _send_org_invite_email_background(
             org_name=org.data["name"] if org.data else "an organization",
             inviter_name=(inviter.data or {}).get("full_name", "Someone"),
             role=role,
+            token=token,
             existing_user=existing_user,
         )
     except Exception as exc:
@@ -212,8 +213,7 @@ def _notify_billing_reverted_background(
 
     db = create_client(db_url, db_key)
     try:
-        org = db.table("organizations").select("name").eq("id", org_id).single().execute()
-        org_name = org.data["name"] if org.data else "your organization"
+        org_name = service._org_name(db, org_id, "your organization")
 
         query = db.table("org_members").select("user_id, email").eq("org_id", org_id)
         if member_user_ids is None:
@@ -304,6 +304,12 @@ async def accept_org_invite(
     # duplicate-gating discipline as topup_purchased etc.
     if result.get("type") == "accepted":
         analytics_capture(user_id, "org_license_accepted", {"org_id": result.get("org_id")})
+        try:
+            service.create_org_join_notifications(_get_supabase(), result["org_id"], user_id, email)
+        except Exception as exc:
+            # The seat is already active — never fail an accepted invite over a
+            # notification write.
+            print(f"Failed to create org join notifications for {user_id}: {exc}")
     return result
 
 
@@ -472,7 +478,19 @@ async def invite_member(
         raise HTTPException(status_code=400, detail=str(e))
 
     analytics_capture(user_id, "org_license_invited", {"org_id": org_id, "role": body.role})
+    invite = result.get("invite") or {}
+    token = invite.get("token")
     existing_user = bool(result.get("notify_user_id"))
+
+    # Existing user -> also drop an in-app Accept/Decline row, same as teams
+    # (teams/router.py invite_member). A brand-new invitee has no account to
+    # notify, so for them the emailed claim link is the whole path in.
+    if existing_user and token:
+        try:
+            service.create_org_invite_notification(db, result["notify_user_id"], org_id, user_id, token)
+        except Exception as exc:
+            print(f"Failed to create org invite notification: {exc}")
+
     background_tasks.add_task(
         _send_org_invite_email_background,
         db_url=os.getenv("VITE_SUPABASE_URL"),
@@ -481,6 +499,7 @@ async def invite_member(
         user_id=user_id,
         email=body.email,
         role=body.role,
+        token=token,
         existing_user=existing_user,
     )
     return result

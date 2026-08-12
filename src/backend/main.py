@@ -22,6 +22,7 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+import artist_access
 from analytics import capture as analytics_capture
 from analytics import init_analytics
 from auth import get_current_user_email, get_current_user_id
@@ -231,26 +232,27 @@ from subscriptions.service import credits_enabled
 
 
 def verify_user_owns_artist(user_id: str, artist_id: str) -> bool:
-    """Verify the artist belongs to the user."""
-    res = get_supabase_client().table("artists").select("id").eq("id", artist_id).eq("user_id", user_id).execute()
-    return bool(res.data)
+    """Verify the user may reach this artist — personally or through their org."""
+    return artist_access.can_access_artist(get_supabase_client(), user_id, artist_id)
 
 
 def get_user_artist_ids(user_id: str) -> list:
-    """Get all artist IDs belonging to a user."""
-    res = get_supabase_client().table("artists").select("id").eq("user_id", user_id).execute()
-    return [a["id"] for a in (res.data or [])]
+    """Every artist ID the user may reach, personal and team-owned alike."""
+    return artist_access.accessible_artist_ids(get_supabase_client(), user_id)
 
 
 def verify_user_owns_project(user_id: str, project_id: str) -> bool:
-    """Verify the project belongs to one of the user's artists."""
-    artist_ids = get_user_artist_ids(user_id)
-    if not artist_ids:
+    """Verify the project's ARTIST is reachable by the user.
+
+    Resolves the one artist that matters instead of listing every accessible
+    artist id and filtering on it — same answer, and it doesn't build an
+    unbounded IN list for a member of a large org.
+    """
+    res = get_supabase_client().table("projects").select("artist_id").eq("id", project_id).execute()
+    if not res.data:
         return False
-    res = (
-        get_supabase_client().table("projects").select("id").eq("id", project_id).in_("artist_id", artist_ids).execute()
-    )
-    return bool(res.data)
+    artist_id = res.data[0].get("artist_id")
+    return bool(artist_id) and verify_user_owns_artist(user_id, artist_id)
 
 
 def verify_user_owns_contract(user_id: str, contract_id: str) -> bool:
@@ -786,10 +788,13 @@ async def get_artists(
     page_size: int = Query(50, ge=1, le=100),
 ):
     """
-    Fetch artists belonging to the authenticated user.
+    Fetch artists the authenticated user can reach — their own, plus every
+    artist owned by an org they hold an active seat in (this is what renders
+    Portfolio, so a team artist invisible here is invisible to the member).
     """
     try:
-        query = get_supabase_client().table("artists").select("*", count="exact").eq("user_id", user_id)
+        sb = get_supabase_client()
+        query = artist_access.visible_artists(sb, user_id, sb.table("artists").select("*", count="exact"))
         return paginate_query(query, page, page_size)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1247,7 +1252,9 @@ async def get_zoe_context_tree(user_id: str = Depends(get_current_user_id)):
     selector. Lightweight — counts only; documents (with page counts) are fetched per checked project."""
     try:
         db = get_supabase_client()
-        artists = db.table("artists").select("id, name").eq("user_id", user_id).execute().data or []
+        artists = (
+            artist_access.visible_artists(db, user_id, db.table("artists").select("id, name")).execute().data or []
+        )
         artist_ids = [a["id"] for a in artists]
         projects = []
         doc_count_by_project: dict[str, int] = {}

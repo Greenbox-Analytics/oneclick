@@ -3,11 +3,14 @@ import { useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useContextScopedArtists } from "@/hooks/useArtistTeam";
 
 export interface ArtistInfo {
   id: string;
   name: string;
   avatar?: string;
+  /** NULL = personal, otherwise the owning org — drives context scoping. */
+  team_id?: string | null;
 }
 
 export interface ProjectCard {
@@ -51,19 +54,26 @@ export function usePortfolioData(filters: PortfolioFilters) {
           id: a.id as string,
           name: a.name as string,
           avatar: (a.avatar_url as string) || (a.avatar as string) || undefined,
+          team_id: (a.team_id as string | null) ?? null,
         })
       );
     },
     enabled: !!user?.id,
   });
 
+  // Scope to the active "Working as" context. Applied HERE rather than in the
+  // page so projects follow their artists — query 2 keys off `artistIds`, so a
+  // scoped-out artist takes its projects with it instead of leaving them
+  // stranded under a context that no longer shows their owner.
+  const scopedArtists = useContextScopedArtists(artistsQuery.data);
+
   const artistMap = useMemo(() => {
     const map = new Map<string, ArtistInfo>();
-    for (const a of artistsQuery.data || []) map.set(a.id, a);
+    for (const a of scopedArtists) map.set(a.id, a);
     return map;
-  }, [artistsQuery.data]);
+  }, [scopedArtists]);
 
-  const artistIds = useMemo(() => (artistsQuery.data || []).map(a => a.id), [artistsQuery.data]);
+  const artistIds = useMemo(() => scopedArtists.map(a => a.id), [scopedArtists]);
 
   // Query 2: Fetch projects for user's artists
   const projectsQuery = useQuery({
@@ -343,7 +353,7 @@ export function usePortfolioData(filters: PortfolioFilters) {
   return {
     myProjects,
     sharedProjects,
-    allArtists: artistsQuery.data || [],
+    allArtists: scopedArtists,
     isLoading: artistsQuery.isLoading || projectsQuery.isLoading,
     refetchProjects: projectsQuery.refetch,
   };

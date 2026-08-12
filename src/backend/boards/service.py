@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 
 from supabase import Client
 
+import artist_access
 from boards import calendar_import, ics
 from confirm import ConfirmationError, normalize_name
 from integrations import events
@@ -45,10 +46,11 @@ def _merge_junction(
 
 
 def _owned_artist_ids(db: Client, user_id: str, ids: list[str]) -> list[str]:
-    """Return only the ids from `ids` that belong to the calling user."""
+    """Return only the ids from `ids` the calling user can reach — their own
+    artists AND their org's (artist_access mirrors the SQL can_access_artist)."""
     if not ids:
         return []
-    rows = db.table("artists").select("id").in_("id", ids).eq("user_id", user_id).execute()
+    rows = artist_access.visible_artists(db, user_id, db.table("artists").select("id").in_("id", ids)).execute()
     return [r["id"] for r in (rows.data or [])]
 
 
@@ -58,9 +60,8 @@ def _accessible_project_ids(db: Client, user_id: str, ids: list[str]) -> list[st
         return []
     allowed: set[str] = set()
 
-    # Projects belonging to the user's own artists
-    art = db.table("artists").select("id").eq("user_id", user_id).execute()
-    my_artist_ids = [a["id"] for a in (art.data or [])]
+    # Projects belonging to artists the user can reach (own + org-owned)
+    my_artist_ids = artist_access.accessible_artist_ids(db, user_id)
     if my_artist_ids:
         owned = db.table("projects").select("id").in_("id", ids).in_("artist_id", my_artist_ids).execute()
         allowed.update(p["id"] for p in (owned.data or []))

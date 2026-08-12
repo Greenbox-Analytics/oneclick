@@ -1,9 +1,11 @@
 // src/hooks/useArtistTeam.ts
 // Artist ownership: which team owns an artist, and moving one into a team.
+import { useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useEntitlements } from "@/hooks/useEntitlements";
+import { useBillingContextSwitcher } from "@/hooks/useBillingContext";
 
 /**
  * The org whose billing context is active, or null when billing is personal.
@@ -17,6 +19,37 @@ export function useActiveTeam(): { orgId: string; orgName: string } | null {
   const { data: ent } = useEntitlements();
   const ctx = ent?.billingContext;
   return ctx && ctx.type === "org" ? { orgId: ctx.orgId, orgName: ctx.orgName } : null;
+}
+
+/**
+ * Scope artists to the ACTIVE billing context: personal shows `team_id === null`,
+ * an org shows only that org's. Display only — access is decided server-side by
+ * artist_access (the mirror of SQL can_access_artist) and is never softened here.
+ */
+export function scopeArtistsToContext<T extends { team_id?: string | null }>(
+  artists: T[],
+  scopeId: string | null,
+  canSwitch: boolean,
+): T[] {
+  // Nothing to switch between => never hide anything. The rollback guard: with
+  // LICENSING_ENABLED off the header pill doesn't render, and filtering to
+  // `team_id === null` there would strand every already-transferred artist
+  // behind a control that no longer exists.
+  if (!canSwitch) return artists;
+  return artists.filter((a) => (a.team_id ?? null) === scopeId);
+}
+
+export function useContextScopedArtists<T extends { team_id?: string | null }>(
+  artists: T[] | undefined,
+): T[] {
+  const activeTeam = useActiveTeam();
+  const { canSwitch } = useBillingContextSwitcher();
+  const scopeId = activeTeam?.orgId ?? null;
+
+  return useMemo(
+    () => scopeArtistsToContext(artists ?? [], scopeId, canSwitch),
+    [artists, canSwitch, scopeId],
+  );
 }
 
 export function useTransferArtistToTeam() {

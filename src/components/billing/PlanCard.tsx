@@ -134,10 +134,15 @@ export function PlanCard() {
         <div>
           <div className="flex gap-2.5 flex-wrap">
             {isPaid ? (
-              <Button variant="outline" size="sm" onClick={openPortal} disabled={isOpeningPortal}>
-                {isOpeningPortal && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Manage subscription
-              </Button>
+              // No Stripe subscription = admin grant, so there is no portal to
+              // open — create-portal-session 404s without a stripe_customer_id.
+              // The adminGranted note below is the whole story for these users.
+              !adminGranted && (
+                <Button variant="outline" size="sm" onClick={openPortal} disabled={isOpeningPortal}>
+                  {isOpeningPortal && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Manage subscription
+                </Button>
+              )
             ) : (
               <Button size="sm" onClick={() => navigate("/pricing")}>
                 Upgrade

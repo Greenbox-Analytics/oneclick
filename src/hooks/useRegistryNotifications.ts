@@ -7,6 +7,9 @@ export interface RegistryNotification {
   user_id: string;
   work_id: string | null;
   type: string;
+  /** Polymorphic target since 20260629000004 — 'work' | 'team' | 'org' | null.
+   * Pairs with `type` to disambiguate: an org invite is invitation + 'org'. */
+  entity_type?: string | null;
   title: string;
   message: string;
   read: boolean;

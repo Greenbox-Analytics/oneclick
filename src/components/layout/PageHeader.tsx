@@ -9,6 +9,7 @@ import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { HeaderCreditsTicker } from "@/components/billing/HeaderCreditsTicker";
+import { HeaderContextSwitcher } from "@/components/billing/HeaderContextSwitcher";
 import { cn } from "@/lib/utils";
 
 interface PageHeaderProps {
@@ -20,7 +21,7 @@ interface PageHeaderProps {
   actions?: ReactNode;
   /** The user/profile dropdown — rendered LAST. Use this slot (instead of
    * stuffing the profile menu into `actions`) so the order stays consistent:
-   * actions → credits → home → docs → notifications → profile. */
+   * actions → context → credits → home → docs → notifications → profile. */
   userMenu?: ReactNode;
   showLogo?: boolean;
   showBack?: boolean;
@@ -57,6 +58,9 @@ export function PageHeader({
   ) : null;
 
   const creditsTicker = user ? <HeaderCreditsTicker /> : null;
+
+  // Renders nothing unless the user actually has more than one context.
+  const contextSwitcher = user ? <HeaderContextSwitcher /> : null;
 
   const docsButton = user ? <HeaderDocsButton /> : null;
 
@@ -99,6 +103,7 @@ export function PageHeader({
           {(actions || homeButton || notificationBell || userMenu) && (
             <div className="flex items-center gap-1 shrink-0">
               {actions}
+              {contextSwitcher}
               {creditsTicker}
               {homeButton}
               {docsButton}
@@ -149,6 +154,7 @@ export function PageHeader({
         {(actions || homeButton || notificationBell || userMenu) && (
           <div className="flex items-center gap-2 shrink-0">
             {actions}
+            {contextSwitcher}
             {creditsTicker}
             {homeButton}
             {docsButton}

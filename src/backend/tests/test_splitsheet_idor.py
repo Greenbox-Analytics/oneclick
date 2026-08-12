@@ -167,7 +167,7 @@ class TestSplitSheetSaveToArtistIDOR:
             if name == "artists":
                 b.execute.return_value = MagicMock(data=[{"id": OWN_ARTIST_ID}])
             elif name == "projects":
-                b.execute.return_value = MagicMock(data=[{"id": OWN_PROJECT_ID}])
+                b.execute.return_value = MagicMock(data=[{"id": OWN_PROJECT_ID, "artist_id": OWN_ARTIST_ID}])
             elif name == "project_files":
                 b.execute.return_value = MagicMock(data=[{"id": "pf-001"}])
             elif name == "usage_counters":

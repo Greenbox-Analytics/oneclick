@@ -51,8 +51,8 @@ def _make_project_ownership_router(
     """Return a table side_effect for endpoints that call verify_user_owns_project.
 
     Call sequence for verify_user_owns_project:
-      1. artists  (get_user_artist_ids)
-      2. projects (check project belongs to those artists)
+      1. projects (resolve the project's artist_id)
+      2. artists  (is that artist reachable — personally or via the user's org)
     Followed by:
       3. project_files (the actual query)
 
@@ -61,7 +61,7 @@ def _make_project_ownership_router(
     if artists_data is None:
         artists_data = [{"id": ARTIST_ID}]
     if projects_data is None:
-        projects_data = [{"id": PROJECT_ID}]
+        projects_data = [{"id": PROJECT_ID, "artist_id": ARTIST_ID}]
     if project_files_data is None:
         project_files_data = []
 
@@ -94,7 +94,7 @@ def _make_artist_ownership_router(
     if artists_data is None:
         artists_data = [{"id": ARTIST_ID}]
     if projects_data is None:
-        projects_data = [{"id": PROJECT_ID}]
+        projects_data = [{"id": PROJECT_ID, "artist_id": ARTIST_ID}]
     if project_files_data is None:
         project_files_data = []
 
@@ -423,7 +423,7 @@ class TestDeleteContract:
         if artists_data is None:
             artists_data = [{"id": ARTIST_ID}]
         if projects_data is None:
-            projects_data = [{"id": PROJECT_ID}]
+            projects_data = [{"id": PROJECT_ID, "artist_id": ARTIST_ID}]
         if contract_detail_data is None:
             contract_detail_data = [CONTRACT_RECORD]
 
@@ -544,7 +544,7 @@ class TestUploadGated:
                 return b
             if name == "projects":
                 b = MockQueryBuilder()
-                b.execute.return_value = MagicMock(data=[{"id": PROJECT_ID}], count=1)
+                b.execute.return_value = MagicMock(data=[{"id": PROJECT_ID, "artist_id": ARTIST_ID}], count=1)
                 return b
             return _default_table_side_effect(name)
 

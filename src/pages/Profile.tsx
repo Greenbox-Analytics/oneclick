@@ -24,9 +24,7 @@ import { PlanCard } from "@/components/billing/PlanCard";
 import { CreditsUsageCard } from "@/components/billing/CreditsUsageCard";
 import { ResourceLimitsCard } from "@/components/billing/ResourceLimitsCard";
 import { IntegrationsCard } from "@/components/billing/IntegrationsCard";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useEntitlements, type BillingContextOption } from "@/hooks/useEntitlements";
-import { useSetBillingContext } from "@/hooks/useBillingContext";
+import { useEntitlements } from "@/hooks/useEntitlements";
 import { useAnalytics, type Plan } from "@/hooks/useAnalytics";
 import { peekCachedAnalyticsContext, refreshAnalyticsContext } from "@/hooks/useAnalyticsContext";
 import { useArtistsList } from "@/hooks/useArtistsList";
@@ -145,24 +143,7 @@ const Profile = () => {
 
   const displayName = formData.given_name || formData.first_name || user?.email?.split("@")[0] || "";
 
-  // Billing context switcher (Licensing Phase B, spec §5) — "Working as:
-  // Personal / ⟨Org⟩". Only rendered when the caller has more than one
-  // context to choose from (availableContexts is absent/personal-only for
-  // everyone else, including licensing-off).
   const { data: ent } = useEntitlements();
-  const setBillingContext = useSetBillingContext();
-  const availableContexts = ent?.availableContexts ?? [];
-  const orgContexts = availableContexts.filter(
-    (c): c is Extract<BillingContextOption, { type: "org" }> => c.type === "org",
-  );
-  const showContextSwitcher = availableContexts.length > 1;
-  // Key the switcher's current value off billingContext (present regardless
-  // of CREDITS_ENABLED — Licensing follow-ups Task 3), falling back to
-  // credits.managedByOrg for safety.
-  const billingContextValue =
-    (ent?.billingContext?.type === "org" ? ent.billingContext.orgId : undefined) ??
-    ent?.credits?.managedByOrg?.orgId ??
-    "personal";
 
   // ---- Ported from the retired /subscription page (merged into Profile) ----
 
@@ -245,35 +226,6 @@ const Profile = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [welcome, stripeSessionId, isPaid]);
-
-  const handleBillingContextChange = (value: string) => {
-    const orgId = value === "personal" ? null : value;
-    const target = orgId ? orgContexts.find((o) => o.orgId === orgId) : null;
-    setBillingContext.mutate(
-      { orgId },
-      {
-        onSuccess: () => {
-          if (!orgId) {
-            toast({ title: "Switched to Personal", description: "Your personal plan and credits apply again." });
-          } else if (target?.pending) {
-            toast({
-              title: "Saved",
-              description: `${target.orgName} is still activating — billing switches over once it's active.`,
-            });
-          } else {
-            toast({ title: "Switched", description: `Now working as ${target?.orgName ?? "your organization"}.` });
-          }
-        },
-        onError: () => {
-          toast({
-            title: "Couldn't switch",
-            description: "We couldn't update your billing context. Please try again.",
-            variant: "destructive",
-          });
-        },
-      },
-    );
-  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -468,38 +420,6 @@ const Profile = () => {
               </div>
             </Card>
           </div>
-
-          {/* Working as — billing context switcher (Licensing Phase B, spec §5) */}
-          {showContextSwitcher && (
-            <Card className="p-5">
-              <div className="flex items-center justify-between gap-4 flex-wrap">
-                <div>
-                  <div className="text-sm font-semibold">Working as</div>
-                  <div className="text-[12.5px] text-muted-foreground mt-0.5">
-                    Whose credits and billing apply to your account right now
-                  </div>
-                </div>
-                <Select
-                  value={billingContextValue}
-                  onValueChange={handleBillingContextChange}
-                  disabled={setBillingContext.isPending}
-                >
-                  <SelectTrigger className="w-[220px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="personal">Personal</SelectItem>
-                    {orgContexts.map((o) => (
-                      <SelectItem key={o.orgId} value={o.orgId}>
-                        {o.orgName}
-                        {o.pending ? " (activating soon)" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </Card>
-          )}
 
           {/* Plan */}
           <PlanCard />

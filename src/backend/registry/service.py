@@ -6,6 +6,7 @@ from datetime import UTC
 
 from supabase import Client
 
+import artist_access
 from analytics import capture as analytics_capture
 from pagination import PaginatedResponse, paginate_query
 from registry.access import get_work_access
@@ -88,10 +89,11 @@ async def get_work(db: Client, user_id: str, work_id: str):
 
 
 async def create_work(db: Client, user_id: str, data: dict):
-    # Verify the artist belongs to this user before allowing work creation
-    artist = db.table("artists").select("id").eq("id", data.get("artist_id")).eq("user_id", user_id).single().execute()
-    if not artist.data:
-        return None  # artist_id doesn't belong to this user
+    # Verify the caller can reach the artist before allowing work creation —
+    # team members create works on their org's artists, creators who handed one
+    # over no longer can.
+    if not artist_access.can_access_artist(db, user_id, data.get("artist_id")):
+        return None  # artist_id isn't reachable by this user
     data["user_id"] = user_id
     result = db.table("works_registry").insert(data).execute()
     return result.data[0] if result.data else None
@@ -1125,7 +1127,14 @@ async def auto_verify_artist(db: Client, manager_user_id: str, email: str, colla
 
 async def get_artists_with_teamcards(db: Client, user_id: str):
     """Batch fetch: all artists for a user with TeamCard overlays in 2 queries (not N+1)."""
-    artists_result = db.table("artists").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
+    # Team artists belong in this roster too — .eq("user_id") alone is the
+    # CREATOR column, which both hides a transferred artist from the colleagues
+    # who should see it and keeps showing it to an offboarded creator.
+    artists_result = (
+        artist_access.visible_artists(db, user_id, db.table("artists").select("*"))
+        .order("created_at", desc=True)
+        .execute()
+    )
     artists = artists_result.data or []
     if not artists:
         return []

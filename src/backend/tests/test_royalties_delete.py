@@ -506,7 +506,9 @@ def _make_contract_delete_router(call_order):
         if name == "artists":
             builder.execute.return_value = MagicMock(data=[{"id": ARTIST_ID}], count=1)
         elif name == "projects":
-            builder.execute.return_value = MagicMock(data=[{"id": PROJECT_ID}], count=1)
+            # artist_id: verify_user_owns_project resolves it, then asks whether
+            # that artist is reachable (personally or through the caller's org).
+            builder.execute.return_value = MagicMock(data=[{"id": PROJECT_ID, "artist_id": ARTIST_ID}], count=1)
         elif name == "project_files":
             call_num = state["project_files_call"]
             state["project_files_call"] += 1

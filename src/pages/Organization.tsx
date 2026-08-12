@@ -9,7 +9,7 @@
 // while the flag is off simply surfaces the backend's 404 as a toast, same
 // as any other disabled-feature attempt.
 import { useState } from "react";
-import { Building2, Loader2, Send } from "lucide-react";
+import { Building2, Loader2, Mail, Send } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/card";
@@ -227,6 +227,10 @@ function MemberPanel({ org }: { org: OrgSummary }) {
   const { data: ent } = useEntitlements();
   const { data: usage } = useCreditUsage();
   const { data: myRequests, isLoading: requestsLoading } = useOrgCreditRequests(org.id);
+  // The org list (GET /orgs) carries no admins or member count — GET /orgs/{id}
+  // does, and is member-gated, so members can read it too.
+  const { data: detail } = useOrg(org.id);
+  const admins = detail?.admins ?? [];
 
   // billingContext is the canonical org-context signal (present even when
   // CREDITS_ENABLED is off); credits.managedByOrg is the back-compat fallback.
@@ -245,8 +249,34 @@ function MemberPanel({ org }: { org: OrgSummary }) {
       <Card className="p-6">
         <div className="text-[15px] font-semibold">Your access</div>
         <div className="text-[13.5px] text-muted-foreground mt-0.5">
-          You&apos;re a member of {org.name} — an admin manages invites and credit limits
+          You&apos;re a member of {org.name}
+          {detail?.member_count ? ` · ${detail.member_count} member${detail.member_count === 1 ? "" : "s"}` : ""} — an
+          admin manages invites and credit limits
         </div>
+
+        {admins.length > 0 && (
+          <div className="mt-4">
+            <div className="text-[11px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 mb-2">
+              {admins.length === 1 ? "Your admin" : "Your admins"}
+            </div>
+            <div className="space-y-1.5">
+              {admins.map((a) => (
+                <div key={a.userId} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate">{a.fullName || a.email || "Admin"}</span>
+                  {a.email && (
+                    <a
+                      href={`mailto:${a.email}`}
+                      className="flex-none inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground underline underline-offset-2"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      {a.email}
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {org.my_status === "suspended" && (
           <div className="mt-4 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3.5 text-[13px] text-amber-700 dark:text-amber-400">

@@ -50,6 +50,16 @@ export interface OrgDetail extends OrgSummary {
   cumulative_paid_in: number;
   remaining_to_activate: number;
   member_count: number;
+  /** Active admins, visible to every member — their only remedy for a reached
+   * cap or a dry pool is "ask an admin", which needs a name to ask. The rest of
+   * the roster (and every cap/spend figure) stays admin-only in `/usage`. */
+  admins?: OrgAdminContact[];
+}
+
+export interface OrgAdminContact {
+  userId: string;
+  email: string | null;
+  fullName: string | null;
 }
 
 /** One row of GET /orgs/{id}/usage's `seats` array (admin-only).
