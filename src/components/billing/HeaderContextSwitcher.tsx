@@ -9,7 +9,8 @@
 //
 // Renders nothing for the overwhelming majority of users: no seat anywhere (or
 // LICENSING_ENABLED off) means one available context, and nothing to switch.
-import { Building2, Check, User } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Building2, Check, Plus, User } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { useBillingContextSwitcher } from "@/hooks/useBillingContext";
 
 export function HeaderContextSwitcher() {
+  const navigate = useNavigate();
   const { canSwitch, orgContexts, value, currentLabel, switchTo, isPending } =
     useBillingContextSwitcher();
 
@@ -59,23 +61,32 @@ export function HeaderContextSwitcher() {
           </p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => switchTo("personal")} className="gap-2">
-          <User className="w-4 h-4 text-muted-foreground" />
-          <span className="flex-1">Personal</span>
-          {isPersonal && <Check className="w-3.5 h-3.5 text-primary" />}
-        </DropdownMenuItem>
-        {orgContexts.map((o) => (
-          <DropdownMenuItem key={o.orgId} onClick={() => switchTo(o.orgId)} className="gap-2">
-            <Building2 className="w-4 h-4 text-muted-foreground" />
-            <span className="flex-1 min-w-0">
-              <span className="block truncate">{o.orgName}</span>
-              {o.pending && (
-                <span className="block text-[11px] text-muted-foreground">Activating soon</span>
-              )}
-            </span>
-            {value === o.orgId && <Check className="w-3.5 h-3.5 text-primary flex-none" />}
+        {/* DropdownMenuContent is overflow-hidden with no height cap, so a long
+            org list would clip its tail out of reach rather than scroll. */}
+        <div className="max-h-[240px] overflow-y-auto">
+          <DropdownMenuItem onClick={() => switchTo("personal")} className="gap-2">
+            <User className="w-4 h-4 text-muted-foreground" />
+            <span className="flex-1">Personal</span>
+            {isPersonal && <Check className="w-3.5 h-3.5 text-primary" />}
           </DropdownMenuItem>
-        ))}
+          {orgContexts.map((o) => (
+            <DropdownMenuItem key={o.orgId} onClick={() => switchTo(o.orgId)} className="gap-2">
+              <Building2 className="w-4 h-4 text-muted-foreground" />
+              <span className="flex-1 min-w-0">
+                <span className="block truncate">{o.orgName}</span>
+                {o.pending && (
+                  <span className="block text-[11px] text-muted-foreground">Activating soon</span>
+                )}
+              </span>
+              {value === o.orgId && <Check className="w-3.5 h-3.5 text-primary flex-none" />}
+            </DropdownMenuItem>
+          ))}
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => navigate("/organization?new=1")} className="gap-2">
+          <Plus className="w-4 h-4 text-muted-foreground" />
+          <span>Create organization</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

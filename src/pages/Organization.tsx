@@ -9,6 +9,7 @@
 // while the flag is off simply surfaces the backend's 404 as a toast, same
 // as any other disabled-feature attempt.
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Building2, Loader2, Mail, Send } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -394,6 +395,7 @@ function MemberPanel({ org }: { org: OrgSummary }) {
 const Organization = () => {
   const { data: orgs, isLoading, error } = useMyOrgs();
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   if (isLoading) {
     return (
@@ -411,10 +413,18 @@ const Organization = () => {
   const licensingOff = error instanceof ApiError && error.status === 404;
   const orgList = orgs ?? [];
 
-  if (licensingOff || orgList.length === 0) {
+  // `?new=1` reaches the same form when orgs ALREADY exist — without it there is
+  // no path to a second org at all, since this empty state was the only place
+  // the create form lived. The header switcher's "Create organization" links here.
+  if (licensingOff || orgList.length === 0 || searchParams.get("new") === "1") {
     return (
       <PageShell>
-        <CreateOrgPanel onCreated={setSelectedOrgId} />
+        <CreateOrgPanel
+          onCreated={(id) => {
+            setSelectedOrgId(id);
+            setSearchParams({}, { replace: true });
+          }}
+        />
       </PageShell>
     );
   }
