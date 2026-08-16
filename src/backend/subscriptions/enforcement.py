@@ -154,7 +154,6 @@ def gated_credits(
     action: CreditAction,
     host_user_id: str | None = None,
     *,
-    is_admin: bool = False,
     resource_project_id: str | None = None,
     resource_contract_ids: list[str] | None = None,
 ) -> CreditGrant:
@@ -181,7 +180,6 @@ def gated_credits(
     result = _service().check_credits(
         user_id,
         str(action),
-        is_admin=is_admin,
         resource_project_id=resource_project_id,
         resource_contract_ids=resource_contract_ids,
     )

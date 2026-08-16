@@ -9,12 +9,24 @@ class OrgCreate(BaseModel):
 
 class OrgUpdate(BaseModel):
     """PUT /orgs/{org_id} body. Fields not present in the request are left
-    untouched by the service (router calls `model_dump(exclude_unset=True)`);
-    an explicit `null` for default_member_cap clears it back to
-    manual-only allocation (NULL/0 = manual-only, spec §4)."""
+    untouched by the service (router calls `model_dump(exclude_unset=True)`).
+
+    default_member_cap is what a NEW member inherits (2,000 out of the box —
+    20260814000001). `-1` sets the org to no limit; an explicit `null` also
+    leaves members uncapped, since the fallback chain then ends at nothing.
+    Prefer -1: it states the intent rather than relying on a NULL terminal."""
 
     name: str | None = Field(default=None, min_length=1)
-    default_member_cap: int | None = Field(default=None, ge=0)
+    default_member_cap: int | None = Field(default=None, ge=-1)
+
+
+class DissolveBody(BaseModel):
+    """POST /orgs/{org_id}/dissolve body. `confirm_name` is the team's name
+    typed back — the service compares it (trimmed) to the stored name and
+    refuses with a 400 before writing anything, which is the only thing
+    standing between a mis-click and a terminal, one-way operation."""
+
+    confirm_name: str = Field(min_length=1)
 
 
 class InviteCreate(BaseModel):
@@ -33,12 +45,16 @@ class MemberRoleUpdate(BaseModel):
 class MemberCapUpdate(BaseModel):
     """PUT /orgs/{org_id}/members/{member_id}/cap body (admin-only).
 
-    `cap=null` clears this member's own cap so they inherit the org's
-    `default_member_cap` (uncapped if that is NULL too). No idempotency key:
-    writing a ceiling is idempotent by nature — there is no money to move twice.
+    Three settings, and null is NOT "no limit":
+      cap=N     this member's own ceiling.
+      cap=null  INHERIT the org's `default_member_cap` (2,000 by default).
+      cap=-1    NO LIMIT for this member, whatever the org default is.
+
+    No idempotency key: writing a ceiling is idempotent by nature — there is no
+    money to move twice.
     """
 
-    cap: int | None = Field(default=None, ge=0, le=10_000_000)
+    cap: int | None = Field(default=None, ge=-1, le=10_000_000)
 
 
 class OrgDispersalUpdate(BaseModel):
@@ -77,6 +93,17 @@ class CreditRequestDeny(BaseModel):
     (admin-only)."""
 
     note: str | None = None
+
+
+class TransferCreditsBody(BaseModel):
+    """POST /orgs/{org_id}/transfer-credits body (active admin only, spec
+    §4.1) — moves `amount` credits from the caller's OWN personal reserve
+    into this org's pool. `le=1_000_000` is a sanity ceiling on a single
+    transfer, not a business limit; the real constraint is the caller's
+    actual reserve balance, enforced by the `transfer_credits` RPC (409 on
+    insufficient reserve)."""
+
+    amount: int = Field(gt=0, le=1_000_000)
 
 
 class ProjectMemberRoleUpdate(BaseModel):

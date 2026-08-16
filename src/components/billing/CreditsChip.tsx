@@ -6,27 +6,26 @@
 import { Coins } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEntitlements } from "@/hooks/useEntitlements";
+import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
 
 export function CreditsChip({ className }: { className?: string }) {
   const { data: ent } = useEntitlements();
   const credits = ent?.credits;
   if (!credits) return null;
-  // Org members are bounded by their monthly cap on the shared pool; everyone
-  // else by their wallet balance. Mirrors CreditsUsageCard's remaining calc.
-  const remaining =
-    credits.memberCap != null
-      ? Math.max(0, credits.memberCap - (credits.memberCapUsed ?? 0))
-      : credits.balance;
+  // null = an uncapped org member: no cap of their own, and the pool balance is
+  // admin-only, so there is no number to put here.
+  const standing = creditStanding(credits);
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground tabular-nums",
+        "inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground",
+        standing ? "tabular-nums" : "",
         className,
       )}
-      title="Credits you have left this month"
+      title={standing ? "Credits you have left this month" : POOL_ONLY_LABEL}
     >
       <Coins className="w-3 h-3" />
-      {remaining.toLocaleString()} credits
+      {standing ? `${standing.remaining.toLocaleString()} credits` : "Org credits"}
     </span>
   );
 }

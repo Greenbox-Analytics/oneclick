@@ -26,6 +26,7 @@ DECLARE
   v_wallet_a UUID;  -- bundle-first debit ordering + negative drift
   v_wallet_b UUID;  -- clawback clamp
   v_wallet_c UUID;  -- rollover happy path + double-roll guard
+  v_wallet_d UUID;  -- self-serve transfer_credits: personal wallet moving reserve into the org pool
   v_pool     UUID;  -- org pool: member spend, cap enforcement, dispersal rollover
   v_org_id   UUID;  -- organizations row backing the pool
   v_mem_id   UUID;  -- org_members row carrying the cap being enforced
@@ -52,6 +53,15 @@ BEGIN
   INSERT INTO credit_wallets (owner_type, owner_id, period_start, period_end)
     VALUES ('user', gen_random_uuid(), now() - interval '31 days', now() - interval '1 day')
     RETURNING id INTO v_wallet_c;
+  -- v_wallet_d: reserve 100 (admin_grant) + bundle 50 (monthly_grant) — the
+  -- bundle is there so 12a-12d can prove the transfer leaves it untouched
+  -- (transfer_credits is reserve-only; moving bundle would silently end its
+  -- monthly expiry for anyone who joins a team).
+  INSERT INTO credit_wallets (owner_type, owner_id, period_start, period_end)
+    VALUES ('user', gen_random_uuid(), now() - interval '31 days', now() - interval '1 day')
+    RETURNING id INTO v_wallet_d;
+  PERFORM grant_credits(v_wallet_d, 100, 'admin_grant', 'reserve', '{}', NULL);
+  PERFORM grant_credits(v_wallet_d, 50, 'monthly_grant', 'bundle', '{}', NULL);
   -- The org pool needs REAL organizations/org_members rows: debit_credits joins
   -- them to resolve the effective cap, so a random owner_id would not exercise
   -- the cap path at all.
@@ -181,6 +191,32 @@ BEGIN
     v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 9b. cap fallthrough — got ' || v_res::text;
   END IF;
 
+  -- ------- 9b-i. the -1 sentinel is NO LIMIT, not a ceiling of minus one --
+  -- Every org now carries a default_member_cap (2,000 — 20260814000001), so
+  -- NULL on the member row means "inherit", and -1 is the only way to say
+  -- "no limit". Without the CASE that normalizes it, `cap_used + amount > -1`
+  -- is true for every debit and EVERY ONE would be flagged cap_exceeded.
+  UPDATE org_members SET monthly_cap = -1, cap_used = 0, cap_period_end = NULL WHERE id = v_mem_id;
+  v_res := debit_credits(v_pool, 50, 'oneclick_run', 'gate-cap-unlim-1', 'debit', '{}', v_mem_id);
+  IF (v_res->>'cap_exceeded')::boolean = false AND v_res->>'cap' IS NULL THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 9b-i. member cap -1 = unlimited: 50 > org default 40, still not flagged, cap reported NULL';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 9b-i. -1 member cap not treated as unlimited — got ' || v_res::text;
+  END IF;
+
+  -- ------- 9b-ii. an org-wide -1 default uncaps members who inherit it --
+  UPDATE organizations SET default_member_cap = -1 WHERE id = v_org_id;
+  UPDATE org_members SET monthly_cap = NULL, cap_used = 0, cap_period_end = NULL WHERE id = v_mem_id;
+  v_res := debit_credits(v_pool, 1, 'zoe_message', 'gate-cap-unlim-2', 'debit', '{}', v_mem_id);
+  IF (v_res->>'cap_exceeded')::boolean = false AND v_res->>'cap' IS NULL THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 9b-ii. org default -1 uncaps an inheriting member';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 9b-ii. org default -1 not treated as unlimited — got ' || v_res::text;
+  END IF;
+  -- Restore the fixture for the gates below.
+  UPDATE organizations SET default_member_cap = 40 WHERE id = v_org_id;
+  UPDATE org_members SET monthly_cap = NULL, cap_used = 0, cap_period_end = NULL WHERE id = v_mem_id;
+
   -- ------------------- 9c. clawback and overage reject a member id --
   v_ok := false;
   BEGIN
@@ -300,6 +336,64 @@ BEGIN
     v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 14d. all three money RPCs revoked from authenticated/anon (service-role only)';
   ELSE
     v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 14d. a money RPC is EXECUTABLE by authenticated/anon — signed-in users can mint/move credits';
+  END IF;
+
+  -- --------------------------------------------- 12a-12d. transfer_credits --
+  -- Self-serve orgs (20260816000002): a member moves their OWN reserve
+  -- credits into an org pool they belong to. Reserve-only source (bundle
+  -- expires monthly and moving it would silently end that expiry), personal
+  -- wallet locked before the pool, RAISE — not clamp — on insufficient
+  -- reserve (the service maps that message to HTTP 409), two ledger rows
+  -- sharing one idempotency key pair (request_id / request_id || ':in').
+  -- Placed after the existing gates (not renumbered into them): nothing
+  -- past gate 9c asserts an absolute value for v_pool's reserve_balance
+  -- (gate 11 only compares the rollover's reserve AFTER to a v_reserve_before
+  -- it captures itself), so 12a landing 40 more reserve on the pool here
+  -- cannot break any later balance assertion.
+
+  -- 12a. transfer happy path: 40 reserve -> pool; ledger rows on both sides
+  v_res := transfer_credits(v_wallet_d, v_pool, 40, 'gate-xfer-1', '{}');
+  SELECT reserve_balance, bundle_balance INTO v_reserve, v_bundle FROM credit_wallets WHERE id = v_wallet_d;
+  SELECT COUNT(*) INTO v_n FROM credit_ledger
+   WHERE request_id IN ('gate-xfer-1', 'gate-xfer-1:in')
+     AND kind IN ('transfer_out', 'transfer_in');
+  IF (v_res->>'duplicate')::boolean = false AND v_reserve = 60 AND v_bundle = 50 AND v_n = 2 THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 12a. transfer 40: reserve 100->60, bundle untouched, two ledger rows';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 12a. transfer — ' || v_res::text || ' reserve=' || v_reserve || ' bundle=' || v_bundle || ' rows=' || v_n;
+  END IF;
+
+  -- 12b. replay: duplicate=true, nothing moves
+  v_res := transfer_credits(v_wallet_d, v_pool, 40, 'gate-xfer-1', '{}');
+  SELECT reserve_balance INTO v_reserve FROM credit_wallets WHERE id = v_wallet_d;
+  IF (v_res->>'duplicate')::boolean = true AND v_reserve = 60 THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 12b. transfer replay is a no-op';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 12b. replay — ' || v_res::text || ' reserve=' || v_reserve;
+  END IF;
+
+  -- 12c. reserve-only: 61 > 60 reserve MUST raise even though bundle holds 50
+  v_ok := false;
+  BEGIN
+    PERFORM transfer_credits(v_wallet_d, v_pool, 61, 'gate-xfer-2', '{}');
+  EXCEPTION WHEN OTHERS THEN v_ok := SQLERRM LIKE '%insufficient reserve%';
+  END;
+  IF v_ok THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 12c. bundle can never fund a transfer (insufficient reserve raised)';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 12c. over-reserve transfer did not raise';
+  END IF;
+
+  -- 12d. target must be an org pool
+  v_ok := false;
+  BEGIN
+    PERFORM transfer_credits(v_wallet_d, v_wallet_a, 1, 'gate-xfer-3', '{}');
+  EXCEPTION WHEN OTHERS THEN v_ok := SQLERRM LIKE '%must be an org pool%';
+  END;
+  IF v_ok THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 12d. user->user transfer refused';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 12d. user->user transfer allowed';
   END IF;
 
   -- ------------------------------------------------- report + forced rollback --

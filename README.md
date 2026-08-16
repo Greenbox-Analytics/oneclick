@@ -2,6 +2,10 @@
 
 A music industry management platform for artists, managers, and collaborators. Handles artist profiles, project/work management, rights registration, contract analysis, royalty calculations, and collaboration workflows.
 
+## Plans
+
+Free / Basic / Pro tiers, metered by a per-user credit wallet, with self-serve Teams (shared credit pool + storage) available on Basic and Pro. See [docs/licensing.md](docs/licensing.md) for the full tier matrix, credits model, and team lifecycle.
+
 ## Quick Start
 
 ### Prerequisites

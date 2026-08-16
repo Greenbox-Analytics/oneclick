@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -43,6 +43,15 @@ import {
   type OrgRole,
 } from "@/hooks/useOrgs";
 
+/** Stored `monthly_cap` meaning "no ceiling", as opposed to null = inherit the
+ * org default. Needed because every org now carries a default (2,000), so
+ * clearing a member's own cap inherits it instead of removing the limit.
+ * Mirrors orgs.service.UNLIMITED_CAP; normalized away server-side, so it never
+ * appears in `effectiveCap`. */
+const UNLIMITED_CAP = -1;
+
+type CapMode = "default" | "custom" | "none";
+
 const STATUS_STYLE: Record<string, string> = {
   active: "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10",
   suspended: "border-amber-500/30 text-amber-700 dark:text-amber-400 bg-amber-500/10",
@@ -63,13 +72,15 @@ function CapDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [value, setValue] = useState("");
-  const [useDefault, setUseDefault] = useState(false);
+  // Three genuinely different settings, which is why this is a radio and not a
+  // checkbox: "inherit" (null) stopped meaning "no limit" once every org
+  // gained a default, so "none" needs its own choice — the -1 sentinel.
+  const [mode, setMode] = useState<CapMode>("custom");
   const setCap = useSetMemberCap();
 
-  // "Use the organization default" is only offered when there IS one. With no
-  // org default the fallback chain ends at uncapped, so that checkbox would
-  // read "(no limit)" — one click to let a single member drain the whole pool.
-  // No default => the admin names a number.
+  // "Use the organization default" is only offered when there IS one. Every org
+  // has one out of the box (2,000), so this is normally shown; it disappears
+  // only if an admin cleared it, where inheriting would mean nothing at all.
   const canUseDefault = defaultCap != null;
 
   // Re-seed whenever a different member's dialog opens.
@@ -77,19 +88,19 @@ function CapDialog({
   const [seededFor, setSeededFor] = useState("");
   if (open && seatKey && seededFor !== seatKey) {
     setSeededFor(seatKey);
-    setUseDefault(canUseDefault && seat?.monthlyCap == null);
-    setValue(seat?.monthlyCap != null ? String(seat.monthlyCap) : "");
+    const stored = seat?.monthlyCap;
+    setMode(stored === UNLIMITED_CAP ? "none" : stored == null && canUseDefault ? "default" : "custom");
+    // Never seed the sentinel into the number box — it is a marker, not an amount.
+    setValue(stored != null && stored !== UNLIMITED_CAP ? String(stored) : "");
   }
 
   const parsed = Number(value);
-  const valid = useDefault || (value !== "" && Number.isFinite(parsed) && parsed >= 0);
+  const valid = mode !== "custom" || (value !== "" && Number.isFinite(parsed) && parsed >= 0);
 
   const submit = () => {
     if (!seat || !valid) return;
-    setCap.mutate(
-      { orgId, memberId: seat.orgMemberId, cap: useDefault ? null : parsed },
-      { onSuccess: () => onOpenChange(false) },
-    );
+    const cap = mode === "default" ? null : mode === "none" ? UNLIMITED_CAP : parsed;
+    setCap.mutate({ orgId, memberId: seat.orgMemberId, cap }, { onSuccess: () => onOpenChange(false) });
   };
 
   return (
@@ -103,20 +114,31 @@ function CapDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          {canUseDefault && (
+          <RadioGroup value={mode} onValueChange={(v) => setMode(v as CapMode)} className="gap-2.5">
+            {canUseDefault && (
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="default" id="cap-default" />
+                <Label htmlFor="cap-default" className="font-normal">
+                  Organization default ({defaultCap.toLocaleString()} credits / month)
+                </Label>
+              </div>
+            )}
             <div className="flex items-center gap-2">
-              <Checkbox
-                id="cap-default"
-                checked={useDefault}
-                onCheckedChange={(v) => setUseDefault(v === true)}
-              />
-              <Label htmlFor="cap-default" className="font-normal">
-                Use the organization default ({defaultCap.toLocaleString()} credits)
+              <RadioGroupItem value="custom" id="cap-custom" />
+              <Label htmlFor="cap-custom" className="font-normal">
+                A set amount each month
               </Label>
             </div>
-          )}
-          {!useDefault && (
-            <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <RadioGroupItem value="none" id="cap-none" />
+              <Label htmlFor="cap-none" className="font-normal">
+                No limit
+              </Label>
+            </div>
+          </RadioGroup>
+
+          {mode === "custom" && (
+            <div className="space-y-1.5 pl-6">
               <Label htmlFor="cap-amount">Credits per month</Label>
               <Input
                 id="cap-amount"
@@ -126,11 +148,16 @@ function CapDialog({
                 onChange={(e) => setValue(e.target.value)}
                 placeholder="2000"
               />
-              <p className="text-xs text-muted-foreground">
-                Used {(seat?.capUsed ?? 0).toLocaleString()} so far this month.
-              </p>
             </div>
           )}
+          {mode === "none" && (
+            <p className="text-xs text-muted-foreground pl-6">
+              They can spend the shared pool down on their own. The pool balance is still the real ceiling.
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Used {(seat?.capUsed ?? 0).toLocaleString()} credits so far this month.
+          </p>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>

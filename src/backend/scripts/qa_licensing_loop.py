@@ -1,15 +1,25 @@
 """End-to-end QA loop for teams/licensing against the REAL local stack.
 
 Drives the full org lifecycle over HTTP (real JWTs, real RLS, real RPCs)
-against a locally-running backend with LICENSING_ENABLED + CREDITS_ENABLED:
+against a locally-running backend with LICENSING_ENABLED + CREDITS_ENABLED.
+Two acts:
 
-  create org -> activate (purchase-grant path) -> invite x2 -> claim ->
-  set member caps + operator sets the dispersal -> transfer artist to the team ->
-  admin grants access -> derived billing debits the ORG POOL against the
-  member's cap -> cap wall + dry-pool wall (member + owner-aware) -> offboard
-  -> archive.
+ACT 1 (enterprise, admin-created): create org via POST /admin/orgs (the
+only way to mint a kind='enterprise' row post-2026-08-16 — see spec
+2026-08-15-pricing-tiers-teams) -> activate (purchase-grant path) ->
+invite x2 -> claim -> set member caps + operator sets the dispersal ->
+transfer artist to the team -> admin grants access -> derived billing
+debits the ORG POOL against the member's cap -> cap wall + credit-request
+raise.
 
-Creates 3 throwaway auth users (…@example.com) and CLEANS UP EVERY ROW in
+ACT 2 (self-serve, spec 2026-08-15): a PAYING (Basic) user creates a team
+via the now slot-gated POST /orgs -> invite to the team-size limit ->
+over-limit invite refused -> fund the pool via personal-reserve transfer
+-> a member spends from the pool via ambient billing context -> release
+coverage -> simulated grace -> lapse (evaluate_standing) -> reactivate via
+coverage claim -> archive -> unarchive -> dissolve-preview -> dissolve.
+
+Creates 8 throwaway auth users (…@example.com) and CLEANS UP EVERY ROW in
 a finally block — the DB is shared with prod.
 
 Run (backend must be up on --port with LICENSING_ENABLED=true
@@ -70,28 +80,50 @@ def api(token):
 
 users = {}  # role -> {id, email, password, token}
 org_id = None
+org_id2 = None  # self-serve act's org (Act 2)
 artist_id = None
 project_id = None
 wallet_ids = []  # every wallet we touch, for ledger+wallet cleanup
 
+
+def _create_user(role):
+    """Throwaway auth user + signed-in session, registered in `users` for
+    both the act steps and the finally-block cleanup."""
+    email = f"qa-licensing-{role}-{SUFFIX}@example.com"
+    password = secrets.token_urlsafe(16)
+    res = sb.auth.admin.create_user({"email": email, "password": password, "email_confirm": True})
+    uid = res.user.id
+    anon = create_client(URL, ANON)
+    session = anon.auth.sign_in_with_password({"email": email, "password": password})
+    u = {"id": uid, "email": email, "password": password, "token": session.session.access_token}
+    users[role] = u
+    print(f"       created {role}: {email} ({uid})")
+    return u
+
+
 try:
     # ------------------------------------------------------------- setup --
     for role in ("admin", "owner", "collab"):
-        email = f"qa-licensing-{role}-{SUFFIX}@example.com"
-        password = secrets.token_urlsafe(16)
-        res = sb.auth.admin.create_user({"email": email, "password": password, "email_confirm": True})
-        uid = res.user.id
-        anon = create_client(URL, ANON)
-        session = anon.auth.sign_in_with_password({"email": email, "password": password})
-        users[role] = {"id": uid, "email": email, "password": password, "token": session.session.access_token}
-        print(f"       created {role}: {email} ({uid})")
+        _create_user(role)
 
     admin, owner, collab = users["admin"], users["owner"], users["collab"]
 
     # ------------------------------------------- 1. create org (pending) --
+    # Enterprise orgs are now created ONLY by a Msanii platform admin via
+    # POST /admin/orgs (review r2 hole 7: plain POST /orgs is self-serve +
+    # slot-gated as of 20260816). Promote the "admin" test user to a platform
+    # admin (profiles.is_admin) so it can call the admin route, and pass its
+    # own email as `admin_email` — create_enterprise_org seats that account
+    # as the resulting org's customer admin via the auto_create_org_admin
+    # trigger, exactly like the old open POST /orgs did for this act.
+    sb.table("profiles").update({"is_admin": True}).eq("id", admin["id"]).execute()
     with api(admin["token"]) as c:
-        r = c.post("/orgs", json={"name": f"QA Licensing Loop {SUFFIX}"})
-        check("1. admin creates org", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        r = c.post("/admin/orgs", json={"name": f"QA Licensing Loop {SUFFIX}", "admin_email": admin["email"]})
+        check(
+            "1. admin creates org (via /admin/orgs, enterprise)",
+            r.status_code == 200,
+            f"{r.status_code}: {r.text[:200]}",
+        )
         org_id = r.json()["id"]
     org_row = sb.table("organizations").select("status").eq("id", org_id).execute().data[0]
     check("1b. org starts pending", org_row["status"] == "pending", str(org_row))
@@ -371,6 +403,222 @@ try:
     res_c2 = svc.check_credits(collab["id"], CreditAction.ZOE_MESSAGE, resource_project_id=project_id)
     check("8h. raise clears the cap wall", res_c2.allowed and res_c2.managed_by_org, f"allowed={res_c2.allowed}")
 
+    # =====================================================================
+    # ACT 2: self-serve team lifecycle (spec 2026-08-15) — a PAYING (Basic)
+    # user creates via POST /orgs (now slot-gated self-serve, not the
+    # enterprise path Act 1 exercises) -> invites to the team-size limit ->
+    # an over-limit invite is refused -> funds the pool via personal-reserve
+    # transfer -> a member spends from the pool via ambient billing context
+    # -> releases coverage -> grace/lapse is simulated (direct write +
+    # evaluate_standing, not a 14-day wait) -> reactivates by re-claiming
+    # coverage -> archive -> unarchive -> dissolve-preview -> dissolve.
+    # =====================================================================
+    from orgs.wallets import read_or_create_user_wallet
+
+    for role in ("ss_owner", "ss_m1", "ss_m2", "ss_m3", "ss_m4"):
+        _create_user(role)
+    ss_owner = users["ss_owner"]
+    ss_members = [users["ss_m1"], users["ss_m2"], users["ss_m3"]]  # fills the Basic limit (3, excl. owner)
+    ss_overflow = users["ss_m4"]  # the 4th — must be refused
+
+    # A real subscription row makes ss_owner a PAYING Basic user: 1 team
+    # slot, 3 members excl. the owner, 10 GiB pool (Migration A dials) —
+    # "as a paying user" per the task, not an admin-implicit-Pro shortcut.
+    sb.table("subscriptions").upsert(
+        {"user_id": ss_owner["id"], "tier": "basic", "status": "active"}, on_conflict="user_id"
+    ).execute()
+
+    org2_name = f"QA Self-Serve {SUFFIX}"
+    with api(ss_owner["token"]) as c:
+        r = c.post("/orgs", json={"name": org2_name})
+        check(
+            "9. paying user creates a self-serve org via POST /orgs",
+            r.status_code == 200,
+            f"{r.status_code}: {r.text[:200]}",
+        )
+        org_id2 = r.json()["id"]
+    org2_row = sb.table("organizations").select("kind, status, covered_by").eq("id", org_id2).execute().data[0]
+    check(
+        "9b. self-serve org is born active, covered by its creator (no activation floor)",
+        org2_row["kind"] == "self_serve"
+        and org2_row["status"] == "active"
+        and org2_row["covered_by"] == ss_owner["id"],
+        str(org2_row),
+    )
+
+    # ------------------------------------------- 10. invite to the limit --
+    with api(ss_owner["token"]) as c:
+        for m in ss_members:
+            r = c.post(f"/orgs/{org_id2}/invites", json={"email": m["email"], "role": "member"})
+            check(f"10. invite {m['email']}", r.status_code == 200, f"{r.status_code}: {r.text[:150]}")
+    invites2 = sb.table("pending_org_invites").select("token, email").eq("org_id", org_id2).execute().data
+    tok2 = {i["email"]: i["token"] for i in invites2}
+    for m in ss_members:
+        with api(m["token"]) as c:
+            r = c.post(f"/orgs/invites/{tok2[m['email']]}/accept")
+            check(f"10b. {m['email']} accepts", r.status_code == 200, f"{r.status_code}: {r.text[:150]}")
+    with api(ss_owner["token"]) as c:
+        r = c.post(f"/orgs/{org_id2}/invites", json={"email": ss_overflow["email"], "role": "member"})
+        check(
+            "10c. a 4th invite past the Basic team-size limit (3, excl. owner) is refused",
+            r.status_code == 402,
+            f"{r.status_code}: {r.text[:200]}",
+        )
+
+    # -------------------------------------- 11. fund the pool by transfer --
+    ss_personal_wallet = read_or_create_user_wallet(sb, ss_owner["id"])
+    wallet_ids.append(ss_personal_wallet["id"])
+    sb.rpc(
+        "grant_credits",
+        {
+            "p_wallet_id": ss_personal_wallet["id"],
+            "p_amount": 200,
+            "p_kind": "admin_grant",
+            "p_bucket": "reserve",
+            "p_metadata": {"reason": "qa_self_serve_seed"},
+            "p_request_id": f"qa-ss-seed-{SUFFIX}",
+        },
+    ).execute()
+    with api(ss_owner["token"]) as c:
+        r = c.post(f"/orgs/{org_id2}/transfer-credits", json={"amount": 150})
+        check(
+            "11. owner transfers 150 personal reserve credits to the pool",
+            r.status_code == 200,
+            f"{r.status_code}: {r.text[:200]}",
+        )
+    ss_pool_wallet = (
+        sb.table("credit_wallets")
+        .select("id, reserve_balance")
+        .eq("owner_type", "org")
+        .eq("owner_id", org_id2)
+        .execute()
+        .data[0]
+    )
+    wallet_ids.append(ss_pool_wallet["id"])
+    check("11b. pool holds the transferred 150 reserve", ss_pool_wallet["reserve_balance"] == 150, str(ss_pool_wallet))
+
+    # ---------------------- 12. a member spends from the pool (ambient) --
+    m1 = ss_members[0]
+    with api(m1["token"]) as c:
+        r = c.put("/me/billing-context", json={"orgId": org_id2})
+        check(
+            "12. member points ambient billing context at the team",
+            r.status_code == 200,
+            f"{r.status_code}: {r.text[:150]}",
+        )
+    res_m1 = svc.check_credits(m1["id"], CreditAction.ZOE_MESSAGE)
+    check(
+        "12b. ambient context derives the check to the pool wallet",
+        res_m1.allowed and res_m1.wallet_id == ss_pool_wallet["id"] and res_m1.managed_by_org,
+        f"allowed={res_m1.allowed} wallet={res_m1.wallet_id} pool={ss_pool_wallet['id']}",
+    )
+    grant2 = CreditGrant(
+        request_id=f"qa-ss-debit-{SUFFIX}",
+        action=str(CreditAction.ZOE_MESSAGE),
+        price=res_m1.price,
+        kind="debit",
+        enabled=True,
+        wallet_id=res_m1.wallet_id,
+        org_member_id=res_m1.org_member_id,
+    )
+    svc.debit_for_action(m1["id"], grant2)
+    ss_pool_post = sb.table("credit_wallets").select("reserve_balance").eq("id", ss_pool_wallet["id"]).execute().data[0]
+    check(
+        "12c. member spend lands on the pool: 150 -> 147 (zoe=3cr)",
+        ss_pool_post["reserve_balance"] == 147,
+        str(ss_pool_post),
+    )
+
+    # ------------------------------------------- 13. release coverage --
+    with api(ss_owner["token"]) as c:
+        r = c.post(f"/orgs/{org_id2}/coverage/release")
+        check("13. owner releases coverage", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+    org2_row = sb.table("organizations").select("covered_by, covered_at").eq("id", org_id2).execute().data[0]
+    check(
+        "13b. covered_by stays (last-coverer attribution), covered_at clears",
+        org2_row["covered_by"] == ss_owner["id"] and org2_row["covered_at"] is None,
+        str(org2_row),
+    )
+
+    # ------------------------- 14. simulated grace -> lapse via the sweep --
+    from datetime import UTC, datetime, timedelta
+
+    from orgs.standing import evaluate_standing, grace_days
+
+    # Direct write instead of waiting ORG_GRACE_DAYS: back-date grace as if
+    # the sweep had already started it well past the grace window, then let
+    # evaluate_standing (the ONE writer of 'lapsed') do the actual flip.
+    stale = (datetime.now(UTC) - timedelta(days=grace_days() + 1)).isoformat()
+    sb.table("organizations").update({"grace_started_at": stale}).eq("id", org_id2).execute()
+    evaluate_standing(sb)
+    org2_row = sb.table("organizations").select("status").eq("id", org_id2).execute().data[0]
+    check("14. sweep lapses an uncovered org past its grace window", org2_row["status"] == "lapsed", str(org2_row))
+
+    # ------------------------------------------- 15. reactivate via claim --
+    with api(ss_owner["token"]) as c:
+        r = c.post(f"/orgs/{org_id2}/coverage/claim")
+        check(
+            "15. owner reclaims coverage on a lapsed org -> reactivates",
+            r.status_code == 200,
+            f"{r.status_code}: {r.text[:200]}",
+        )
+    org2_row = sb.table("organizations").select("status, covered_at").eq("id", org_id2).execute().data[0]
+    check(
+        "15b. org is active again, covered_at restamped",
+        org2_row["status"] == "active" and org2_row["covered_at"],
+        str(org2_row),
+    )
+
+    # ------------------------------------------- 16. archive / unarchive --
+    with api(ss_owner["token"]) as c:
+        r = c.post(f"/orgs/{org_id2}/archive")
+        check("16. owner archives the team", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+    org2_row = sb.table("organizations").select("archived_at").eq("id", org_id2).execute().data[0]
+    check("16b. archived_at stamped", org2_row["archived_at"] is not None, str(org2_row))
+
+    with api(ss_owner["token"]) as c:
+        r = c.post(f"/orgs/{org_id2}/unarchive")
+        check(
+            "17. owner unarchives (free slot + reactivation storage guard both pass)",
+            r.status_code == 200,
+            f"{r.status_code}: {r.text[:200]}",
+        )
+    org2_row = sb.table("organizations").select("archived_at, status").eq("id", org_id2).execute().data[0]
+    check(
+        "17b. archived_at cleared, active again",
+        org2_row["archived_at"] is None and org2_row["status"] == "active",
+        str(org2_row),
+    )
+
+    # ------------------------------------- 18. dissolve-preview + dissolve --
+    with api(ss_owner["token"]) as c:
+        r = c.get(f"/orgs/{org_id2}/dissolve-preview")
+        preview = r.json() if r.status_code == 200 else {}
+        check(
+            "18. dissolve-preview lists the forfeited reserve and member count",
+            r.status_code == 200 and preview.get("forfeitReserve") == 147 and preview.get("memberCount") == 4,
+            f"{r.status_code}: {str(preview)[:250]}",
+        )
+    with api(ss_owner["token"]) as c:
+        r = c.post(f"/orgs/{org_id2}/dissolve", json={"confirm_name": "the wrong name"})
+        check(
+            "19. dissolve refuses a mismatched confirm name", r.status_code == 400, f"{r.status_code}: {r.text[:150]}"
+        )
+        r = c.post(f"/orgs/{org_id2}/dissolve", json={"confirm_name": org2_name})
+        check("19b. dissolve with the correct name succeeds", r.status_code == 200, f"{r.status_code}: {r.text[:200]}")
+        r = c.post(f"/orgs/{org_id2}/dissolve", json={"confirm_name": org2_name})
+        check(
+            "19c. re-dissolve is idempotent (already: true, nothing double-moves)",
+            r.status_code == 200 and r.json().get("already") is True,
+            f"{r.status_code}: {r.text[:150]}",
+        )
+    org2_row = sb.table("organizations").select("dissolved_at").eq("id", org_id2).execute().data[0]
+    check(
+        "19d. dissolved_at stamped (soft dissolve — org row retained)",
+        org2_row["dissolved_at"] is not None,
+        str(org2_row),
+    )
+
 finally:
     # ------------------------------------------------------- cleanup --
     print("\n--- cleanup (shared DB) ---")
@@ -394,6 +642,11 @@ finally:
         if org_id:
             sb.table("credit_requests").delete().eq("org_id", org_id).execute()
             sb.table("pending_org_invites").delete().eq("org_id", org_id).execute()
+        if org_id2:
+            # dissolve_org expires open invites itself; delete is a harmless no-op
+            # if none remain. Soft-dissolve retains the org row by design — this
+            # is cleanup of a throwaway QA row in a shared DB, not a product path.
+            sb.table("pending_org_invites").delete().eq("org_id", org_id2).execute()
         # Users BEFORE org_members: a direct delete of the sole admin's row
         # trips the last-admin guard; the auth-user deletion CASCADE is the
         # sanctioned escape (guard yields to it and auto-archives the org).
@@ -403,6 +656,9 @@ finally:
         if org_id:
             sb.table("org_members").delete().eq("org_id", org_id).execute()
             sb.table("organizations").delete().eq("id", org_id).execute()
+        if org_id2:
+            sb.table("org_members").delete().eq("org_id", org_id2).execute()
+            sb.table("organizations").delete().eq("id", org_id2).execute()
         print("cleanup complete")
     except Exception as e:  # noqa: BLE001
         print(f"CLEANUP ERROR (manual sweep needed for suffix {SUFFIX}): {e}")

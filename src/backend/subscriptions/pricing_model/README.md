@@ -42,7 +42,17 @@ No server and no dependencies — `index.html` is fully standalone (inline CSS +
 
 ## What's live vs modeled vs unbuilt
 
-- **Live** (values shipped in the code): credit prices (`credit_prices`), plan grants
+> **Superseded in part.** `credit_prices` is no longer what a run costs — it is the
+> pre-flight ESTIMATE the balance check reserves against. The actual charge is metered
+> from the tokens the run burned: `credits_for_cost()` in `ai_pricing.py` applies
+> `CREDIT_MARKUP` (default 3.0, the same dial as tab 1's markup slider) to the real
+> OpenAI cost and divides by `CREDIT_OVERAGE_USD`. So tab 1's "suggested credits" column
+> is now what the code actually charges at the modeled token counts, and the "Margin"
+> column no longer drifts from it — margin is held by construction at every request size.
+> Reconcile the modeled token counts against `ai_usage_log` and `credit_ledger.metadata`
+> (which now carries `input_tokens` / `output_tokens` / `cost_usd` per charge).
+
+- **Live** (values shipped in the code): credit estimates (`credit_prices`), plan grants
   (`tier_entitlements`), plan prices (`lib/tiers.ts`), pack prices (`credit_packs`), the
   pay-per-use rate (`CREDIT_OVERAGE_USD`), the org activation floor
   (`ENTERPRISE_MIN_INITIAL_CREDITS`).

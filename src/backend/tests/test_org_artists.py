@@ -17,6 +17,37 @@ from tests.conftest import MockQueryBuilder
 U1 = "00000000-0000-0000-0000-000000000001"
 ORG_ID = "20000000-0000-0000-0000-000000000001"
 ARTIST_ID = "30000000-0000-0000-0000-000000000001"
+GB = 2**30
+
+
+def _db(*, owner_id=U1, team_id=None, exists=True, archived_at=None, kind=None, covered_by=None):
+    """Shared by TestTransferArtist and TestTransferStorageGuard below.
+    `kind`/`covered_by` default to None -> `.get("kind") == "self_serve"` is
+    False, so callers that never pass them exercise the SAME
+    enterprise/no-op path as before Task 12 touched this fixture."""
+    captured: dict = {}
+
+    def _side(name):
+        b = MockQueryBuilder()
+        if name == "artists":
+            rows = [{"id": ARTIST_ID, "user_id": owner_id, "team_id": team_id}] if exists else []
+            b.execute.return_value = MagicMock(data=rows, count=len(rows))
+
+            def _update(payload):
+                captured["payload"] = payload
+                return b
+
+            b.update = _update
+        elif name == "organizations":
+            b.execute.return_value = MagicMock(
+                data=[{"id": ORG_ID, "archived_at": archived_at, "kind": kind, "covered_by": covered_by}],
+                count=1,
+            )
+        return b
+
+    db = MagicMock()
+    db.table.side_effect = _side
+    return db, captured
 
 
 class TestTransferArtist:
@@ -24,27 +55,7 @@ class TestTransferArtist:
     artist pulled out of a team whose credits paid for its files — so v1 does
     not offer it; support moves it back by hand if it is ever needed."""
 
-    def _db(self, *, owner_id=U1, team_id=None, exists=True, archived_at=None):
-        captured: dict = {}
-
-        def _side(name):
-            b = MockQueryBuilder()
-            if name == "artists":
-                rows = [{"id": ARTIST_ID, "user_id": owner_id, "team_id": team_id}] if exists else []
-                b.execute.return_value = MagicMock(data=rows, count=len(rows))
-
-                def _update(payload):
-                    captured["payload"] = payload
-                    return b
-
-                b.update = _update
-            elif name == "organizations":
-                b.execute.return_value = MagicMock(data=[{"id": ORG_ID, "archived_at": archived_at}], count=1)
-            return b
-
-        db = MagicMock()
-        db.table.side_effect = _side
-        return db, captured
+    _db = staticmethod(_db)
 
     async def test_non_member_of_destination_404s(self, monkeypatch):
         """Membership is checked FIRST, so a stranger probing artist ids learns
@@ -133,6 +144,79 @@ class TestTransferArtist:
         monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
         db, captured = self._db()
         db.rpc.side_effect = RuntimeError("postgres said no")
+
+        await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
+
+        assert captured["payload"]["team_id"] == ORG_ID
+
+
+class TestTransferStorageGuard:
+    """Task 12, spec §5 byte inlet #2: a transfer into a self_serve org must
+    not let a team route around the upload gate by moving an artist's files in
+    wholesale instead of uploading them one at a time."""
+
+    _db = staticmethod(_db)
+
+    async def test_self_serve_transfer_over_pool_is_409_with_both_numbers(self, monkeypatch):
+        monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
+        db, captured = self._db(kind="self_serve", covered_by=U1)
+        monkeypatch.setattr(org_artists.storage_guard, "artist_subtree_bytes", lambda *a: 11 * GB)
+        monkeypatch.setattr(org_artists.storage_guard, "pool_state", lambda *a: (0, 10 * GB, False))
+
+        with pytest.raises(HTTPException) as exc_info:
+            await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
+
+        assert exc_info.value.status_code == 409
+        assert "11.0 GB" in exc_info.value.detail
+        assert "10.0 GB" in exc_info.value.detail
+        assert "payload" not in captured  # nothing written
+
+    async def test_self_serve_transfer_within_pool_proceeds(self, monkeypatch):
+        monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
+        db, captured = self._db(kind="self_serve", covered_by=U1)
+        monkeypatch.setattr(org_artists.storage_guard, "artist_subtree_bytes", lambda *a: 4 * GB)
+        monkeypatch.setattr(org_artists.storage_guard, "pool_state", lambda *a: (5 * GB, 10 * GB, False))
+
+        await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
+
+        assert captured["payload"]["team_id"] == ORG_ID
+
+    async def test_self_serve_transfer_landing_exactly_on_the_pool_boundary_proceeds(self, monkeypatch):
+        """used + subtree == pool is a fit, not an overage — same inclusive
+        `<=` boundary as upload_allowed itself (the guard delegates to it)."""
+        monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
+        db, captured = self._db(kind="self_serve", covered_by=U1)
+        monkeypatch.setattr(org_artists.storage_guard, "artist_subtree_bytes", lambda *a: 4 * GB)
+        monkeypatch.setattr(org_artists.storage_guard, "pool_state", lambda *a: (6 * GB, 10 * GB, False))  # 6 + 4 == 10
+
+        await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
+
+        assert captured["payload"]["team_id"] == ORG_ID
+
+    async def test_self_serve_transfer_pro_like_owner_bypasses_the_pool(self, monkeypatch):
+        """A pro-like covering owner is allowed regardless of the pool numbers
+        — PAYG absorbs it (mirrors upload_allowed / reactivation_allowed)."""
+        monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
+        db, captured = self._db(kind="self_serve", covered_by=U1)
+        monkeypatch.setattr(org_artists.storage_guard, "artist_subtree_bytes", lambda *a: 200 * GB)
+        monkeypatch.setattr(org_artists.storage_guard, "pool_state", lambda *a: (0, 100 * GB, True))
+
+        await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
+
+        assert captured["payload"]["team_id"] == ORG_ID
+
+    async def test_enterprise_transfer_never_touches_the_pool(self, monkeypatch):
+        """Enterprise targets are untouched: the guard doesn't even ask —
+        no artist_subtree_bytes call, no pool_state call, no tier_entitlements
+        read (pool_state is the only thing in this module that reads it)."""
+        monkeypatch.setattr(authz, "is_org_member", lambda *a: True)
+        db, captured = self._db(kind="enterprise", covered_by=None)
+
+        def _boom(*a):
+            raise AssertionError("enterprise transfer must not consult the pool")
+
+        monkeypatch.setattr(org_artists.storage_guard, "artist_subtree_bytes", _boom)
+        monkeypatch.setattr(org_artists.storage_guard, "pool_state", _boom)
 
         await org_artists.transfer_artist_to_team(db, U1, ORG_ID, ARTIST_ID)
 

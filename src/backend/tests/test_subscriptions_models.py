@@ -17,6 +17,23 @@ class TestCaps:
         )
         assert c.max_artists == -1
 
+    def test_team_dials_default_to_zero(self):
+        """Team dials (spec 2026-08-15 §1) default to 0, not -1 — they are not
+        count caps, so "unlimited" is never a valid value for them."""
+        from subscriptions.models import Caps
+
+        c = Caps(
+            max_artists=-1,
+            max_projects=-1,
+            max_tasks=-1,
+            max_storage_bytes=-1,
+            max_split_sheets_per_month=-1,
+            max_oneclick_runs_per_month=-1,
+        )
+        assert c.max_teams == 0
+        assert c.max_team_members == 0
+        assert c.team_storage_bytes == 0
+
 
 class TestFeatures:
     def test_default_integrations_list(self):
@@ -52,6 +69,10 @@ class TestEntitlements:
         assert d["usage"]["splitSheetsThisPeriod"] == 0
         assert d["hasOverrides"] is False
         assert d["degraded"] is False
+        # Team dials (spec 2026-08-15 §1) — camelCase, present even at default 0
+        assert d["caps"]["maxTeams"] == 0
+        assert d["caps"]["maxTeamMembers"] == 0
+        assert d["caps"]["teamStorageBytes"] == 0
         # Stripe billing sub-object always present; None for free users
         assert "subscription" in d
         assert d["subscription"]["stripeSubscriptionId"] is None

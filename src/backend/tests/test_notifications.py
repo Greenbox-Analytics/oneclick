@@ -223,3 +223,59 @@ def test_mark_all_notifications_read_bulk(client, mock_supabase):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+# ============================================================
+# "Mark all read" must not consume an unanswered invitation
+# ============================================================
+# An invite row is a to-do, not a message: NotificationRow gates its
+# Accept/Decline buttons on unread. Sweeping one up with the rest is what made
+# an invite unrecoverable — the user clicks "Mark all read", the buttons vanish,
+# and the invite is still pending server-side with no in-app way to accept it.
+
+
+async def test_mark_all_read_skips_org_invites():
+    from registry import service
+
+    rows = [
+        {"id": "n-org-invite", "type": "invitation", "entity_type": "org"},
+        {"id": "n-team-invite", "type": "team_invite", "entity_type": None},
+        {"id": "n-work-invite", "type": "invitation", "entity_type": "work"},
+        {"id": "n-status", "type": "status_change", "entity_type": "org"},
+        {"id": "n-registry", "type": "invitation", "entity_type": None},
+    ]
+    db = MagicMock()
+    select_chain = db.table.return_value.select.return_value.eq.return_value.eq.return_value
+    select_chain.execute.return_value = MagicMock(data=rows)
+
+    await service.mark_all_notifications_read(db, TEST_USER_ID)
+
+    marked = db.table.return_value.update.return_value.in_.call_args.args[1]
+    # The two ACTIONABLE invites survive; everything else is marked read —
+    # including registry 'invitation' rows, which carry no buttons.
+    assert set(marked) == {"n-work-invite", "n-status", "n-registry"}
+
+
+async def test_mark_all_read_is_a_noop_when_only_invites_are_unread():
+    """No update at all rather than an empty .in_() — an unfiltered update
+    would mark the whole inbox read."""
+    from registry import service
+
+    db = MagicMock()
+    select_chain = db.table.return_value.select.return_value.eq.return_value.eq.return_value
+    select_chain.execute.return_value = MagicMock(data=[{"id": "n1", "type": "team_invite", "entity_type": None}])
+
+    await service.mark_all_notifications_read(db, TEST_USER_ID)
+
+    db.table.return_value.update.assert_not_called()
+
+
+def test_actionable_invite_predicate_matches_the_ui():
+    """Mirrors NotificationRow.tsx's isInvite exactly."""
+    from registry.service import _is_actionable_invite
+
+    assert _is_actionable_invite({"type": "invitation", "entity_type": "org"})
+    assert _is_actionable_invite({"type": "team_invite", "entity_type": None})
+    assert not _is_actionable_invite({"type": "invitation", "entity_type": "work"})
+    assert not _is_actionable_invite({"type": "invitation", "entity_type": None})
+    assert not _is_actionable_invite({"type": "status_change", "entity_type": "org"})

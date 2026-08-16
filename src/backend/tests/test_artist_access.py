@@ -57,7 +57,7 @@ class _Recorder:
 
     @staticmethod
     def _record(builder, sink):
-        for method in ("eq", "is_", "or_", "in_"):
+        for method in ("eq", "neq", "is_", "or_", "in_"):
             original = getattr(builder, method)
 
             def _capture(*args, _m=method, _o=original, **kwargs):
@@ -119,6 +119,36 @@ def test_archived_org_confers_no_visibility(monkeypatch):
     assert main.verify_user_owns_artist(TEST_USER_ID, ARTIST) is False
     assert ("is_", ("archived_at", "null")) in rec.org_filters
     assert not [f for f in rec.artist_filters if f[0] == "or_"]
+
+
+def test_lapsed_org_confers_no_visibility(monkeypatch):
+    """20260816000002_self_serve_orgs.sql: a self-serve org whose grace period
+    ran out goes inert for its whole roster, admins included — same one-rule
+    semantics as archived_at, mirrored here since the backend runs
+    service-role and the SQL clause alone is decorative for API paths.
+    Modeled the same way archived is: the lapsed org is absent from the
+    (mocked) DB response, and the query must still ask for the exclusion."""
+    rec = _Recorder(seats=[{"org_id": ORG_A}], live_orgs=[], artists=[])
+    _install(monkeypatch, rec)
+
+    assert main.verify_user_owns_artist(TEST_USER_ID, ARTIST) is False
+    assert ("neq", ("status", "lapsed")) in rec.org_filters
+
+
+def test_pending_org_stays_visible(monkeypatch):
+    """Pre-existing behaviour pinned: only 'lapsed' is excluded.
+    'pending'/'suspended' are deliberately still unchecked (documented in
+    20260803000001) — a pending org is still being set up, and its members
+    should be able to build the roster they are about to pay for."""
+    rec = _Recorder(
+        seats=[{"org_id": ORG_A}],
+        live_orgs=[{"id": ORG_A}],
+        artists=[{"id": ARTIST}],
+    )
+    _install(monkeypatch, rec)
+
+    assert main.verify_user_owns_artist(TEST_USER_ID, ARTIST) is True
+    assert ("neq", ("status", "lapsed")) in rec.org_filters
 
 
 def test_only_active_seats_are_considered(monkeypatch):

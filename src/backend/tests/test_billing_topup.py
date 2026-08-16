@@ -227,3 +227,183 @@ class TestCreateTopupSessionOrgTarget:
         assert kwargs["cancel_url"] == "https://app.test/profile?topup=canceled"
         assert kwargs.get("customer") == "cus_existing"
         assert "customer_email" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# Recurring org top-up (spec 2026-08-15 §4.3, Task 11)
+# ---------------------------------------------------------------------------
+
+RECURRING_PACK_ROW = {**PACK_ROW, "recurring_stripe_price_id": "price_rec_500"}
+LIVE_ORG = {
+    "kind": "self_serve",
+    "archived_at": None,
+    "dissolved_at": None,
+    "topup_stripe_subscription_id": None,
+}
+
+
+class TestCreditPacksCatalogRecurring:
+    """The pack listing doubles as the recurring-top-up catalog: a pack is
+    monthly-buyable exactly when the operator set recurring_stripe_price_id
+    on it (Migration 20260816000002). No second catalog endpoint."""
+
+    def _packs(self, rows):
+        def _fn(name):
+            if name == "credit_packs":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=rows)
+                return b
+            return _default_table_side_effect(name)
+
+        return _fn
+
+    def test_exposes_recurring_price_id(self, client, mock_supabase):
+        mock_supabase.table.side_effect = self._packs([RECURRING_PACK_ROW])
+        resp = client.get("/billing/credit-packs")
+        assert resp.status_code == 200
+        assert resp.json()["packs"][0]["recurringPriceId"] == "price_rec_500"
+
+    def test_null_when_operator_has_not_configured_one(self, client, mock_supabase):
+        mock_supabase.table.side_effect = self._packs([PACK_ROW])
+        resp = client.get("/billing/credit-packs")
+        assert resp.status_code == 200
+        pack = resp.json()["packs"][0]
+        assert pack["key"] == "pack_500"
+        assert pack["recurringPriceId"] is None
+
+
+class TestOrgTopupCheckout:
+    """POST /billing/org-topup-checkout — the SAME pack bought as a monthly
+    Stripe SUBSCRIPTION on the purchasing admin's personal customer, refilling
+    the ORG pool each period.
+
+    The metadata contract is load-bearing (review r2): BOTH the session's
+    metadata (read by handle_checkout_session_completed) and
+    subscription_data.metadata (copied by Stripe onto the Subscription and
+    every invoice's subscription_details.metadata) carry
+    {org_id, kind: 'org_topup', purchased_by} — and NEITHER carries user_id,
+    which is what keeps the personal-subscription handlers off these events.
+    """
+
+    def _side_effect(self, org_row=None, pack=RECURRING_PACK_ROW, customer="cus_existing"):
+        def _fn(name):
+            if name == "credit_packs":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[pack] if pack else [])
+                return b
+            if name == "subscriptions":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[{"user_id": TEST_USER_ID, "stripe_customer_id": customer}])
+                return b
+            if name == "organizations":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[org_row] if org_row is not None else [])
+                return b
+            return _default_table_side_effect(name)
+
+        return _fn
+
+    def _post(self, client, key="pack_500"):
+        return client.post("/billing/org-topup-checkout", json={"org_id": ORG_ID, "key": key})
+
+    def _flags_on(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("FRONTEND_URL", "https://app.test")
+
+    def test_404_when_licensing_flag_off(self, client, mock_supabase, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        mock_supabase.table.side_effect = self._side_effect(org_row=LIVE_ORG)
+        assert self._post(client).status_code == 404
+
+    def test_409_when_credits_flag_off(self, client, mock_supabase, monkeypatch):
+        monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        mock_supabase.table.side_effect = self._side_effect(org_row=LIVE_ORG)
+        assert self._post(client).status_code == 409
+
+    def test_403_when_caller_is_not_an_active_admin(self, client, mock_supabase, monkeypatch):
+        self._flags_on(monkeypatch)
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: False)
+        mock_supabase.table.side_effect = self._side_effect(org_row=LIVE_ORG)
+        assert self._post(client).status_code == 403
+
+    def test_409_on_enterprise_org(self, client, mock_supabase, monkeypatch):
+        self._flags_on(monkeypatch)
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: True)
+        mock_supabase.table.side_effect = self._side_effect(org_row={**LIVE_ORG, "kind": "enterprise"})
+        assert self._post(client).status_code == 409
+
+    def test_409_on_archived_org(self, client, mock_supabase, monkeypatch):
+        self._flags_on(monkeypatch)
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: True)
+        mock_supabase.table.side_effect = self._side_effect(
+            org_row={**LIVE_ORG, "archived_at": "2026-08-01T00:00:00+00:00"}
+        )
+        assert self._post(client).status_code == 409
+
+    def test_409_when_org_already_has_a_topup(self, client, mock_supabase, monkeypatch):
+        self._flags_on(monkeypatch)
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: True)
+        mock_supabase.table.side_effect = self._side_effect(
+            org_row={**LIVE_ORG, "topup_stripe_subscription_id": "sub_existing"}
+        )
+        assert self._post(client).status_code == 409
+
+    def test_404_when_pack_has_no_recurring_price(self, client, mock_supabase, monkeypatch):
+        """A pack that exists but was never given a recurring Stripe price is
+        not part of this catalog — 404, reading identically to an unknown key
+        (PACK_ROW is the one-time-only pack)."""
+        self._flags_on(monkeypatch)
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: True)
+        mock_supabase.table.side_effect = self._side_effect(org_row=LIVE_ORG, pack=PACK_ROW)
+        assert self._post(client).status_code == 404
+
+    def test_404_when_key_is_unknown(self, client, mock_supabase, monkeypatch):
+        self._flags_on(monkeypatch)
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: True)
+        mock_supabase.table.side_effect = self._side_effect(org_row=LIVE_ORG, pack=None)
+        assert self._post(client, key="nope").status_code == 404
+
+    def test_creates_subscription_mode_session_with_both_metadata_objects(self, client, mock_supabase, monkeypatch):
+        self._flags_on(monkeypatch)
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: True)
+        mock_supabase.table.side_effect = self._side_effect(org_row=LIVE_ORG)
+
+        fake_stripe = MagicMock()
+        fake_stripe.checkout.Session.create.return_value = MagicMock(url="https://checkout.stripe/topup")
+        with patch("subscriptions.billing_router.stripe_client_module.get_stripe", return_value=fake_stripe):
+            resp = self._post(client)
+
+        assert resp.status_code == 200
+        assert resp.json()["url"] == "https://checkout.stripe/topup"
+        kwargs = fake_stripe.checkout.Session.create.call_args.kwargs
+        assert kwargs["mode"] == "subscription"
+        assert kwargs["line_items"] == [{"price": "price_rec_500", "quantity": 1}]
+        expected = {"org_id": ORG_ID, "kind": "org_topup", "purchased_by": TEST_USER_ID}
+        assert kwargs["metadata"] == expected
+        assert kwargs["subscription_data"]["metadata"] == expected
+        # NO user_id in either object — that key is what routes an event into
+        # the personal-subscription handlers.
+        assert "user_id" not in kwargs["metadata"]
+        assert "user_id" not in kwargs["subscription_data"]["metadata"]
+        # Same customer-resolution block as the pack path.
+        assert kwargs.get("customer") == "cus_existing"
+        assert "customer_email" not in kwargs
+        assert "/organization?topup=success" in kwargs["success_url"]
+
+    def test_falls_back_to_customer_email(self, client, mock_supabase, monkeypatch):
+        self._flags_on(monkeypatch)
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: True)
+        mock_supabase.table.side_effect = self._side_effect(org_row=LIVE_ORG, customer=None)
+
+        fake_stripe = MagicMock()
+        fake_stripe.checkout.Session.create.return_value = MagicMock(url="https://checkout.stripe/topup")
+        with patch("subscriptions.billing_router.stripe_client_module.get_stripe", return_value=fake_stripe):
+            resp = self._post(client)
+
+        assert resp.status_code == 200
+        kwargs = fake_stripe.checkout.Session.create.call_args.kwargs
+        assert kwargs.get("customer_email")
+        assert "customer" not in kwargs

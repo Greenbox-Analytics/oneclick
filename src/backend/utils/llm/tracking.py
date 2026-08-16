@@ -9,23 +9,86 @@ No context set → no row (covers scripts/tests/background jobs).
 """
 
 import logging
+import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from functools import partial
 from typing import Any
 
-from subscriptions.ai_pricing import estimate_cost_usd
+from subscriptions.ai_pricing import credits_for_cost, estimate_cost_usd
 
 logger = logging.getLogger(__name__)
 
 # (user_id, tool) for the current request; None outside a tracked endpoint.
 llm_call_context: ContextVar[tuple[str, str] | None] = ContextVar("llm_call_context", default=None)
 
+# Running LLM spend for the current request, accumulated by _record_with_ctx.
+# This is what makes a credit charge proportional to tokens actually burned
+# rather than a flat per-action price. None outside a tracked scope (scripts,
+# background jobs, tests) — callers then fall back to the flat estimate.
+llm_usage_totals: ContextVar[dict | None] = ContextVar("llm_usage_totals", default=None)
+
+# ponytail: one global lock, not per-accumulator. `d[k] += n` is a
+# read-modify-write that OneClick's submit_with_context worker threads can
+# genuinely interleave on, and this is a money path. Contention is a handful of
+# LLM calls per request — go per-accumulator only if that ever shows up.
+_totals_lock = threading.Lock()
+
+
+def new_usage_totals() -> dict:
+    """A fresh per-request LLM spend accumulator.
+
+    `unpriced` counts calls whose model is missing from MODEL_RATES: their cost
+    is unknowable, so the measured total is incomplete and callers must fall
+    back to the flat estimate rather than under-charging.
+    """
+    return {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "calls": 0, "unpriced": 0}
+
+
+def _accumulate(totals: dict | None, *, cost: float | None, input_tokens: int, output_tokens: int) -> None:
+    if totals is None:
+        return
+    with _totals_lock:
+        totals["calls"] += 1
+        totals["input_tokens"] += input_tokens
+        totals["output_tokens"] += output_tokens
+        if cost is None:
+            totals["unpriced"] += 1
+        else:
+            totals["cost_usd"] += cost
+
+
+def llm_usage_snapshot() -> dict | None:
+    """Copy of the current scope's accumulated spend, or None outside a scope."""
+    totals = llm_usage_totals.get()
+    if totals is None:
+        return None
+    with _totals_lock:
+        return dict(totals)
+
+
+def credits_for_llm_usage() -> int | None:
+    """Credits owed for the LLM work done so far in the current tracked scope.
+
+    None means "not measurable" — no scope active, or at least one call used a
+    model absent from MODEL_RATES — and the caller must charge the flat
+    estimate instead. A scope that made no LLM calls returns 0, which is how a
+    cache hit becomes free without any per-tool special-casing.
+    """
+    totals = llm_usage_snapshot()
+    if totals is None or totals["unpriced"]:
+        return None
+    return credits_for_cost(totals["cost_usd"])
+
 
 @contextmanager
 def set_llm_context(user_id: str, tool: str):
     """Scope LLM usage attribution to (user_id, tool) for the duration.
+
+    Yields the spend accumulator, so a caller that needs the totals AFTER the
+    block can hold onto it. Everything inside the block can read it via
+    credits_for_llm_usage() instead.
 
     WORKS for: plain request/response handlers, and ASYNC generator bodies
     (StreamingResponse consumes an async generator inside one task, so a set()
@@ -34,28 +97,35 @@ def set_llm_context(user_id: str, tool: str):
     advances those in a threadpool where each next() gets a fresh context
     copy. Use iter_with_llm_context() for sync generators instead.
     """
+    totals = new_usage_totals()
     token = llm_call_context.set((user_id, tool))
+    totals_token = llm_usage_totals.set(totals)
     try:
-        yield
+        yield totals
     finally:
+        llm_usage_totals.reset(totals_token)
         llm_call_context.reset(token)
 
 
 def iter_with_llm_context(user_id: str, tool: str, inner):
     """Wrap a SYNC generator so the LLM context is live during EVERY resumption.
 
-    Each next() re-binds the contextvar around the inner step, so LLM calls
-    made anywhere inside that step see it — regardless of which threadpool
-    thread Starlette runs the step on.
+    Each next() re-binds the contextvars around the inner step, so LLM calls
+    made anywhere inside that step see them — regardless of which threadpool
+    thread Starlette runs the step on. ONE accumulator spans the whole stream,
+    so a charge taken at the terminal event covers every call the stream made.
     """
     it = iter(inner)
+    totals = new_usage_totals()
     while True:
         token = llm_call_context.set((user_id, tool))
+        totals_token = llm_usage_totals.set(totals)
         try:
             item = next(it)
         except StopIteration:
             return
         finally:
+            llm_usage_totals.reset(totals_token)
             llm_call_context.reset(token)
         yield item
 
@@ -78,11 +148,24 @@ def _default_get_supabase():
 
 
 def _record(get_supabase: Callable, *, model: str, usage: Any, success: bool) -> None:
-    _record_with_ctx(get_supabase, ctx=llm_call_context.get(), model=model, usage=usage, success=success)
+    _record_with_ctx(
+        get_supabase,
+        ctx=llm_call_context.get(),
+        totals=llm_usage_totals.get(),
+        model=model,
+        usage=usage,
+        success=success,
+    )
 
 
 def _record_with_ctx(
-    get_supabase: Callable, *, ctx: tuple[str, str] | None, model: str, usage: Any, success: bool
+    get_supabase: Callable,
+    *,
+    ctx: tuple[str, str] | None,
+    model: str,
+    usage: Any,
+    success: bool,
+    totals: dict | None = None,
 ) -> None:
     if ctx is None:
         return
@@ -97,6 +180,12 @@ def _record_with_ctx(
             if input_tokens is not None
             else None
         )
+        # Accumulate BEFORE the insert: the credit charge must not depend on
+        # the analytics write succeeding. A call that reported no usage at all
+        # (a failure before the API answered) contributes nothing but is NOT
+        # counted unpriced — it burned no tokens, so it owes no credits.
+        if input_tokens is not None or output_tokens is not None:
+            _accumulate(totals, cost=cost, input_tokens=input_tokens or 0, output_tokens=output_tokens or 0)
         get_supabase().table("ai_usage_log").insert(
             {
                 "user_id": user_id,
@@ -119,16 +208,24 @@ class _UsageCapturingStream:
     stream=True calls return usage only on the FINAL chunk, and only when
     stream_options={"include_usage": True} was requested (the final chunk has
     empty `choices` — existing consumer loops that guard on `chunk.choices`
-    tolerate it). Identity (user_id, tool) is SNAPSHOTTED at create() time
-    because sync generators under StreamingResponse advance in threadpool
-    steps where the contextvar may no longer be set.
+    tolerate it). Identity (user_id, tool) AND the spend accumulator are both
+    SNAPSHOTTED at create() time because sync generators under StreamingResponse
+    advance in threadpool steps where the contextvars may no longer be set.
     """
 
-    def __init__(self, inner_stream, get_supabase: Callable, model: str, ctx: tuple[str, str] | None):
+    def __init__(
+        self,
+        inner_stream,
+        get_supabase: Callable,
+        model: str,
+        ctx: tuple[str, str] | None,
+        totals: dict | None = None,
+    ):
         self._inner = inner_stream
         self._get_supabase = get_supabase
         self._model = model
         self._ctx = ctx
+        self._totals = totals
         self._usage = None
         self._recorded = False
         self._gen = None
@@ -156,7 +253,14 @@ class _UsageCapturingStream:
         if self._recorded:
             return
         self._recorded = True
-        _record_with_ctx(self._get_supabase, ctx=self._ctx, model=self._model, usage=self._usage, success=success)
+        _record_with_ctx(
+            self._get_supabase,
+            ctx=self._ctx,
+            totals=self._totals,
+            model=self._model,
+            usage=self._usage,
+            success=success,
+        )
 
     # __iter__ resolves on the TYPE, not through __getattr__. The sole consumer
     # iterates (`for chunk in response`), routing through ONE capturing generator
@@ -182,13 +286,15 @@ class _TrackedCompletions:
             opts = dict(kwargs.get("stream_options") or {})
             opts.setdefault("include_usage", True)
             kwargs["stream_options"] = opts
-            ctx = llm_call_context.get()  # snapshot NOW — see _UsageCapturingStream
+            # Snapshot NOW — see _UsageCapturingStream.
+            ctx = llm_call_context.get()
+            totals = llm_usage_totals.get()
             try:
                 stream = self._inner.create(*args, **kwargs)
             except Exception:
-                _record_with_ctx(self._get_supabase, ctx=ctx, model=model, usage=None, success=False)
+                _record_with_ctx(self._get_supabase, ctx=ctx, totals=totals, model=model, usage=None, success=False)
                 raise
-            return _UsageCapturingStream(stream, self._get_supabase, model, ctx)
+            return _UsageCapturingStream(stream, self._get_supabase, model, ctx, totals)
         try:
             resp = self._inner.create(*args, **kwargs)
         except Exception:

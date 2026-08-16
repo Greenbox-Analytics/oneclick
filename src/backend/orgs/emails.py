@@ -183,6 +183,71 @@ def send_billing_reverted_email(recipient_email: str, org_name: str):
     )
 
 
+def send_standing_email(recipient_emails: list[str], org_name: str, kind: str):
+    """Best-effort email to every ACTIVE admin on a team-standing transition
+    (grace/lapsed/reactivated — orgs/standing.py's evaluate_standing, the
+    daily sweep). Clones send_billing_reverted_email's shape/env guards;
+    multi-recipient like send_credit_request_email since every admin needs to
+    see this, not just the covering one.
+
+    `kind` ∈ {"grace_started", "lapsed", "reactivated"} — matches the
+    in-app notification's transition names 1:1."""
+    if not recipient_emails:
+        print("Warning: no admin recipients resolved — skipping standing email")
+        return None
+
+    from orgs.standing import grace_days
+
+    frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
+    safe_org = html.escape(org_name)
+    cta_href = f"{frontend_url}/organization"
+
+    copy = {
+        "grace_started": (
+            "Your team is losing access soon",
+            f"Your team <strong>&ldquo;{safe_org}&rdquo;</strong> has lost its credit coverage. "
+            f"Reactivate within <strong>{grace_days()} days</strong> by keeping a Basic or Pro "
+            "subscription, or by claiming coverage, to avoid a pause.",
+        ),
+        "lapsed": (
+            "Your team has been paused",
+            f"Your team <strong>&ldquo;{safe_org}&rdquo;</strong> is now paused — nothing is "
+            "deleted, but active work stops until it's covered again. If a credit top-up "
+            "subscription is still running for this team, cancel it from your billing settings "
+            "to stop further charges; credits already purchased stay in the pool and are "
+            "spendable once you reactivate.",
+        ),
+        "reactivated": (
+            "Your team is active again",
+            f"Your team <strong>&ldquo;{safe_org}&rdquo;</strong> is active again.",
+        ),
+    }
+    headline, detail = copy[kind]
+
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <h1 style="color: #1a3a2a; font-size: 24px; margin: 0;">Msanii</h1>
+      </div>
+      <p style="font-size: 16px; color: #333;">{headline}</p>
+      <p style="font-size: 15px; color: #555;">{detail}</p>
+      <div style="text-align: center; margin: 32px 0;">
+        <a href="{cta_href}"
+           style="display: inline-block; background: #1a3a2a; color: white; padding: 14px 32px;
+                  border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px;">
+          Open your organization
+        </a>
+      </div>
+    </div>
+    """
+
+    return _send(
+        subject=f'{headline} ("{safe_org}")',
+        html_body=html_body,
+        recipients=recipient_emails,
+    )
+
+
 def send_credit_request_resolved_email(
     recipient_email: str,
     org_name: str,

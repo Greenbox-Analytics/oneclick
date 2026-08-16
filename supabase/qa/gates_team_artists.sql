@@ -13,13 +13,14 @@
 --
 -- Gates 1-6 cover 20260803000001, 7-14 cover 20260803000002, 15-16 cover
 -- 20260803000003, 17-19 cover 20260805000001 (parent-pointer walk-out locks),
--- 20-21 cover 20260805000002 (notes team scope).
+-- 20-21 cover 20260805000002 (notes team scope), 22-24 cover 20260816000002
+-- (self-serve orgs' 'lapsed' status wired into can_access_artist).
 --
 -- Run the whole file after each of those migrations, and read the count in
 -- context: after 20260803000001 alone, gates 1-6 pass and 7-11 fail because the
 -- policies they exercise do not exist yet. Expected totals are 6 after
 -- 20260803000001, 14 after 20260803000002, 16 after 20260803000003, 19 after
--- 20260805000001, and 21 after 20260805000002.
+-- 20260805000001, 21 after 20260805000002, and 24 after 20260816000002.
 -- ============================================================================
 DO $$
 DECLARE
@@ -367,6 +368,38 @@ BEGIN
     RESET ROLE;
     PERFORM set_config('request.jwt.claims', NULL, true);
   END;
+
+  -- -------------------------------------------------------------- 22..24 --
+  -- 'lapsed' (20260816000002): a self-serve org whose grace period ran out
+  -- goes inert for its whole roster, admins included -- same one-rule
+  -- semantics as archived_at (gate 4), just keyed off a different column.
+  -- v_org/v_team/v_member are the same fixture gates 1-21 used; by this point
+  -- v_org is back to 'active' and v_member is an ordinary active member (both
+  -- restored after gate 20/21), so this reads as a clean before/after probe.
+  UPDATE organizations SET status = 'lapsed' WHERE id = v_org;
+  IF NOT can_access_artist(v_team, v_member) THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 22. lapsed org revokes team artist access';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 22. lapsed org still grants access';
+  END IF;
+
+  UPDATE organizations SET status = 'active' WHERE id = v_org;
+  IF can_access_artist(v_team, v_member) THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 23. active org restores team artist access';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 23. active org does not restore access';
+  END IF;
+
+  -- Pin pre-existing behavior: 'pending' is deliberately NOT gated by
+  -- can_access_artist (a team still being set up must be able to build its
+  -- roster before it has paid). This migration must not silently change that.
+  UPDATE organizations SET status = 'pending' WHERE id = v_org;
+  IF can_access_artist(v_team, v_member) THEN
+    v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 24. pending org still grants access (pre-existing behavior, unchanged)';
+  ELSE
+    v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 24. pending org now blocks access (behavior regression)';
+  END IF;
+  UPDATE organizations SET status = 'active' WHERE id = v_org;
 
   RAISE EXCEPTION E'\n=== TEAM ARTIST GATES: % passed, % failed. ALL TEST DATA ROLLED BACK. ===%\n',
     v_pass, v_fail, v_report;

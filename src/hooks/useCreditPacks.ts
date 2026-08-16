@@ -7,6 +7,10 @@ export interface CreditPack {
   credits: number;
   price_cents: number;
   sort_order: number;
+  /** Set only when an operator has configured a recurring Stripe price for
+   * this pack — makes it eligible for the org monthly top-up catalog
+   * (POST /billing/org-topup-checkout). Null on every other pack. */
+  recurringPriceId?: string | null;
 }
 
 /** GET /billing/credit-packs — active, purchasable packs. */

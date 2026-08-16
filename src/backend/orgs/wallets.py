@@ -13,13 +13,12 @@ The pool carries BOTH buckets, with different lifetimes:
 `debit_credits` drains bundle before reserve, so the expiring money is always
 spent first.
 
-LOUD WARNING — do NOT reuse `subscriptions.service.EntitlementsService.
-_read_or_create_wallet` for the org pool, and do NOT copy its upsert pattern
-here. That helper seeds `period_end=now()` so the caller's next
-`_maybe_rollover_wallet` fires immediately and grants the *tier's*
-`monthly_credits` — on an org pool that would overwrite the dispersal with a
-personal-plan grant. The pool's period is written by the dispersal sweep and
-nothing else.
+LOUD WARNING — do NOT reuse `read_or_create_user_wallet` (below) for the org
+pool, and do NOT copy its upsert pattern here. That helper seeds
+`period_end=now()` so the caller's next `_maybe_rollover_wallet` fires
+immediately and grants the *tier's* `monthly_credits` — on an org pool that
+would overwrite the dispersal with a personal-plan grant. The pool's period
+is written by the dispersal sweep and nothing else.
 
 INSERT, not upsert: an upsert's `ON CONFLICT ... DO UPDATE` could reset
 bundle_balance/reserve_balance back to their insert defaults if two
@@ -29,7 +28,9 @@ as "someone else already created it, re-read what they wrote."
 """
 
 import os
+from datetime import UTC, datetime
 
+from dateutil.relativedelta import relativedelta
 from supabase import Client
 
 # Ledger kinds that represent the org PAYING us for credits. All count toward
@@ -61,7 +62,16 @@ def _read_wallet(sb: Client, owner_type: str, owner_id: str) -> dict | None:
 
 
 def read_or_create_org_wallet(sb: Client, org_id: str) -> dict:
-    """The org's pool wallet: owner_type='org', owner_id=org_id. Create-on-miss.
+    """The shared accessor for the org's ONE pool wallet: owner_type='org',
+    owner_id=org_id. Create-on-miss (see the module docstring for why this
+    is a plain INSERT, not an upsert).
+
+    Both READ callers (balance display: dissolve_preview, get_org_usage,
+    subscriptions.service's org credit-balance resolution) and WRITE callers
+    (transfer_credits_to_pool, top-up/admin-gift grants, dissolve_org's
+    reserve forfeit) across orgs/ and subscriptions/ go through this — never
+    a raw `credit_wallets` table read/insert — so the pool has exactly one
+    code path that can bring its wallet into existence.
 
     NEVER call this with a user id — user wallets are seeded exclusively by
     `EntitlementsService._read_or_create_wallet`, which arms a rollover-triggering
@@ -94,6 +104,50 @@ def read_or_create_org_wallet(sb: Client, org_id: str) -> dict:
         if row:
             return row
         raise RuntimeError(f"failed to read or create org wallet for org_id={org_id}")
+
+
+def read_or_create_user_wallet(db: Client, user_id: str) -> dict:
+    """The caller's PERSONAL wallet: owner_type='user', owner_id=user_id.
+    Create-on-miss, upsert-seeded with `period_end=now()` so the caller's next
+    `_maybe_rollover_wallet` fires immediately and grants the tier's
+    `monthly_credits` — no wallet ever starts un-granted (same seeding trick as
+    the migration's trigger/backfill).
+
+    MOVED here (2026-08-15) from `subscriptions.service.EntitlementsService.
+    _read_or_create_wallet`, which is now a one-line delegate to this function —
+    ONE wallet read-or-create per owner type, not two siblings. This module has
+    NO subscriptions imports, so `subscriptions.service` importing FROM here
+    (lazily, matching the rest of this file's call sites) keeps the
+    orgs<->subscriptions import direction one-way.
+
+    NEVER call this with an org id — see the module's LOUD WARNING above and
+    use `read_or_create_org_wallet` instead: this seeds a rollover-triggering
+    tier grant an org pool must never receive.
+    """
+    existing = _read_wallet(db, "user", user_id)
+    if existing:
+        return existing
+    now = datetime.now(UTC)
+    db.table("credit_wallets").upsert(
+        {
+            "owner_type": "user",
+            "owner_id": user_id,
+            "period_start": (now - relativedelta(months=1)).isoformat(),
+            "period_end": now.isoformat(),
+        },
+        on_conflict="owner_type,owner_id",
+    ).execute()
+    existing = _read_wallet(db, "user", user_id)
+    return existing or {
+        "id": None,
+        "owner_type": "user",
+        "owner_id": user_id,
+        "bundle_balance": 0,
+        "reserve_balance": 0,
+        "overage_this_period": 0,
+        "period_start": (now - relativedelta(months=1)).isoformat(),
+        "period_end": now.isoformat(),
+    }
 
 
 def cumulative_paid_in(sb: Client, org_wallet_id: str) -> int:

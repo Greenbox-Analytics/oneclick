@@ -218,3 +218,85 @@ def test_stale_cache_payload_without_aliases_still_matches_by_name():
     assert result["found"] is True
     assert result["master_pct"] == 25
     assert result["matched_file_ids"] == ["f1"]
+
+
+# ---------------------------------------------------------------------------
+# Endpoint gating: Derive runs a full LLM extraction per contract, so it is a
+# metered AI action. It previously charged NOTHING — only the Registry feature
+# flag guarded it — which leaked the whole cost of the Derive dialog.
+# ---------------------------------------------------------------------------
+
+
+def _drive_derive_endpoint(monkeypatch, *, derive_result=None, burn_tokens=False):
+    """Call the router coroutine directly with its deps stubbed, returning
+    (gated_credits calls, debit_for_action calls, credits measured at debit)."""
+    from unittest.mock import MagicMock
+
+    from registry import router as registry_router
+    from registry.models import DeriveFromContractsBody
+    from utils.llm.tracking import TrackedOpenAI, credits_for_llm_usage
+
+    gate_calls, debit_calls, measured = [], [], []
+
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"id": "link-1"}]
+    )
+    db.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+    async def _work_access(*_a, **_k):
+        return MagicMock(can_manage=True)
+
+    async def _derive(*_a, **_k):
+        if burn_tokens:
+            inner = MagicMock()
+            inner.chat.completions.create.return_value = MagicMock(
+                usage=MagicMock(prompt_tokens=200_000, completion_tokens=0, prompt_tokens_details=None)
+            )
+            TrackedOpenAI(inner, get_supabase=lambda: MagicMock()).chat.completions.create(model="gpt-5-mini")
+        return derive_result or {"found": False, "confidence": "none", "matched_file_ids": []}
+
+    ent = MagicMock()
+    ent.debit_for_action.side_effect = lambda *a: (
+        debit_calls.append(a),
+        measured.append(credits_for_llm_usage()),
+    )
+
+    monkeypatch.setattr(registry_router, "gated_feature", lambda *a, **k: None)
+    monkeypatch.setattr(registry_router, "gated_credits", lambda *a, **k: gate_calls.append((a, k)) or "grant")
+    monkeypatch.setattr(registry_router, "_get_supabase", lambda: db)
+    monkeypatch.setattr(registry_router, "get_work_access", _work_access)
+    monkeypatch.setattr(registry_router, "analytics_capture", lambda *a, **k: None)
+    monkeypatch.setattr(derive_service, "derive_for_collaborator", _derive)
+    monkeypatch.setattr("subscriptions.deps._get_entitlements_service", lambda: ent)
+
+    body = DeriveFromContractsBody(work_id="w1", name="Marcus", contract_file_ids=["f1"])
+    asyncio.run(registry_router.derive_from_contracts(body, user_id="u1"))
+    return gate_calls, debit_calls, measured
+
+
+def test_derive_endpoint_is_credit_gated(monkeypatch):
+    """It must take the REGISTRY_PARSE credit gate, and derive the billing org
+    from the contracts it is about to parse."""
+    from subscriptions.models import CreditAction
+
+    gate_calls, debit_calls, _ = _drive_derive_endpoint(monkeypatch)
+
+    assert len(gate_calls) == 1
+    args, kwargs = gate_calls[0]
+    assert args == ("u1", CreditAction.REGISTRY_PARSE)
+    assert kwargs["resource_contract_ids"] == ["f1"]
+    assert len(debit_calls) == 1  # charge-on-success
+
+
+def test_derive_endpoint_debits_inside_the_tracking_scope(monkeypatch):
+    """The debit must see the tokens the parses burned — otherwise the metered
+    amount reads as 0 and the whole derive is free again."""
+    _, _, measured = _drive_derive_endpoint(monkeypatch, burn_tokens=True)
+    assert measured == [8]  # $0.05 of gpt-5-mini x 3 markup / $0.02 per credit
+
+
+def test_derive_endpoint_charges_nothing_on_an_all_cached_derive(monkeypatch):
+    """Every contract served from the parse cache burns no tokens -> 0 credits."""
+    _, _, measured = _drive_derive_endpoint(monkeypatch, burn_tokens=False)
+    assert measured == [0]

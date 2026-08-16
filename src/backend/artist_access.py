@@ -3,10 +3,12 @@
 The backend runs on the service-role client, which BYPASSES RLS, so these
 helpers ARE the authorization for every artist-scoped read in the app. They must
 answer what can_access_artist() answers for RLS
-(supabase/migrations/20260803000001_team_owned_artists.sql):
+(supabase/migrations/20260803000001_team_owned_artists.sql,
+20260816000002_self_serve_orgs.sql):
 
     personal: team_id IS NULL AND user_id = me
     team:     team_id = an org where I hold an ACTIVE seat, org not archived
+              and not 'lapsed'
 
 `artists.user_id` is the CREATOR and keeps pointing at them after a transfer, so
 `AND team_id IS NULL` on the personal branch is load-bearing in BOTH directions:
@@ -29,14 +31,26 @@ from supabase import Client
 
 def live_org_ids(db: Client, user_id: str) -> list[str]:
     """Orgs whose team-owned artists `user_id` may reach: an ACTIVE seat in a
-    NON-ARCHIVED org. Both halves are load-bearing — a suspended/removed seat
-    confers nothing, and can_access_artist denies on `archived_at` (which is
-    exactly why archiving an org can leave `artists.team_id` attached)."""
+    NON-ARCHIVED, non-`'lapsed'` org. All three are load-bearing — a
+    suspended/removed seat confers nothing, can_access_artist denies on
+    `archived_at` (which is exactly why archiving an org can leave
+    `artists.team_id` attached), and 20260816000002_self_serve_orgs.sql adds
+    the same denial for a self-serve org whose grace period ran out:
+    `'lapsed'` goes inert for EVERY member, admins included.
+    `'pending'`/`'suspended'` are deliberately still unchecked here
+    (pre-existing, documented in 20260803000001)."""
     seats = db.table("org_members").select("org_id").eq("user_id", user_id).eq("status", "active").execute()
     org_ids = [s["org_id"] for s in (seats.data or []) if s.get("org_id")]
     if not org_ids:
         return []
-    live = db.table("organizations").select("id").in_("id", org_ids).is_("archived_at", "null").execute()
+    live = (
+        db.table("organizations")
+        .select("id")
+        .in_("id", org_ids)
+        .is_("archived_at", "null")
+        .neq("status", "lapsed")  # mirror of the SQL clause added in 20260816000002_self_serve_orgs.sql
+        .execute()
+    )
     return [o["id"] for o in (live.data or []) if o.get("id")]
 
 

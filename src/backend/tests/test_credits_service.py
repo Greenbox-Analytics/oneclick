@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+from orgs.storage_guard import TEAM_STORAGE_FULL_MSG
+from subscriptions.ai_pricing import credits_for_cost
 from subscriptions.models import CreditGrant
 from subscriptions.service import EntitlementsService
 from tests.conftest import (
@@ -30,6 +32,7 @@ from tests.test_billing_context import (
 )
 from tests.test_billing_context import _sub_row as _ctx_sub_row  # avoid shadowing this file's _sub_row(user_id)
 from tests.test_billing_sweep import _FilterBuilder
+from utils.llm.tracking import TrackedOpenAI, set_llm_context
 
 FREE_TIER_ROW = {
     "tier": "free",
@@ -216,6 +219,125 @@ def _paid_supabase(
     return sb
 
 
+class TestGrandfatheredGrant:
+    """Precedence: explicit admin override > grandfathered > tier value.
+    The SAME resolution must hold in get_for_user, check_credits and the sweep
+    — a mismatch silently grants two different bundles."""
+
+    # Sentinel: "unset" means "far-future when gf is set, else irrelevant" —
+    # every EXISTING call site that only passes gf=... keeps testing the
+    # unexpired-grandfather path without touching each one individually. Pass
+    # gf_until explicitly (an expired ISO string, or None) to test expiry.
+    _UNSET = object()
+
+    def _sb(self, *, gf=None, gf_until=_UNSET, override_credits=None, tier="basic", tier_credits=2000):
+        sb = _paid_supabase(bundle=0)
+        orig = sb.table.side_effect
+        until = (FAR_FUTURE if gf is not None else None) if gf_until is self._UNSET else gf_until
+
+        def side_effect(name):
+            b = orig(name)
+            if name == "subscriptions":
+                b.execute.return_value = MagicMock(
+                    data=[
+                        {
+                            "user_id": TEST_USER_ID,
+                            "tier": tier,
+                            "status": "active",
+                            "grandfathered_monthly_credits": gf,
+                            "grandfathered_until": until,
+                        }
+                    ],
+                    count=1,
+                )
+            if name == "tier_entitlements":
+                row = dict(_PRO_TIER_ROW, tier=tier, monthly_credits=tier_credits)
+                b.execute.return_value = MagicMock(data=[row], count=1)
+            if name == "tier_overrides" and override_credits is not None:
+                b.execute.return_value = MagicMock(
+                    data=[{"user_id": TEST_USER_ID, "monthly_credits": override_credits}], count=1
+                )
+            return b
+
+        sb.table.side_effect = side_effect
+        return sb
+
+    def test_grandfather_beats_tier_value(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ent = EntitlementsService(self._sb(gf=3000)).get_for_user(TEST_USER_ID)
+        assert ent.credits.monthly_grant == 3000
+
+    def test_admin_override_beats_grandfather(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ent = EntitlementsService(self._sb(gf=3000, override_credits=9999)).get_for_user(TEST_USER_ID)
+        assert ent.credits.monthly_grant == 9999
+
+    def test_no_grandfather_uses_tier_value(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ent = EntitlementsService(self._sb(gf=None)).get_for_user(TEST_USER_ID)
+        assert ent.credits.monthly_grant == 2000
+
+    def test_expired_grandfather_uses_tier_value(self, monkeypatch):
+        """Owner policy clarification (spec §1): grandfathering expires with
+        the already-paid period — a past grandfathered_until reads as
+        expired, silently, and falls through to the tier value."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ent = EntitlementsService(self._sb(gf=8000, gf_until="2020-01-01T00:00:00+00:00")).get_for_user(TEST_USER_ID)
+        assert ent.credits.monthly_grant == 2000
+
+    def test_grandfather_with_no_until_stamped_treated_as_expired(self, monkeypatch):
+        """Defensive: a grant with no expiry stamped (should never happen —
+        the migration backfill always stamps both together) is treated as
+        already expired, never as indefinite."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ent = EntitlementsService(self._sb(gf=8000, gf_until=None)).get_for_user(TEST_USER_ID)
+        assert ent.credits.monthly_grant == 2000
+
+    def test_get_credit_usage_rolls_stale_wallet_at_grandfathered_grant(self, monkeypatch):
+        """get_credit_usage is a FOURTH grant-computation site (spec review
+        follow-up): a grandfathered user with a stale wallet hitting the usage
+        view must roll at the resolved grant, not the tier default."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = self._sb(gf=8000)
+        orig = sb.table.side_effect
+
+        def side_effect(name):
+            b = orig(name)
+            if name == "credit_wallets":
+                stale = dict(_DEFAULT_WALLET_ROW, period_end="2020-01-01T00:00:00+00:00")
+                b.execute.return_value = MagicMock(data=[stale], count=1)
+            return b
+
+        sb.table.side_effect = side_effect
+
+        result = EntitlementsService(sb).get_credit_usage(TEST_USER_ID)
+
+        args = [c.args[1] for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"][0]
+        assert args["p_monthly_grant"] == 8000
+        assert result["monthlyGrant"] == 8000
+
+    def test_check_credits_rolls_stale_wallet_at_grandfathered_grant(self, monkeypatch):
+        """check_credits is the SAME chokepoint (Task 1 AC) as get_for_user and
+        get_credit_usage — clone of the get_credit_usage pin above."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = self._sb(gf=8000)
+        orig = sb.table.side_effect
+
+        def side_effect(name):
+            b = orig(name)
+            if name == "credit_wallets":
+                stale = dict(_DEFAULT_WALLET_ROW, period_end="2020-01-01T00:00:00+00:00")
+                b.execute.return_value = MagicMock(data=[stale], count=1)
+            return b
+
+        sb.table.side_effect = side_effect
+
+        EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message")
+
+        args = [c.args[1] for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"][0]
+        assert args["p_monthly_grant"] == 8000
+
+
 class TestCheckCredits:
     def test_disabled_allows_free_price_zero(self):
         r = EntitlementsService(_paid_supabase()).check_credits(TEST_USER_ID, "zoe_message")
@@ -295,10 +417,15 @@ class TestCheckCredits:
         r = EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message")
         assert not r.allowed and r.upgrade_required and not r.overage_available
 
-    def test_admin_short_circuits_before_wallet(self, monkeypatch):
+    def test_bypass_paywalls_env_short_circuits_before_wallet(self, monkeypatch):
+        """BYPASS_PAYWALLS is the ONLY remaining short-circuit — the ops
+        escape hatch. Admin status no longer confers one (owner decision,
+        2026-08-15: admins are metered so the system is testable by its own
+        operators; they self-grant when low)."""
         monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("BYPASS_PAYWALLS", "true")
         sb = _paid_supabase(bundle=0)
-        r = EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message", is_admin=True)
+        r = EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message")
         assert r.allowed and r.price == 0
         tables_touched = {c.args[0] for c in sb.table.call_args_list}
         assert "credit_wallets" not in tables_touched
@@ -436,10 +563,13 @@ class TestCheckCredits:
         r = EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message")
         assert r.allowed and r.degraded and r.price == 0
 
-    def test_db_admin_leg_short_circuits(self, monkeypatch):
-        """profiles.is_admin=True (DB leg, not the is_admin param) skips the wallet entirely."""
+    def test_db_admin_is_metered_like_everyone(self, monkeypatch):
+        """profiles.is_admin=True no longer bypasses the credit gate: the check
+        runs against the wallet and returns the real price. Admins self-grant
+        when they run low — their ledger rows are what make the credit system
+        testable by its own operators."""
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _paid_supabase(bundle=0)
+        sb = _paid_supabase(bundle=100)
         orig = sb.table.side_effect
 
         def side_effect(name):
@@ -450,9 +580,9 @@ class TestCheckCredits:
 
         sb.table.side_effect = side_effect
         r = EntitlementsService(sb).check_credits(TEST_USER_ID, "zoe_message")
-        assert r.allowed and r.price == 0
+        assert r.allowed and r.price == 3
         tables_touched = {c.args[0] for c in sb.table.call_args_list}
-        assert "credit_wallets" not in tables_touched
+        assert "credit_wallets" in tables_touched
 
 
 class TestPastDueOveragePause:
@@ -513,6 +643,117 @@ class TestDebitForAction:
         sb.rpc.side_effect = RuntimeError("db down")
         grant = CreditGrant(request_id="req-3", action="zoe_message", price=3, kind="debit", enabled=True)
         EntitlementsService(sb).debit_for_action(TEST_USER_ID, grant)  # no raise
+
+
+def _burn(*, model="gpt-5-mini", input_tokens=0, output_tokens=0):
+    """Push a real LLM call through the tracking proxy so the current scope's
+    spend accumulator moves exactly as it does in production."""
+    inner = MagicMock()
+    inner.chat.completions.create.return_value = MagicMock(
+        usage=MagicMock(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            prompt_tokens_details=None,
+        )
+    )
+    TrackedOpenAI(inner, get_supabase=lambda: MagicMock()).chat.completions.create(model=model)
+
+
+class TestMeteredDebit:
+    """The charge is the tokens actually burned, not the flat action price.
+
+    `grant.price` survives ONLY as the pre-flight estimate the balance check
+    reserved against, and as the fallback when spend is unmeasurable.
+    """
+
+    @staticmethod
+    def _grant(price=3, kind="debit"):
+        return CreditGrant(request_id="req-m", action="zoe_message", price=price, kind=kind, enabled=True)
+
+    @staticmethod
+    def _debit_args(sb):
+        calls = [c.args[1] for c in sb.rpc.call_args_list if c.args[0] == "debit_credits"]
+        return calls[0] if calls else None
+
+    def test_measured_spend_overrides_flat_price(self, monkeypatch):
+        """$0.05 of gpt-5-mini -> 8 credits, charged instead of the flat 3."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100)
+        with set_llm_context(TEST_USER_ID, "zoe"):
+            _burn(input_tokens=200_000)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
+        args = self._debit_args(sb)
+        assert args["p_amount"] == 8
+        assert args["p_metadata"]["input_tokens"] == 200_000
+        assert args["p_metadata"]["estimated"] == 3
+        assert args["p_metadata"]["metered"] is True
+
+    def test_cheap_call_costs_less_than_the_flat_price(self, monkeypatch):
+        """The whole point: a small request is not billed like a big one."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100)
+        with set_llm_context(TEST_USER_ID, "zoe"):
+            _burn(input_tokens=2_000)  # $0.0005 -> 1 credit (the floor)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant(price=21))
+        assert self._debit_args(sb)["p_amount"] == 1
+
+    def test_no_llm_call_charges_nothing(self, monkeypatch):
+        """A cache hit inside a tracked scope burns no tokens -> no RPC at all.
+
+        This is what makes cache hits free without per-tool special-casing.
+        """
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100)
+        with set_llm_context(TEST_USER_ID, "registry"):
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
+        assert self._debit_args(sb) is None
+
+    def test_unpriced_model_falls_back_to_the_estimate(self, monkeypatch):
+        """A model missing from MODEL_RATES has unknowable cost — charge the
+        flat estimate rather than silently under-charging to zero."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100)
+        with set_llm_context(TEST_USER_ID, "zoe"):
+            _burn(model="some-unlisted-model", input_tokens=200_000)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
+        args = self._debit_args(sb)
+        assert args["p_amount"] == 3 and args["p_metadata"]["metered"] is False
+
+    def test_no_tracked_scope_falls_back_to_the_estimate(self, monkeypatch):
+        """Background jobs and scripts have no scope — behave as before."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100)
+        EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
+        assert self._debit_args(sb)["p_amount"] == 3
+
+    def test_metered_amount_flows_into_overage(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100)
+        with set_llm_context(TEST_USER_ID, "oneclick"):
+            _burn(input_tokens=200_000)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant(price=21, kind="overage_debit"))
+        args = self._debit_args(sb)
+        assert args["p_kind"] == "overage_debit" and args["p_amount"] == 8
+
+
+class TestCreditsForCost:
+    def test_zero_cost_is_free(self):
+        assert credits_for_cost(0) == 0 and credits_for_cost(-1) == 0
+
+    def test_any_real_spend_costs_at_least_one_credit(self):
+        assert credits_for_cost(0.000001) == 1
+
+    def test_scales_linearly_with_cost(self):
+        assert credits_for_cost(0.20) == 2 * credits_for_cost(0.10)
+
+    def test_no_phantom_credit_from_float_dust(self):
+        """0.10 * 3 / 0.02 is 15.000000000000002 in IEEE754; ceil must not
+        round that to 16 (the bug the pricing dashboard's selfCheck caught)."""
+        assert credits_for_cost(0.10) == 15
+
+    def test_markup_is_tunable(self, monkeypatch):
+        monkeypatch.setenv("CREDIT_MARKUP", "6.0")
+        assert credits_for_cost(0.10) == 30
 
 
 class TestStorageIncludedCheck:
@@ -1292,6 +1533,45 @@ class TestMemberCapGate:
 
         assert r.allowed is True and r.cap_reached is False
 
+    def test_sentinel_cap_uncaps_a_member_under_a_capped_org(self, monkeypatch):
+        """-1 on the member row beats a real org default — the ONLY way to say
+        "no limit" now that every org carries one. Without the normalization
+        this would compare against a ceiling of -1 and wall immediately."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(
+            _org_check_data([_pool_wallet(reserve=500)], monthly_cap=-1, cap_used=9999, default_member_cap=3)
+        )
+
+        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")
+
+        assert r.allowed is True and r.cap_reached is False
+
+    def test_sentinel_org_default_uncaps_inheriting_members(self, monkeypatch):
+        """An admin can lift the ceiling org-wide the same way."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(
+            _org_check_data([_pool_wallet(reserve=500)], monthly_cap=None, cap_used=9999, default_member_cap=-1)
+        )
+
+        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message")
+
+        assert r.allowed is True and r.cap_reached is False
+
+    def test_uncapped_member_reports_no_cap_to_the_ui(self, monkeypatch):
+        """A -1 member must surface memberCap=None so the UI says "pulling from
+        org credits pool" rather than rendering a nonsense -1 limit."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(
+            _org_check_data([_pool_wallet(reserve=500)], monthly_cap=-1, cap_used=0, default_member_cap=2000)
+        )
+
+        cap, _used = EntitlementsService(sb)._member_cap(ORG, MEMBER)
+
+        assert cap is None
+
     def test_debit_threads_the_member_id_into_the_rpc(self, monkeypatch):
         """End-to-end: the grant carries org_member_id, so the RPC gets
         p_member_id and moves the cap counter transactionally."""
@@ -1444,3 +1724,100 @@ class TestTeamStorageAttribution:
         sb = self._sb(artist_team=None, team_bytes=999_999, personal_bytes=0)
 
         assert self._can_upload(sb).allowed, "a personal artist must not see the team's usage"
+
+
+class TestSelfServeOrgUploadGate:
+    """Task 12: the can() UPLOAD_BYTES org branch, self_serve side.
+    `_team_storage`'s org-row read (in TestTeamStorageAttribution above) now
+    also carries `kind`/`covered_by` — a self_serve org routes through the
+    shared per-owner pool (orgs/storage_guard.pool_state's math) instead of
+    the enterprise per-seat calc, with its own member-facing copy. The
+    enterprise branch itself is asserted BYTE-IDENTICAL above; this class only
+    adds the new self_serve fork plus the two edges the task calls out
+    explicitly: an enterprise org must not pick up an extra tier_entitlements
+    read, and a lapsed org must never reach this branch at all."""
+
+    GB = 2**30
+    BASIC_TEAM_TIER_ROW = dict(FREE_TIER_ROW, tier="basic", team_storage_bytes=10 * GB)
+
+    def _sb(self, *, org_status="active", org_kind="self_serve", team_bytes=0):
+        org = {**_org(status=org_status), "storage_bytes": team_bytes}
+        if org_kind is not None:
+            org["kind"] = org_kind
+            org["covered_by"] = CTX_USER
+        data = {
+            "profiles": [_profile(context_org=None)],
+            "org_members": [_member(status="active")],
+            "organizations": [org],
+            "projects": [{"id": DERIV_PROJECT, "artist_id": "art-1"}],
+            "artists": [{"id": "art-1", "team_id": ORG}],
+            "usage_counters": [_usage_row(storage=0)],
+            "subscriptions": [_ctx_sub_row(tier="basic" if org_kind == "self_serve" else "pro")],
+            "tier_entitlements": [self.BASIC_TEAM_TIER_ROW if org_kind == "self_serve" else PRO_TIER_ROW],
+            "tier_overrides": [],
+            "credit_prices": list(PRICES),
+            "credit_wallets": [],
+        }
+        return _ctx_supabase(data)
+
+    def _can_upload(self, sb, size):
+        from subscriptions.models import Action
+
+        return EntitlementsService(sb).can(CTX_USER, Action.UPLOAD_BYTES, size=size, resource_project_id=DERIV_PROJECT)
+
+    def test_self_serve_pool_denies_with_member_copy(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        sb = self._sb(team_bytes=int(9.5 * self.GB))
+
+        r = self._can_upload(sb, size=int(0.6 * self.GB))
+
+        assert r.allowed is False
+        assert r.reason == TEAM_STORAGE_FULL_MSG
+
+    def test_self_serve_pool_allows_within_headroom(self, monkeypatch):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        sb = self._sb(team_bytes=int(9.5 * self.GB))
+
+        r = self._can_upload(sb, size=int(0.4 * self.GB))
+
+        assert r.allowed is True
+
+    def test_landing_exactly_on_the_pool_boundary_is_allowed(self, monkeypatch):
+        """used + size == pool is a fit, not an overage (inclusive `<=`)."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        sb = self._sb(team_bytes=9 * self.GB)  # basic pool is 10 GiB
+
+        r = self._can_upload(sb, size=1 * self.GB)  # 9 + 1 == 10
+
+        assert r.allowed is True
+
+    def test_enterprise_upload_does_not_add_a_tier_entitlements_read(self, monkeypatch):
+        """Enterprise stays on the ORIGINAL per-seat calc: pool_state's
+        team_dials_for_user is a SECOND profiles/subscriptions/tier_entitlements
+        read on top of get_for_user's own, and it must never fire here."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("ENTERPRISE_SEAT_STORAGE_BYTES", str(10 * self.GB))
+        sb = self._sb(org_kind=None, team_bytes=0)  # no `kind` on the row -> enterprise fork
+
+        r = self._can_upload(sb, size=1)
+
+        assert r.allowed is True
+        assert len(sb._log.get("tier_entitlements", [])) == 1, "only get_for_user's own personal-tier read"
+
+    def test_lapsed_org_never_reaches_the_pool_branch(self, monkeypatch):
+        """The REAL gate for a lapsed org is upstream, at the artist-visibility
+        layer (artist_access.live_org_ids excludes status='lapsed' — see
+        tests/test_artist_access.py, not duplicated here). This pins the
+        can()-level consequence: resolve_billing_org_for_project requires
+        status='active' (_org_context_for), so a lapsed org's project never
+        derives — the pool/_team_storage branch is unreached and the request
+        falls through to the caller's own personal cap, never a wall
+        pretending the (here: 999 GB) org total is theirs (review r2)."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        sb = self._sb(org_status="lapsed", team_bytes=999 * self.GB)
+
+        assert EntitlementsService(sb).resolve_billing_org_for_project(CTX_USER, DERIV_PROJECT) is None
+
+        r = self._can_upload(sb, size=1)
+
+        assert r.allowed is True, "must fall through to the tiny personal cap, not the lapsed org's 999GB total"

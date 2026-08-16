@@ -24,12 +24,14 @@ from orgs.models import (
     CreditRequestApprove,
     CreditRequestCreate,
     CreditRequestDeny,
+    DissolveBody,
     InviteCreate,
     MemberCapUpdate,
     MemberRoleUpdate,
     OrgCreate,
     OrgUpdate,
     ProjectMemberRoleUpdate,
+    TransferCreditsBody,
 )
 from orgs.service import (
     CreditRequestAlreadyResolvedError,
@@ -38,7 +40,10 @@ from orgs.service import (
     DuplicatePendingRequestError,
     InviteInvalidError,
     LastAdminError,
+    TeamFullError,
+    TeamLapsedError,
 )
+from orgs.standing import NoSlotError
 from subscriptions.service import licensing_enabled
 
 
@@ -328,8 +333,14 @@ async def decline_org_invite(
 @router.post("")
 async def create_org(body: OrgCreate, user_id: str = Depends(get_current_user_id)):
     db = _get_supabase()
-    org = await service.create_org(db, user_id, body.name)
-    analytics_capture(user_id, "org_created", {"org_id": org.get("id")})
+    try:
+        org = await service.create_org(db, user_id, body.name)
+    except NoSlotError as e:
+        raise HTTPException(status_code=402, detail={"reason": str(e), "upgradeRequired": True})
+    # `POST /orgs` is self-serve-only now (enterprise creation moved to
+    # `POST /admin/orgs`) — event name matches spec §9's `team_created`,
+    # not the pre-self-serve `org_created` name.
+    analytics_capture(user_id, "team_created", {"org_id": org.get("id")})
     return org
 
 
@@ -366,6 +377,71 @@ async def archive_org(org_id: str, background_tasks: BackgroundTasks, user_id: s
         org_id=org_id,
         member_user_ids=None,  # archive: notify every ACTIVE member
     )
+    analytics_capture(user_id, "team_archived", {"org_id": org_id})
+    return result
+
+
+@router.post("/{org_id}/unarchive")
+async def unarchive_org(org_id: str, user_id: str = Depends(get_current_user_id)):
+    """Self-serve reactivation of an archived org (active admin, self_serve
+    only — enterprise 409). Requires a free slot AND the reactivation storage
+    guard, since an archived team holds no slot but its bytes still count.
+    Does NOT restore org-granted project memberships or members' billing
+    contexts torn down at archive time — see service.unarchive_org's
+    docstring for that pre-existing limitation."""
+    try:
+        result = await service.unarchive_org(_get_supabase(), user_id, org_id)
+    except NoSlotError as e:
+        raise HTTPException(status_code=402, detail={"reason": str(e), "upgradeRequired": True})
+    analytics_capture(user_id, "team_unarchived", {"org_id": org_id})
+    return result
+
+
+@router.get("/{org_id}/dissolve-preview")
+async def dissolve_preview(org_id: str, user_id: str = Depends(get_current_user_id)):
+    """What dissolving would do: which person each team artist reverts to
+    (`fallback: true` means the artist's creator no longer holds a seat, so it
+    comes to YOU), how many purchased credits are forfeited, how much monthly
+    dispersal simply expires with the team, and how many seats close. Admin +
+    self_serve only, enforced in the service alongside the execute."""
+    return await service.dissolve_preview(_get_supabase(), user_id, org_id)
+
+
+@router.post("/{org_id}/dissolve")
+async def dissolve_org(org_id: str, body: DissolveBody, user_id: str = Depends(get_current_user_id)):
+    """Terminal, one-way, name-confirmed (400 on a mismatch, nothing written).
+    Idempotent: a second call returns {"already": true} — gate the event on
+    that, same duplicate-discipline as accept_invite, so a double-click can't
+    report two dissolutions. A 500 here is RETRY-SAFE by construction: it can
+    only come from the artist reverts or the terminal patch, whatever landed
+    stays landed, and re-POSTing the same body finishes the job."""
+    result = await service.dissolve_org(_get_supabase(), user_id, org_id, body.confirm_name)
+    if not result.get("already"):
+        analytics_capture(user_id, "team_dissolved", {"org_id": org_id})
+    return result
+
+
+@router.post("/{org_id}/coverage/claim")
+async def claim_coverage(org_id: str, user_id: str = Depends(get_current_user_id)):
+    """An admin with a free slot claims coverage of this org (spec §2 rev 2,
+    Task 5) — claiming an org you already actively cover is a no-op 200."""
+    db = _get_supabase()
+    try:
+        result = await service.claim_coverage(db, user_id, org_id)
+    except NoSlotError as e:
+        raise HTTPException(status_code=402, detail={"reason": str(e), "upgradeRequired": True})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    analytics_capture(user_id, "coverage_claimed", {"org_id": org_id})
+    return result
+
+
+@router.post("/{org_id}/coverage/release")
+async def release_coverage(org_id: str, user_id: str = Depends(get_current_user_id)):
+    """Only the CURRENT coverer may release. covered_by stays put — the sweep
+    is the single writer that starts grace."""
+    result = await service.release_coverage(_get_supabase(), user_id, org_id)
+    analytics_capture(user_id, "coverage_released", {"org_id": org_id})
     return result
 
 
@@ -376,6 +452,61 @@ async def get_org_usage(org_id: str, user_id: str = Depends(get_current_user_id)
     (403) is raised directly from orgs.authz.require_admin inside the
     service, same as every other admin-gated endpoint in this router."""
     return await service.get_org_usage(_get_supabase(), user_id, org_id)
+
+
+@router.get("/{org_id}/ledger")
+async def get_org_ledger(org_id: str, user_id: str = Depends(get_current_user_id)):
+    """Admin-only: newest 50 pool ledger rows for the org billing console's
+    Pool activity feed (Task 15, spec §6). Authz denial (403) is raised
+    directly from orgs.authz.require_admin inside the service."""
+    return {"ledger": await service.get_org_ledger(_get_supabase(), user_id, org_id)}
+
+
+@router.post("/{org_id}/transfer-credits")
+async def transfer_credits_to_pool(org_id: str, body: TransferCreditsBody, user_id: str = Depends(get_current_user_id)):
+    """Owner-requested funding inlet (spec §4.1): an active admin moves
+    credits from their OWN personal reserve into this org's pool. 409s
+    (managed-by-Msanii, archived, dissolved, insufficient reserve) are all
+    raised directly from orgs.service.transfer_credits_to_pool.
+
+    Idempotent: a retried request (same client-side dedupe) surfaces the
+    RPC's `duplicate: true` result as a plain 200. Analytics fires only for a
+    FRESH transfer — same duplicate-gating discipline as dissolve_org /
+    accept_invite, so a retry can't report two transfers."""
+    result = await service.transfer_credits_to_pool(_get_supabase(), user_id, org_id, body.amount)
+    if not result.get("duplicate"):
+        analytics_capture(user_id, "credits_transferred", {"org_id": org_id, "amount": body.amount})
+    return result
+
+
+@router.post("/{org_id}/cancel-topup")
+async def cancel_topup(org_id: str, user_id: str = Depends(get_current_user_id)):
+    """Stop this team's recurring credit top-up. ANY active admin may cancel,
+    not just the one whose card it is — an admin who left shouldn't be able to
+    strand the team on a subscription nobody else can stop.
+
+    Returns {"canceled": false} when there was nothing to cancel (idempotent
+    double-click), and the event fires only on a real cancel — same
+    duplicate-gating discipline as dissolve_org / transfer-credits. A Stripe
+    failure propagates (500) with the org's columns intact so the admin can
+    retry; already-purchased credits are never clawed back."""
+    from orgs.authz import require_admin
+
+    db = _get_supabase()
+    require_admin(db, user_id, org_id)
+    # Task 17 RULING: deliberately NOT gated by _require_live_org. This
+    # endpoint is the documented RETRY path for a failed Stripe cancel
+    # (service.py's _cancel_topup_if_purchaser and dissolve_org docstrings
+    # both name it), and archive_org never cancels the top-up itself — so an
+    # archived org keeps billing the admin's card every month with no other
+    # way to stop it, and a dissolved org whose step-2 Stripe cancel failed
+    # has no escape at all (there's no unarchive from dissolved). Canceling a
+    # live charge on a dead org is remedial, same logic as release_coverage's
+    # exemption, stronger because real money is bleeding.
+    canceled = service.cancel_topup(db, org_id)
+    if canceled:
+        analytics_capture(user_id, "org_topup_canceled", {"org_id": org_id, "trigger": "manual"})
+    return {"canceled": canceled}
 
 
 # --- Members: role, offboarding, reactivation ---
@@ -474,6 +605,10 @@ async def invite_member(
         result = await service.invite_member(db, user_id, org_id, body.email, body.role)
     except DuplicateInviteError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except TeamLapsedError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except TeamFullError as e:
+        raise HTTPException(status_code=402, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

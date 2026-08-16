@@ -16,7 +16,7 @@ from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Header, HTTPException
 
 from subscriptions.overage_billing import bill_pending_overage, invoice_unswept_items
-from subscriptions.service import _parse_iso, credits_enabled, licensing_enabled
+from subscriptions.service import EntitlementsService, _parse_iso, credits_enabled, licensing_enabled
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["internal"])
@@ -75,9 +75,16 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         "tier_entitlements",
     )
     grants = {r["tier"]: r["monthly_credits"] for r in tier_data}
+    # `grandfathered_monthly_credits` and `grandfathered_until` both require
+    # migration 20260816000001 — deploying this code before the owner applies
+    # that migration 400s the whole sweep on the unknown columns. This select
+    # is the sweep's ONLY explicit read of either (the roll-grant chain below
+    # reads them off subs_by_uid via _resolve_monthly_grant).
     paid_subs = _capped(
         sb.table("subscriptions")
-        .select("user_id, tier, stripe_customer_id, stripe_price_id")
+        .select(
+            "user_id, tier, stripe_customer_id, stripe_price_id, grandfathered_monthly_credits, grandfathered_until"
+        )
         .in_("tier", list(PAID_TIERS)),
         "subscriptions",
     )
@@ -109,15 +116,26 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     )
     for wallet in stale:
         try:
-            tier = subs_by_uid.get(wallet["owner_id"], {}).get("tier", "free")
+            uid = wallet["owner_id"]
+            tier = subs_by_uid.get(uid, {}).get("tier", "free")
             new_end = datetime.fromisoformat(wallet["period_end"])
             while new_end < now:
                 new_end = new_end + relativedelta(months=1)
+            # Reuse the single source of truth for grant precedence (Task 1 AC:
+            # explicit override > grandfathered > tier value) instead of
+            # re-implementing the chain here — two copies is exactly how they'd
+            # silently drift. The synthetic override dict just carries the
+            # sweep's own pre-filtered (expiry/tester-revoked-aware)
+            # override_grants map in the {"monthly_credits": ...} shape
+            # _read_override would have produced.
+            grant = EntitlementsService._resolve_monthly_grant(
+                subs_by_uid.get(uid, {}), {"monthly_credits": override_grants.get(uid)}, grants.get(tier, 0)
+            )
             res = sb.rpc(
                 "rollover_wallet",
                 {
                     "p_wallet_id": wallet["id"],
-                    "p_monthly_grant": override_grants.get(wallet["owner_id"], grants.get(tier, 0)),
+                    "p_monthly_grant": grant,
                     "p_new_period_start": (new_end - relativedelta(months=1)).isoformat(),
                     "p_new_period_end": new_end.isoformat(),
                 },
@@ -381,6 +399,45 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
     except Exception:
         logger.exception("sweep charge-leak detection failed")
 
+    # Org invites lapse after 48h; flip them to 'expired' once and tell the
+    # admin who sent them. Isolated like every other step — an invite courtesy
+    # message must never take the money steps down with it.
+    invites_expired = 0
+    if licensing_enabled():
+        try:
+            from orgs.service import expire_stale_invites
+
+            invites_expired = expire_stale_invites(sb)
+        except Exception:
+            logger.exception("sweep invite expiry failed")
+
+    # Standing sweep (Task 6, spec §3): grace -> lapsed -> recovery for every
+    # live self-serve org. Isolated like every other step — a standing
+    # failure must never take the money steps down with it.
+    standing_stats = {"evaluated": 0, "lapsed": 0, "grace_started": 0}
+    if licensing_enabled():
+        try:
+            from orgs.standing import evaluate_standing
+
+            standing_stats = evaluate_standing(sb)
+        except Exception:
+            logger.exception("sweep standing evaluation failed")
+
+    # Storage PAYG (Task 13, spec §5): once per owner-period, bill Stripe for
+    # self-serve pool overage on the covering owner's PERSONAL customer.
+    # Isolated like every other step — a billing failure for one owner must
+    # never take the rest of the sweep down with it (bill_team_storage_overage
+    # already isolates per-owner internally; this try/except is belt-and-
+    # suspenders against a failure in the scan query itself).
+    team_storage_invoiced = 0
+    if licensing_enabled():
+        try:
+            from orgs.storage_guard import bill_team_storage_overage
+
+            team_storage_invoiced = bill_team_storage_overage(sb)
+        except Exception:
+            logger.exception("sweep team storage overage billing failed")
+
     return {
         "walletsRolled": rolled,
         "overageBilled": overage_billed,
@@ -388,4 +445,9 @@ async def billing_sweep(x_sweep_token: str | None = Header(None)):
         "orgsDispersed": dispersed,
         "orphanGrantsRevoked": orphan_grants_revoked,
         "chargeLeaks": charge_leaks,
+        "invitesExpired": invites_expired,
+        "standingEvaluated": standing_stats["evaluated"],
+        "orgsLapsed": standing_stats["lapsed"],
+        "graceStarted": standing_stats["grace_started"],
+        "teamStorageInvoiced": team_storage_invoiced,
     }

@@ -110,9 +110,10 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
             <div>
               <div className="text-sm font-medium">Default member limit</div>
               <p className="text-[12.5px] text-muted-foreground mt-0.5 max-w-[440px]">
-                How much of the pool each member can use per month, unless you set theirs
-                individually. Limits are ceilings, not reservations — they can add up to more than
-                the pool holds, since most members won&apos;t reach theirs.
+                What every new member starts with, unless you set theirs individually. Turn this off
+                to let new members use the pool with no limit. Limits are ceilings, not reservations
+                — they can add up to more than the pool holds, since most members won&apos;t reach
+                theirs.
               </p>
             </div>
             <Switch checked={capEnabled} onCheckedChange={handleToggleCap} />
@@ -142,38 +143,45 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
         </Button>
       </div>
 
-      <div className="mt-6 pt-5 border-t border-destructive/30">
-        <div className="text-sm font-semibold text-destructive">Archive organization</div>
-        <p className="text-[12.5px] text-muted-foreground mt-0.5 max-w-[520px]">
-          Archiving hides the organization for everyone and can&apos;t be undone from the app. Credits
-          left in the pool stay there — contact support if you need them refunded or moved.
-        </p>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button
-              variant="outline"
-              className="mt-3 text-destructive hover:text-destructive"
-              disabled={!!org.archived_at}
-            >
-              {org.archived_at ? "Archived" : "Archive organization…"}
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Archive {org.name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Members lose access immediately. Credits left in the pool stay held — contact
-                support if you need them refunded or moved. Artists owned by the team stay with it
-                but become unreachable while it&apos;s archived.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={() => archiveOrg.mutate({ orgId: org.id })}>Archive</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
+      {/* Self-serve orgs get their archive/unarchive/dissolve ladder from
+          OrgLifecyclePanel instead (2026-08-15 teams spec) — showing it here
+          too would be two Archive buttons on one page. `kind` undefined
+          (pre-migration rows) falls through to this block, matching today's
+          behavior for every org that existed before self-serve teams shipped. */}
+      {org.kind !== "self_serve" && (
+        <div className="mt-6 pt-5 border-t border-destructive/30">
+          <div className="text-sm font-semibold text-destructive">Archive organization</div>
+          <p className="text-[12.5px] text-muted-foreground mt-0.5 max-w-[520px]">
+            Archiving hides the organization for everyone and can&apos;t be undone from the app. Credits
+            left in the pool stay there — contact support if you need them refunded or moved.
+          </p>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                className="mt-3 text-destructive hover:text-destructive"
+                disabled={!!org.archived_at}
+              >
+                {org.archived_at ? "Archived" : "Archive organization…"}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Archive {org.name}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Members lose access immediately. Credits left in the pool stay held — contact
+                  support if you need them refunded or moved. Artists owned by the team stay with it
+                  but become unreachable while it&apos;s archived.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => archiveOrg.mutate({ orgId: org.id })}>Archive</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      )}
     </Card>
   );
 }

@@ -50,7 +50,7 @@ from fastapi import HTTPException
 from supabase import Client
 
 from orgs import authz
-from orgs.service import _resolve_user_email
+from orgs.service import _first_org, _require_live_org, _resolve_user_email
 
 
 class ProjectMemberIsOwnerError(Exception):
@@ -265,8 +265,16 @@ async def set_org_project_member_role(
       3. row.org_id == this org             -> UPDATE role, provenance kept
       4. row.org_id is NULL or another org  -> NO-OP, {"status": "organic"}
          (rule 2: never overwrite organic or another org's grant)
+
+    Task 17: refuses on an archived/dissolved org (right after authz, before
+    the no-leak 404 gates below still run on a live-or-not org the same
+    way) — archiving already tears down every org-granted `project_members`
+    row (`_teardown_archived_org_grants`), but the admin's own seat and
+    `artists.team_id` both survive archiving, so without this an admin could
+    re-INSERT a grant here on a dead org.
     """
     authz.require_admin(db, user_id, org_id)
+    _require_live_org(_first_org(db, org_id))
 
     target_user_id = _require_active_org_seat_member(db, org_id, member_id)
     _require_project_in_org(db, org_id, project_id)
@@ -328,8 +336,14 @@ async def remove_org_project_member(db: Client, user_id: str, org_id: str, proje
     reports `revoked: 0`, which is accurate (there was no org-granted access
     to remove) rather than mislabeled as "organic" (that copy asserts the
     member DOES have independent access, which would be false here).
+
+    Task 17: refuses on an archived/dissolved org, same reasoning as
+    `set_org_project_member_role` above — this is a mutation, not the
+    cleanup path (`revoke_org_granted_memberships` itself stays unguarded;
+    archive/offboard/dissolve all call it directly and must not be blocked).
     """
     authz.require_admin(db, user_id, org_id)
+    _require_live_org(_first_org(db, org_id))
 
     target_user_id = _require_active_org_seat_member(db, org_id, member_id)
     _require_project_in_org(db, org_id, project_id)

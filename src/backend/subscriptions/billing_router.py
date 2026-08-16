@@ -98,19 +98,34 @@ async def list_credit_packs():
     DELIBERATELY unauthenticated (stated decision, not an omission): this is
     public pricing data — no user state — and the pricing page must render it
     logged-out. Every sibling route stays user-authed.
+
+    Doubles as the RECURRING top-up catalog (spec 2026-08-15 §4.3): a pack is
+    also buyable monthly exactly when the operator has set a recurring Stripe
+    price on it, surfaced as `recurringPriceId` (null on the rest). No second
+    endpoint and no second table — a top-up is the same pack, billed monthly.
     """
     from main import get_supabase_client
 
     sb = get_supabase_client()
     res = (
         sb.table("credit_packs")
-        .select("key, credits, price_cents, sort_order")
+        .select("key, credits, price_cents, sort_order, recurring_stripe_price_id")
         .eq("active", True)
         .not_.is_("stripe_price_id", "null")
         .order("sort_order")
         .execute()
     )
-    return {"packs": res.data or []}
+    packs = [
+        {
+            "key": p["key"],
+            "credits": p["credits"],
+            "price_cents": p["price_cents"],
+            "sort_order": p["sort_order"],
+            "recurringPriceId": p.get("recurring_stripe_price_id"),
+        }
+        for p in (res.data or [])
+    ]
+    return {"packs": packs}
 
 
 @router.post("/create-topup-session")
@@ -186,6 +201,109 @@ async def create_topup_session(
         **customer_kwargs,
     )
     analytics_capture(user_id, "checkout_started", {"plan": body.pack_key, "kind": "topup"})
+    return {"url": session.url}
+
+
+class OrgTopupCheckoutRequest(BaseModel):
+    org_id: str
+    key: str  # credit_packs.key — the pack must carry a recurring Stripe price
+
+
+@router.post("/org-topup-checkout")
+async def create_org_topup_checkout(
+    body: OrgTopupCheckoutRequest,
+    user_id: str = Depends(get_current_user_id),
+    email: str = Depends(get_current_user_email),
+):
+    """Recurring org top-up (spec 2026-08-15 §4.3): the SAME credit pack, sold
+    as a monthly Stripe SUBSCRIPTION that refills the org's pool every period.
+
+    Billed to the CALLER's personal Stripe customer — there is no org-level
+    customer — using the same customer-resolution block as the pack path, so
+    the charge lands next to that admin's other invoices for refund lookups.
+    One top-up per org (409 on a second): a second subscription would be a
+    second card silently billing for the same team.
+
+    METADATA CONTRACT (load-bearing): the triple {org_id, kind, purchased_by}
+    goes on BOTH objects — `metadata` is what checkout.session.completed reads,
+    and `subscription_data.metadata` is what Stripe copies onto the
+    Subscription and onto every invoice's `subscription_details.metadata`
+    (which is how invoice.paid resolves the org). NEITHER carries a user_id:
+    that key is what routes an event into the PERSONAL subscription handlers,
+    and a top-up must never be mistaken for the admin's own plan.
+    """
+    from subscriptions.service import credits_enabled, licensing_enabled
+
+    if not credits_enabled():
+        raise HTTPException(status_code=409, detail="Credit top-ups aren't available yet.")
+    # 404 (not 409) with licensing off — same "don't reveal the feature" stance
+    # as the /orgs router gate and the pack path's org branch.
+    if not licensing_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+    from main import get_supabase_client
+    from orgs.authz import require_admin
+
+    sb = get_supabase_client()
+    # Authz FIRST, before any pack or org detail is read back — same ordering
+    # (and same reason) as the pack path's org branch.
+    require_admin(sb, user_id, body.org_id)
+
+    org_res = (
+        sb.table("organizations")
+        .select("kind, archived_at, dissolved_at, topup_stripe_subscription_id")
+        .eq("id", body.org_id)
+        .execute()
+    )
+    org = org_res.data[0] if org_res.data else None
+    if not org or org.get("kind") != "self_serve":
+        raise HTTPException(status_code=409, detail="This organization is managed by Msanii")
+    if org.get("dissolved_at"):
+        # dissolved_at only exists on self-serve orgs (the kind check above
+        # already refused any other kind), so "team" — the self-serve UI
+        # vocabulary — is correct here, unlike the generic "organization"
+        # phrasing on the archived/managed-by-Msanii branches around it.
+        raise HTTPException(status_code=409, detail="This team has been dissolved")
+    if org.get("archived_at"):
+        raise HTTPException(status_code=409, detail="This organization is archived.")
+    if org.get("topup_stripe_subscription_id"):
+        raise HTTPException(status_code=409, detail="This team already has a monthly credit top-up.")
+    # KNOWN RACE (Task 17, documented not closed — the fix lives in
+    # stripe_events.py, owned by another workstream): two admins can both read
+    # topup_stripe_subscription_id as NULL here and each open a Stripe Checkout
+    # session below, creating two live top-up subscriptions for this org. The
+    # second checkout.session.completed webhook overwrites the column, so the
+    # FIRST subscription keeps billing with nothing in the DB naming it.
+    # Accepted remedy for now: the losing subscription still shows up in the
+    # purchasing admin's own Stripe billing portal and can be canceled there.
+    # Closing this properly means a re-check inside the webhook handler
+    # (compound uniqueness / re-read-before-write on topup_stripe_subscription_id)
+    # before it accepts a second org_topup subscription for the same org.
+
+    # Same lookup shape as the pack path: fetch by key, then let the Python
+    # guard below decide. A pack with no recurring price is simply not part of
+    # this catalog, and reads identically to an unknown key (no existence oracle).
+    pack_res = sb.table("credit_packs").select("key, recurring_stripe_price_id, active").eq("key", body.key).execute()
+    pack = pack_res.data[0] if pack_res.data else None
+    if not pack or not pack.get("active") or not pack.get("recurring_stripe_price_id"):
+        raise HTTPException(status_code=404, detail="That monthly top-up isn't available.")
+
+    sub_res = sb.table("subscriptions").select("stripe_customer_id").eq("user_id", user_id).execute()
+    customer_id = sub_res.data[0].get("stripe_customer_id") if sub_res.data else None
+    customer_kwargs = {"customer": customer_id} if customer_id else {"customer_email": email}
+
+    frontend_url = os.environ["FRONTEND_URL"]
+    metadata = {"org_id": body.org_id, "kind": "org_topup", "purchased_by": user_id}
+    session = stripe_client_module.get_stripe().checkout.Session.create(
+        mode="subscription",
+        line_items=[{"price": pack["recurring_stripe_price_id"], "quantity": 1}],
+        metadata=metadata,
+        subscription_data={"metadata": dict(metadata)},
+        success_url=f"{frontend_url}/organization?topup=success",
+        cancel_url=f"{frontend_url}/organization?topup=canceled",
+        **customer_kwargs,
+    )
+    analytics_capture(user_id, "checkout_started", {"plan": pack["key"], "kind": "org_topup", "org_id": body.org_id})
     return {"url": session.url}
 
 

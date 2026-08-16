@@ -261,6 +261,124 @@ class TestSweepRollover:
         assert payload["p_wallet_id"] == "wallet-stale"
         assert payload["p_monthly_grant"] == 3000  # tier resolved from subs_by_uid, not a re-query
 
+    async def test_grandfathered_grant_wins_over_tier_default(self, monkeypatch):
+        """Task 1 (spec §1): a per-subscription grandfathered grant beats the
+        tier's current default — same precedence as _resolve_monthly_grant."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb = _filter_aware_supabase(
+            {
+                "tier_entitlements": [{"tier": "pro", "monthly_credits": 5000, "included_storage_bytes": -1}],
+                "subscriptions": [
+                    {
+                        "user_id": "u_gf",
+                        "tier": "pro",
+                        "stripe_customer_id": None,
+                        "stripe_price_id": None,
+                        "grandfathered_monthly_credits": 8000,
+                        "grandfathered_until": "2099-01-01T00:00:00+00:00",
+                    },
+                ],
+                "credit_wallets": [
+                    {
+                        "id": "wallet-gf",
+                        "owner_type": "user",
+                        "owner_id": "u_gf",
+                        "period_end": "2020-01-01T00:00:00+00:00",
+                    },
+                ],
+            }
+        )
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["walletsRolled"] == 1
+        payload = [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"][0].args[1]
+        assert payload["p_monthly_grant"] == 8000
+
+    async def test_expired_grandfather_rolls_at_tier_default(self, monkeypatch):
+        """Owner policy clarification (spec §1): grandfathering expires with
+        the already-paid period — a past grandfathered_until must roll at the
+        tier's current default (5,000), never the stale grandfathered grant."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb = _filter_aware_supabase(
+            {
+                "tier_entitlements": [{"tier": "pro", "monthly_credits": 5000, "included_storage_bytes": -1}],
+                "subscriptions": [
+                    {
+                        "user_id": "u_gf",
+                        "tier": "pro",
+                        "stripe_customer_id": None,
+                        "stripe_price_id": None,
+                        "grandfathered_monthly_credits": 8000,
+                        "grandfathered_until": "2020-01-01T00:00:00+00:00",
+                    },
+                ],
+                "credit_wallets": [
+                    {
+                        "id": "wallet-gf",
+                        "owner_type": "user",
+                        "owner_id": "u_gf",
+                        "period_end": "2020-01-01T00:00:00+00:00",
+                    },
+                ],
+            }
+        )
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["walletsRolled"] == 1
+        payload = [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"][0].args[1]
+        assert payload["p_monthly_grant"] == 5000
+
+    async def test_override_wins_over_grandfathered(self, monkeypatch):
+        """Task 1 (spec §1): explicit override outranks even a grandfathered
+        grant — the third position of the precedence chain (the other two are
+        covered by test_grandfathered_grant_wins_over_tier_default and
+        TestSweepOverrideGrants.test_override_monthly_credits_wins_over_tier_default)."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb = _filter_aware_supabase(
+            {
+                "tier_entitlements": [{"tier": "pro", "monthly_credits": 5000, "included_storage_bytes": -1}],
+                "subscriptions": [
+                    {
+                        "user_id": "u_gf",
+                        "tier": "pro",
+                        "stripe_customer_id": None,
+                        "stripe_price_id": None,
+                        "grandfathered_monthly_credits": 8000,
+                        "grandfathered_until": "2099-01-01T00:00:00+00:00",
+                    },
+                ],
+                "tier_overrides": [{"user_id": "u_gf", "monthly_credits": 9999, "reason": "vip", "expires_at": None}],
+                "credit_wallets": [
+                    {
+                        "id": "wallet-gf",
+                        "owner_type": "user",
+                        "owner_id": "u_gf",
+                        "period_end": "2020-01-01T00:00:00+00:00",
+                    },
+                ],
+            }
+        )
+
+        with patch("main.get_supabase_client", return_value=sb):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["walletsRolled"] == 1
+        payload = [c for c in sb.rpc.call_args_list if c.args[0] == "rollover_wallet"][0].args[1]
+        assert payload["p_monthly_grant"] == 9999
+
 
 # ---------------------------------------------------------------------------
 # Rollover — per-user tier_overrides.monthly_credits wins over tier default
@@ -1112,3 +1230,161 @@ class TestSweepChargeLeakDetection:
 
         assert result["chargeLeaks"] == 0
         assert not [r for r in caplog.records if "charge-leak detection" in r.getMessage()]
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — standing sweep wiring: the sweep calls orgs.standing.evaluate_standing
+# and surfaces its counters. evaluate_standing's own behavior (grace/lapse/
+# recovery transitions) is covered by tests/test_org_standing.py; here we only
+# pin the WIRING — that it's called with the sweep's client, and that its
+# result lands in the response under the right keys.
+# ---------------------------------------------------------------------------
+
+
+class TestSweepStanding:
+    async def test_sweep_calls_standing(self, monkeypatch):
+        """Both flags on: evaluate_standing is called once with the sweep's
+        client, and its counters land in the response under standingEvaluated/
+        orgsLapsed/graceStarted."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = _sweep_mock_supabase({})
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch(
+                "orgs.standing.evaluate_standing",
+                return_value={"evaluated": 5, "lapsed": 2, "grace_started": 3},
+            ) as mock_eval,
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        mock_eval.assert_called_once_with(sb)
+        assert result["standingEvaluated"] == 5
+        assert result["orgsLapsed"] == 2
+        assert result["graceStarted"] == 3
+
+    async def test_licensing_off_standing_keys_present_but_zero(self, monkeypatch):
+        """LICENSING_ENABLED off: the step is skipped entirely (evaluate_standing
+        never called), but the response keys still show up, initialized to 0 —
+        no absent keys for a caller to special-case."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = _sweep_mock_supabase({})
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("orgs.standing.evaluate_standing") as mock_eval,
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        mock_eval.assert_not_called()
+        assert result["standingEvaluated"] == 0
+        assert result["orgsLapsed"] == 0
+        assert result["graceStarted"] == 0
+
+    async def test_standing_failure_is_isolated(self, monkeypatch, caplog):
+        """A raising evaluate_standing must not take the rest of the sweep down
+        with it — same isolation contract as every other sweep step."""
+        import logging
+
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = _sweep_mock_supabase({})
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("orgs.standing.evaluate_standing", side_effect=RuntimeError("boom")),
+            caplog.at_level(logging.ERROR),
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["standingEvaluated"] == 0
+        assert result["orgsLapsed"] == 0
+        assert result["graceStarted"] == 0
+        assert result["walletsRolled"] == 0  # rest of the sweep still completed
+
+
+# ---------------------------------------------------------------------------
+# Storage PAYG (Task 13, spec §5): once-per-owner-period InvoiceItem billing
+# for self-serve pool overage on the covering owner's PERSONAL customer.
+# The per-owner billing/stamping logic itself (exact cents, idempotency key,
+# stamp comparisons, Stripe-failure/no-customer handling) is covered by
+# tests/test_org_storage_guard.py; here we only pin the WIRING — that it's
+# called with the sweep's client, after standing, inside the licensing gate,
+# and that its count lands in the response under the right key.
+# ---------------------------------------------------------------------------
+
+
+class TestSweepTeamStorageOverage:
+    async def test_sweep_calls_team_storage_overage_billing(self, monkeypatch):
+        """Both flags on: bill_team_storage_overage is called once with the
+        sweep's client, and its count lands in the response under
+        teamStorageInvoiced."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = _sweep_mock_supabase({})
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("orgs.storage_guard.bill_team_storage_overage", return_value=3) as mock_bill,
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        mock_bill.assert_called_once_with(sb)
+        assert result["teamStorageInvoiced"] == 3
+
+    async def test_licensing_off_team_storage_key_present_but_zero(self, monkeypatch):
+        """LICENSING_ENABLED off: the step is skipped entirely
+        (bill_team_storage_overage never called), but the response key still
+        shows up, initialized to 0 — no absent key for a caller to
+        special-case."""
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = _sweep_mock_supabase({})
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("orgs.storage_guard.bill_team_storage_overage") as mock_bill,
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        mock_bill.assert_not_called()
+        assert result["teamStorageInvoiced"] == 0
+
+    async def test_team_storage_failure_is_isolated(self, monkeypatch, caplog):
+        """A raising bill_team_storage_overage must not take the rest of the
+        sweep down with it — same isolation contract as every other step."""
+        import logging
+
+        monkeypatch.setenv("SWEEP_TOKEN", "s3cret")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        from subscriptions.sweep import billing_sweep
+
+        sb, _ = _sweep_mock_supabase({})
+
+        with (
+            patch("main.get_supabase_client", return_value=sb),
+            patch("orgs.storage_guard.bill_team_storage_overage", side_effect=RuntimeError("boom")),
+            caplog.at_level(logging.ERROR),
+        ):
+            result = await billing_sweep(x_sweep_token="s3cret")
+
+        assert result["teamStorageInvoiced"] == 0
+        assert result["walletsRolled"] == 0  # rest of the sweep still completed

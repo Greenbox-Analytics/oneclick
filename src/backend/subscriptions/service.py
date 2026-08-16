@@ -137,6 +137,23 @@ def _parse_iso(ts: str | None) -> datetime | None:
     return datetime.fromisoformat(ts)
 
 
+def _pool_visible_to(role: str | None) -> bool:
+    """Whether an org member of this role may see the shared credit pool.
+
+    Admins only. The pool balance — with the dispersal and activation figures
+    that sit beside it — is a commercial fact about the ORG (what it bought,
+    what it has left), not about the member's own access. A member's own
+    ceiling is `member_cap`, which they always see; with no cap they draw
+    straight from the pool and the honest thing to show is exactly that, with
+    no number attached.
+
+    Defaults CLOSED: an unknown or missing role sees nothing. This is the one
+    predicate for pool visibility on the entitlements side — orgs.service has
+    the matching one for the org row itself (`redact_org_for_role`).
+    """
+    return role == "admin"
+
+
 class EntitlementsService:
     """Reads merged entitlements for a user. NO cache — each call hits DB."""
 
@@ -209,17 +226,23 @@ class EntitlementsService:
             #
             # `monthly_grant` is the member's CAP, not a grant: nothing is
             # allocated to them, so what the UI must show is "your ceiling on
-            # the shared pool". `balance` stays the pool balance — the real
-            # constraint when the pool is emptier than the cap.
+            # the shared pool".
+            #
+            # POOL VISIBILITY (see _pool_visible_to): the balance is the ORG's
+            # money, so only an org ADMIN sees it. A plain member sees their own
+            # cap and nothing else; with no cap they see that they draw on the
+            # org pool, without a number. Redaction happens HERE, at the read,
+            # not in the UI — a number never sent cannot leak.
             if credits_enabled():
                 from orgs.wallets import read_or_create_org_wallet
                 from subscriptions.models import CreditsInfo
 
                 pool = read_or_create_org_wallet(self.supabase, ctx["org_id"])
                 cap, cap_used = self._member_cap(ctx["org_id"], ctx["org_member_id"])
+                show_pool = _pool_visible_to(ctx.get("role"))
                 credits_info = CreditsInfo(
-                    bundle_balance=pool.get("bundle_balance", 0),
-                    reserve_balance=pool.get("reserve_balance", 0),
+                    bundle_balance=pool.get("bundle_balance", 0) if show_pool else None,
+                    reserve_balance=pool.get("reserve_balance", 0) if show_pool else None,
                     monthly_grant=cap if cap is not None else 0,
                     overage_this_period=pool.get("overage_this_period", 0),
                     # NO pay-as-you-go on a pool — a member past their cap asks
@@ -249,8 +272,9 @@ class EntitlementsService:
                 features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
 
             # captured BEFORE any admin/bypass caps patch — the wallet grant must
-            # always be the tier's real grant, never a patched sentinel.
-            merged_monthly_grant = caps.monthly_credits
+            # always be the tier's real grant, never a patched sentinel. Precedence
+            # (Task 1, spec §1): explicit override > grandfathered > tier value.
+            merged_monthly_grant = self._resolve_monthly_grant(sub, override, caps.monthly_credits)
 
             if credits_enabled():
                 from subscriptions.models import CreditsInfo
@@ -281,6 +305,16 @@ class EntitlementsService:
         from subscriptions.admin_auth import is_db_admin  # local: same package, avoid circular at import time
 
         if is_db_admin(self.supabase, user_id):
+            # Team dials are not count caps (never -1) — an implicit-Pro admin
+            # gets the PRO tier's real dials, read live rather than hardcoded,
+            # so a dial retune doesn't require touching this patch too.
+            try:
+                pro_tier_row = self._read_tier_entitlements("pro") or {}
+            except Exception:
+                import logging
+
+                logging.exception("admin implicit-Pro: failed to read pro tier_entitlements row")
+                pro_tier_row = {}
             caps = Caps(
                 max_artists=-1,
                 max_projects=-1,
@@ -293,6 +327,9 @@ class EntitlementsService:
                 monthly_credits=-1,
                 max_works=-1,
                 included_storage_bytes=-1,
+                max_teams=pro_tier_row.get("max_teams", 0),
+                max_team_members=pro_tier_row.get("max_team_members", 0),
+                team_storage_bytes=pro_tier_row.get("team_storage_bytes", 0),
             )
             features = Features(
                 zoe_enabled=True,
@@ -731,41 +768,14 @@ class EntitlementsService:
         )
 
     def _read_or_create_wallet(self, user_id: str) -> dict:
-        res = (
-            self.supabase.table("credit_wallets").select("*").eq("owner_type", "user").eq("owner_id", user_id).execute()
-        )
-        if res.data:
-            return res.data[0]
-        now = datetime.now(UTC)
-        # period_end = now: the caller's _maybe_rollover_wallet fires immediately
-        # and grants the tier's monthly credits (same seeding trick as the
-        # migration's trigger/backfill — no wallet ever starts un-granted).
-        self.supabase.table("credit_wallets").upsert(
-            {
-                "owner_type": "user",
-                "owner_id": user_id,
-                "period_start": (now - relativedelta(months=1)).isoformat(),
-                "period_end": now.isoformat(),
-            },
-            on_conflict="owner_type,owner_id",
-        ).execute()
-        res = (
-            self.supabase.table("credit_wallets").select("*").eq("owner_type", "user").eq("owner_id", user_id).execute()
-        )
-        return (
-            res.data[0]
-            if res.data
-            else {
-                "id": None,
-                "owner_type": "user",
-                "owner_id": user_id,
-                "bundle_balance": 0,
-                "reserve_balance": 0,
-                "overage_this_period": 0,
-                "period_start": (now - relativedelta(months=1)).isoformat(),
-                "period_end": now.isoformat(),
-            }
-        )
+        """Delegates to `orgs.wallets.read_or_create_user_wallet` (moved there
+        2026-08-15 so both owner types — user and org — share one
+        read-or-create implementation instead of two siblings). Lazy import:
+        `orgs.wallets` has no subscriptions imports, so this stays a one-way
+        dependency (mirrors this file's other `from orgs...` call sites)."""
+        from orgs.wallets import read_or_create_user_wallet
+
+        return read_or_create_user_wallet(self.supabase, user_id)
 
     def _get_credit_prices(self) -> dict[str, int]:
         res = self.supabase.table("credit_prices").select("*").execute()
@@ -880,6 +890,12 @@ class EntitlementsService:
             monthly_credits=pick("monthly_credits", 0),
             max_works=pick("max_works", -1),
             included_storage_bytes=pick("included_storage_bytes", -1),
+            # Team dials (spec 2026-08-15 §1) come from the tier row only —
+            # overrides deliberately do NOT carry them (YAGNI: no admin-override
+            # UI for team caps yet).
+            max_teams=tier_row.get("max_teams", 0),
+            max_team_members=tier_row.get("max_team_members", 0),
+            team_storage_bytes=tier_row.get("team_storage_bytes", 0),
         )
         features = Features(
             zoe_enabled=pick("zoe_enabled"),
@@ -900,6 +916,42 @@ class EntitlementsService:
             features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
             caps = replace(caps, max_oneclick_runs_per_month=-1)
         return caps, features, override is not None
+
+    @staticmethod
+    def _resolve_monthly_grant(sub: dict, override: dict | None, tier_monthly_credits: int) -> int:
+        """Grant precedence (spec §1): explicit admin override > grandfathered
+        > tier value.
+
+        `tier_monthly_credits` is the MERGED value from `_merge` (tier row with
+        any per-field override already folded in) — branch order below matters
+        BECAUSE of that: the override check must run FIRST, or a grandfathered
+        grant would beat an explicit admin override instead of losing to it.
+        `override` is None both when no `tier_overrides` row exists at all AND
+        when one exists but its `monthly_credits` field is NULL (the admin left
+        it unset) — either way `_merge` already fell back to the tier default
+        for that value, so this helper has nothing extra to add on that path.
+
+        Grandfathering is NOT indefinite (spec §1, owner policy clarification):
+        it expires with the subscriber's already-paid billing period, not on a
+        calendar date chosen at merge time. It is honored ONLY when BOTH
+        `grandfathered_monthly_credits` and `grandfathered_until` are set AND
+        `grandfathered_until` is still in the future; a grant with no expiry
+        stamped is treated as already expired (defensive — the migration
+        backfill always stamps both together, so this should never happen in
+        practice) rather than as indefinite. Expiry is silent and read-time:
+        nothing fires an event or NULLs the columns at the boundary, a read
+        after it simply falls through to the tier value. `grandfathered_until`
+        is stamped ONCE, at grant time, and is never extended afterward —
+        webhooks NULL both columns together on any tier change (see
+        stripe_events.py), they never push the expiry forward.
+        """
+        if override is not None and override.get("monthly_credits") is not None:
+            return override["monthly_credits"]
+        gf = sub.get("grandfathered_monthly_credits")
+        until = _parse_iso(sub.get("grandfathered_until"))
+        if gf is not None and until is not None and until > datetime.now(UTC):
+            return gf
+        return tier_monthly_credits
 
     # -----------------------------------------------------------------------
     # can() — single chokepoint with host-wins resolution
@@ -1005,20 +1057,22 @@ class EntitlementsService:
             # _bump_storage put them there. Measuring the caller's personal
             # counter would compare the wrong number against the wrong cap.
             derived_storage = False
+            team_deny_reason = None
             if (host_user_id is None or host_user_id == user_id) and resource_project_id is not None:
                 org_ctx = self.resolve_billing_org_for_project(user_id, resource_project_id)
                 if org_ctx is not None:
                     derived_storage = True
-                    used, cap = self._team_storage(org_ctx["org_id"])
+                    used, cap, team_deny_reason = self._team_storage(org_ctx["org_id"])
                     projected = used + size
 
             if cap != -1 and projected > cap:
                 # An org storage wall — whether from ambient org context (rule 13)
-                # or a DERIVED team (rule 9) — points at SUPPORT, never "ask your
-                # admin" / upgrade: the admin has no storage lever, and the finite
-                # cap is the enforcement here.
+                # or a DERIVED team (rule 9) — points at SUPPORT for an enterprise
+                # seat (the admin has no storage lever there) or at the org's own
+                # admin for a self-serve pool (Task 12: they DO have a lever —
+                # buy more, or free up space); _team_storage picks the copy.
                 if derived_storage:
-                    return deny("Your team's storage is full. Contact support to discuss more space.")
+                    return deny(team_deny_reason)
                 if getattr(owner_ent, "managed_by_org", None) is not None:
                     return deny("Your organization seat's storage is full. Contact support to discuss options.")
                 return deny(
@@ -1111,16 +1165,23 @@ class EntitlementsService:
             upgrade_required=True,
         )
 
-    def _team_storage(self, org_id: str) -> tuple[int, int]:
-        """(bytes used, cap) for a team (Team-Owned Artists, Task 4).
+    def _team_storage(self, org_id: str) -> tuple[int, int, str]:
+        """(bytes used, cap, member-facing deny reason) for a team.
 
-        Used comes from the cached `organizations.storage_bytes`, which the
-        storage triggers in 20260803000003 keep live — an aggregate over two
-        file tables is far too expensive to run on the gate for every upload.
+        Task 12: the org row's `kind` branches this — self_serve delegates to
+        the owner's pool (orgs/storage_guard.upload_allowed's math, inlined
+        here as a used/cap pair so the existing cap check above stays
+        untouched); anything else (enterprise) keeps the ORIGINAL per-seat
+        calc below byte-identical, `kind`/`covered_by` just ride along on the
+        same row read — no new query.
 
-        Cap is the per-seat allowance times the number of ACTIVE seats. The env
-        value is per person; charging a ten-person team one seat's worth of
-        space would make the feature unusable the day it shipped.
+        Enterprise: used comes from the cached `organizations.storage_bytes`,
+        which the storage triggers in 20260803000003 keep live — an aggregate
+        over two file tables is far too expensive to run on the gate for every
+        upload. Cap is the per-seat allowance times the number of ACTIVE
+        seats. The env value is per person; charging a ten-person team one
+        seat's worth of space would make the feature unusable the day it
+        shipped.
 
         ponytail: cap moves when the roster does, so an org that loses members
         can sit over its cap with files already uploaded (existing files are
@@ -1128,7 +1189,16 @@ class EntitlementsService:
         organizations.storage_cap_bytes set alongside the credit dispersal is
         the upgrade path if that becomes a real complaint.
         """
-        org = self._first_row(self.supabase.table("organizations").select("storage_bytes").eq("id", org_id).execute())
+        org = self._first_row(
+            self.supabase.table("organizations").select("storage_bytes, kind, covered_by").eq("id", org_id).execute()
+        )
+        if (org or {}).get("kind") == "self_serve":
+            from orgs.storage_guard import TEAM_STORAGE_FULL_MSG, pool_state
+
+            used, pool, is_pro_like = pool_state(self.supabase, org.get("covered_by"))
+            cap = -1 if is_pro_like else pool
+            return used, cap, TEAM_STORAGE_FULL_MSG
+
         seats = (
             self.supabase.table("org_members")
             .select("id", count="exact")
@@ -1138,7 +1208,11 @@ class EntitlementsService:
             .count
         ) or 0
         used = (org or {}).get("storage_bytes") or 0
-        return used, _enterprise_seat_storage_bytes() * max(seats, 1)
+        return (
+            used,
+            _enterprise_seat_storage_bytes() * max(seats, 1),
+            "Your team's storage is full. Contact support to discuss more space.",
+        )
 
     @staticmethod
     def _more_permissive_cap(personal: int, derived: int) -> int:
@@ -1193,14 +1267,21 @@ class EntitlementsService:
         user_id: str,
         action: str,
         *,
-        is_admin: bool = False,
         resource_project_id: str | None = None,
         resource_contract_ids: list[str] | None = None,
     ):
-        """Can this user run `action` right now, and at what price?
+        """Can this user run `action` right now, and at what ESTIMATED price?
+
+        `credit_prices` is a pre-flight ESTIMATE, not the charge: the real cost
+        of an AI action is unknowable until its tokens are burned, so this
+        reserves a plausible amount and `debit_for_action` bills what was
+        actually metered. A run that measures above its estimate is allowed to
+        overshoot (the debit_credits RPC absorbs it as bundle drift, exactly
+        like a raced concurrent debit) — the estimate exists to keep a broke
+        user from starting expensive work, not to cap the bill.
 
         Order: bypass/admin → resource-derived org (Phase C) → ambient org
-        (Phase B) → price lookup → wallet balance → opt-in overage → wall.
+        (Phase B) → estimate lookup → wallet balance → opt-in overage → wall.
         Degraded policy (spec §12): paid fails open (uncharged), free fails
         closed. NOTE: re-reads tables per call like the rest of this service
         (no-cache philosophy) — optimization deferred deliberately.
@@ -1213,13 +1294,18 @@ class EntitlementsService:
         """
         import logging
 
-        from subscriptions.admin_auth import is_db_admin
         from subscriptions.models import CreditCheckResult
 
         if not credits_enabled():
             return CreditCheckResult(allowed=True, price=0)
-        if _bypass_paywalls_enabled() or is_admin or is_db_admin(self.supabase, user_id):
-            # Short-circuit BEFORE wallet read/debit — no ledger rows for admins.
+        if _bypass_paywalls_enabled():
+            # Ops escape hatch only. ADMINS ARE METERED like everyone else
+            # (owner decision, 2026-08-15): admin ledger rows are what make the
+            # credit system testable by its own operators, and admins can
+            # self-grant when they run low. The old is_admin/is_db_admin
+            # short-circuit ("no ledger rows for admins") is deliberately gone —
+            # do not reintroduce it here; BYPASS_PAYWALLS covers the blanket-off
+            # case explicitly.
             return CreditCheckResult(allowed=True, price=0)
 
         # Resource-derived org billing (Licensing Phase C, spec §6/§11, rules 4-6).
@@ -1310,7 +1396,9 @@ class EntitlementsService:
                 raise RuntimeError(f"Missing tier_entitlements row for tier={tier!r}")
             override = self._read_override(user_id)
             caps, _, _ = self._merge(tier_row, override)
-            monthly_grant = caps.monthly_credits
+            # Precedence (Task 1, spec §1): explicit override > grandfathered >
+            # tier value — must match get_for_user and the sweep exactly.
+            monthly_grant = self._resolve_monthly_grant(sub, override, caps.monthly_credits)
             wallet = self._read_or_create_wallet(user_id)
             wallet = self._maybe_rollover_wallet(wallet, monthly_grant)
             balance = wallet.get("bundle_balance", 0) + wallet.get("reserve_balance", 0)
@@ -1525,13 +1613,31 @@ class EntitlementsService:
     def debit_for_action(self, user_id: str, grant) -> None:
         """Debit a CreditGrant after the action succeeded. Best-effort, never raises.
 
+        The amount is METERED, not flat: it is derived from the tokens the
+        TrackedOpenAI proxy actually saw during this request (real OpenAI cost x
+        CREDIT_MARKUP / price-per-credit). `grant.price` is only the pre-flight
+        estimate the balance check reserved against — it is the fallback when
+        the spend is unmeasurable (no tracked scope, or a model missing from
+        MODEL_RATES), never the price.
+
+        Two consequences worth knowing: an action that made no LLM call (cache
+        hit) measures 0 and is skipped — no per-tool special-casing needed — and
+        a heavy run can measure ABOVE the reserved estimate, which the
+        debit_credits RPC absorbs as bundle drift exactly like a raced debit.
+
         NOTE: overage_debit rows are billed OFF the request path — daily
         sweep creates pending InvoiceItems; invoice.created attaches
         stragglers to the draft renewal invoice. Never call Stripe here.
         """
         import logging
 
+        from utils.llm.tracking import credits_for_llm_usage, llm_usage_snapshot
+
         if grant is None or not grant.enabled or grant.price <= 0:
+            return
+        measured = credits_for_llm_usage()
+        amount = grant.price if measured is None else measured
+        if amount <= 0:
             return
         try:
             wallet_id = getattr(grant, "wallet_id", None)
@@ -1549,13 +1655,28 @@ class EntitlementsService:
             # the member's cap counter in the same transaction as the debit, and
             # tags the ledger row with who spent it. None on personal wallets, so
             # the org_members read inside the RPC never happens for them.
+            # The token counts and real cost behind this charge ride on the
+            # ledger row: with a metered price, "why 9 credits?" is otherwise
+            # unanswerable from the ledger alone. `estimated` records what the
+            # gate reserved, so over/under-runs are measurable.
+            usage = llm_usage_snapshot() or {}
+            metadata = {"estimated": grant.price, "metered": measured is not None}
+            if usage:
+                metadata.update(
+                    {
+                        "input_tokens": usage.get("input_tokens", 0),
+                        "output_tokens": usage.get("output_tokens", 0),
+                        "llm_calls": usage.get("calls", 0),
+                        "cost_usd": round(usage.get("cost_usd", 0.0), 6),
+                    }
+                )
             payload = {
                 "p_wallet_id": wallet_id,
-                "p_amount": grant.price,
+                "p_amount": amount,
                 "p_action": grant.action,
                 "p_request_id": grant.request_id,
                 "p_kind": grant.kind,
-                "p_metadata": {},
+                "p_metadata": metadata,
             }
             member_id = getattr(grant, "org_member_id", None)
             if member_id is not None:
@@ -1587,12 +1708,22 @@ class EntitlementsService:
     # -----------------------------------------------------------------------
 
     def _aggregate_tool_usage(
-        self, wallet_id: str | None, prices: dict[str, int], *, since: str | None = None
+        self,
+        wallet_id: str | None,
+        prices: dict[str, int],
+        *,
+        since: str | None = None,
+        org_member_id: str | None = None,
     ) -> list[dict]:
         """Shared per-action ledger aggregation for the usage view (personal AND
-        org-context paths, Task 7). `since=None` means ALL-TIME — the org-context
-        caller passes None because seat wallets are NULL-period by construction
-        (rule 1) and have no period_start to floor on.
+        org-context paths, Task 7). `since=None` means ALL-TIME.
+
+        `org_member_id` scopes the scan to ONE member's rows on a shared org
+        pool, matching on the `metadata.org_member_id` that debit_credits
+        stamps — the same attribution key the admin console groups by. Without
+        it, a pool wallet aggregates every member's spend. Filtered in Python
+        rather than as a PostgREST JSONB filter to keep one code path with the
+        personal case; the scan is already bounded by wallet + period.
         """
         agg: dict[str, dict] = {}
         if wallet_id is not None:
@@ -1608,6 +1739,8 @@ class EntitlementsService:
             for r in rows.data or []:
                 action = r.get("action")
                 if not action:
+                    continue
+                if org_member_id is not None and (r.get("metadata") or {}).get("org_member_id") != org_member_id:
                     continue
                 if r.get("kind") == "overage_debit":
                     amt = (r.get("metadata") or {}).get("credits_billed") or 0
@@ -1647,7 +1780,9 @@ class EntitlementsService:
             raise RuntimeError(f"Missing tier_entitlements row for tier={tier!r}")
         override = self._read_override(user_id)
         caps, _, _ = self._merge(tier_row, override)
-        monthly_grant = caps.monthly_credits
+        # Precedence (Task 1, spec §1): explicit override > grandfathered >
+        # tier value — must match get_for_user, check_credits, and the sweep.
+        monthly_grant = self._resolve_monthly_grant(sub, override, caps.monthly_credits)
 
         wallet = self._read_or_create_wallet(user_id)
         wallet = self._maybe_rollover_wallet(wallet, monthly_grant)
@@ -1676,10 +1811,20 @@ class EntitlementsService:
         """(effective cap, credits used this cap period) for one member.
 
         The cap falls through org_members.monthly_cap -> organizations.
-        default_member_cap -> None (uncapped, pool is the only limit). `cap_used`
-        is the counter debit_credits maintains; it reads as 0 once its period has
-        lapsed, because the RPC rolls it lazily on the next debit rather than
-        needing a sweep to reset every member.
+        default_member_cap -> None (uncapped, pool is the only limit). Every org
+        carries a default (2,000, seeded by 20260814000001), so in practice a
+        new member IS capped and the terminal None is reached only when an admin
+        deliberately clears the org default.
+
+        A NEGATIVE stored cap is the "explicitly unlimited" sentinel (-1, the
+        repo's tier_entitlements idiom) and normalizes to None HERE, so nothing
+        above this function ever sees it: "None means no ceiling" stays the only
+        rule in the Python layer, and the sentinel is purely how the DB spells
+        it. debit_credits does the same normalization under the pool lock.
+
+        `cap_used` is the counter debit_credits maintains; it reads as 0 once its
+        period has lapsed, because the RPC rolls it lazily on the next debit
+        rather than needing a sweep to reset every member.
 
         Never raises: an unreadable membership row degrades to uncapped, matching
         the fail-open posture of every other read on this path.
@@ -1702,6 +1847,8 @@ class EntitlementsService:
                     self.supabase.table("organizations").select("default_member_cap").eq("id", org_id).execute()
                 )
                 cap = (org or {}).get("default_member_cap")
+            if cap is not None and cap < 0:
+                cap = None  # -1 sentinel: explicitly unlimited
             period_end = _parse_iso(member.get("cap_period_end"))
             lapsed = period_end is None or period_end <= datetime.now(UTC)
             return cap, 0 if lapsed else (member.get("cap_used") or 0)
@@ -1710,24 +1857,36 @@ class EntitlementsService:
             return None, 0
 
     def _get_credit_usage_org(self, ctx: dict) -> dict:
-        """Org-context credit usage: the POOL's ledger for the current period,
-        plus this member's cap and what they've spent against it.
+        """Org-context credit usage for the CALLER: their own per-tool spend out
+        of the pool, plus their cap and what they've spent against it.
 
         The pool's period is the dispersal period, so flooring the ledger scan on
         period_start gives "this month's spend" — the same window the member's cap
         counter uses. `monthlyGrant` carries the member's CAP: nothing is
         allocated to them, so the number that means something is their ceiling.
+
+        SCOPED TO THE CALLER, admins included. This backs `/me/credits/usage`,
+        which is a view of MY usage — it used to aggregate the pool's whole
+        ledger and hand every member the org's total spend, which both leaked
+        other members' activity and mislabelled it ("Your usage"). Org-wide
+        rollups live on the admin-only console (`GET /orgs/{id}/usage`).
+
+        Pool balances follow `_pool_visible_to`: admins see them, members get
+        None (see CreditsInfo for why None and not 0).
         """
         from orgs.wallets import read_or_create_org_wallet
 
         pool = read_or_create_org_wallet(self.supabase, ctx["org_id"])
         prices = self._get_credit_prices()
         period_start = pool.get("period_start")
-        tools = self._aggregate_tool_usage(pool.get("id"), prices, since=period_start)
+        tools = self._aggregate_tool_usage(
+            pool.get("id"), prices, since=period_start, org_member_id=ctx["org_member_id"]
+        )
         cap, cap_used = self._member_cap(ctx["org_id"], ctx["org_member_id"])
 
-        bundle = pool.get("bundle_balance", 0)
-        reserve = pool.get("reserve_balance", 0)
+        show_pool = _pool_visible_to(ctx.get("role"))
+        bundle = pool.get("bundle_balance", 0) if show_pool else None
+        reserve = pool.get("reserve_balance", 0) if show_pool else None
         return {
             "enabled": True,
             "managedByOrg": {"orgId": ctx["org_id"], "orgName": ctx["org_name"], "role": ctx["role"]},
@@ -1738,7 +1897,7 @@ class EntitlementsService:
             "memberCapUsed": cap_used,
             "bundleBalance": bundle,
             "reserveBalance": reserve,
-            "balance": bundle + reserve,
+            "balance": (bundle + reserve) if show_pool else None,
             "overageThisPeriod": 0,
             "tools": tools,
         }

@@ -9,7 +9,7 @@
 // while the flag is off simply surfaces the backend's 404 as a toast, same
 // as any other disabled-feature attempt.
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Building2, Loader2, Mail, Send } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -32,14 +32,19 @@ import {
   useCreateOrg,
   useOrgCreditRequests,
   useSubmitCreditRequest,
+  useClaimCoverage,
   type OrgSummary,
+  type OrgDetail,
 } from "@/hooks/useOrgs";
 import { OrgPoolCard } from "@/components/orgs/OrgPoolCard";
+import { OrgBillingPanel } from "@/components/orgs/OrgBillingPanel";
 import { OrgSeatsTable } from "@/components/orgs/OrgSeatsTable";
 import { OrgInvitesPanel } from "@/components/orgs/OrgInvitesPanel";
 import { OrgRequestsPanel } from "@/components/orgs/OrgRequestsPanel";
 import { OrgSettingsPanel } from "@/components/orgs/OrgSettingsPanel";
 import { OrgLinkedProjectsPanel } from "@/components/orgs/OrgLinkedProjectsPanel";
+import { OrgLifecyclePanel } from "@/components/orgs/OrgLifecyclePanel";
+import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
 
 const TOOL_LABELS: Record<CreditAction, string> = {
   oneclick_run: "OneClick run",
@@ -59,6 +64,31 @@ function PageShell({ children }: { children: React.ReactNode }) {
 function CreateOrgPanel({ onCreated }: { onCreated?: (orgId: string) => void }) {
   const [name, setName] = useState("");
   const createOrg = useCreateOrg();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { data: ent, isLoading: entLoading } = useEntitlements();
+  const { data: orgs } = useMyOrgs();
+
+  const maxTeams = ent?.caps.maxTeams;
+  // Slots already held: self-serve orgs this user covers, not archived/
+  // dissolved. Mirrors the backend's count_covered_orgs (orgs/standing.py) —
+  // deliberately NOT gated on covered_at, since a released org (covered_by
+  // still set, covered_at cleared) still holds its last coverer's slot.
+  const usedSlots = (orgs ?? []).filter(
+    (o) => o.kind === "self_serve" && o.covered_by === user?.id && !o.archived_at && !o.dissolved_at,
+  ).length;
+  const noSlots = maxTeams === 0;
+
+  // Wait for entitlements before deciding which form to show — otherwise a
+  // zero-slot Free user briefly sees the normal create form before it swaps
+  // to the upgrade CTA once `maxTeams` resolves.
+  if (entLoading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   const handleCreate = () => {
     if (!name.trim()) return;
@@ -73,6 +103,25 @@ function CreateOrgPanel({ onCreated }: { onCreated?: (orgId: string) => void }) 
     );
   };
 
+  if (noSlots) {
+    return (
+      <Card className="p-8 max-w-lg mx-auto text-center">
+        <div className="w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mx-auto">
+          <Building2 className="w-6 h-6" />
+        </div>
+        <h1 className="text-xl font-semibold tracking-tight mt-4">Create a team</h1>
+        <p className="text-[13.5px] text-muted-foreground mt-1.5 max-w-sm mx-auto">
+          Creating and owning a team needs a Basic or Pro plan — it shares one credit pool with your
+          invited members, with seats, invites, and admin controls. Joining someone else&apos;s team
+          is free on every plan.
+        </p>
+        <Button className="mt-5" onClick={() => navigate("/pricing")}>
+          View plans
+        </Button>
+      </Card>
+    );
+  }
+
   return (
     <Card className="p-8 max-w-lg mx-auto text-center">
       <div className="w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mx-auto">
@@ -84,6 +133,11 @@ function CreateOrgPanel({ onCreated }: { onCreated?: (orgId: string) => void }) 
         controls. A new organization starts <strong>pending</strong> and turns on automatically once
         its first credit purchases reach the minimum — no separate activation step.
       </p>
+      {maxTeams != null && maxTeams > 0 && (
+        <p className="text-xs text-muted-foreground mt-2">
+          {usedSlots} of {maxTeams} team slots used
+        </p>
+      )}
 
       <div className="mt-6 text-left space-y-2 max-w-xs mx-auto">
         <Label htmlFor="new-org-name">Organization name</Label>
@@ -120,6 +174,51 @@ function OrgHeader({ org }: { org: OrgSummary }) {
   );
 }
 
+/** Formats an ISO timestamp plus a day count as "{date}" — used for the
+ * grace banner's "loses access on {date}" copy. */
+function addDaysLabel(iso: string, days: number): string {
+  const start = new Date(iso).getTime();
+  if (Number.isNaN(start)) return "soon";
+  return fmtDate(new Date(start + days * 86_400_000).toISOString());
+}
+
+/** Admin-only grace/lapsed banner for a self-serve org (2026-08-15 pricing/
+ * teams spec §3, §8). Never rendered for members — grace notifies admins
+ * only, and a lapsed member sees the paused-team notice in MemberPanel
+ * instead. `org.graceDays` is real (Task 15, `orgs.standing.grace_days()`,
+ * present for every org/role); the "soon" fallback below is defensive only,
+ * for a payload served before the backend shipped the field. */
+function StandingBanner({ orgId, org }: { orgId: string; org: OrgDetail }) {
+  const claim = useClaimCoverage();
+
+  if (org.status === "lapsed") {
+    return (
+      <div className="bg-destructive/10 border border-destructive/30 rounded-xl px-4 py-3.5 flex items-center justify-between gap-4 flex-wrap">
+        <p className="text-[13px] text-destructive">
+          This team is paused — nothing is deleted, but it&apos;s inaccessible until it&apos;s covered
+          again.
+        </p>
+        <Button size="sm" variant="outline" onClick={() => claim.mutate({ orgId })} disabled={claim.isPending}>
+          {claim.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+          Reactivate
+        </Button>
+      </div>
+    );
+  }
+
+  if (org.grace_started_at) {
+    const dateLabel = org.graceDays != null ? addDaysLabel(org.grace_started_at, org.graceDays) : "soon";
+    return (
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3.5 text-[13px] text-amber-700 dark:text-amber-400">
+        This team loses access on {dateLabel} — keep a Basic/Pro subscription or have another admin
+        claim coverage.
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function AdminConsole({ orgId }: { orgId: string }) {
   const { user } = useAuth();
   const { data: org, isLoading } = useOrg(orgId);
@@ -133,10 +232,18 @@ function AdminConsole({ orgId }: { orgId: string }) {
     );
   }
 
+  // Self-serve teams (2026-08-15 spec) get a grace/lapsed banner and the
+  // coverage/archive/dissolve lifecycle panel; enterprise orgs (incl. every
+  // pre-migration row, where `kind` is undefined) render exactly as before —
+  // nothing below is inserted into their JSX path.
+  const isSelfServe = org.kind === "self_serve";
+
   return (
     <div className="flex flex-col gap-[22px]">
       <OrgHeader org={org} />
+      {isSelfServe && <StandingBanner orgId={orgId} org={org} />}
       <OrgPoolCard org={org} />
+      {isSelfServe && <OrgBillingPanel org={org} />}
       <OrgSeatsTable orgId={orgId} currentUserId={user?.id} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-[22px] items-start">
         <OrgInvitesPanel orgId={orgId} />
@@ -144,6 +251,7 @@ function AdminConsole({ orgId }: { orgId: string }) {
       </div>
       <OrgLinkedProjectsPanel orgId={orgId} seats={usage?.seats ?? []} />
       <OrgSettingsPanel org={org} />
+      {isSelfServe && <OrgLifecyclePanel orgId={orgId} org={org} currentUserId={user?.id} />}
     </div>
   );
 }
@@ -239,10 +347,56 @@ function MemberPanel({ org }: { org: OrgSummary }) {
     ent?.billingContext?.type === "org" ? ent.billingContext : ent?.credits?.managedByOrg;
   const isActiveContext = managedByOrg?.orgId === org.id;
   const hasPending = (myRequests ?? []).some((r) => r.status === "pending");
+  // `usage.tools` is the caller's OWN spend out of the pool (backend scopes it
+  // by org_member_id) — it used to be the org-wide total mislabelled as "Your
+  // usage", which showed every member the whole roster's activity.
   const usedTools = (usage?.tools ?? []).filter((t) => t.count > 0);
+  const standing = creditStanding(ent?.credits);
 
   const capExceeded =
     ent?.credits?.memberCap != null && (ent.credits.memberCapUsed ?? 0) > ent.credits.memberCap;
+
+  // Lapsed self-serve team (2026-08-15 spec §3): replaces the member panel
+  // body entirely — there's no limit/usage/request UI to show while the
+  // team's pool and every team artist are inaccessible. All hooks above still
+  // ran (rules of hooks), so `admins` — already fetched for "who to ask" — is
+  // reused here rather than skipped.
+  if (org.status === "lapsed") {
+    return (
+      <div className="flex flex-col gap-[22px]">
+        <OrgHeader org={org} />
+        <Card className="p-6">
+          <div className="text-[15px] font-semibold">This team is paused</div>
+          <p className="text-[13.5px] text-muted-foreground mt-1.5 max-w-md">
+            This team is paused — its admin needs to reactivate it. Nothing has been deleted.
+          </p>
+          {admins.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[11px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 mb-2">
+                {admins.length === 1 ? "Its admin" : "Its admins"}
+              </div>
+              <div className="space-y-1.5">
+                {admins.map((a) => (
+                  <div key={a.userId} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="min-w-0 truncate">{a.fullName || a.email || "Admin"}</span>
+                    {a.email && (
+                      <a
+                        href={`mailto:${a.email}`}
+                        className="flex-none inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground underline underline-offset-2"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                        {a.email}
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-[22px]">
@@ -289,21 +443,34 @@ function MemberPanel({ org }: { org: OrgSummary }) {
         <div className="mt-4 bg-background border border-border rounded-xl px-[18px] py-4">
           {isActiveContext ? (
             <>
-              <div className="text-[12.5px] text-muted-foreground">
-                {ent?.credits?.memberCap != null ? "Left of your monthly limit" : "In the shared pool"}
-              </div>
-              <div className="text-[28px] font-bold tracking-tight mt-1 tabular-nums">
-                {(ent?.credits?.memberCap != null
-                  ? Math.max(0, ent.credits.memberCap - (ent.credits.memberCapUsed ?? 0))
-                  : (ent?.credits?.balance ?? 0)
-                ).toLocaleString()}{" "}
-                <span className="text-sm font-normal text-muted-foreground">credits</span>
-              </div>
+              {/* A member sees their own limit and nothing about the pool — its
+                  balance is redacted by the backend for non-admins, so
+                  creditStanding() returns null when they also have no cap and
+                  there is genuinely no figure to show. */}
+              {standing ? (
+                <>
+                  <div className="text-[12.5px] text-muted-foreground">Left of your monthly limit</div>
+                  <div className="text-[28px] font-bold tracking-tight mt-1 tabular-nums">
+                    {standing.remaining.toLocaleString()}{" "}
+                    <span className="text-sm font-normal text-muted-foreground">credits</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-[12.5px] text-muted-foreground">Your credits</div>
+                  <div className="text-[20px] font-semibold tracking-tight mt-1">{POOL_ONLY_LABEL}</div>
+                  <div className="text-[12px] text-muted-foreground mt-1">
+                    No monthly limit set — your admin can add one at any time.
+                  </div>
+                </>
+              )}
               {ent?.credits?.memberCap != null && (
                 <div className="text-[12px] text-muted-foreground mt-1">
                   {(ent.credits.memberCapUsed ?? 0).toLocaleString()} of{" "}
-                  {ent.credits.memberCap.toLocaleString()} used · organization pool holds{" "}
-                  {(ent.credits.balance ?? 0).toLocaleString()}
+                  {ent.credits.memberCap.toLocaleString()} used
+                  {ent.credits.balance != null && (
+                    <> · organization pool holds {ent.credits.balance.toLocaleString()}</>
+                  )}
                 </div>
               )}
               {capExceeded && (
@@ -431,7 +598,12 @@ const Organization = () => {
 
   const orgId = selectedOrgId && orgList.some((o) => o.id === selectedOrgId) ? selectedOrgId : orgList[0].id;
   const selected = orgList.find((o) => o.id === orgId) ?? orgList[0];
-  const isAdmin = selected.my_role === "admin";
+  // Admin AND active. The backend counts only ACTIVE seats as admin
+  // (is_org_admin / require_member), so a suspended admin sent to AdminConsole
+  // would sit on a spinner forever — GET /orgs/{id} 404s for them — and every
+  // admin-only field they'd render is redacted anyway. The member view degrades
+  // honestly instead, and already explains the paused seat.
+  const isAdmin = selected.my_role === "admin" && selected.my_status === "active";
 
   return (
     <PageShell>

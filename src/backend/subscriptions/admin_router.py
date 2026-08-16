@@ -3,6 +3,7 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, EmailStr, Field
@@ -61,6 +62,24 @@ class OrgPoolGrantPayload(BaseModel):
     # "each call is distinct" (the user-grant default) is the wrong failure
     # mode for a double-submit. The dialog mints a UUID per open.
     idempotency_key: str = Field(min_length=1)
+
+
+class CreateEnterpriseOrgRequest(BaseModel):
+    """POST /admin/orgs body — creates an ENTERPRISE org for an EXISTING
+    customer account. See admin_service.create_enterprise_org for why
+    `created_by` must be the customer's id, never the operator's."""
+
+    name: str = Field(min_length=1)
+    admin_email: EmailStr
+
+
+class SetOrgKindRequest(BaseModel):
+    """PUT /admin/orgs/{org_id}/kind body. `covered_by_user_id` is REQUIRED
+    when flipping to 'self_serve' (422 at the router without it) — see
+    admin_service.set_org_kind for the coverer/slot requirements."""
+
+    kind: Literal["self_serve", "enterprise"]
+    covered_by_user_id: str | None = None
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -397,6 +416,59 @@ async def list_orgs(_admin: str = Depends(require_admin)):
     from subscriptions.admin_service import list_orgs_admin
 
     return {"orgs": list_orgs_admin(get_supabase_client())}
+
+
+@router.post("/orgs")
+async def create_enterprise_org_route(
+    body: CreateEnterpriseOrgRequest,
+    admin_email: str = Depends(require_admin),
+) -> dict:
+    """Msanii-admin-only: create an ENTERPRISE org for an existing customer
+    account. This (and PUT /admin/orgs/{id}/kind's flip-to-enterprise path)
+    are the ONLY producers of kind='enterprise' rows post-migration —
+    org creation everywhere else (POST /orgs) is self-serve + slot-gated.
+    See admin_service.create_enterprise_org for the created_by rationale
+    (review r2 hole 5)."""
+    from main import get_supabase_client
+    from subscriptions.admin_service import create_enterprise_org
+
+    try:
+        result = create_enterprise_org(get_supabase_client(), body.name, body.admin_email)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    logger.info("admin %s created enterprise org %s for customer %s", admin_email, result.get("id"), body.admin_email)
+    return result
+
+
+@router.put("/orgs/{org_id}/kind")
+async def set_org_kind_route(
+    org_id: str,
+    body: SetOrgKindRequest,
+    admin_email: str = Depends(require_admin),
+) -> dict:
+    """Msanii-admin-only: flip an org between 'enterprise' and 'self_serve'.
+    See admin_service.set_org_kind for the coverer/slot requirements."""
+    if body.kind == "self_serve" and not body.covered_by_user_id:
+        raise HTTPException(status_code=422, detail="covered_by_user_id is required when flipping to self_serve")
+
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    org = sb.table("organizations").select("id").eq("id", org_id).maybe_single().execute()
+    if not (org and org.data):
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    from orgs.standing import NoSlotError
+    from subscriptions.admin_service import set_org_kind
+
+    try:
+        result = set_org_kind(sb, org_id, body.kind, body.covered_by_user_id)
+    except NoSlotError as e:
+        raise HTTPException(status_code=402, detail={"reason": str(e), "upgradeRequired": True})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("admin %s flipped org %s kind to %s", admin_email, org_id, body.kind)
+    return result
 
 
 @router.put("/orgs/{org_id}/dispersal")

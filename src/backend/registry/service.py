@@ -1358,8 +1358,60 @@ async def mark_notification_read(db: Client, user_id: str, notification_id: str)
     db.table("registry_notifications").update({"read": True}).eq("id", notification_id).eq("user_id", user_id).execute()
 
 
+# Notification rows whose Accept/Decline buttons the UI renders (mirrors
+# NotificationRow.tsx's isInvite). These are ACTIONS, not messages: marking one
+# read retires its buttons, so "Mark all read" must skip them or a single click
+# silently strands every outstanding invitation.
+def _is_actionable_invite(row: dict) -> bool:
+    if row.get("type") == "team_invite":
+        return True
+    # Registry's own 'invitation' rows carry entity_type 'work'/NULL and have no
+    # buttons — only the org ones are actionable.
+    return row.get("type") == "invitation" and row.get("entity_type") == "org"
+
+
 async def mark_all_notifications_read(db: Client, user_id: str):
-    db.table("registry_notifications").update({"read": True}).eq("user_id", user_id).eq("read", False).execute()
+    """Mark everything read EXCEPT pending invitations.
+
+    An invite row is a to-do, not a message. Its buttons are gated on unread, so
+    sweeping it up with the rest is what made an invite unrecoverable: the user
+    hits "Mark all read", the Accept button disappears, and the invite is still
+    pending server-side with no way left to accept it in-app.
+
+    Filtered in Python rather than as a PostgREST predicate because the
+    condition spans two columns with a NULL-bearing one (entity_type), where
+    `.neq` quietly drops NULL rows — the registry invitations that SHOULD be
+    marked. Two round-trips, bounded by the caller's unread count.
+    """
+    unread = (
+        db.table("registry_notifications")
+        .select("id, type, entity_type")
+        .eq("user_id", user_id)
+        .eq("read", False)
+        .execute()
+    ).data or []
+    ids = [r["id"] for r in unread if not _is_actionable_invite(r)]
+    if not ids:
+        return
+    db.table("registry_notifications").update({"read": True}).in_("id", ids).execute()
+
+
+def mark_invite_notifications_read(db: Client, user_id: str, token: str) -> None:
+    """Retire the in-app invite row once its invite is actually actioned.
+
+    Accepting from the emailed claim page leaves the bell's copy of the same
+    invite sitting there unread with live buttons; this closes it. Best-effort
+    — a notification that fails to update must never fail the acceptance, which
+    has already committed.
+    """
+    import logging
+
+    try:
+        db.table("registry_notifications").update({"read": True}).eq("user_id", user_id).eq("read", False).eq(
+            "metadata->>token", token
+        ).execute()
+    except Exception:
+        logging.exception("failed to close invite notification user=%s", user_id)
 
 
 # ============================================================

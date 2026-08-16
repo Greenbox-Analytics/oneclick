@@ -2181,6 +2181,15 @@ async def confirm_calculation(request: ConfirmCalculationRequest, user_id: str =
         get_supabase_client(), user_id, request.project_id, request.royalty_statement_id, request.contract_ids or []
     )
 
+    # _parse_statement_rows below runs the LLM payable-column detector, twice.
+    # TRACKED, not charged: confirming is a follow-on of a run the user already
+    # paid for, so this exists to keep ai_usage_log honest about where OpenAI
+    # spend goes — there is no gate and no debit_for_action on this path.
+    with set_llm_context(user_id, "oneclick"):
+        return await _confirm_calculation_inner(request, user_id)
+
+
+async def _confirm_calculation_inner(request: ConfirmCalculationRequest, user_id: str):
     # GATE CHECK — pure reads. A 409 here must leave NO cache row behind, so
     # this runs before any write. Statement rows are parsed here (not persisted)
     # so the revision gate sees the REAL period — a today-fallback would let the

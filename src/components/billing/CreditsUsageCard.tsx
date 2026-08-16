@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useCreditUsage, type CreditAction } from "@/hooks/useCreditUsage";
 import { useCreditPacks } from "@/hooks/useCreditPacks";
@@ -69,8 +70,9 @@ export function CreditsUsageCard() {
   if (managedByOrg) {
     const cap = ent?.credits?.memberCap ?? null;
     const capUsed = ent?.credits?.memberCapUsed ?? 0;
-    const poolBalance = ent?.credits?.balance ?? 0;
-    const remaining = cap != null ? Math.max(0, cap - capUsed) : poolBalance;
+    // null unless the caller is an org ADMIN — the pool is the org's money.
+    const poolBalance = ent?.credits?.balance ?? null;
+    const standing = creditStanding(ent?.credits);
     return (
       <Card className="overflow-hidden">
         <div className="flex items-start justify-between gap-4 px-6 pt-[22px] pb-1.5">
@@ -88,21 +90,29 @@ export function CreditsUsageCard() {
 
         <div className="flex items-center justify-between gap-4 flex-wrap px-6 pt-3.5 pb-[22px]">
           <div>
-            <div className="text-[32px] font-bold tracking-tight tabular-nums">
-              {remaining.toLocaleString()}{" "}
-              <span className="text-sm font-normal text-muted-foreground">credits left this month</span>
-            </div>
+            {standing ? (
+              <div className="text-[32px] font-bold tracking-tight tabular-nums">
+                {standing.remaining.toLocaleString()}{" "}
+                <span className="text-sm font-normal text-muted-foreground">credits left this month</span>
+              </div>
+            ) : (
+              // Uncapped member: no ceiling of their own and no visibility of
+              // the pool, so there is genuinely no number to headline.
+              <div className="text-[22px] font-semibold tracking-tight">{POOL_ONLY_LABEL}</div>
+            )}
             <p className="text-[12.5px] text-muted-foreground mt-1 max-w-[440px]">
               {cap != null ? (
                 <>
-                  You&apos;ve used {capUsed.toLocaleString()} of your {cap.toLocaleString()} monthly limit. Your
-                  organization has {poolBalance.toLocaleString()} in the shared pool. Need more? Ask your admin to
-                  raise your limit.
+                  You&apos;ve used {capUsed.toLocaleString()} of your {cap.toLocaleString()} monthly limit.
+                  {/* The pool balance is admin-only — a member sees their limit and nothing else. */}
+                  {poolBalance != null && <> Your organization has {poolBalance.toLocaleString()} in the shared pool.</>}{" "}
+                  Need more? Ask your admin to raise your limit.
                 </>
               ) : (
                 <>
-                  You draw from your organization&apos;s shared pool with no personal limit. Running low? Ask your
-                  admin to top the pool up.
+                  You draw from your organization&apos;s shared pool with no personal limit
+                  {poolBalance != null && <>, which holds {poolBalance.toLocaleString()} credits</>}. Running low? Ask
+                  your admin to top the pool up.
                 </>
               )}
             </p>
@@ -242,7 +252,16 @@ export function CreditsUsageCard() {
           <div>
             {rows.map((r) => {
               const pct = maxSpent ? Math.round((r.spent / maxSpent) * 100) : 0;
-              const unit = r.price == null ? "free" : `${r.price} cr`;
+              // Credits are metered per run off the AI tokens it actually used,
+              // so there is no flat "X cr each". Show the real average once
+              // there is something to average; before that, the estimate the
+              // balance check reserves per run.
+              const unit =
+                r.price == null
+                  ? "free"
+                  : r.count > 0
+                    ? `~${Math.round(r.spent / r.count)} cr avg`
+                    : `~${r.price} cr est`;
               return (
                 <div key={r.label} className="py-[13px] border-t border-border/60 first:border-t-0">
                   <div className="flex items-center justify-between gap-3">
@@ -260,7 +279,6 @@ export function CreditsUsageCard() {
                       {r.spent > 0 ? `${r.spent} cr` : "—"}
                       <small className="block text-[11px] font-normal text-muted-foreground mt-px">
                         {r.count} · {unit}
-                        {unit !== "free" ? " ea" : ""}
                       </small>
                     </div>
                   </div>
@@ -282,6 +300,19 @@ export function CreditsUsageCard() {
           <p className="text-xs text-muted-foreground mt-3">
             Unused monthly credits don&apos;t carry over. Credits you buy separately never expire.
           </p>
+          {/* Grandfathered rate (2026-08-15 tiers): live grant above the tier's
+              listed grant means this user kept their old monthly credits, which
+              expire with the already-paid period (grandfathered_until). Say so
+              here — this card is the surface that shows "of {grant} / mo", and
+              silence would make the drop at renewal read as a surprise
+              downgrade. Guard tierGrant > 0: -1 means unlimited. */}
+          {(ent?.caps?.monthlyCredits ?? 0) > 0 && grant > ent.caps.monthlyCredits && (
+            <p className="text-xs text-muted-foreground mt-1.5">
+              You&apos;re keeping your current {grant.toLocaleString()} credits a month until your
+              next renewal. After that, your plan includes{" "}
+              {ent.caps.monthlyCredits.toLocaleString()} a month.
+            </p>
+          )}
         </div>
       </div>
 

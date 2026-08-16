@@ -834,9 +834,32 @@ async def derive_from_contracts(body: DeriveFromContractsBody, user_id: str = De
         link = db.table("work_files").select("id").eq("work_id", body.work_id).eq("file_id", cid).execute()
         if not link.data:
             raise HTTPException(status_code=403, detail="Access denied")
-    result = await derive_service.derive_for_collaborator(
-        db, body.work_id, body.name, body.email, body.contract_file_ids
+
+    # This runs a full LLM contract extraction per file (derive_service ->
+    # get_or_parse), so it is a metered AI action like every other parse — it
+    # was previously gated only on the Registry FEATURE flag and charged
+    # nothing, which leaked the entire cost of the Derive dialog.
+    # Access-before-derivation (rule 4): the work_files link check above already
+    # ran, so a derived org can never be billed for a file the caller can't see.
+    # ponytail: no pre-gate cache peek like parse-contract-splits has — the
+    # parse happens per-file inside derive_service, so a peek would mean
+    # re-resolving and re-downloading every file here. Consequence: a
+    # zero-balance user is walled on a derive that would have been a free cache
+    # hit. Add the peek if that turns up in support.
+    parse_grant = gated_credits(
+        user_id,
+        CreditAction.REGISTRY_PARSE,
+        resource_contract_ids=list(body.contract_file_ids) if body.contract_file_ids else None,
     )
+    with set_llm_context(user_id, "registry"):
+        result = await derive_service.derive_for_collaborator(
+            db, body.work_id, body.name, body.email, body.contract_file_ids
+        )
+        # Charge on success, metered off the tokens the parses actually burned
+        # (0 when every contract came back from the parse cache).
+        from subscriptions.deps import _get_entitlements_service
+
+        _get_entitlements_service().debit_for_action(user_id, parse_grant)
 
     # Auto-link the source contract to the work — when a split was successfully
     # derived from a file, that file is by definition related to this work and
@@ -1215,14 +1238,15 @@ async def parse_contract_splits(
         with set_llm_context(user_id, "registry"):
             # Route through the shared parse cache so this Add-Work parse is cached and
             # canonicalized (marker-stripped) like every other contract parse.
-            cache_missed = {"v": False}
-            contract_data = get_or_parse(_get_supabase(), lambda: text, on_miss=lambda: cache_missed.update(v=True))
+            contract_data = get_or_parse(_get_supabase(), lambda: text, on_miss=None)
             result = contract_splits.parse_royalty_splits(
                 contract_data=contract_data,
                 main_artist_name=main_artist_name or "",
             )
-        # Charge only when a real LLM parse happened — cache hits are free (spec §3).
-        if cache_missed["v"]:
+            # INSIDE the scope: the debit is metered off the tokens this parse
+            # burned, which is only readable while the context is live. A cache
+            # hit burns none, so it measures 0 and charges nothing — the
+            # on_miss/cache_missed flag this used to need is now redundant.
             from subscriptions.deps import _get_entitlements_service
 
             _get_entitlements_service().debit_for_action(user_id, parse_grant)

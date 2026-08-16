@@ -291,6 +291,20 @@ class TestSetOrgProjectMemberRoleNoLeak404s:
             await org_projects.set_org_project_member_role(db, USER_ID, ORG_ID, PROJECT_ID, SEAT_MEMBER_ID, "editor")
         assert exc_info.value.status_code == 403
 
+    async def test_archived_org_blocks_the_put_path_409(self, monkeypatch):
+        """Task 17 F1: PUT .../members/{member_id} re-INSERTs a project_members
+        grant, so an archived org (whose grants were already torn down) must
+        refuse it — stand-in for the guard's structurally distinct placement
+        in orgs/projects.py, mirroring test_orgs_service.py's
+        test_archived_org_blocks_a_member_management_mutation. No org_members
+        table configured: the 409 fires before the no-leak 404 gates run."""
+        _authorize_admin(monkeypatch)
+        db = _db_seq({"organizations": [MagicMock(data=_org_row(archived_at="2026-08-01T00:00:00+00:00"), count=1)]})
+        with pytest.raises(HTTPException) as exc_info:
+            await org_projects.set_org_project_member_role(db, USER_ID, ORG_ID, PROJECT_ID, SEAT_MEMBER_ID, "editor")
+        assert exc_info.value.status_code == 409
+        assert "archived" in exc_info.value.detail.lower()
+
 
 class TestSetOrgProjectMemberRoleDecisionTree:
     def _side_for(self, pm_rows_by_call, captured):

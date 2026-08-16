@@ -969,6 +969,121 @@ def get_org_pool(supabase, org_id: str) -> dict:
     }
 
 
+# ------------------------------------------------------------------
+# Enterprise org creation + kind flip (spec 2026-08-15 §2, review r2 hole 5).
+# Post-migration, these two are the ONLY producers of kind='enterprise' rows
+# — orgs.service.create_org is self-serve + slot-gated for everyone else.
+# ------------------------------------------------------------------
+
+
+def create_enterprise_org(supabase: Client, name: str, admin_email: str) -> dict:
+    """Msanii-admin-only: create an ENTERPRISE org for an EXISTING customer
+    account. `created_by` is the CUSTOMER's user id, never the operator's —
+    the auto_create_org_admin DB trigger seats `created_by` as the org's
+    sole admin, so creating under the Msanii admin's own id would make
+    MSANII the customer's admin, and a NULL would leave nobody able to
+    invite. `kind='enterprise'` is written explicitly here.
+
+    Status defaults to 'pending' (DB CHECK default) — the activation floor
+    still applies, same as today.
+
+    Raises ValueError (-> 404 at the router) when `admin_email` has no
+    account — enterprise onboarding requires an existing account, unlike
+    orgs.service.invite_member's invite-by-email path.
+    """
+    from orgs.service import _find_user_id_by_email
+
+    customer_id = _find_user_id_by_email(supabase, admin_email)
+    if not customer_id:
+        raise ValueError(f"No account found for email: {admin_email}")
+
+    res = (
+        supabase.table("organizations")
+        .insert({"name": name, "created_by": customer_id, "kind": "enterprise"})
+        .execute()
+    )
+    org = res.data[0] if res.data else None
+    if not org:
+        raise RuntimeError("Failed to create organization")
+    return org
+
+
+def set_org_kind(supabase: Client, org_id: str, kind: str, covered_by_user_id: str | None = None) -> dict:
+    """Msanii-admin-only: flip an org's `kind` between 'enterprise' and
+    'self_serve'.
+
+    Flipping TO 'self_serve' REQUIRES `covered_by_user_id` — the router
+    enforces this with a 422 before calling in; this function re-checks
+    (defense in depth, since it takes no authz dependency of its own). Mirrors
+    orgs.service.claim_coverage's guard block:
+      - refuses an archived or dissolved org (ValueError -> 400 at the
+        router), same as claim_coverage — coverage should never be assigned
+        onto a team that can't be reactivated this way.
+      - the coverer must be an ACTIVE admin of `org_id` (orgs.authz.is_org_admin)
+      - the coverer must have a free team slot on their own plan
+        (orgs.standing.require_free_slot, which raises NoSlotError -> 402 at
+        the router)
+    Without all three, the org would sit uncovered and lapse in the grace
+    window with nobody able to fix it. On a clean flip, stamps
+    `covered_by`/`covered_at`, and additionally:
+      - sets `status='active'` — create_org's invariant is that the slot IS
+        the activation; a flip must land in the same state a fresh
+        self-serve create would.
+      - zeroes `monthly_dispersal_credits` — an enterprise dispersal
+        surviving the flip would mint free monthly credits into a self-serve
+        pool forever after: the sweep's rollover grants
+        `monthly_dispersal_credits` to ANY org with a positive value
+        regardless of `kind` (subscriptions/sweep.py), so a stale enterprise
+        contract volume left on a self-serve row is a standing credit leak,
+        not a no-op.
+
+    Flipping TO 'enterprise' clears `grace_started_at` — standing.py (the
+    sweep) ignores enterprise orgs entirely, so a stale grace-start
+    timestamp left over from a prior self_serve stint must not linger and
+    confuse a later flip back.
+
+    Raises ValueError for an invalid `kind`, a missing coverer, an archived/
+    dissolved org, or a coverer who isn't an active admin of this org (-> 400
+    at the router, mirroring set_org_dispersal). Raises RuntimeError if the
+    update affects no row (org deleted between the router's existence check
+    and this write) — never fabricate a success body for a write we can't
+    confirm landed, mirroring create_enterprise_org. Org existence is
+    otherwise checked at the router (mirrors the dispersal endpoint's
+    404-then-400 split) — this function assumes `org_id` is real going in.
+    """
+    from orgs import authz as org_authz
+    from orgs.standing import require_free_slot
+
+    if kind not in ("self_serve", "enterprise"):
+        raise ValueError(f"invalid kind {kind!r}")
+
+    payload: dict = {"kind": kind}
+    if kind == "self_serve":
+        if not covered_by_user_id:
+            raise ValueError("covered_by_user_id is required when flipping to self_serve")
+
+        org_res = supabase.table("organizations").select("archived_at, dissolved_at").eq("id", org_id).execute()
+        org_row = (org_res.data or [None])[0]
+        if org_row and (org_row.get("archived_at") or org_row.get("dissolved_at")):
+            raise ValueError("Cannot flip an archived or dissolved organization to self_serve")
+
+        if not org_authz.is_org_admin(supabase, covered_by_user_id, org_id):
+            raise ValueError("covered_by_user_id must be an active admin of this organization")
+        require_free_slot(supabase, covered_by_user_id)  # raises NoSlotError -> 402 at the router
+
+        payload["covered_by"] = covered_by_user_id
+        payload["covered_at"] = datetime.now(UTC).isoformat()
+        payload["status"] = "active"
+        payload["monthly_dispersal_credits"] = 0
+    else:
+        payload["grace_started_at"] = None
+
+    res = supabase.table("organizations").update(payload).eq("id", org_id).execute()
+    if not res.data:
+        raise RuntimeError(f"Failed to update organization kind: {org_id}")
+    return res.data[0]
+
+
 def list_orgs_admin(supabase) -> list[dict]:
     """Every org for the admin Organizations tab — INCLUDING suspended and
     archived (labeled, never hidden: the tooling must not vanish for exactly

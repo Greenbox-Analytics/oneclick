@@ -30,6 +30,12 @@ class Caps:
     monthly_credits: int = 0
     max_works: int = -1
     included_storage_bytes: int = -1
+    # Self-serve teams (spec 2026-08-15 §1): slots this tier may COVER, seats
+    # per team EXCLUDING the covering owner, and the per-OWNER storage pool
+    # across all owned teams. 0 on free; never -1 (these are not count caps).
+    max_teams: int = 0
+    max_team_members: int = 0
+    team_storage_bytes: int = 0
 
 
 @dataclass
@@ -145,6 +151,9 @@ class Entitlements:
                 "maxWorks": self.caps.max_works,
                 "includedStorageBytes": self.caps.included_storage_bytes,
                 "monthlyCredits": self.caps.monthly_credits,
+                "maxTeams": self.caps.max_teams,
+                "maxTeamMembers": self.caps.max_team_members,
+                "teamStorageBytes": self.caps.team_storage_bytes,
             },
             "features": {
                 "zoeEnabled": self.features.zoe_enabled,
@@ -246,10 +255,19 @@ class CreditAction(StrEnum):
 
 @dataclass
 class CreditsInfo:
-    """Wallet state surfaced in Entitlements (spec §6/§7)."""
+    """Wallet state surfaced in Entitlements (spec §6/§7).
 
-    bundle_balance: int
-    reserve_balance: int
+    The balances are None when the caller is NOT allowed to see them: a
+    non-admin member of an org may not see the shared pool (it is a commercial
+    fact about the org, not about their own access). They are REDACTED rather
+    than zeroed — a 0 reads as "the org is out of credits", which is a lie a
+    member would act on. None is unambiguous, and since this block only exists
+    at all when credits are enabled, the frontend can read None as exactly
+    "pool hidden" and fall back to the member's own limit.
+    """
+
+    bundle_balance: int | None
+    reserve_balance: int | None
     monthly_grant: int
     overage_this_period: int
     overage_enabled: bool
@@ -263,7 +281,9 @@ class CreditsInfo:
     member_cap_used: int = 0
 
     @property
-    def balance(self) -> int:
+    def balance(self) -> int | None:
+        if self.bundle_balance is None or self.reserve_balance is None:
+            return None
         return self.bundle_balance + self.reserve_balance
 
 

@@ -189,6 +189,48 @@ class TestProUserDefaults:
         assert ent.has_overrides is False
 
 
+class TestTeamDialsMerge:
+    """Task 1 (spec §1): Caps.max_teams/max_team_members/team_storage_bytes
+    come straight from the tier row — overrides don't carry them (YAGNI)."""
+
+    def test_team_dials_merge_from_tier_row(self):
+        from subscriptions.service import EntitlementsService
+
+        tier_row = {**PRO_TIER_ROW, "max_teams": 3, "max_team_members": 10, "team_storage_bytes": 107374182400}
+        sb = _make_supabase_with_rows(
+            {
+                "subscriptions": [PRO_SUB_ROW],
+                "tier_entitlements": [tier_row],
+                "tier_overrides": [],
+                "usage_counters": [ZERO_USAGE_ROW],
+            }
+        )
+        ent = EntitlementsService(sb).get_for_user(TEST_USER_ID)
+
+        assert ent.caps.max_teams == 3
+        assert ent.caps.max_team_members == 10
+        assert ent.caps.team_storage_bytes == 107374182400
+
+    def test_team_dials_default_zero_when_absent_from_tier_row(self):
+        """FREE_TIER_ROW carries no team-dial columns at all — merge must
+        default to 0, never raise a KeyError."""
+        from subscriptions.service import EntitlementsService
+
+        sb = _make_supabase_with_rows(
+            {
+                "subscriptions": [FREE_SUB_ROW],
+                "tier_entitlements": [FREE_TIER_ROW],
+                "tier_overrides": [],
+                "usage_counters": [ZERO_USAGE_ROW],
+            }
+        )
+        ent = EntitlementsService(sb).get_for_user(TEST_USER_ID)
+
+        assert ent.caps.max_teams == 0
+        assert ent.caps.max_team_members == 0
+        assert ent.caps.team_storage_bytes == 0
+
+
 class TestOverrideMerging:
     def test_override_per_field_merge(self):
         from subscriptions.service import EntitlementsService
@@ -1155,3 +1197,97 @@ class TestAdminImplicitPro:
 
         assert ent.caps.max_artists == 1  # free tier limit, not unlimited
         assert ent.features.zoe_enabled is False
+
+
+class TestAdminTeamDialsGrant:
+    def test_admin_gets_pro_team_dials_read_live_not_own_tier(self):
+        """Task 1 AC: the admin implicit-Pro patch grants the PRO tier's team
+        dials — read live from tier_entitlements (never hardcoded literals),
+        regardless of the admin's own subscribed tier (free, here)."""
+        from subscriptions.service import EntitlementsService
+
+        tier_rows = {
+            "free": {
+                "tier": "free",
+                "max_artists": 1,
+                "max_projects": 1,
+                "max_tasks": 10,
+                "max_storage_bytes": 100000000,
+                "max_split_sheets_per_month": 1,
+                "max_oneclick_runs_per_month": 1,
+                "zoe_enabled": False,
+                "oneclick_enabled": False,
+                "registry_enabled": False,
+                "integrations_allowed": [],
+                "max_teams": 0,
+                "max_team_members": 0,
+                "team_storage_bytes": 0,
+            },
+            "pro": {
+                "tier": "pro",
+                "max_artists": -1,
+                "max_projects": -1,
+                "max_tasks": -1,
+                "max_storage_bytes": -1,
+                "max_split_sheets_per_month": -1,
+                "max_oneclick_runs_per_month": -1,
+                "zoe_enabled": True,
+                "oneclick_enabled": True,
+                "registry_enabled": True,
+                "integrations_allowed": ["google_drive"],
+                "max_teams": 3,
+                "max_team_members": 10,
+                "team_storage_bytes": 107374182400,
+            },
+        }
+
+        def _table(name):
+            b = MockQueryBuilder()
+            captured: dict = {}
+            original_eq = b.eq
+
+            def _capture_eq(field, value):
+                if field == "tier":
+                    captured["tier"] = value
+                return original_eq(field, value)
+
+            b.eq = _capture_eq
+
+            def _execute():
+                if name == "tier_entitlements":
+                    row = tier_rows.get(captured.get("tier"))
+                    return MagicMock(data=[row] if row else [], count=1 if row else 0)
+                if name == "subscriptions":
+                    return MagicMock(data=[{"user_id": "admin-uid", "tier": "free", "status": "active"}], count=1)
+                if name == "tier_overrides":
+                    return MagicMock(data=[], count=0)
+                if name == "usage_counters":
+                    return MagicMock(
+                        data=[
+                            {
+                                "user_id": "admin-uid",
+                                "total_storage_bytes": 0,
+                                "split_sheets_this_period": 0,
+                                "zoe_queries_this_period": 0,
+                                "oneclick_runs_this_period": 0,
+                                "period_start": "2026-01-01T00:00:00Z",
+                                "period_end": "2026-12-31T00:00:00Z",
+                            }
+                        ],
+                        count=1,
+                    )
+                if name == "profiles":
+                    return MagicMock(data=[{"id": "admin-uid", "is_admin": True}], count=1)
+                return MagicMock(data=[], count=0)
+
+            b.execute = _execute
+            return b
+
+        sb = MagicMock()
+        sb.table.side_effect = _table
+
+        ent = EntitlementsService(sb).get_for_user("admin-uid")
+
+        assert ent.caps.max_teams == 3
+        assert ent.caps.max_team_members == 10
+        assert ent.caps.team_storage_bytes == 107374182400

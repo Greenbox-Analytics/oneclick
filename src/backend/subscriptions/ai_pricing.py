@@ -9,6 +9,7 @@ table and refuses to open when they disagree, so drift can't go unnoticed.
 Rates are USD per 1M tokens, standard tier.
 """
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -21,6 +22,35 @@ def overage_usd_per_credit() -> float:
     here, so changing CREDIT_OVERAGE_USD can never leave the two disagreeing.
     """
     return float(os.getenv("CREDIT_OVERAGE_USD", "0.02"))
+
+
+def credit_markup() -> float:
+    """Multiplier applied to real LLM cost when converting it into credits.
+
+    Same dial as the pricing dashboard's "target markup on COGS" (tab 1): a
+    credit sells for `overage_usd_per_credit()`, so credits = COGS x markup /
+    price-per-credit. 3.0 is the dashboard baseline and reproduces the flat
+    prices this replaced (zoe 3 / registry 12 / oneclick 21) at their modeled
+    token counts.
+    """
+    return float(os.getenv("CREDIT_MARKUP", "3.0"))
+
+
+def credits_for_cost(cost_usd: float) -> int:
+    """Credits owed for a MEASURED USD cost of LLM work.
+
+    Rounded UP, so any real spend costs at least 1 credit; zero cost (a cache
+    hit, or an action that made no LLM call at all) is genuinely free.
+
+    The round() before ceil kills float dust: 0.10 * 3 / 0.02 evaluates to
+    15.000000000000002 in IEEE754, which a naive ceil bills as 16.
+    """
+    if cost_usd <= 0:
+        return 0
+    per_credit = overage_usd_per_credit()
+    if per_credit <= 0:
+        return 0
+    return max(1, math.ceil(round(cost_usd * credit_markup() / per_credit, 6)))
 
 
 @dataclass(frozen=True)

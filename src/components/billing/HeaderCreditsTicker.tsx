@@ -12,6 +12,7 @@ import { cn, fmtDay } from "@/lib/utils";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useCreditUsage, type CreditAction } from "@/hooks/useCreditUsage";
 import { TopUpCreditsDialog } from "@/components/billing/TopUpCreditsDialog";
+import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
 
 // Popover labels are activity phrasing ("runs"), unlike CreditsUsageCard's
 // price-list phrasing ("OneClick run · 20 cr ea") — hence not shared.
@@ -36,26 +37,22 @@ export function HeaderCreditsTicker() {
     ent?.billingContext?.type === "org" ? ent.billingContext : credits.managedByOrg;
   const isOrgAdmin = managedByOrg?.role === "admin";
 
-  // Same remaining math as CreditsChip / CreditsUsageCard: org members are
-  // bounded by their monthly cap on the shared pool, everyone else by balance.
-  const remaining =
-    credits.memberCap != null
-      ? Math.max(0, credits.memberCap - (credits.memberCapUsed ?? 0))
-      : credits.balance;
-  // Meter denominator: the member's cap in org context; otherwise what the
-  // period started with (monthly grant + non-expiring reserve).
-  const total =
-    credits.memberCap != null
-      ? credits.memberCap
-      : credits.monthlyGrant + credits.reserveBalance;
+  // null = an uncapped org member: no cap of their own, and the pool balance is
+  // admin-only. There is no figure and no meter to draw — the pill says where
+  // their credits come from instead, and never claims they are out.
+  const standing = creditStanding(credits);
+  const remaining = standing?.remaining ?? 0;
+  const total = standing?.total ?? 0;
   const pct = total > 0 ? Math.min(1, remaining / total) : 0;
-  const out = remaining <= 0;
-  const low = !out && pct <= 0.1; // matches the credit-wall trigger
+  const out = standing != null && remaining <= 0;
+  const low = standing != null && !out && pct <= 0.1; // matches the credit-wall trigger
 
   const resetDay = fmtDay(credits.periodEnd);
-  const title = out
-    ? "You're out of credits"
-    : `${remaining.toLocaleString()} of ${total.toLocaleString()} credits left${resetDay ? ` — resets ${resetDay}` : ""}`;
+  const title = !standing
+    ? POOL_ONLY_LABEL
+    : out
+      ? "You're out of credits"
+      : `${remaining.toLocaleString()} of ${total.toLocaleString()} credits left${resetDay ? ` — resets ${resetDay}` : ""}`;
 
   // Members buy nothing on a pool — their remedy is asking the org.
   const openBuy = () => {
@@ -86,14 +83,20 @@ export function HeaderCreditsTicker() {
         <Coins className="w-3.5 h-3.5 flex-none text-muted-foreground" />
       )}
       <span className="whitespace-nowrap">
-        <span className="font-semibold">{remaining.toLocaleString()}</span>
-        {out ? (
-          <span className="font-normal opacity-75"> credits · buy more</span>
+        {standing ? (
+          <>
+            <span className="font-semibold">{remaining.toLocaleString()}</span>
+            {out ? (
+              <span className="font-normal opacity-75"> credits · buy more</span>
+            ) : (
+              <span className="font-normal text-muted-foreground hidden xl:inline"> credits</span>
+            )}
+          </>
         ) : (
-          <span className="font-normal text-muted-foreground hidden xl:inline"> credits</span>
+          <span className="font-medium text-muted-foreground">Org credits</span>
         )}
       </span>
-      {!out && (
+      {!out && standing && (
         <span className="hidden sm:block w-[42px] h-1 rounded-full bg-border overflow-hidden">
           <span
             className={cn("block h-full rounded-full", low ? "bg-amber-500" : "bg-primary")}
@@ -115,14 +118,20 @@ export function HeaderCreditsTicker() {
           <PopoverTrigger asChild>{pill}</PopoverTrigger>
           <PopoverContent align="end" className="w-[288px] p-3.5">
             <div className="flex items-baseline justify-between gap-2">
-              <div className="text-[22px] font-bold tabular-nums leading-none">
-                {remaining.toLocaleString()}{" "}
-                <span className="text-[12.5px] font-medium text-muted-foreground">
-                  {credits.memberCap != null
-                    ? `of your ${credits.memberCap.toLocaleString()} / month limit`
-                    : "left"}
-                </span>
-              </div>
+              {standing ? (
+                <div className="text-[22px] font-bold tabular-nums leading-none">
+                  {remaining.toLocaleString()}{" "}
+                  <span className="text-[12.5px] font-medium text-muted-foreground">
+                    {credits.memberCap != null
+                      ? `of your ${credits.memberCap.toLocaleString()} / month limit`
+                      : "left"}
+                  </span>
+                </div>
+              ) : (
+                // Uncapped org member: no personal ceiling, and the pool is the
+                // org's business. Say where the credits come from, full stop.
+                <div className="text-[13px] font-medium leading-snug">{POOL_ONLY_LABEL}</div>
+              )}
               {resetDay && (
                 <div className="text-[11.5px] text-muted-foreground whitespace-nowrap">
                   Resets {resetDay}

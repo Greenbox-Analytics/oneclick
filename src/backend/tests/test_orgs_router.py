@@ -76,7 +76,7 @@ def test_create_org_ok(client):
     assert resp.json()["my_role"] == "admin"
 
 
-def test_create_org_fires_org_created_analytics(client):
+def test_create_org_fires_team_created_analytics(client):
     with (
         patch("orgs.router.service.create_org", new=AsyncMock(return_value={"id": "o1"})),
         patch("orgs.router.analytics_capture") as mock_capture,
@@ -85,12 +85,27 @@ def test_create_org_fires_org_created_analytics(client):
     assert resp.status_code == 200
     mock_capture.assert_called_once()
     args = mock_capture.call_args.args
-    assert args[1] == "org_created"
+    assert args[1] == "team_created"
 
 
 def test_create_org_rejects_empty_name(client):
     resp = client.post("/orgs", json={"name": ""})
     assert resp.status_code == 422
+
+
+def test_create_org_no_slot_returns_402(client):
+    """orgs.router's own mapping of standing.NoSlotError -> 402 — the
+    USER-facing slot wall (distinct from the admin route's PUT
+    /admin/orgs/{id}/kind mapping, covered in tests/test_admin_router.py)."""
+    from orgs.standing import NoSlotError
+
+    with patch(
+        "orgs.router.service.create_org",
+        new=AsyncMock(side_effect=NoSlotError("You have no free team slot on your plan.")),
+    ):
+        resp = client.post("/orgs", json={"name": "Acme"})
+    assert resp.status_code == 402
+    assert resp.json()["detail"]["upgradeRequired"] is True
 
 
 # ---------------------------------------------------------------------------

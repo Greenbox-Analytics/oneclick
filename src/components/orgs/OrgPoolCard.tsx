@@ -3,6 +3,10 @@
 // purchased, and the "buy N more to activate" banner while pending (plan
 // Task 12). Buying credits reuses the Phase A TopUpCreditsDialog with an org
 // target instead of duplicating the pack picker.
+//
+// ADMIN ONLY. Every figure here is stripped from GET /orgs/{id} for a plain
+// member, so this must stay behind the AdminConsole branch — the `?? 0`
+// fallbacks are defence against a future misrender, not a supported mode.
 import { useState } from "react";
 import { Plus, Coins } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -36,7 +40,7 @@ export function OrgPoolCard({ org }: { org: OrgDetail }) {
         <div className="bg-background border border-border rounded-xl px-[18px] py-4">
           <div className="text-[12.5px] text-muted-foreground">Pool balance</div>
           <div className="text-[28px] font-bold tracking-tight mt-1 tabular-nums">
-            {org.pool_balance.toLocaleString()}{" "}
+            {(org.pool_balance ?? 0).toLocaleString()}{" "}
             <span className="text-sm font-normal text-muted-foreground">credits</span>
           </div>
         </div>
@@ -45,12 +49,12 @@ export function OrgPoolCard({ org }: { org: OrgDetail }) {
             {org.monthly_dispersal_credits ? "Credits each month" : "Total paid in"}
           </div>
           <div className="text-[28px] font-bold tracking-tight mt-1 tabular-nums">
-            {(org.monthly_dispersal_credits || org.cumulative_paid_in).toLocaleString()}{" "}
+            {(org.monthly_dispersal_credits || org.cumulative_paid_in || 0).toLocaleString()}{" "}
             <span className="text-sm font-normal text-muted-foreground">credits</span>
           </div>
           {!!org.monthly_dispersal_credits && (
             <div className="text-[11.5px] text-muted-foreground/80 mt-1">
-              {org.cumulative_paid_in.toLocaleString()} paid in to date
+              {(org.cumulative_paid_in ?? 0).toLocaleString()} paid in to date
             </div>
           )}
         </div>
@@ -59,7 +63,7 @@ export function OrgPoolCard({ org }: { org: OrgDetail }) {
       {pending && (
         <div className="mt-4 px-4 py-3.5 border border-amber-500/30 bg-amber-500/10 rounded-xl">
           <div className="text-[13px] font-medium text-amber-800 dark:text-amber-400">
-            Buy {org.remaining_to_activate.toLocaleString()} more credit
+            Buy {(org.remaining_to_activate ?? 0).toLocaleString()} more credit
             {org.remaining_to_activate === 1 ? "" : "s"} to activate
           </div>
           <p className="text-[12.5px] text-amber-800/80 dark:text-amber-400/80 mt-0.5 max-w-[520px]">

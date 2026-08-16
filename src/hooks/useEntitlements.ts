@@ -21,9 +21,24 @@ export interface EntitlementCaps {
   maxWorks?: number;
   includedStorageBytes?: number;
   monthlyCredits?: number;
+  /**
+   * Self-serve teams (2026-08-15 pricing/teams spec §1) — team SLOTS this
+   * tier can own/cover, seats per owned team EXCLUDING the covering owner,
+   * and the per-owner storage pool shared across all owned teams. 0 on Free.
+   * Optional for payloads served before the backend shipped these columns.
+   */
+  maxTeams?: number;
+  maxTeamMembers?: number;
+  teamStorageBytes?: number;
 }
 
-/** Per-action credit prices (backend `credit_prices`, camelCase). */
+/**
+ * Per-action credit ESTIMATES (backend `credit_prices`, camelCase).
+ *
+ * NOT what a run costs — the charge is metered off the AI tokens the run
+ * actually burns. This is the amount the balance check reserves up front, so
+ * treat it as "roughly this much" in any copy that shows it.
+ */
 export interface CreditPrices {
   zoeMessage: number;
   oneclickRun: number;
@@ -63,12 +78,20 @@ export type BillingContext = { type: "personal" } | (OrgBillingContext & { type:
  * Shape mirrors the backend Entitlements.to_dict()["credits"] block.
  */
 export interface EntitlementCredits {
-  /** Spendable = bundleBalance + reserveBalance. */
-  balance: number;
-  /** Monthly grant remainder; expires at period rollover. */
-  bundleBalance: number;
-  /** Admin grants; never expire. */
-  reserveBalance: number;
+  /**
+   * Spendable = bundleBalance + reserveBalance.
+   *
+   * `null` means REDACTED, never "zero": the caller is a plain member of an
+   * org, and the shared pool is the org's money — admins only. Since this
+   * whole block is absent when credits are off, `null` here has exactly one
+   * meaning. Render the member's own `memberCap` instead, or — with no cap —
+   * say they draw on the org pool, with no number.
+   */
+  balance: number | null;
+  /** Monthly grant remainder; expires at period rollover. null = redacted. */
+  bundleBalance: number | null;
+  /** Admin grants; never expire. null = redacted. */
+  reserveBalance: number | null;
   /** This tier's monthly credit grant. */
   monthlyGrant: number;
   overageThisPeriod: number;

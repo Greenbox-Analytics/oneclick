@@ -18,14 +18,24 @@ import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
 import { supabase } from "@/integrations/supabase/client";
 
-export type OrgStatus = "pending" | "active" | "suspended";
+export type OrgStatus = "pending" | "active" | "suspended" | "lapsed";
 export type OrgRole = "admin" | "member";
 export type OrgMemberStatus = "active" | "suspended" | "removed";
 export type CreditRequestStatus = "pending" | "approved" | "denied";
+/** 'enterprise' = today's negotiated/admin-managed org (default, incl. every
+ * pre-2026-08-15 row). 'self_serve' = paid-tier team creation (2026-08-15
+ * pricing/teams spec) — only these get coverage/grace/lapse/dissolve. */
+export type OrgKind = "self_serve" | "enterprise";
 
 /** Row shape from GET /orgs (list_my_orgs) — annotated with the caller's own
  * membership. No pool/activation fields here; fetch a single org (useOrg)
- * for those. */
+ * for those.
+ *
+ * `kind`/`covered_by`/`covered_at`/`dissolved_at` are NOT in the backend's
+ * `_ADMIN_ONLY_ORG_FIELDS` redaction set, so every member (not just admins)
+ * sees them — they're optional here only for payloads served before the
+ * backend shipped these columns (pre-migration rows), not for role reasons.
+ * `undefined` kind should be treated as enterprise (today's behavior). */
 export interface OrgSummary {
   id: string;
   name: string;
@@ -35,6 +45,13 @@ export interface OrgSummary {
   monthly_dispersal_credits?: number;
   status: OrgStatus;
   archived_at?: string | null;
+  kind?: OrgKind;
+  /** Admin currently on the hook for this org's slot/storage/billing. Stays
+   * set (last coverer) even when released — see release_coverage. */
+  covered_by?: string | null;
+  /** Null = released/never claimed, even if covered_by is set. */
+  covered_at?: string | null;
+  dissolved_at?: string | null;
   created_at?: string;
   updated_at?: string;
   my_role?: OrgRole | null;
@@ -43,17 +60,52 @@ export interface OrgSummary {
 
 /** GET /orgs/{id} (get_org) — org row + computed pool/activation fields.
  * Member-only (404s for non-members); a suspended/removed seat also 404s
- * (require_member only counts ACTIVE rows). */
+ * (require_member only counts ACTIVE rows).
+ *
+ * The pool/dispersal/activation fields are ADMIN-ONLY and the backend omits
+ * them entirely for a plain member — hence the `?`. Never render them without
+ * an `org.my_role === "admin"` guard, or a member sees `undefined`. */
 export interface OrgDetail extends OrgSummary {
-  pool_balance: number;
+  pool_balance?: number;
   /** Purchases AND monthly dispersals — everything the org has paid us. */
-  cumulative_paid_in: number;
-  remaining_to_activate: number;
+  cumulative_paid_in?: number;
+  remaining_to_activate?: number;
   member_count: number;
   /** Active admins, visible to every member — their only remedy for a reached
    * cap or a dry pool is "ask an admin", which needs a name to ask. The rest of
    * the roster (and every cap/spend figure) stays admin-only in `/usage`. */
   admins?: OrgAdminContact[];
+  /** ADMIN-ONLY (in `_ADMIN_ONLY_ORG_FIELDS`) — when grace started, if the
+   * org is uncovered. Absent for members, and absent when not in grace. */
+  grace_started_at?: string | null;
+  /**
+   * Configured grace window length in days, for the banner's "loses access
+   * on {date}" copy. REAL as of Task 15 (was a stub before) — a global
+   * constant, so present for every org/role, not admin-gated. Still keep
+   * rendering defensively: when absent, say "soon" instead of computing a date.
+   */
+  graceDays?: number;
+  /** ADMIN-ONLY, self_serve-only (Task 15, spec §6): the covering admin's
+   * team storage pool, sized against their plan's `team_storage_bytes`.
+   * Absent for enterprise orgs, for a released org (no covered_by), and for
+   * any non-admin — same redaction posture as `pool_balance` etc. */
+  teamStorage?: {
+    usedBytes: number;
+    poolBytes: number;
+    /** ceil((usedBytes - poolBytes) / 1 GiB), floored at 0. */
+    overageGb: number;
+    /** USD per GB over the pool, billed to the covering admin's Stripe account. */
+    ratePerGb: number;
+  };
+  /** ADMIN-ONLY (Task 15) — set once an admin has started this org's
+   * recurring monthly credit top-up (POST /billing/org-topup-checkout).
+   * Null/absent = no active top-up. */
+  topup_stripe_subscription_id?: string | null;
+  /** ADMIN-ONLY (Task 15) — the admin whose card the recurring top-up bills
+   * to. Only that admin's own Stripe portal manages/cancels the underlying
+   * card, but ANY active admin may cancel the top-up itself
+   * (POST .../cancel-topup). */
+  topup_admin_id?: string | null;
 }
 
 export interface OrgAdminContact {
@@ -240,6 +292,114 @@ export function useArchiveOrg() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Self-serve lifecycle (2026-08-15 pricing/teams spec §3): coverage
+// claim/release, unarchive, and dissolve. Self_serve-only on the backend —
+// enterprise orgs 409 ("This organization is managed by Msanii"), which the
+// default onError below surfaces verbatim via ApiError.message (a plain-string
+// `detail`), same as every other error this file renders. No request body for
+// claim/release/unarchive.
+// ---------------------------------------------------------------------------
+
+export function useClaimCoverage() {
+  const qc = useQueryClient();
+  return useMutation<OrgSummary, Error, { orgId: string }>({
+    mutationFn: ({ orgId }) => apiFetch<OrgSummary>(`${API_URL}/orgs/${orgId}/coverage/claim`, { method: "POST" }),
+    onSuccess: (_d, { orgId }) => {
+      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
+      toast.success("Coverage claimed");
+    },
+    onError: (e) => toast.error(errMessage(e, "Couldn't claim coverage.")),
+  });
+}
+
+export function useReleaseCoverage() {
+  const qc = useQueryClient();
+  return useMutation<OrgSummary, Error, { orgId: string }>({
+    mutationFn: ({ orgId }) => apiFetch<OrgSummary>(`${API_URL}/orgs/${orgId}/coverage/release`, { method: "POST" }),
+    onSuccess: (_d, { orgId }) => {
+      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
+      toast.success("Coverage released");
+    },
+    onError: (e) => toast.error(errMessage(e, "Couldn't release coverage.")),
+  });
+}
+
+/** POST /orgs/{id}/unarchive — self-serve reactivation. 402 on no free slot
+ * (router wraps `NoSlotError` in a structured `{reason, upgradeRequired: true}`
+ * dict) or on the storage guard (a plain-string reason instead — see
+ * orgs/router.py); either shape is handled by `apiErrorFromBody`'s fallback,
+ * so `e.message` is the human copy to show either way. */
+export function useUnarchiveOrg() {
+  const qc = useQueryClient();
+  return useMutation<OrgSummary, Error, { orgId: string }>({
+    mutationFn: ({ orgId }) => apiFetch<OrgSummary>(`${API_URL}/orgs/${orgId}/unarchive`, { method: "POST" }),
+    onSuccess: (_d, { orgId }) => {
+      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
+      toast.success("Organization unarchived");
+    },
+    onError: (e) => toast.error(errMessage(e, "Couldn't unarchive organization.")),
+  });
+}
+
+/** One row of GET /orgs/{id}/dissolve-preview's `recipients` array. */
+export interface DissolvePreviewRecipient {
+  artistId: string;
+  artistName: string | null;
+  userId: string;
+  email: string | null;
+  /** True when the artist's creator no longer holds an active seat, so it
+   * reverts to the dissolving admin instead ("returned to you" copy). */
+  fallback: boolean;
+}
+
+/** GET /orgs/{id}/dissolve-preview — admin, self_serve only. What POST
+ * .../dissolve is about to do, for the confirm dialog. */
+export interface DissolvePreview {
+  recipients: DissolvePreviewRecipient[];
+  /** Purchased/comped reserve credits the pool forfeits (clawback). */
+  forfeitReserve: number;
+  /** Expiring monthly-bundle credits left inert on the dissolved org's wallet. */
+  inertBundle: number;
+  memberCount: number;
+}
+
+/** Fetched only while the dissolve dialog is open — `enabled` keeps this from
+ * firing every time the lifecycle panel mounts. */
+export function useDissolvePreview(orgId: string, enabled: boolean) {
+  const { user } = useAuth();
+  return useQuery<DissolvePreview>({
+    queryKey: ["orgs", orgId, "dissolve-preview"],
+    queryFn: () => apiFetch<DissolvePreview>(`${API_URL}/orgs/${orgId}/dissolve-preview`),
+    enabled: !!user?.id && !!orgId && enabled,
+  });
+}
+
+/** POST /orgs/{id}/dissolve — terminal, name-confirmed. `{already: true}` on
+ * a replayed call (idempotent, nothing written twice); a mismatched name 400s
+ * with "Type the team name exactly as it appears to confirm" before this
+ * should ever be reachable, since the dialog gates its confirm button on an
+ * exact match client-side too. */
+export function useDissolveOrg() {
+  const qc = useQueryClient();
+  return useMutation<{ already?: boolean } & Record<string, unknown>, Error, { orgId: string; confirmName: string }>({
+    mutationFn: ({ orgId, confirmName }) =>
+      apiFetch(`${API_URL}/orgs/${orgId}/dissolve`, {
+        method: "POST",
+        body: JSON.stringify({ confirm_name: confirmName }),
+      }),
+    onSuccess: (_d, { orgId }) => {
+      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
+      toast.success("Organization dissolved");
+    },
+    onError: (e) => toast.error(errMessage(e, "Couldn't dissolve organization.")),
+  });
+}
+
 /** GET /orgs/{id}/usage — admin-only. */
 export function useOrgUsage(orgId?: string) {
   const { user } = useAuth();
@@ -248,6 +408,103 @@ export function useOrgUsage(orgId?: string) {
     queryFn: () => apiFetch<OrgUsage>(`${API_URL}/orgs/${orgId}/usage`),
     enabled: !!user?.id && !!orgId,
     staleTime: 15_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Org billing panel (Task 15, spec §6): pool ledger, personal-reserve
+// transfer, and the recurring monthly top-up. Mirrors this file's idioms —
+// namespaced query keys, invalidate-on-success — except the two hooks whose
+// callers own bespoke error UI (useTransferCredits, useStartOrgTopup) skip
+// the auto-toast onError this file uses elsewhere, same rationale as the
+// invite-claim hooks up top: a generic toast would swallow the structured
+// copy (409 reason, checkout failure) the dialog/panel needs to render itself.
+// ---------------------------------------------------------------------------
+
+/** One row of GET /orgs/{id}/ledger — the pool's activity feed. `action` is
+ * the metered action for a `kind: "debit"` row (e.g. "oneclick_run"); null
+ * for every other kind. `metadata.org_member_id` (debit rows) / `metadata.admin_user_id`
+ * (transfer_in rows) are NOT resolved to an email client-side — the panel
+ * renders simple kind-based labels ("member spend", "transfer from admin")
+ * rather than doing its own identity lookup. */
+export interface OrgLedgerEntry {
+  kind: string;
+  action: string | null;
+  delta: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+/** GET /orgs/{id}/ledger — admin-only, newest 50 pool ledger rows. */
+export function useOrgLedger(orgId?: string) {
+  const { user } = useAuth();
+  return useQuery<OrgLedgerEntry[]>({
+    queryKey: ["orgs", orgId, "ledger"],
+    queryFn: async () => (await apiFetch<{ ledger: OrgLedgerEntry[] }>(`${API_URL}/orgs/${orgId}/ledger`)).ledger,
+    enabled: !!user?.id && !!orgId,
+    staleTime: 15_000,
+  });
+}
+
+/** POST /orgs/{id}/transfer-credits — an active admin moves credits from
+ * their OWN personal reserve into this org's pool. `duplicate: true` on a
+ * retried request is a normal success (idempotent), not an error.
+ *
+ * No onError toast: a 409 (insufficient reserve) carries a structured
+ * `{reason, reserveBalance}` — TransferCreditsDialog renders `error.message`
+ * (== `reason`, per apiErrorFromBody's precedence) verbatim next to the
+ * amount field instead of a toast, same as every other credit-wall dialog
+ * in this codebase. */
+export function useTransferCredits() {
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  return useMutation<{ duplicate?: boolean }, Error, { orgId: string; amount: number }>({
+    mutationFn: ({ orgId, amount }) =>
+      apiFetch(`${API_URL}/orgs/${orgId}/transfer-credits`, {
+        method: "POST",
+        body: JSON.stringify({ amount }),
+      }),
+    onSuccess: (data, { orgId }) => {
+      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "ledger"] });
+      qc.invalidateQueries({ queryKey: ["entitlements", user?.id] });
+      if (!data?.duplicate) toast.success("Credits transferred to the pool");
+    },
+  });
+}
+
+/** POST /billing/org-topup-checkout — starts this org's recurring monthly
+ * credit top-up (the SAME pack, sold as a Stripe subscription instead of a
+ * one-time purchase) and redirects to Stripe Checkout. Catalog: filter
+ * `useCreditPacks()`'s rows to `recurringPriceId != null` — no separate
+ * endpoint. Mirrors `useCreateTopupSession` in useCreditPacks.ts (same
+ * redirect-on-success shape, same no-onError-toast — the panel renders the
+ * raw error inline like TopUpCreditsDialog does). */
+export function useStartOrgTopup() {
+  return useMutation<void, Error, { orgId: string; key: string }>({
+    mutationFn: async ({ orgId, key }) => {
+      const res = await apiFetch<{ url: string }>(`${API_URL}/billing/org-topup-checkout`, {
+        method: "POST",
+        body: JSON.stringify({ org_id: orgId, key }),
+      });
+      window.location.href = res.url;
+    },
+  });
+}
+
+/** POST /orgs/{id}/cancel-topup — ANY active admin may cancel, not just the
+ * purchaser. `{canceled: false}` is a no-op (nothing was running); only a
+ * real cancel toasts. */
+export function useCancelOrgTopup() {
+  const qc = useQueryClient();
+  return useMutation<{ canceled: boolean }, Error, { orgId: string }>({
+    mutationFn: ({ orgId }) => apiFetch(`${API_URL}/orgs/${orgId}/cancel-topup`, { method: "POST" }),
+    onSuccess: (data, { orgId }) => {
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
+      if (data?.canceled) toast.success("Monthly top-up canceled");
+    },
+    onError: (e) => toast.error(errMessage(e, "Couldn't cancel the monthly top-up.")),
   });
 }
 

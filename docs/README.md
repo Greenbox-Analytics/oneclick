@@ -20,7 +20,7 @@ Domain-specific guides organized by tool/product area. Each doc covers backend e
 | [Secrets & Env Vars](secrets.md) | Every env var the app reads, where to get it, what's required to boot vs feature-optional, prod-vs-local storage |
 | [Stripe Integration](stripe-integration.md) | Checkout + Portal + webhook wiring, full local-test flow with Stripe CLI, prod cutover checklist |
 | [Admin Roles](admin-roles.md) | `ADMIN_EMAILS` bootstrap + `profiles.is_admin` DB grants, `/admin/users` console, promote/demote flow, three-layer gating |
-| [Licensing & Teams](licensing.md) | `LICENSING_ENABLED`, organizations, team-owned artists (`artists.team_id`), the shared credit pool + per-member caps, storage attribution, the transfer endpoint, and the QA gate scripts |
+| [Licensing & Teams](licensing.md) | `LICENSING_ENABLED`, organizations, team-owned artists (`artists.team_id`), the shared credit pool + per-member caps, storage attribution, the transfer endpoint, self-serve Teams (tier slots/sizes/storage, coverage claim/release, standing/grace/lapsed, archive vs. dissolve, pool funding + PAYG), and the QA gate scripts |
 
 ## Other Documentation
 

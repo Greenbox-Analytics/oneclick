@@ -246,7 +246,9 @@ def _ctx_supabase(data):
     return sb
 
 
-def _org_context_data(*, tier="pro", org_status="active", seat=_pool_wallet, user_wallet=_user_wallet, usage=0):
+def _org_context_data(
+    *, tier="pro", org_status="active", seat=_pool_wallet, user_wallet=_user_wallet, usage=0, role="member"
+):
     return {
         "profiles": [_profile(context_org=ORG)],
         "subscriptions": [_sub_row(tier=tier)],
@@ -256,7 +258,7 @@ def _org_context_data(*, tier="pro", org_status="active", seat=_pool_wallet, use
         "credit_prices": list(PRICES),
         "credit_ledger": [],
         "credit_wallets": [user_wallet(), seat()],
-        "org_members": [_member()],
+        "org_members": [_member(role=role)],
         "organizations": [_org(status=org_status)],
     }
 
@@ -266,16 +268,70 @@ def _org_context_data(*, tier="pro", org_status="active", seat=_pool_wallet, use
 # ===========================================================================
 
 
+class TestPoolVisibility:
+    """The shared pool balance is the ORG's money — only an org ADMIN sees it.
+
+    A plain member sees their own ceiling and nothing else. Redaction is None,
+    never 0: a 0 reads as "the org is out of credits", which is a lie a member
+    would act on by chasing an admin who has plenty.
+    """
+
+    @staticmethod
+    def _credits(monkeypatch, *, role, monthly_cap=None):
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        data = _org_context_data(role=role)
+        data["org_members"] = [_member(role=role, monthly_cap=monthly_cap, cap_period_end=FAR_FUTURE)]
+        return EntitlementsService(_ctx_supabase(data)).get_for_user(USER).credits
+
+    def test_member_cannot_see_the_pool(self, monkeypatch):
+        credits = self._credits(monkeypatch, role="member")
+        assert credits.balance is None
+        assert credits.bundle_balance is None
+        assert credits.reserve_balance is None
+
+    def test_admin_can_see_the_pool(self, monkeypatch):
+        credits = self._credits(monkeypatch, role="admin")
+        assert credits.balance == 500
+
+    def test_member_still_sees_their_own_limit(self, monkeypatch):
+        """The member's remedy is their cap, so redaction must not hide it."""
+        credits = self._credits(monkeypatch, role="member", monthly_cap=250)
+        assert credits.member_cap == 250
+        assert credits.balance is None
+
+    def test_uncapped_member_gets_no_numbers_at_all(self, monkeypatch):
+        """No cap + no pool visibility => the UI has nothing to render but
+        "you're drawing on the org pool", which is exactly the intent."""
+        credits = self._credits(monkeypatch, role="member", monthly_cap=None)
+        assert credits.member_cap is None
+        assert credits.balance is None
+
+    def test_redaction_survives_serialization(self, monkeypatch):
+        """The wire payload is what actually leaks — assert on to_dict()."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _ctx_supabase(_org_context_data(role="member"))
+        payload = EntitlementsService(sb).get_for_user(USER).to_dict()["credits"]
+        assert payload["balance"] is None
+        assert payload["bundleBalance"] is None
+        assert payload["reserveBalance"] is None
+
+
 class TestRule11PersonalWalletUntouched:
     def test_org_context_never_reads_or_rolls_personal_wallet(self, monkeypatch):
         """THE rule-11 test: a Basic (pro) subscriber with a STALE personal period +
         3000 bundle reads entitlements in ACTIVE org context. The personal wallet
         must never be SELECTed (every credit_wallets query filters owner_type='org',
         none 'user'), rollover_wallet must NEVER fire, the personal bundle stays 3000,
-        and the credits block reflects the SEAT wallet (500)."""
+        and the credits block reflects the SEAT wallet (500).
+
+        Run as an ADMIN so the pool balance is actually surfaced — a member's is
+        redacted to None (see TestPoolVisibility), which would make the "500,
+        not 3000" assertion vacuous."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(_org_context_data())
+        sb = _ctx_supabase(_org_context_data(role="admin"))
 
         ent = EntitlementsService(sb).get_for_user(USER)
 
@@ -299,7 +355,7 @@ class TestRule11PersonalWalletUntouched:
         assert ent.credits.balance == 500
         assert ent.credits.monthly_grant == 0
         payload = ent.to_dict()
-        assert payload["credits"]["managedByOrg"] == {"orgId": ORG, "orgName": "Acme Records", "role": "member"}
+        assert payload["credits"]["managedByOrg"] == {"orgId": ORG, "orgName": "Acme Records", "role": "admin"}
 
     def test_org_context_does_not_mutate_subscriptions_tier(self, monkeypatch):
         """Enterprise shape is synthesized — subscriptions.tier is never written."""
@@ -601,18 +657,19 @@ class TestBillingContextFieldMatrix:
         top-level billingContext key — a pure addition, no-op on the gate."""
         monkeypatch.setenv("LICENSING_ENABLED", "true")
         monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(_org_context_data())
+        sb = _ctx_supabase(_org_context_data(role="admin"))
         payload = EntitlementsService(sb).get_for_user(USER).to_dict()
 
         assert payload["billingContext"] == {
             "type": "org",
             "orgId": ORG,
             "orgName": "Acme Records",
-            "role": "member",
+            "role": "admin",
         }
         # Today's payload is unchanged: seat-wallet credits block, managedByOrg.
+        # Admin, so the pool balance is visible — a member's is None.
         assert payload["credits"]["balance"] == 500
-        assert payload["credits"]["managedByOrg"] == {"orgId": ORG, "orgName": "Acme Records", "role": "member"}
+        assert payload["credits"]["managedByOrg"] == {"orgId": ORG, "orgName": "Acme Records", "role": "admin"}
 
     def test_licensing_on_credits_off_org_context_cell(self, monkeypatch):
         """Cell (licensing on, credits off), org context — THE behavior change.
@@ -683,6 +740,10 @@ class TestToDictRegressionSnapshot:
         The overage rate is pinned: it is read from CREDIT_OVERAGE_USD at
         serialization time, and main.py load_dotenv()s the developer's .env, so
         without this the snapshot asserts against whatever rate that file carries.
+
+        The caps shape grew in the 2026-08-15 teams work (max_teams/max_team_members/
+        team_storage_bytes); Caps is constructed here without them so the expected
+        dict below pins their defaults (0), not a deliberately-set value.
         """
         monkeypatch.setenv("CREDIT_OVERAGE_USD", "0.02")
         from datetime import datetime
@@ -742,6 +803,9 @@ class TestToDictRegressionSnapshot:
                 "maxWorks": -1,
                 "includedStorageBytes": 107374182400,
                 "monthlyCredits": 3000,
+                "maxTeams": 0,
+                "maxTeamMembers": 0,
+                "teamStorageBytes": 0,
             },
             "features": {
                 "zoeEnabled": True,

@@ -51,12 +51,14 @@ const PRO_FEATURES: Feature[] = [
 // ---------------------------------------------------------------------------
 // Credits model: every tool is open on every tier — AI actions draw from a
 // monthly credit allowance instead of tier locks. Credit and storage numbers
-// mirror tier_entitlements (150/3,000/8,000 credits; 1/100/250 GB — storage is
-// a hard cap on every tier, never pay-per-use).
+// mirror tier_entitlements (100/2,000/5,000 credits; 1/100/250 GB — storage is
+// a hard cap on every tier, never pay-per-use). Existing paid subscribers on
+// the prior 3,000/8,000 grants keep them only via grandfather overrides
+// (20260816000001) — this public page advertises the new grants, not those.
 // ---------------------------------------------------------------------------
 const FREE_FEATURES_CREDITS: Feature[] = [
   { included: true, label: "All tools included — Zoe, OneClick, Registry, split sheets" },
-  { included: true, label: "150 credits per month for AI-powered actions" },
+  { included: true, label: "100 credits per month for AI-powered actions" },
   { included: true, label: "3 artists, 3 projects, 50 tasks" },
   { included: true, label: "1 GB storage" },
   { included: true, label: "5 split sheets per month" },
@@ -65,7 +67,7 @@ const FREE_FEATURES_CREDITS: Feature[] = [
 
 const BASIC_FEATURES_CREDITS: Feature[] = [
   { included: true, label: "All tools included — usage draws from your monthly credits" },
-  { included: true, label: "3,000 credits per month for AI-powered actions" },
+  { included: true, label: "2,000 credits per month for AI-powered actions" },
   { included: true, label: "Unlimited artists, projects, and tasks" },
   { included: true, label: "100 GB storage" },
   { included: true, label: "Unlimited split sheets" },
@@ -74,10 +76,21 @@ const BASIC_FEATURES_CREDITS: Feature[] = [
 
 const PRO_FEATURES_CREDITS: Feature[] = [
   { included: true, label: `Everything in ${tierLabel("basic")}` },
-  { included: true, label: "8,000 credits per month for AI-powered actions" },
+  { included: true, label: "5,000 credits per month for AI-powered actions" },
   { included: true, label: "250 GB storage" },
   { included: true, label: "Priority support" },
 ];
+
+// ---------------------------------------------------------------------------
+// Self-serve teams (2026-08-15 pricing/teams spec §1) — team ownership rows,
+// only meaningful once both CREDITS_ENABLED and LICENSING_ENABLED are on
+// (teamsOn below). Joining someone else's team is always free and already
+// covered by "Joining teams as a member: unlimited" — not called out per-tier.
+const TEAM_FEATURE: Record<"free" | "basic" | "pro", Feature> = {
+  free: { included: false, label: "Own a team (Basic and up — joining a team stays free)" },
+  basic: { included: true, label: "1 team you own — up to 3 members, 10 GB team storage" },
+  pro: { included: true, label: "3 teams you own — up to 10 members each, 100 GB team storage" },
+};
 
 // No DB tier — org seats resolve to these entitlements (Phase B).
 const ENTERPRISE_FEATURES: Feature[] = [
@@ -114,9 +127,15 @@ const Pricing = () => {
   // /me/entitlements exactly when the flag is on. Signed-out visitors (no
   // entitlements) see the legacy lists — same tradeoff as licensingOn above.
   const creditsOn = ent?.credits != null;
-  const freeFeatures = creditsOn ? FREE_FEATURES_CREDITS : FREE_FEATURES;
-  const basicFeatures = creditsOn ? BASIC_FEATURES_CREDITS : BASIC_FEATURES;
-  const proFeatures = creditsOn ? PRO_FEATURES_CREDITS : PRO_FEATURES;
+  // Self-serve team creation requires BOTH flags (spec §0) — a licensing-off
+  // deployment has no /orgs surface at all, so the team row would promise
+  // something the account can't do yet.
+  const teamsOn = creditsOn && licensingOn;
+  const freeFeatures = creditsOn ? [...FREE_FEATURES_CREDITS, ...(teamsOn ? [TEAM_FEATURE.free] : [])] : FREE_FEATURES;
+  const basicFeatures = creditsOn
+    ? [...BASIC_FEATURES_CREDITS, ...(teamsOn ? [TEAM_FEATURE.basic] : [])]
+    : BASIC_FEATURES;
+  const proFeatures = creditsOn ? [...PRO_FEATURES_CREDITS, ...(teamsOn ? [TEAM_FEATURE.pro] : [])] : PRO_FEATURES;
 
   const [basicPeriod, setBasicPeriod] = useState<Period>("monthly");
   const [proPeriod, setProPeriod] = useState<Period>("monthly");
@@ -202,6 +221,12 @@ const Pricing = () => {
           Free for indie artists. Basic and Pro for growing catalogs. Enterprise for organizations running it all
           centrally.
         </p>
+        {/* Grants were rescaled 2026-08-16 (150/3,000/8,000 -> 100/2,000/5,000
+            on Free/Basic/Pro); this page always advertises the new numbers.
+            Existing paid subscribers keep their old grant via
+            `grandfathered_monthly_credits` until their current billing period
+            ends — the "you keep your current credits until renewal" note lives
+            on CreditsUsageCard, the surface that shows their actual grant. */}
       </section>
 
       {/* Pricing cards */}

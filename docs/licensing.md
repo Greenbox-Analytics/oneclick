@@ -107,6 +107,8 @@ A member who can read a team artist can retype its name, email and splits into a
 
 ## Credits: the pool and the caps
 
+> **Superseded (2026-08-15 self-serve teams) — this section describes ENTERPRISE orgs only.** "Any signed-in user can create an org" and the dispersal/activation-floor mechanics below predate self-serve teams, when `POST /orgs` was the only creation path and every org landed as `kind='enterprise'`. That path is now admin-only (`POST /admin/orgs`). A self-serve org (`kind='self_serve'`, created by `POST /orgs`) has no dispersal, no activation floor, and is born `status='active'` — see [Self-serve teams](#self-serve-teams) below for how its pool gets funded instead.
+
 An org negotiates a monthly credit volume, set **only by a Msanii admin** (`PUT /admin/orgs/{id}/dispersal`) — never by the org's own admin. Any signed-in user can create an org and is auto-made its admin, and dispersed credits count toward the activation floor, so a customer-writable dial would mint free credits and self-activate.
 
 - The org holds **one** pool wallet (`credit_wallets`, `owner_type='org'`). The daily sweep grants `organizations.monthly_dispersal_credits` into the **expiring** bundle bucket, so an unspent month can't be banked; purchased packs land in reserve and never expire. Dispersal flows to `pending` orgs too — it counts toward the activation floor and auto-activates the org the moment the floor is met (`orgs.wallets.maybe_activate_org`, shared with the pack-purchase path). On org wallets the dispersal component of `cumulative_paid_in` is the `monthly_grant` ledger kind — the sweep disperses via `rollover_wallet`, and nothing writes the kind `'dispersal'`.
@@ -155,9 +157,11 @@ Storage is a **hard cap on every tier**, with no pay-per-use.
 
 ### Member / admin (`/orgs`, all gated by `require_licensing`)
 
+> **Superseded (2026-08-15 self-serve teams):** `POST /orgs` is now **self-serve-only** and slot-gated (`NoSlotError` → 402) — it no longer produces `kind='enterprise'` rows. Enterprise orgs are created exclusively via the Msanii-admin `POST /admin/orgs`. See [Self-serve teams](#self-serve-teams) for the full self-serve endpoint set (archive/unarchive, dissolve, coverage claim/release, transfer-credits, top-up, ledger).
+
 | Method | Path | Who |
 |---|---|---|
-| POST / GET | `/orgs` | any signed-in user (creator becomes admin) |
+| POST / GET | `/orgs` | any signed-in user (creator becomes admin) — self-serve only, see above |
 | GET / PUT | `/orgs/{org_id}` | member / admin (`default_member_cap` lives here) |
 | POST | `/orgs/{org_id}/archive` | admin |
 | GET | `/orgs/{org_id}/usage` | member |
@@ -172,15 +176,25 @@ Storage is a **hard cap on every tier**, with no pay-per-use.
 | GET | `/orgs/{org_id}/projects` | admin — the projects this org owns, via artist ownership |
 | **POST** | **`/orgs/{org_id}/artists/{artist_id}/transfer`** | the artist's personal owner, who must hold a seat |
 | PUT / DELETE | `/orgs/{org_id}/projects/{project_id}/members/{member_id}` | admin — grant/adjust/revoke seat access |
+| POST | `/orgs/{org_id}/archive` · `/unarchive` | admin — self-serve only; unarchive is slot- and storage-guard-gated |
+| GET | `/orgs/{org_id}/dissolve-preview` | admin — self-serve only, read-only |
+| POST | `/orgs/{org_id}/dissolve` | admin — self-serve only, typed-name-confirmed, terminal |
+| POST | `/orgs/{org_id}/coverage/claim` · `/release` | admin — self-serve only |
+| GET | `/orgs/{org_id}/ledger` | admin — pool ledger |
+| POST | `/orgs/{org_id}/transfer-credits` | admin — self-serve only; personal reserve → pool |
+| POST | `/orgs/{org_id}/cancel-topup` | admin — self-serve only; exempt from `_require_live_org` (the retry path for a cancel that failed mid-archive/dissolve) |
+| POST | `/subscriptions/org-topup-checkout` | admin — starts the recurring org top-up subscription |
 
 ### Msanii admin (`/admin`)
 
 | Method | Path | Purpose |
 |---|---|---|
-| PUT | `/admin/orgs/{org_id}/dispersal` | set the monthly credit volume |
+| PUT | `/admin/orgs/{org_id}/dispersal` | set the monthly credit volume (enterprise) |
 | POST | `/admin/orgs/{org_id}/suspend` · `/reactivate` | lifecycle |
 | GET | `/admin/orgs/{org_id}/pool` | pool balance |
 | POST | `/admin/orgs/{org_id}/pool/clawback` | reserve-only |
+| POST | `/admin/orgs` | create an **enterprise** org for an existing customer account — the only producer of `kind='enterprise'` rows besides the kind flip below |
+| PUT | `/admin/orgs/{org_id}/kind` | flip an org between `self_serve` and `enterprise`; flipping to `self_serve` requires `covered_by_user_id` (422 without it) and is slot-gated (402 via `NoSlotError`) |
 
 ---
 
@@ -202,7 +216,9 @@ Storage is a **hard cap on every tier**, with no pay-per-use.
 |---|---|---|
 | `LICENSING_ENABLED` | unset (off) | Master switch. Off = every `/orgs/*` route 404s and no derivation runs |
 | `CREDITS_ENABLED` | unset (off) | The credits model. Off = legacy tier gating |
-| `ENTERPRISE_SEAT_STORAGE_BYTES` | `500 GiB` | **Per seat.** A team's cap is this × active seats |
+| `ENTERPRISE_SEAT_STORAGE_BYTES` | `500 GiB` | **Per seat.** A team's cap is this × active seats (enterprise only — self-serve uses `tier_entitlements.team_storage_bytes`, see below) |
+| `ORG_GRACE_DAYS` | `14` | Self-serve only. Days an uncovered team sits in grace before `evaluate_standing` flips it to `status='lapsed'` |
+| `TEAM_STORAGE_OVERAGE_USD_PER_GB` | `0.025` | Self-serve Pro only. PAYG rate for team-storage pool overage, billed monthly as a Stripe InvoiceItem on the covering owner's personal customer |
 
 `conftest.py` clears the first two, so backend tests must set them explicitly with `monkeypatch.setenv` — a developer's `.env` can never leak into a test run.
 
@@ -224,6 +240,87 @@ pytest mocks the Supabase client and never reaches Postgres, so **the SQL layer'
 Every PL/pgSQL variable in those scripts is `v_`-prefixed. PL/pgSQL's `variable_conflict` defaults to `error`, so a variable named `org_id` in `WHERE org_id = org_id` aborts the whole block with "column reference org_id is ambiguous".
 
 ---
+
+## Self-serve teams
+
+Spec: `docs/superpowers/specs/2026-08-15-pricing-tiers-teams-design.md`. Same `organizations` table as everything above — `organizations.kind` is `self_serve` | `enterprise` (existing orgs backfilled `enterprise`; zero behavior change for them) — but a different lifecycle, funded and governed differently. Where a term in this chapter conflicts with earlier chapters (dispersal, activation floor, "any signed-in user can create an org"), the earlier text describes enterprise only; see the superseded notes above.
+
+### Flag matrix, including the half-flag case
+
+`orgs.service.create_org` branches on both flags:
+
+| `LICENSING_ENABLED` | `CREDITS_ENABLED` | Result |
+|---|---|---|
+| on | on | Self-serve: `kind='self_serve'`, slot-gated (`NoSlotError` → 402 at the router), `covered_by`/`covered_at` set to the creator, born `status='active'` — **no activation floor, the slot IS the activation** |
+| on | off | **503.** This half-flag window must NOT fall through to the branch below — that would silently mint a permanent `kind='enterprise'` row nobody governs (no dispersal, no activation, no admin visibility) on every hit |
+| off | irrelevant | `/orgs/*` 404s at the router before `create_org` is ever called (see the top-of-file rollback note) |
+
+### Tier matrix
+
+| Tier | Monthly grant | Grandfathered grant (until `grandfathered_until`) | Team slots (`max_teams`) | Team size excl. owner (`max_team_members`) | Team storage pool (`team_storage_bytes`) |
+|---|---|---|---|---|---|
+| Free | 100 | — | 0 | 0 | 0 |
+| Basic | 2,000 | 3,000 | 1 | 3 | 10 GiB |
+| Pro | 5,000 | 8,000 | 3 | 10 | 100 GiB |
+
+All three team dials live on `tier_entitlements` (migration `20260816000001`), read through `orgs.standing.team_dials_for_user` — a Msanii admin's own dials always resolve as Pro, regardless of their subscription tier. **Joining a team is free on every tier; only owning (covering) one draws on a slot.**
+
+**Grandfathering:** subscribers paid at merge time keep their pre-rescale grant (Basic 3,000 / Pro 8,000) via `subscriptions.grandfathered_monthly_credits`, honored only while `now() < grandfathered_until` — stamped ONCE at the backfill from the row's `current_period_end` (so a monthly subscriber keeps the old grant until this month's renewal, an annual subscriber until their term ends). The stamp is never extended by an interval switch; only a tier change ends it, and ends it EARLY by nulling both columns immediately in the same webhook write. Precedence (explicit admin override > unexpired grandfather > tier value) lives in exactly one helper, `EntitlementsService._resolve_monthly_grant`, called at all five grant sites — a mismatch there is the one way two users could see two different bundles for the same tier.
+
+### Coverage is claimed, never assigned
+
+`covered_by` / `covered_at` on `organizations` name who is spending a team slot on this org. Two endpoints move it, both self-serve-only (`_require_self_serve_org`, 409 otherwise) and admin-only:
+
+- `POST /orgs/{id}/coverage/claim` — free-slot-gated (`standing.require_free_slot`, 402 via `NoSlotError`). Idempotent if the caller already actively covers it. If the org is `lapsed`, claiming also requires `storage_guard.reactivation_allowed` (402 otherwise) and flips it back to `active`.
+- `POST /orgs/{id}/coverage/release` — **current coverer only**, and the write is conditioned on `WHERE covered_by = user_id`, not just the preceding read: a rival admin's claim landing in the gap between read and write means zero rows match, and the caller gets a 403 telling them to refresh, rather than silently clobbering the rival's fresh `covered_at`. `covered_by` deliberately stays set after a release (it feeds last-coverer storage attribution and the sweep's ranking) — only `covered_at` clears, which is the sweep's signal to start evaluating this org.
+
+### Standing: a daily predicate, never an event
+
+`orgs.standing.evaluate_standing` (called from the daily sweep) is the ONLY writer of grace/lapsed state. Per run:
+
+1. Rank each coverer's orgs by `covered_at DESC`, keep the top `max_teams` — and only if the coverer still holds an ACTIVE ADMIN seat in that org (`_holds_active_admin_seat`; a demoted/offboarded coverer keeps neither the ranking slot nor the seat that earned it).
+2. A covered org whose `grace_started_at` was set gets it cleared (and, if it was `lapsed`, flips back to `active` — but only if `storage_guard.reactivation_allowed` passes; a covered-but-over-pool team stays lapsed until space frees up).
+3. An uncovered org with no `grace_started_at` gets one stamped `now()`, and every ACTIVE admin is notified (in-app + best-effort email).
+4. An uncovered org already in grace, past `ORG_GRACE_DAYS` (env, default 14) days, flips to `status='lapsed'`.
+
+`can_access_artist`'s team branch gained the one new RLS predicate this whole feature adds — `AND o.status <> 'lapsed'` — denying the entire artist subtree to **everyone, admins included**, the same posture as `archived_at`. A bad ranking input for one coverer (corrupt `covered_at`, a dials read blowing up) skips only that coverer's orgs for the run, never treated as "uncovered" (which would wrongly grace-stamp/lapse over a data problem).
+
+### Archive vs. dissolve
+
+Two very different endings, both admin-only, both self-serve-only:
+
+| | Archive | Dissolve |
+|---|---|---|
+| Reversible? | Yes — `POST /orgs/{id}/unarchive` | No — terminal |
+| What happens to artists | Nothing; `team_id` stays attached, subtree goes dormant via `can_access_artist`'s `archived_at` check | Every team artist reverts to a person: the creator if they still hold an active seat, else the dissolving admin (`_dissolve_recipients`) — a service-role `UPDATE artists SET team_id = NULL`, which also **reassigns `user_id`** to the fallback recipient, since `team_id = NULL` makes `user_id` mean "owner" again |
+| What happens to the pool | Untouched — whatever it holds survives | Purchased **reserve** forfeited via the existing clawback RPC (fixed `request_id`, so a retry can't claw back twice); the expiring **bundle** bucket is left inert, not reclaimed |
+| Balance precondition | None — members hold no credits, nothing to strand | None |
+| Org row / wallet / ledger | Retained | Retained (support still needs to read them) |
+| Slot | Freed immediately | Freed (was already freed if archived first; `dissolved_at` stamps `archived_at` too if not already set) |
+
+**Unarchive** requires a free slot again (`NoSlotError` → 402, not atomic with the slot check — accepted as a low-frequency admin-only race) and `storage_guard.reactivation_allowed` (402 if the owner is over-pool). Known limitation: org-granted `project_members` rows and members' billing contexts torn down at archive time are **not** restored by unarchiving — a member who lost project access must be re-added by hand.
+
+**Dissolve** is typed-name-confirmed and idempotent (`{"already": true}` on retry, no double-write). Order matters — money first, then the irreversible work, then cleanup: (1) forfeit the pool's purchased reserve, (2) cancel the top-up Stripe subscription (fires `org_topup_canceled` with `trigger="dissolve"`), (3) revert artists to people — **not** best-effort, a crash here aborts the whole call and leaves the org intact and retryable, because a `team_id` left pointing at a dissolved org locks its creator out of their own subtree, (4) re-derive storage totals, (5) soft-remove seats / expire invites / drop org-granted project access (best-effort — the daily sweep reconciles anything missed), (6) stamp `dissolved_at` (+`archived_at` if not already set). `GET /orgs/{id}/dissolve-preview` runs the same authz (active admin) as the execute — it discloses the roster and pool balance, so a plain member must never see it — and shows `forfeitReserve`, `inertBundle`, and per-artist recipients before the admin confirms.
+
+`_require_live_org` (409 dissolved always; 409 archived unless `allow_archived=True`) guards every mutating lifecycle endpoint (invite/accept, member cap/role, credit-requests, project-member grants, claim-coverage, transfer-credits). Reads (`get_org`, dissolve-preview, usage, ledger) and `cancel-topup` are deliberately exempt — `cancel-topup` is the documented retry path for a Stripe cancel that failed mid-archive/dissolve, so a dead org must still be able to stop its own charge.
+
+### Funding the pool
+
+Self-serve orgs have no dispersal. Every credit lands in the pool's **reserve** bucket (never expires) through one of three admin-only inlets:
+
+1. **Transfer** — `POST /orgs/{id}/transfer-credits`, backed by the `transfer_credits` RPC (migration `20260816000002`). Personal reserve → org pool only (bundle credits are never transferable — moving them would silently end their monthly expiry). Takes a `FOR UPDATE` lock on the source wallet and re-checks the balance under that lock, so two concurrent transfers can't both slip past an insufficient-reserve check; a 409 with the caller's (freshly re-read) `reserveBalance` is returned rather than a silent clamp. Idempotent on `request_id` — a retried transfer reads as `duplicate: true`, not a double-spend.
+2. **Packs** — the existing credit-pack purchase flow, targetable at an org (Phase B: `target=org_id` in the Stripe Checkout metadata).
+3. **Recurring top-up** — `POST /subscriptions/org-topup-checkout`, riding the **purchasing admin's own personal Stripe customer** (never a separate org customer). The subscription's metadata carries `kind='org_topup'` + `org_id` — the personal subscription webhook handlers (`handle_subscription_updated`, `handle_subscription_deleted`, etc.) early-return on that metadata shape, so an org top-up can never be mistaken for, or overwrite, the purchaser's own plan. `invoice.paid` grants pool reserve, idempotent on the Stripe invoice id. Canceling: `POST /orgs/{id}/cancel-topup` (manual, `trigger="manual"`), automatically on dissolve (`trigger="dissolve"`), and automatically when the purchasing admin is offboarded (`orgs.service._cancel_topup_if_purchaser`, `trigger="offboard"`) — three call sites, one event name, distinguished by the `trigger` property.
+
+### Storage: a separate per-owner pool, plus Pro PAYG
+
+Team storage is **not** the enterprise `ENTERPRISE_SEAT_STORAGE_BYTES × seats` cap, and it is **not** personal storage. `orgs.storage_guard.pool_state(owner_id)` sums `organizations.storage_bytes` across every self-serve org `covered_by` still points at — **active and archived, excluding only dissolved** (a parked archived team's bytes still count, so archive-then-recreate can't dodge the cap).
+
+- **Basic:** 10 GiB hard cap. Uploads that would exceed it are refused (`storage_guard.upload_allowed`, shared message `TEAM_STORAGE_FULL_MSG`).
+- **Pro:** 100 GiB, then PAYG. "Pro-like" (`team_storage_bytes > 10 GiB`, which also covers Msanii admin dials) owners always pass the upload gate and the reactivation guard — overage bills instead of blocking.
+- **PAYG billing:** a daily sweep step (`storage_guard.bill_team_storage_overage`) turns overage into a Stripe InvoiceItem on the owner's **personal** customer, once per owner-period (stamped on `subscriptions.last_team_storage_invoiced_period`, keyed off the personal wallet's `period_start` — zero overage still stamps, or a fully-covered owner would be re-evaluated forever). Rate is `TEAM_STORAGE_OVERAGE_USD_PER_GB` (env, seeded $0.025/GB/mo). Billing is **per owner**, not per org — `pool_state` already sums across every org that owner covers, so per-org billing would double-count.
+- **Reactivation guard:** `reactivation_allowed` — a lapsed or archived team may not wake up (via coverage claim, unarchive, or the standing sweep's recovery branch) while the owner sits over-pool, unless they're pro-like (PAYG absorbs it).
+- Two other byte inlets besides upload: `artist_subtree_bytes` sizes an artist transfer before it happens (so a transfer that would blow the pool can be refused up front), and the reactivation guard above.
 
 ## Not built (deliberate)
 

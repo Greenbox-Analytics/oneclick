@@ -6,8 +6,10 @@ export type CreditAction = "oneclick_run" | "registry_parse" | "zoe_message";
 
 export interface CreditToolUsage {
   action: CreditAction;
+  /** Pre-flight ESTIMATE per run, not a fixed rate — see CreditPrices. */
   price: number | null;
   count: number;
+  /** Credits actually charged, metered off the AI tokens each run burned. */
   spent: number;
 }
 
@@ -18,12 +20,16 @@ export interface CreditUsage {
   periodStart?: string | null;
   periodEnd?: string | null;
   monthlyGrant?: number;
-  bundleBalance?: number;
-  reserveBalance?: number;
+  /** null in org context for a non-admin member — the pool is admin-only. */
+  bundleBalance?: number | null;
+  reserveBalance?: number | null;
+  balance?: number | null;
   overageThisPeriod?: number;
   /** Org context only — the member's ceiling and usage against it. */
   memberCap?: number | null;
   memberCapUsed?: number;
+  /** Always the CALLER's own spend, in org context too. Org-wide rollups are
+   * admin-only and live on GET /orgs/{id}/usage. */
   tools?: CreditToolUsage[];
 }
 

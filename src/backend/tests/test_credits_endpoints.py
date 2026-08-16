@@ -5,7 +5,11 @@ Covers Task 9 wiring:
   the credit check denies.
 - Debits fire ONLY from terminal-success events (charge-on-success, spec §3):
   Zoe's `done`/`complete`, OneClick's fresh-computation completion, Registry's
-  cache-miss parse. Error paths and cache hits never charge.
+  parse. Error paths never charge, and cache hits cost nothing because the
+  charge is METERED off tokens burned — a hit burns none. That is why the
+  cache-hit tests assert a zero MEASURED spend at debit time rather than an
+  absent debit call: the freeness now lives in debit_for_action, not the
+  call site.
 - create_work is gated by the max_works cap via gated_create.
 - get_or_parse invokes on_miss exactly when a live LLM parse happens.
 """
@@ -201,7 +205,6 @@ class TestResourceDerivationWiring:
         broke_free_service.check_credits.assert_called_once_with(
             TEST_USER_ID,
             "zoe_message",
-            is_admin=False,
             resource_project_id=None,
             resource_contract_ids=["c1", "c2"],
         )
@@ -227,7 +230,7 @@ class TestCreditWalls:
         assert detail["reason"] == "You've used this month's credits."
         # Phase C: contract_ids=[] → resource_contract_ids=None (no resource → ambient).
         broke_free_service.check_credits.assert_called_once_with(
-            TEST_USER_ID, "zoe_message", is_admin=False, resource_project_id=None, resource_contract_ids=None
+            TEST_USER_ID, "zoe_message", resource_project_id=None, resource_contract_ids=None
         )
 
     def test_zoe_conversational_bypasses_wall_when_broke(self, client, broke_free_service, debit_spy):
@@ -252,7 +255,7 @@ class TestCreditWalls:
         assert resp.json()["detail"]["upgradeRequired"] is True
         # Phase C: OneClick threads the project_id it already holds (rule 5).
         broke_free_service.check_credits.assert_called_once_with(
-            TEST_USER_ID, "oneclick_run", is_admin=False, resource_project_id=PROJECT_ID, resource_contract_ids=None
+            TEST_USER_ID, "oneclick_run", resource_project_id=PROJECT_ID, resource_contract_ids=None
         )
 
     def test_oneclick_stream_402_when_broke(self, client, broke_free_service):
@@ -305,7 +308,6 @@ class TestCreditWalls:
         broke_free_service.check_credits.assert_called_once_with(
             TEST_USER_ID,
             "registry_parse",
-            is_admin=False,
             resource_project_id=None,
             resource_contract_ids=[CONTRACT_ID],
         )
@@ -360,7 +362,11 @@ class TestCreditWalls:
 
         assert resp.status_code == 200
         broke_free_service.check_credits.assert_not_called()
-        ent.debit_for_action.assert_not_called()
+        # The peek short-circuits to a free_credit_grant, so the debit call that
+        # does happen is a no-op by construction (disabled, zero-priced).
+        ent.debit_for_action.assert_called_once()
+        _, grant = ent.debit_for_action.call_args.args
+        assert grant.enabled is False and grant.price == 0
 
 
 # ---------------------------------------------------------------------------
@@ -700,11 +706,37 @@ class TestOneClickJsonCharge:
 # ---------------------------------------------------------------------------
 
 
+def _burn_tokens(model="gpt-5-mini", input_tokens=200_000, output_tokens=0):
+    """Simulate a real LLM call through the tracking proxy, so the current
+    request's spend accumulator moves exactly as it would in production.
+
+    200k gpt-5-mini input tokens = $0.05 -> 8 credits at the default 3x markup
+    and $0.02/credit. The point is only that it is comfortably non-zero.
+    """
+    from utils.llm.tracking import TrackedOpenAI
+
+    inner = MagicMock()
+    inner.chat.completions.create.return_value = MagicMock(
+        usage=MagicMock(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            prompt_tokens_details=None,
+        )
+    )
+    TrackedOpenAI(inner, get_supabase=lambda: MagicMock()).chat.completions.create(model=model)
+
+
 class TestRegistryParseCharge:
-    def _wire(self, client, mock_supabase, monkeypatch, *, miss: bool):
+    def _wire(self, client, mock_supabase, monkeypatch, *, miss: bool, on_debit=None):
         """Drive POST /registry/parse-contract-splits with get_or_parse faked to
-        either report a cache miss (live parse) or a silent cache hit."""
+        either report a cache miss (live parse) or a silent cache hit.
+
+        `on_debit` runs as debit_for_action's side effect, i.e. INSIDE the
+        endpoint's LLM-tracking scope, so a test can observe the metered spend.
+        """
         ent = MagicMock()
+        if on_debit is not None:
+            ent.debit_for_action.side_effect = on_debit
         monkeypatch.setattr("subscriptions.deps._get_entitlements_service", lambda: ent)
 
         def _side_effect(name):
@@ -718,9 +750,9 @@ class TestRegistryParseCharge:
 
         mock_supabase.table.side_effect = _side_effect
 
-        def _fake_get_or_parse(db, load_text, *, on_miss=None, **kwargs):
-            if miss and on_miss is not None:
-                on_miss()
+        def _fake_get_or_parse(db, load_text, **kwargs):
+            if miss:
+                _burn_tokens()  # a live parse: real tokens land in the accumulator
             return MagicMock()  # ContractData stand-in; pivot is patched below
 
         with (
@@ -735,18 +767,46 @@ class TestRegistryParseCharge:
         return resp, ent
 
     def test_cache_miss_debits_once(self, client, mock_supabase, credit_service, monkeypatch):
-        resp, ent = self._wire(client, mock_supabase, monkeypatch, miss=True)
+        """A live parse charges, and charges the METERED amount — not the flat
+        `registry_parse` price the gate reserved."""
+        from utils.llm.tracking import credits_for_llm_usage
+
+        measured = []
+        resp, ent = self._wire(
+            client,
+            mock_supabase,
+            monkeypatch,
+            miss=True,
+            on_debit=lambda *_a: measured.append(credits_for_llm_usage()),
+        )
         assert resp.status_code == 200
         ent.debit_for_action.assert_called_once()
         uid, grant = ent.debit_for_action.call_args.args
         assert uid == TEST_USER_ID
         assert grant.action == "registry_parse" and grant.enabled
+        # $0.05 of gpt-5-mini x 3 markup / $0.02 per credit.
+        assert measured == [8]
 
     def test_cache_hit_is_free(self, client, mock_supabase, credit_service, monkeypatch):
-        resp, ent = self._wire(client, mock_supabase, monkeypatch, miss=False)
+        """A cache hit costs nothing because it burns no tokens.
+
+        The debit IS attempted (metering decides the amount, not the call
+        site), so the assertion is on the MEASURED spend visible at that
+        moment — 0 credits, which debit_for_action turns into no RPC at all.
+        """
+        from utils.llm.tracking import credits_for_llm_usage
+
+        measured = []
+        resp, ent = self._wire(
+            client,
+            mock_supabase,
+            monkeypatch,
+            miss=False,
+            on_debit=lambda *_a: measured.append(credits_for_llm_usage()),
+        )
         assert resp.status_code == 200
-        # Cache hits never charge (spec §3).
-        ent.debit_for_action.assert_not_called()
+        ent.debit_for_action.assert_called_once()
+        assert measured == [0]
 
 
 # ---------------------------------------------------------------------------
@@ -852,10 +912,16 @@ class TestGetCreditUsageOrgContext:
         "period_end": None,
     }
 
+    # Pool rows carry the spender in metadata.org_member_id (stamped by
+    # debit_credits). The last row belongs to a DIFFERENT member and must never
+    # show up in this caller's usage — /me/credits/usage is MY usage, and the
+    # pool's whole ledger is other members' activity.
+    OTHER_MEMBER = "member-usage-0002"
     LEDGER_ROWS = [
-        {"action": "zoe_message", "delta": -3, "kind": "debit", "metadata": {}},
-        {"action": "zoe_message", "delta": -3, "kind": "debit", "metadata": {}},
-        {"action": "oneclick_run", "delta": -21, "kind": "debit", "metadata": {}},
+        {"action": "zoe_message", "delta": -3, "kind": "debit", "metadata": {"org_member_id": "member-usage-0001"}},
+        {"action": "zoe_message", "delta": -3, "kind": "debit", "metadata": {"org_member_id": "member-usage-0001"}},
+        {"action": "oneclick_run", "delta": -21, "kind": "debit", "metadata": {"org_member_id": "member-usage-0001"}},
+        {"action": "oneclick_run", "delta": -99, "kind": "debit", "metadata": {"org_member_id": OTHER_MEMBER}},
     ]
 
     def _org_supabase(self, *, pool_wallet=None, ledger_rows=None):
@@ -895,10 +961,13 @@ class TestGetCreditUsageOrgContext:
         assert result["periodEnd"] is None
         assert result["monthlyGrant"] == 0
         assert result["overageThisPeriod"] == 0
-        assert result["bundleBalance"] == 0
-        assert result["reserveBalance"] == 777
-        assert result["balance"] == 777
+        # Plain member: the pool is the ORG's money and stays hidden. None, not
+        # 0 — a 0 would read as "the org is out of credits".
+        assert result["bundleBalance"] is None
+        assert result["reserveBalance"] is None
+        assert result["balance"] is None
 
+        # Scoped to THIS member: the other member's 99-credit run is excluded.
         tools = {t["action"]: t for t in result["tools"]}
         assert tools["zoe_message"]["count"] == 2
         assert tools["zoe_message"]["spent"] == 6
@@ -906,9 +975,51 @@ class TestGetCreditUsageOrgContext:
         assert tools["oneclick_run"]["spent"] == 21
         assert tools["registry_parse"]["count"] == 0
 
-        # NEVER queries the personal wallet / subscription / tier rows (rule
-        # 11's usage-view analogue) — only the seat wallet + shared prices +
-        # seat ledger are touched.
+    def test_org_admin_sees_the_pool_balance(self, monkeypatch):
+        """Same call, admin role — the pool numbers come through."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ctx = dict(self.ORG_CTX, role="admin")
+        monkeypatch.setattr(EntitlementsService, "_resolve_context", lambda _self, _uid: dict(ctx))
+
+        result = EntitlementsService(self._org_supabase()).get_credit_usage(TEST_USER_ID)
+
+        assert result["bundleBalance"] == 0
+        assert result["reserveBalance"] == 777
+        assert result["balance"] == 777
+
+    def test_org_admin_usage_is_still_their_own_not_the_orgs(self, monkeypatch):
+        """/me/credits/usage is MY usage for everyone. An admin wanting the
+        org-wide rollup reads the admin-only console (GET /orgs/{id}/usage)."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        ctx = dict(self.ORG_CTX, role="admin")
+        monkeypatch.setattr(EntitlementsService, "_resolve_context", lambda _self, _uid: dict(ctx))
+
+        result = EntitlementsService(self._org_supabase()).get_credit_usage(TEST_USER_ID)
+
+        tools = {t["action"]: t for t in result["tools"]}
+        assert tools["oneclick_run"]["spent"] == 21  # not 120 (21 + the other member's 99)
+
+    def test_unattributed_pool_rows_are_not_claimed_by_anyone(self, monkeypatch):
+        """A pool row with no org_member_id (pre-attribution legacy) cannot be
+        assigned to a member, so it is excluded rather than shown to all."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setattr(EntitlementsService, "_resolve_context", lambda _self, _uid: dict(self.ORG_CTX))
+        orphan = [{"action": "zoe_message", "delta": -3, "kind": "debit", "metadata": {}}]
+
+        result = EntitlementsService(self._org_supabase(ledger_rows=orphan)).get_credit_usage(TEST_USER_ID)
+
+        tools = {t["action"]: t for t in result["tools"]}
+        assert tools["zoe_message"]["count"] == 0
+
+    def test_org_usage_never_touches_personal_rows(self, monkeypatch):
+        """Rule 11's usage-view analogue: only the pool wallet + shared prices +
+        pool ledger are read — never the personal wallet/subscription/tier."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setattr(EntitlementsService, "_resolve_context", lambda _self, _uid: dict(self.ORG_CTX))
+        sb = self._org_supabase()
+
+        EntitlementsService(sb).get_credit_usage(TEST_USER_ID)
+
         assert "subscriptions" not in sb._touched
         assert "tier_entitlements" not in sb._touched
         assert "tier_overrides" not in sb._touched
