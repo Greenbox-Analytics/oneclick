@@ -1,17 +1,10 @@
-"""402 walls + charge-on-success at the credit-gated endpoints.
+"""Credit gating at the tool endpoints.
 
-Covers Task 9 wiring:
-- Zoe / OneClick (stream + JSON) / Registry parse raise structured 402s when
-  the credit check denies.
-- Debits fire ONLY from terminal-success events (charge-on-success, spec §3):
-  Zoe's `done`/`complete`, OneClick's fresh-computation completion, Registry's
-  parse. Error paths never charge, and cache hits cost nothing because the
-  charge is METERED off tokens burned — a hit burns none. That is why the
-  cache-hit tests assert a zero MEASURED spend at debit time rather than an
-  absent debit call: the freeness now lives in debit_for_action, not the
-  call site.
-- create_work is gated by the max_works cap via gated_create.
-- get_or_parse invokes on_miss exactly when a live LLM parse happens.
+Error paths never charge. Cache hits DO charge — the base rate, once per
+billing period (a deterministic request_id dedupes them; see
+enforcement.gated_credits' dedupe_key). The only free paths left are Zoe's
+conversational fast-path, /oneclick/recalculate-net and /oneclick/confirm:
+no deliverable, or a follow-on of a run already paid for.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -162,7 +155,7 @@ class TestSeatCreditWall:
         assert resp.status_code == 402
         detail = resp.json()["detail"]
         assert detail["managedByOrg"] is True
-        assert detail["requestUrl"] == "/organization"
+        assert detail["requestUrl"] == "/teams"
         assert detail["upgradeRequired"] is False
         assert detail["overageAvailable"] is False
         assert detail["resetDate"] is None
@@ -218,7 +211,7 @@ class TestResourceDerivationWiring:
         assert detail["projectId"] == PROJECT_ID
         # Co-occurs with the managed-by-org buy/request affordance.
         assert detail["managedByOrg"] is True
-        assert detail["requestUrl"] == "/organization"
+        assert detail["requestUrl"] == "/teams"
 
 
 class TestCreditWalls:
@@ -312,11 +305,10 @@ class TestCreditWalls:
             resource_contract_ids=[CONTRACT_ID],
         )
 
-    def test_registry_cached_parse_bypasses_wall_when_broke(
-        self, client, mock_supabase, broke_free_service, monkeypatch
-    ):
-        """Zero balance + already-cached contract → 200, free, no wall.
-        (Review fix #3b: the credit gate used to fire before the parse-cache peek.)"""
+    def test_registry_cached_parse_is_walled_when_broke(self, client, mock_supabase, broke_free_service, monkeypatch):
+        """Zero balance + already-cached contract → 402. A cache hit is a full
+        deliverable (spec 2026-08-17 §4); the cache is our cost optimisation, not
+        the user's discount."""
         ent = MagicMock()
         monkeypatch.setattr("subscriptions.deps._get_entitlements_service", lambda: ent)
         monkeypatch.setattr("main.verify_user_owns_contract", lambda user_id, contract_id: True)
@@ -360,13 +352,9 @@ class TestCreditWalls:
         ):
             resp = client.post("/registry/parse-contract-splits", data={"contract_file_id": CONTRACT_ID})
 
-        assert resp.status_code == 200
-        broke_free_service.check_credits.assert_not_called()
-        # The peek short-circuits to a free_credit_grant, so the debit call that
-        # does happen is a no-op by construction (disabled, zero-priced).
-        ent.debit_for_action.assert_called_once()
-        _, grant = ent.debit_for_action.call_args.args
-        assert grant.enabled is False and grant.price == 0
+        assert resp.status_code == 402
+        broke_free_service.check_credits.assert_called_once()
+        ent.debit_for_action.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -571,7 +559,7 @@ class TestOneClickStreamCharge:
         assert uid == TEST_USER_ID
         assert grant.action == "oneclick_run" and grant.enabled
 
-    def test_cached_run_is_free(self, client, mock_supabase, credit_service, debit_spy):
+    def test_cached_run_charges_the_base(self, client, mock_supabase, credit_service, debit_spy):
         cached_result = {
             "status": "success",
             "total_payments": 1,
@@ -599,12 +587,13 @@ class TestOneClickStreamCharge:
 
         assert resp.status_code == 200
         assert '"is_cached": true' in resp.text
-        # Cached re-runs are FREE (spec §3) — no ledger debit.
-        debit_spy.debit_for_action.assert_not_called()
+        # A cached re-run hands back the same deliverable, so it pays the base
+        # (spec 2026-08-17 §4). Idempotent per period via the dedupe_key.
+        debit_spy.debit_for_action.assert_called_once()
 
-    def test_cached_run_bypasses_wall_when_broke(self, client, mock_supabase, broke_free_service, debit_spy):
-        """Zero balance + already-analyzed statement → 200, free, no wall.
-        (Review fix #3: the gate used to fire before the cache check.)"""
+    def test_cached_run_is_walled_when_broke(self, client, mock_supabase, broke_free_service, debit_spy):
+        """Zero balance + already-analyzed statement → 402. The cache no longer
+        decides billing, only whether we recompute."""
         cached_result = {"status": "success", "total_payments": 1, "payments": [SAMPLE_PAYMENTS[0]], "message": "1"}
         sequences = [
             [{"id": CALCULATION_ID, "results": cached_result}],  # royalty_calculations
@@ -625,10 +614,88 @@ class TestOneClickStreamCharge:
             resp = client.get("/oneclick/calculate-royalties-stream", params=self._params())
             mock_calc.assert_not_called()
 
-        assert resp.status_code == 200
-        assert '"is_cached": true' in resp.text
-        broke_free_service.check_credits.assert_not_called()
+        assert resp.status_code == 402
         debit_spy.debit_for_action.assert_not_called()
+
+    def _wire_fresh(self, mock_supabase):
+        """Cache MISS: royalty_calculations comes back empty, so the run computes."""
+        mock_supabase.table.side_effect = lambda name: (
+            _default_table_side_effect(name)
+            if name in ("subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles")
+            else self._builder([SAMPLE_STATEMENT_FILE] if name == "project_files" else [])
+        )
+        mock_supabase.storage.from_.return_value.download.return_value = b"mock-xlsx-content"
+
+    def _wire_cached(self, mock_supabase):
+        """Cache HIT: the probe finds a calculation for this (statement, contracts)."""
+        cached_result = {"status": "success", "total_payments": 1, "payments": [SAMPLE_PAYMENTS[0]], "message": "1"}
+        sequences = [
+            [{"id": CALCULATION_ID, "results": cached_result}],  # royalty_calculations
+            [{"calculation_id": CALCULATION_ID, "contract_id": CONTRACT_ID}],  # junction
+        ]
+        call_idx = [0]
+
+        def _side_effect(name):
+            if name in ("subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"):
+                return _default_table_side_effect(name)
+            data = sequences[call_idx[0]] if call_idx[0] < len(sequences) else []
+            call_idx[0] += 1
+            return self._builder(data)
+
+        mock_supabase.table.side_effect = _side_effect
+
+    @staticmethod
+    def _wallet_backed(credit_service):
+        """The dedupe id is scoped to a wallet + period, so the check must carry
+        both — the bare fixture result has neither and falls back to uuid4."""
+        from datetime import UTC, datetime
+
+        credit_service.check_credits.return_value = CreditCheckResult(
+            allowed=True, price=30, wallet_id="wallet-1", reset_date=datetime(2026, 9, 1, tzinfo=UTC)
+        )
+
+    @staticmethod
+    def _request_ids(debit_spy):
+        return [c.args[1].request_id for c in debit_spy.debit_for_action.call_args_list]
+
+    def test_fresh_run_then_cached_rerun_charges_once(self, client, mock_supabase, credit_service, debit_spy):
+        """The reconnect case. Attempt 1 computes; attempt 2 is served from cache.
+        Both must carry the SAME request_id so the RPC dedupes the second — keying
+        the dedupe on 'was this a cache hit?' would give them different ids and
+        charge twice, which is the bug this test exists to prevent."""
+        self._wallet_backed(credit_service)
+
+        self._wire_fresh(mock_supabase)
+        with patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, None)):
+            first = client.get("/oneclick/calculate-royalties-stream", params=self._params())
+        assert '"type": "complete"' in first.text
+
+        self._wire_cached(mock_supabase)
+        with patch("main.calculate_royalty_payments") as mock_calc:
+            second = client.get("/oneclick/calculate-royalties-stream", params=self._params())
+            mock_calc.assert_not_called()
+        assert '"is_cached": true' in second.text
+
+        ids = self._request_ids(debit_spy)
+        assert len(ids) == 2
+        assert ids[0] == ids[1], "fresh run and cached re-run must share a request_id"
+
+    def test_force_recalculate_charges_again(self, client, mock_supabase, credit_service, debit_spy):
+        """A forced recalc redoes the LLM work — a new deliverable, a new charge."""
+        self._wallet_backed(credit_service)
+
+        self._wire_fresh(mock_supabase)
+        with patch("main.calculate_royalty_payments", return_value=(SAMPLE_PAYMENTS, None)):
+            client.get("/oneclick/calculate-royalties-stream", params=self._params())
+            client.get(
+                "/oneclick/calculate-royalties-stream",
+                params={**self._params(), "force_recalculate": "true"},
+            )
+
+        ids = self._request_ids(debit_spy)
+        assert len(ids) == 2
+        assert ids[0].startswith("dedupe:oneclick_run:wallet-1:")
+        assert not ids[1].startswith("dedupe:"), "a forced recalc must get a fresh uuid4"
 
     def test_failed_run_no_debit(self, client, mock_supabase, credit_service, debit_spy):
         mock_supabase.table.side_effect = lambda name: (
@@ -787,13 +854,9 @@ class TestRegistryParseCharge:
         # $0.05 of gpt-5-mini x 3 markup / $0.02 per credit.
         assert measured == [8]
 
-    def test_cache_hit_is_free(self, client, mock_supabase, credit_service, monkeypatch):
-        """A cache hit costs nothing because it burns no tokens.
-
-        The debit IS attempted (metering decides the amount, not the call
-        site), so the assertion is on the MEASURED spend visible at that
-        moment — 0 credits, which debit_for_action turns into no RPC at all.
-        """
+    def test_cache_hit_charges_the_base(self, client, mock_supabase, credit_service, monkeypatch):
+        """A cache hit burns no tokens, measures 0, and so pays exactly the base
+        — max(base, 0) — because the deliverable is the same one."""
         from utils.llm.tracking import credits_for_llm_usage
 
         measured = []
@@ -805,8 +868,11 @@ class TestRegistryParseCharge:
             on_debit=lambda *_a: measured.append(credits_for_llm_usage()),
         )
         assert resp.status_code == 200
-        ent.debit_for_action.assert_called_once()
         assert measured == [0]
+        ent.debit_for_action.assert_called_once()
+        _, grant = ent.debit_for_action.call_args.args
+        assert grant.enabled is True
+        assert grant.price > 0
 
 
 # ---------------------------------------------------------------------------
@@ -956,7 +1022,12 @@ class TestGetCreditUsageOrgContext:
         result = EntitlementsService(sb).get_credit_usage(TEST_USER_ID)
 
         assert result["enabled"] is True
-        assert result["managedByOrg"] == {"orgId": ctx["org_id"], "orgName": ctx["org_name"], "role": ctx["role"]}
+        assert result["managedByOrg"] == {
+            "orgId": ctx["org_id"],
+            "orgName": ctx["org_name"],
+            "role": ctx["role"],
+            "kind": None,
+        }
         assert result["periodStart"] is None
         assert result["periodEnd"] is None
         assert result["monthlyGrant"] == 0

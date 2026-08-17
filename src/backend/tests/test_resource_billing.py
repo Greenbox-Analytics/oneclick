@@ -28,6 +28,7 @@ EXPECTED_CTX = {
     "org_name": "Acme Records",
     "org_member_id": MEMBER,
     "role": "member",
+    "kind": None,
     "project_id": PROJECT,
 }
 

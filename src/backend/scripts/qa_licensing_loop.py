@@ -422,7 +422,7 @@ try:
     ss_overflow = users["ss_m4"]  # the 4th — must be refused
 
     # A real subscription row makes ss_owner a PAYING Basic user: 1 team
-    # slot, 3 members excl. the owner, 10 GiB pool (Migration A dials) —
+    # slot, 3 members excl. the owner, 100 GiB pool (20260817000001 dials) —
     # "as a paying user" per the task, not an admin-implicit-Pro shortcut.
     sb.table("subscriptions").upsert(
         {"user_id": ss_owner["id"], "tier": "basic", "status": "active"}, on_conflict="user_id"

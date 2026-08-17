@@ -65,7 +65,6 @@ from subscriptions.billing_router import router as billing_router
 from subscriptions.pro_requests_router import router as pro_requests_router
 from subscriptions.router import router as subscriptions_router
 from subscriptions.sweep import router as sweep_router
-from teams.router import router as teams_router
 from users.router import router as users_router
 
 app.include_router(google_drive_router, prefix="/integrations/google-drive", tags=["Google Drive"])
@@ -94,7 +93,6 @@ app.include_router(contact_router, tags=["Contact"])
 app.include_router(billing_router)
 app.include_router(sweep_router)
 app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
-app.include_router(teams_router, prefix="/teams", tags=["Teams"])
 app.include_router(orgs_router, prefix="/orgs", tags=["Organizations"])
 
 # The internal event bus (integrations/events.py) currently has NO subscribers — Slack was
@@ -2476,8 +2474,9 @@ async def oneclick_calculate_royalties_stream(
         royalty_statement_file_id,
         (contract_ids or []) + ([contract_id] if contract_id else []),
     )
-    # Result-cache probe BEFORE the gate: a cached re-run is free (spec §3) and
-    # must never be walled behind the balance. Probe failure = miss (gate applies).
+    # Result-cache probe. It no longer decides BILLING — a cached re-run is a
+    # complete deliverable and pays the base rate (spec 2026-08-17 §4) — it only
+    # decides whether we recompute. Probe failure = miss.
     target_contract_ids = list(contract_ids) if contract_ids else ([contract_id] if contract_id else [])
     cached_calc = None
     if not force_recalculate and target_contract_ids:
@@ -2487,19 +2486,38 @@ async def oneclick_calculate_royalties_stream(
             )
         except Exception as e:
             print(f"Cache probe failed (continuing as miss): {e}")
-    if credits_enabled() and cached_calc is not None:
-        oneclick_grant = free_credit_grant(CreditAction.ONECLICK_RUN)
-    else:
-        # SP3/credits: gate OneClick; 402 for users without access or credits.
-        # Resource-derived billing (Licensing Phase C, rule 5): pass project_id so
-        # a run inside an org-linked project bills the linked org's seat.
-        # Derivation-vs-access ordering (rule 4, Phase A access-first):
-        # _assert_can_access_oneclick_inputs above runs BEFORE this gate, so
-        # derivation can never bill an org for a project the caller can't access;
-        # charge-on-success is the backstop.
-        oneclick_grant = gated_credits(
-            user_id, CreditAction.ONECLICK_RUN, host_user_id=host_user_id, resource_project_id=project_id
-        )
+    # SP3/credits: gate OneClick; 402 for users without access or credits.
+    # Resource-derived billing (Licensing Phase C, rule 5): pass project_id so
+    # a run inside an org-linked project bills the linked org's seat.
+    # Derivation-vs-access ordering (rule 4, Phase A access-first):
+    # _assert_can_access_oneclick_inputs above runs BEFORE this gate, so
+    # derivation can never bill an org for a project the caller can't access;
+    # charge-on-success is the backstop.
+    # The deliverable is fully determined by (statement, contract set), so key
+    # the debit off that for EVERY non-forced run — not just the ones that hit
+    # the cache.
+    #
+    # Keying on `cached_calc is not None` would miss the case this exists for.
+    # The common double-charge is fresh-run-then-reconnect: attempt 1 computes
+    # and charges under a uuid4, attempt 2 probes, hits the cache, and charges
+    # under the dedupe id. Two different ids, two charges — only the THIRD
+    # attempt would dedupe. Conditioning on force_recalculate instead puts the
+    # fresh run and all its cached re-runs on one id, so the period is charged
+    # exactly once for one deliverable.
+    #
+    # force_recalculate deliberately gets a random id: it bypasses the cache and
+    # redoes the LLM work, which is a new deliverable and charges again.
+    oneclick_grant = gated_credits(
+        user_id,
+        CreditAction.ONECLICK_RUN,
+        host_user_id=host_user_id,
+        resource_project_id=project_id,
+        dedupe_key=(
+            f"{royalty_statement_file_id}|{'|'.join(sorted(target_contract_ids))}"
+            if not force_recalculate and target_contract_ids
+            else None
+        ),
+    )
     # SP2: track per-period OneClick usage; best-effort, never blocks.
     _get_entitlements_service().increment_usage(user_id, "oneclick_runs_this_period")
     analytics_capture(user_id, "tool_used", {"tool": "oneclick"})
@@ -2536,6 +2554,13 @@ async def oneclick_calculate_royalties_stream(
 
                 # --- CACHE HIT (probed pre-gate; no re-query) ---
                 if cached_calc is not None:
+                    # Charge-on-success. This branch is inside set_llm_context and
+                    # makes no LLM call, so it measures 0 and pays exactly the base
+                    # — the price of the deliverable, which is identical to a fresh
+                    # run's. The debit is idempotent per billing period via the
+                    # grant's deterministic request_id, so an SSE reconnect or a
+                    # double-submit cannot charge twice for the same cached result.
+                    _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
                     yield f"data: {json.dumps({'type': 'status', 'message': 'Found cached results!', 'progress': 100, 'stage': 'complete'})}\n\n"
 
                     result = cached_calc["results"]
@@ -2824,8 +2849,8 @@ async def oneclick_calculate_royalties_stream(
                 }
 
                 # Charge on success: calculation completed, results streaming out.
-                # Fresh-computation path ONLY — the cache-hit branch above yields
-                # its own terminal event and returns without charging (spec §3).
+                # Fresh-computation path. The cache-hit branch above charges its
+                # own base before returning, so both paths bill exactly once.
                 # ACCEPTED RESIDUAL (plan round 3): a deliberate disconnect after
                 # the LLM work but before this event = free run; measurable via
                 # ai_usage_log success=true rows with no matching ledger debit.

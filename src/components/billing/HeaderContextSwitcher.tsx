@@ -83,9 +83,9 @@ export function HeaderContextSwitcher() {
           ))}
         </div>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => navigate("/organization?new=1")} className="gap-2">
+        <DropdownMenuItem onClick={() => navigate("/teams?new=1")} className="gap-2">
           <Plus className="w-4 h-4 text-muted-foreground" />
-          <span>Create organization</span>
+          <span>Create team</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

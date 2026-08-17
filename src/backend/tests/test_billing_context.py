@@ -127,13 +127,14 @@ def _member(status="active", role="member", monthly_cap=None, cap_used=0, cap_pe
     }
 
 
-def _org(status="active", archived_at=None, name="Acme Records", default_member_cap=None):
+def _org(status="active", archived_at=None, name="Acme Records", default_member_cap=None, kind=None):
     return {
         "id": ORG,
         "name": name,
         "status": status,
         "archived_at": archived_at,
         "default_member_cap": default_member_cap,
+        "kind": kind,
     }
 
 
@@ -355,7 +356,12 @@ class TestRule11PersonalWalletUntouched:
         assert ent.credits.balance == 500
         assert ent.credits.monthly_grant == 0
         payload = ent.to_dict()
-        assert payload["credits"]["managedByOrg"] == {"orgId": ORG, "orgName": "Acme Records", "role": "admin"}
+        assert payload["credits"]["managedByOrg"] == {
+            "orgId": ORG,
+            "orgName": "Acme Records",
+            "role": "admin",
+            "kind": None,
+        }
 
     def test_org_context_does_not_mutate_subscriptions_tier(self, monkeypatch):
         """Enterprise shape is synthesized — subscriptions.tier is never written."""
@@ -398,7 +404,7 @@ class TestEnterpriseShape:
         payload = EntitlementsService(sb).get_for_user(USER).to_dict()
         assert payload["availableContexts"] == [
             {"type": "personal"},
-            {"type": "org", "orgId": ORG, "orgName": "Acme Records", "role": "member", "pending": False},
+            {"type": "org", "orgId": ORG, "orgName": "Acme Records", "role": "member", "pending": False, "kind": None},
         ]
 
 
@@ -567,6 +573,7 @@ class TestPendingOrgPersists:
             "orgName": "Acme Records",
             "role": "member",
             "pending": True,
+            "kind": None,
         } in payload["availableContexts"]
 
     def test_resolve_context_pending_marker_not_active(self, monkeypatch):
@@ -665,11 +672,17 @@ class TestBillingContextFieldMatrix:
             "orgId": ORG,
             "orgName": "Acme Records",
             "role": "admin",
+            "kind": None,
         }
         # Today's payload is unchanged: seat-wallet credits block, managedByOrg.
         # Admin, so the pool balance is visible — a member's is None.
         assert payload["credits"]["balance"] == 500
-        assert payload["credits"]["managedByOrg"] == {"orgId": ORG, "orgName": "Acme Records", "role": "admin"}
+        assert payload["credits"]["managedByOrg"] == {
+            "orgId": ORG,
+            "orgName": "Acme Records",
+            "role": "admin",
+            "kind": None,
+        }
 
     def test_licensing_on_credits_off_org_context_cell(self, monkeypatch):
         """Cell (licensing on, credits off), org context — THE behavior change.
@@ -694,6 +707,7 @@ class TestBillingContextFieldMatrix:
             "orgId": ORG,
             "orgName": "Acme Records",
             "role": "member",
+            "kind": None,
         }
 
         # NO seat-wallet read+create call at all.
@@ -835,7 +849,7 @@ class TestToDictRegressionSnapshot:
                 "memberCap": None,
                 "memberCapUsed": 0,
                 "periodEnd": None,
-                "prices": {"zoeMessage": 3, "oneclickRun": 21, "registryParse": 12},
+                "prices": {"zoeMessage": 3, "oneclickRun": 21, "registryParse": 12, "splitSheet": 0},
             },
             "hasOverrides": False,
             "degraded": False,

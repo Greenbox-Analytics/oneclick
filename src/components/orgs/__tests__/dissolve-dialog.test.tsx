@@ -89,6 +89,6 @@ describe("DissolveOrgDialog", () => {
     // asserting navigation happened on a mutate() call that (mocked) never
     // resolves on its own.
     dissolveMutate.mock.calls[0][1].onSuccess();
-    expect(navigateMock).toHaveBeenCalledWith("/organization");
+    expect(navigateMock).toHaveBeenCalledWith("/teams");
   });
 });

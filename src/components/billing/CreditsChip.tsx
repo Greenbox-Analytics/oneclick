@@ -8,13 +8,32 @@ import { cn } from "@/lib/utils";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
 
-export function CreditsChip({ className }: { className?: string }) {
+const PRICE_KEY = {
+  oneclick_run: "oneclickRun",
+  registry_parse: "registryParse",
+  zoe_message: "zoeMessage",
+  split_sheet: "splitSheet",
+} as const;
+
+export function CreditsChip({
+  className,
+  action,
+}: {
+  className?: string;
+  /** When set, the chip also states what THIS action costs. Prices come from
+   * the entitlements payload (backend `credit_prices`), never a literal. */
+  action?: keyof typeof PRICE_KEY;
+}) {
   const { data: ent } = useEntitlements();
   const credits = ent?.credits;
   if (!credits) return null;
   // null = an uncapped org member: no cap of their own, and the pool balance is
   // admin-only, so there is no number to put here.
   const standing = creditStanding(credits);
+  const price = action ? credits.prices?.[PRICE_KEY[action]] : undefined;
+  const balanceText = standing
+    ? `${standing.remaining.toLocaleString()} credits`
+    : "Org credits";
   return (
     <span
       className={cn(
@@ -25,7 +44,7 @@ export function CreditsChip({ className }: { className?: string }) {
       title={standing ? "Credits you have left this month" : POOL_ONLY_LABEL}
     >
       <Coins className="w-3 h-3" />
-      {standing ? `${standing.remaining.toLocaleString()} credits` : "Org credits"}
+      {price ? `${price} cr · ${balanceText} left` : balanceText}
     </span>
   );
 }

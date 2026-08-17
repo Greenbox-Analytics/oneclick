@@ -243,8 +243,8 @@ export function ZoeInputBar({
 
           <p className="composer-note">{noteText}</p>
           <p className="composer-note">
-            <CreditsChip className="mr-1.5 align-middle" />
-            Chatting with Zoe is free — credits are only used when she analyzes a contract.
+            <CreditsChip className="mr-1.5 align-middle" action="zoe_message" />
+            Greetings are free — a real answer costs credits.
           </p>
         </div>
       </div>

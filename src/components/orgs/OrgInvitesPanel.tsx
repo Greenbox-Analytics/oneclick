@@ -1,7 +1,8 @@
 // src/components/orgs/OrgInvitesPanel.tsx
 // Admin console: pending invites list + invite-by-email form + revoke.
-// Mirrors the pending-invites idiom in TeamsPanel.tsx.
+// Pending invites live here now — the old workspace Teams panel is gone.
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Loader2, Mail, UserPlus, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,9 +17,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ApiError } from "@/lib/apiFetch";
 import { useOrgInvites, useInviteOrgMember, useCancelOrgInvite, type OrgRole } from "@/hooks/useOrgs";
+import { orgNoun } from "@/lib/tiers";
 
-export function OrgInvitesPanel({ orgId }: { orgId: string }) {
+/** Seat-wall 402 detail shape from POST /orgs/{id}/invites (orgs/router.py). */
+interface SeatWallDetail {
+  reason: string;
+  nextStep: "upgrade" | "contact";
+}
+
+function seatWallDetail(e: unknown): SeatWallDetail | null {
+  if (!(e instanceof ApiError) || !e.detail || typeof e.detail !== "object") return null;
+  const d = e.detail as { reason?: unknown; nextStep?: unknown };
+  if (d.nextStep !== "upgrade" && d.nextStep !== "contact") return null;
+  return { reason: typeof d.reason === "string" ? d.reason : e.message, nextStep: d.nextStep };
+}
+
+export function OrgInvitesPanel({ orgId, orgKind }: { orgId: string; orgKind?: string | null }) {
   const { data: invites, isLoading } = useOrgInvites(orgId);
   const inviteMember = useInviteOrgMember();
   const cancelInvite = useCancelOrgInvite();
@@ -26,20 +42,26 @@ export function OrgInvitesPanel({ orgId }: { orgId: string }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<OrgRole>("member");
+  const [seatWall, setSeatWall] = useState<SeatWallDetail | null>(null);
 
   const handleOpenChange = (open: boolean) => {
     setDialogOpen(open);
     if (!open) {
       setEmail("");
       setRole("member");
+      setSeatWall(null);
     }
   };
 
   const handleInvite = () => {
     if (!email.trim()) return;
+    setSeatWall(null);
     inviteMember.mutate(
       { orgId, email: email.trim(), role },
-      { onSuccess: () => handleOpenChange(false) },
+      {
+        onSuccess: () => handleOpenChange(false),
+        onError: (e) => setSeatWall(seatWallDetail(e)),
+      },
     );
   };
 
@@ -48,7 +70,7 @@ export function OrgInvitesPanel({ orgId }: { orgId: string }) {
       <div className="flex items-start justify-between gap-3.5">
         <div>
           <div className="text-[15px] font-semibold">Invites</div>
-          <div className="text-[13.5px] text-muted-foreground mt-0.5">Pending invitations to join this organization</div>
+          <div className="text-[13.5px] text-muted-foreground mt-0.5">Pending invitations to join this {orgNoun(orgKind)}</div>
         </div>
         <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setDialogOpen(true)}>
           <UserPlus className="w-3.5 h-3.5" />
@@ -99,7 +121,7 @@ export function OrgInvitesPanel({ orgId }: { orgId: string }) {
       <Dialog open={dialogOpen} onOpenChange={handleOpenChange}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Invite to organization</DialogTitle>
+            <DialogTitle>Invite to {orgNoun(orgKind)}</DialogTitle>
             <DialogDescription>They&apos;ll get an email invite to join with their own seat.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -125,6 +147,20 @@ export function OrgInvitesPanel({ orgId }: { orgId: string }) {
                 </SelectContent>
               </Select>
             </div>
+            {seatWall && (
+              <div className="text-sm text-muted-foreground bg-muted rounded-lg px-3 py-2">
+                {seatWall.reason}{" "}
+                {seatWall.nextStep === "upgrade" ? (
+                  <Link to="/pricing" className="text-primary underline underline-offset-2">
+                    Upgrade to Pro
+                  </Link>
+                ) : (
+                  <Link to="/contact" className="text-primary underline underline-offset-2">
+                    Talk to us about Enterprise
+                  </Link>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => handleOpenChange(false)}>

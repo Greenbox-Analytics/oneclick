@@ -4,100 +4,67 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Check, X, Music, ArrowLeft } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { useCreateCheckoutSession } from "@/hooks/useBilling";
-import { useEntitlements } from "@/hooks/useEntitlements";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { tierLabel, usd, annualPerMonth, ENTERPRISE_LABEL, TIER_PRICES } from "@/lib/tiers";
+import { tierLabel, usd, annualPerMonth, ENTERPRISE_LABEL, TIER_PRICES, TEAM_STORAGE_OVERAGE_USD_PER_GB } from "@/lib/tiers";
 
 type Feature = { included: boolean; label: string };
 type Period = "monthly" | "annual";
 
 // ---------------------------------------------------------------------------
-// Legacy (credits off): tools are tier-gated, so Free shows locks.
+// Credits model: every tool is open on every tier — AI actions draw from a
+// monthly credit allowance instead of tier locks. Numbers mirror
+// tier_entitlements (100/2,000/5,000 credits; 1/100/250 GB personal storage,
+// a hard cap on every tier; teams 0/1/3 owned, 3/10 members, 100/250 GB team
+// storage — matching personal, 20260817000001). Existing paid subscribers on the prior 3,000/8,000 grants keep
+// them only via grandfather overrides (20260816000001) — this public page
+// advertises the new grants, not those.
 // ---------------------------------------------------------------------------
 const FREE_FEATURES: Feature[] = [
-  { included: true, label: "3 artists" },
-  { included: true, label: "3 projects" },
-  { included: true, label: "50 tasks total" },
-  { included: true, label: "1 GB storage" },
+  { included: true, label: "All tools included" },
+  { included: true, label: "150 credits per month" },
+  { included: true, label: "3 artists, 3 projects, 50 tasks" },
+  { included: true, label: "1 GB personal storage" },
   { included: true, label: "5 split sheets per month" },
-  { included: true, label: "OneClick royalty calculator (1 run/month)" },
-  { included: true, label: "Google Drive integration" },
-  { included: false, label: "Zoe AI contract analysis" },
-  { included: false, label: "Metadata Registry" },
+  { included: true, label: "Google Drive & Dropbox integration" },
+  { included: true, label: "Join any team you're invited to" },
+  { included: false, label: "Own a team (Basic and up)" },
 ];
 
 // "basic" DB tier.
 const BASIC_FEATURES: Feature[] = [
-  { included: true, label: "Unlimited artists, projects, tasks" },
-  { included: true, label: "Unlimited storage" },
+  { included: true, label: "All tools included" },
+  { included: true, label: "2,000 credits per month" },
+  { included: true, label: "Unlimited artists, projects, and tasks" },
+  { included: true, label: "100 GB personal storage" },
   { included: true, label: "Unlimited split sheets" },
-  { included: true, label: "Zoe AI contract analysis" },
-  { included: true, label: "Unlimited OneClick royalty calculations" },
-  { included: true, label: "Metadata Registry" },
-  { included: true, label: "Google Drive integration" },
+  { included: true, label: "Google Drive & Dropbox integration" },
+  { included: true, label: "1 team with up to 3 members" },
+  { included: true, label: "100 GB team storage" },
 ];
 
 // "pro" DB tier.
 const PRO_FEATURES: Feature[] = [
   { included: true, label: `Everything in ${tierLabel("basic")}` },
-  { included: true, label: "More storage headroom" },
+  { included: true, label: "5,000 credits per month" },
+  { included: true, label: "250 GB personal storage" },
+  { included: true, label: "3 teams with up to 5 members each — scale to 10 per team when another Pro member joins" },
+  { included: true, label: `250 GB team storage, then ${usd(TEAM_STORAGE_OVERAGE_USD_PER_GB)}/GB per month` },
   { included: true, label: "Priority support" },
 ];
 
-// ---------------------------------------------------------------------------
-// Credits model: every tool is open on every tier — AI actions draw from a
-// monthly credit allowance instead of tier locks. Credit and storage numbers
-// mirror tier_entitlements (100/2,000/5,000 credits; 1/100/250 GB — storage is
-// a hard cap on every tier, never pay-per-use). Existing paid subscribers on
-// the prior 3,000/8,000 grants keep them only via grandfather overrides
-// (20260816000001) — this public page advertises the new grants, not those.
-// ---------------------------------------------------------------------------
-const FREE_FEATURES_CREDITS: Feature[] = [
-  { included: true, label: "All tools included — Zoe, OneClick, Registry, split sheets" },
-  { included: true, label: "100 credits per month for AI-powered actions" },
-  { included: true, label: "3 artists, 3 projects, 50 tasks" },
-  { included: true, label: "1 GB storage" },
-  { included: true, label: "5 split sheets per month" },
-  { included: true, label: "Google Drive integration" },
-];
-
-const BASIC_FEATURES_CREDITS: Feature[] = [
-  { included: true, label: "All tools included — usage draws from your monthly credits" },
-  { included: true, label: "2,000 credits per month for AI-powered actions" },
-  { included: true, label: "Unlimited artists, projects, and tasks" },
-  { included: true, label: "100 GB storage" },
-  { included: true, label: "Unlimited split sheets" },
-  { included: true, label: "Google Drive integration" },
-];
-
-const PRO_FEATURES_CREDITS: Feature[] = [
-  { included: true, label: `Everything in ${tierLabel("basic")}` },
-  { included: true, label: "5,000 credits per month for AI-powered actions" },
-  { included: true, label: "250 GB storage" },
-  { included: true, label: "Priority support" },
-];
-
-// ---------------------------------------------------------------------------
-// Self-serve teams (2026-08-15 pricing/teams spec §1) — team ownership rows,
-// only meaningful once both CREDITS_ENABLED and LICENSING_ENABLED are on
-// (teamsOn below). Joining someone else's team is always free and already
-// covered by "Joining teams as a member: unlimited" — not called out per-tier.
-const TEAM_FEATURE: Record<"free" | "basic" | "pro", Feature> = {
-  free: { included: false, label: "Own a team (Basic and up — joining a team stays free)" },
-  basic: { included: true, label: "1 team you own — up to 3 members, 10 GB team storage" },
-  pro: { included: true, label: "3 teams you own — up to 10 members each, 100 GB team storage" },
-};
-
-// No DB tier — org seats resolve to these entitlements (Phase B).
+// No DB tier — enterprise orgs are set up by Msanii (POST /admin/orgs) after
+// a conversation, so this card is a "Talk to us" contact CTA, not a signup.
 const ENTERPRISE_FEATURES: Feature[] = [
   { included: true, label: `Everything in ${tierLabel("pro")}` },
-  { included: true, label: "Centralized billing for your whole team" },
-  { included: true, label: "Email-invited member seats" },
-  { included: true, label: "Org credit pool with per-seat allocation" },
+  { included: true, label: "Teams larger than 10 people" },
+  { included: true, label: "Shared credit pool with per-member limits" },
+  { included: true, label: "Centralized billing for your whole organization" },
+  { included: true, label: "Priority support and dedicated onboarding" },
+  { included: true, label: "Private, custom deployment on request" },
 ];
 
 const FeatureItem = ({ included, label }: Feature) => (
@@ -116,27 +83,6 @@ const FeatureItem = ({ included, label }: Feature) => (
 const Pricing = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  // LICENSING_ENABLED is a BACKEND env var — Vite only exposes VITE_-prefixed
-  // vars to the browser, so the frontend can't read it and must not try. The
-  // signal it ships instead is `availableContexts`, which /me/entitlements
-  // includes only when licensing is on. Absent for signed-out visitors too,
-  // which is the behaviour we want: they get the contact-us CTA.
-  const { data: ent } = useEntitlements();
-  const licensingOn = ent?.availableContexts != null;
-  // CREDITS_ENABLED is likewise backend-only: `credits` is non-null on
-  // /me/entitlements exactly when the flag is on. Signed-out visitors (no
-  // entitlements) see the legacy lists — same tradeoff as licensingOn above.
-  const creditsOn = ent?.credits != null;
-  // Self-serve team creation requires BOTH flags (spec §0) — a licensing-off
-  // deployment has no /orgs surface at all, so the team row would promise
-  // something the account can't do yet.
-  const teamsOn = creditsOn && licensingOn;
-  const freeFeatures = creditsOn ? [...FREE_FEATURES_CREDITS, ...(teamsOn ? [TEAM_FEATURE.free] : [])] : FREE_FEATURES;
-  const basicFeatures = creditsOn
-    ? [...BASIC_FEATURES_CREDITS, ...(teamsOn ? [TEAM_FEATURE.basic] : [])]
-    : BASIC_FEATURES;
-  const proFeatures = creditsOn ? [...PRO_FEATURES_CREDITS, ...(teamsOn ? [TEAM_FEATURE.pro] : [])] : PRO_FEATURES;
-
   const [basicPeriod, setBasicPeriod] = useState<Period>("monthly");
   const [proPeriod, setProPeriod] = useState<Period>("monthly");
   const { mutateAsync: createBasicCheckout, isPending: isBasicPending } = useCreateCheckoutSession();
@@ -148,12 +94,13 @@ const Pricing = () => {
   };
 
   const handleBasicClick = async () => {
+    const planParam = basicPeriod === "annual" ? "basic_annual" : "basic_monthly";
     if (!user) {
-      navigate(`/auth?redirect=/pricing&plan=${basicPeriod}`);
+      navigate(`/auth?redirect=/pricing&plan=${planParam}`);
       return;
     }
     try {
-      const url = await createBasicCheckout(basicPeriod);
+      const url = await createBasicCheckout(planParam);
       captureCheckoutStarted(basicPeriod);
       window.location.href = url;
     } catch {
@@ -245,7 +192,7 @@ const Pricing = () => {
               <span className="text-muted-foreground ml-1">/month</span>
             </div>
             <ul className="space-y-3 flex-1 mb-8">
-              {freeFeatures.map((f) => (
+              {FREE_FEATURES.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
@@ -265,7 +212,7 @@ const Pricing = () => {
             <div className="mb-6">
               <h2 className="text-xl font-semibold mb-1">{tierLabel("basic")}</h2>
               <p className="text-sm text-muted-foreground">
-                For managers, labels, and serious creators
+                For independent managers and serious creators
               </p>
             </div>
 
@@ -290,7 +237,7 @@ const Pricing = () => {
             )}
 
             <ul className="space-y-3 flex-1 mb-8">
-              {basicFeatures.map((f) => (
+              {BASIC_FEATURES.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
@@ -304,7 +251,7 @@ const Pricing = () => {
             <div className="mb-6">
               <h2 className="text-xl font-semibold mb-1">{tierLabel("pro")}</h2>
               <p className="text-sm text-muted-foreground">
-                For power users who lean hardest on Zoe, OneClick, and Registry
+                For power users and small teams
               </p>
             </div>
 
@@ -329,7 +276,7 @@ const Pricing = () => {
             )}
 
             <ul className="space-y-3 flex-1 mb-8">
-              {proFeatures.map((f) => (
+              {PRO_FEATURES.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
@@ -344,8 +291,8 @@ const Pricing = () => {
             </Button>
           </Card>
 
-          {/* Enterprise — no DB tier; org seats resolve to these entitlements
-              in Phase B. Non-functional CTA for now. */}
+          {/* Enterprise is never created in-app (owner decision, 2026-08-16) —
+              this card is a pure "Talk to us" contact CTA, not a signup flow. */}
           <Card className="p-8 flex flex-col">
             <div className="mb-6">
               <h2 className="text-xl font-semibold mb-1">{ENTERPRISE_LABEL}</h2>
@@ -355,52 +302,30 @@ const Pricing = () => {
             </div>
             <div className="mb-8">
               <span className="text-2xl font-semibold tracking-tight">Custom</span>
-              <div className="text-sm text-muted-foreground mt-1">Org credit pool — priced to fit your team</div>
+              <div className="text-sm text-muted-foreground mt-1">Shared credit pool — priced for your organization</div>
             </div>
             <ul className="space-y-3 flex-1 mb-8">
               {ENTERPRISE_FEATURES.map((f) => (
                 <FeatureItem key={f.label} {...f} />
               ))}
             </ul>
-            {/* Signed-out visitors can't load entitlements, so licensingOn reads false
-                for them — send them to sign in rather than telling them it's unreleased. */}
-            {licensingOn || !user ? (
-              <>
-                <Button
-                  size="lg"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => navigate(user ? "/organization" : "/auth?redirect=/pricing")}
-                >
-                  {user ? "Create an organization" : "Sign in to create an organization"}
-                </Button>
-                <p className="text-xs text-muted-foreground mt-3 text-center">
-                  Starts free and inactive until it&apos;s funded.{" "}
-                  <Link to="/contact" className="underline">
-                    Talk to us
-                  </Link>{" "}
-                  about a monthly plan.
-                </p>
-              </>
-            ) : (
-              <>
-                <Button size="lg" variant="outline" className="w-full" disabled title="Coming soon">
-                  Create an organization
-                </Button>
-                <p className="text-xs text-muted-foreground mt-3 text-center">
-                  Coming soon —{" "}
-                  <Link to="/contact" className="underline">
-                    reach out
-                  </Link>{" "}
-                  for early access.
-                </p>
-              </>
-            )}
+            <p className="text-xs text-muted-foreground mb-3 text-center">
+              Custom pricing, a monthly credit plan, and onboarding with our team.
+            </p>
+            <Button size="lg" variant="outline" className="w-full" onClick={() => navigate("/contact")}>
+              Talk to us
+            </Button>
           </Card>
         </div>
 
+        <p className="mt-8 text-center text-sm text-muted-foreground">
+          A OneClick run or an AI contract parse is 30 credits, a split sheet 20, and a Zoe
+          message 5.
+        </p>
+
         <p className="text-center text-xs text-muted-foreground mt-8">
-          USD pricing. Cancel anytime.
+          USD pricing. Cancel anytime. A team is covered by one admin&apos;s plan at a time — that plan supplies the team
+          slot and team storage; other admins and members join free on any plan.
         </p>
       </section>
     </div>

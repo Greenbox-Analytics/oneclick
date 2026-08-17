@@ -41,8 +41,10 @@ def pool_state(db, owner_id: str):
     ).data or []
     used = sum(r.get("storage_bytes") or 0 for r in rows)
     dials = team_dials_for_user(db, owner_id)
-    # pro-like = the 100 GB tier (or Msanii admin): overflow goes to PAYG.
-    is_pro_like = dials.team_storage_bytes > 10 * 2**30
+    # pro-like = the Pro tier (Msanii admins resolve as pro): overflow goes to
+    # PAYG. Keyed on the resolved tier, NOT the pool size — Basic and Pro pools
+    # are 100/250 GiB (20260817000001), so size can't tell them apart.
+    is_pro_like = dials.tier == "pro"
     return used, dials.team_storage_bytes, is_pro_like
 
 

@@ -246,3 +246,17 @@ class TestParseInputCap:
         ) as extract:
             parser.parse_contract(self._oversized(1000))
         extract.assert_called_once()
+
+
+def test_content_key_is_marker_insensitive_and_stable():
+    """The dedupe key and the cache key must be the same function of the same
+    canonical text, or a cache hit could dedupe against the wrong ledger row."""
+    from utils.contract_parsing.cache import content_key
+    from utils.ingestion.pdf_markdown import strip_page_markers
+
+    # The credit layer passes RAW markdown; the cache passes already-stripped
+    # text. Stripping is idempotent, so both land on the same key.
+    raw = "# Contract\n[[PAGE 1]]\nbody"
+    assert content_key(raw) == content_key(strip_page_markers(raw))
+    assert content_key("a") != content_key("b")
+    assert len(content_key("a")) == 64

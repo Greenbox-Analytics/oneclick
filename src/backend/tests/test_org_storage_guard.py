@@ -3,7 +3,7 @@ top of Task 5's pool_state/reactivation_allowed. Task 13 adds
 bill_team_storage_overage (the sweep step).
 
 pool_state and reactivation_allowed themselves (the archived/lapsed-included,
-dissolved-excluded sum; the >10 GiB pro-like threshold) are covered by
+dissolved-excluded sum; the tier-keyed pro-like flag) are covered by
 tests/test_org_standing.py::TestPoolState / TestReactivationAllowed and are
 NOT duplicated here — this file only adds what Task 12/13 are new for.
 """
@@ -61,6 +61,21 @@ class TestUploadAllowed:
         db = _pool_db(org_rows=[{"storage_bytes": int(9.5 * GB)}], tier="basic")
 
         allowed, reason = storage_guard.upload_allowed(db, U1, int(0.6 * GB))
+
+        assert allowed is False
+        assert reason == storage_guard.TEAM_STORAGE_FULL_MSG
+
+    def test_basic_owner_with_pro_sized_pool_is_still_hard_capped(self):
+        """is_pro_like is keyed on the tier, not the pool size: after
+        20260817000001 Basic's pool is 100 GiB — the same size Pro's used to
+        be — and it must still refuse an over-pool upload."""
+        db = _pool_db(
+            org_rows=[{"storage_bytes": 100 * GB}],
+            tier="basic",
+            tier_row={"tier": "basic", "max_teams": 1, "max_team_members": 3, "team_storage_bytes": 100 * GB},
+        )
+
+        allowed, reason = storage_guard.upload_allowed(db, U1, GB)
 
         assert allowed is False
         assert reason == storage_guard.TEAM_STORAGE_FULL_MSG

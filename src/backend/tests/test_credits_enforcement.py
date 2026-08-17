@@ -134,7 +134,7 @@ class TestSeatWall:
         detail = exc.value.detail
         assert exc.value.status_code == 402
         assert detail["managedByOrg"] is True
-        assert detail["requestUrl"] == "/organization"
+        assert detail["requestUrl"] == "/teams"
         # Seat wall has NO overage / upgrade path and no reset (rule 8).
         assert detail["upgradeRequired"] is False
         assert detail["overageAvailable"] is False
@@ -208,7 +208,7 @@ class TestSeatWall:
 
         detail = exc.value.detail
         assert detail["managedByOrg"] is True
-        assert detail["requestUrl"] == "/organization"
+        assert detail["requestUrl"] == "/teams"
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ class TestOwnerAwareDrySeatWall:
         assert "projectName" not in detail  # absent when the read didn't carry it
         # CO-OCCURS with the buy/request affordance — never mutually exclusive.
         assert detail["managedByOrg"] is True
-        assert detail["requestUrl"] == "/organization"
+        assert detail["requestUrl"] == "/teams"
 
     def test_seat_wall_without_owner_has_no_owner_keys(self, fake_service):
         """A non-owner seat wall keeps the plain managed-by-org shape — no owner
@@ -311,3 +311,47 @@ class TestResourceProjectIdThreading:
         assert "resource_project_id" not in kwargs
         assert kwargs["host_user_id"] is None
         assert kwargs["size"] == 100
+
+
+class TestDedupeKey:
+    """Cache-hit debits must be idempotent per billing period (spec §8.5)."""
+
+    def _check(self, reset_date="2026-09-01T00:00:00+00:00"):
+        svc = MagicMock()
+        svc.check_credits.return_value = CreditCheckResult(
+            allowed=True,
+            price=30,
+            wallet_id="wallet-1",
+            reset_date=datetime.fromisoformat(reset_date),
+        )
+        return svc
+
+    def test_same_key_same_period_gives_same_request_id(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setattr(enforcement, "_service", lambda: self._check())
+        g1 = enforcement.gated_credits(TEST_USER, CreditAction.ONECLICK_RUN, dedupe_key="stmt-1|c1|c2")
+        g2 = enforcement.gated_credits(TEST_USER, CreditAction.ONECLICK_RUN, dedupe_key="stmt-1|c1|c2")
+        assert g1.request_id == g2.request_id
+        assert g1.request_id.startswith("dedupe:oneclick_run:wallet-1:")
+
+    def test_different_key_gives_different_request_id(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setattr(enforcement, "_service", lambda: self._check())
+        g1 = enforcement.gated_credits(TEST_USER, CreditAction.ONECLICK_RUN, dedupe_key="stmt-1|c1")
+        g2 = enforcement.gated_credits(TEST_USER, CreditAction.ONECLICK_RUN, dedupe_key="stmt-2|c1")
+        assert g1.request_id != g2.request_id
+
+    def test_next_period_charges_again(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setattr(enforcement, "_service", lambda: self._check("2026-09-01T00:00:00+00:00"))
+        g1 = enforcement.gated_credits(TEST_USER, CreditAction.ONECLICK_RUN, dedupe_key="k")
+        monkeypatch.setattr(enforcement, "_service", lambda: self._check("2026-10-01T00:00:00+00:00"))
+        g2 = enforcement.gated_credits(TEST_USER, CreditAction.ONECLICK_RUN, dedupe_key="k")
+        assert g1.request_id != g2.request_id
+
+    def test_no_dedupe_key_is_still_random(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setattr(enforcement, "_service", lambda: self._check())
+        g1 = enforcement.gated_credits(TEST_USER, CreditAction.ONECLICK_RUN)
+        g2 = enforcement.gated_credits(TEST_USER, CreditAction.ONECLICK_RUN)
+        assert g1.request_id != g2.request_id

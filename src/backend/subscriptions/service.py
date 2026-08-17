@@ -217,7 +217,9 @@ class EntitlementsService:
             caps = _enterprise_caps()
             features = _enterprise_features()
             has_overrides = False
-            managed_by_org = ManagedByOrg(org_id=ctx["org_id"], org_name=ctx["org_name"], role=ctx["role"])
+            managed_by_org = ManagedByOrg(
+                org_id=ctx["org_id"], org_name=ctx["org_name"], role=ctx["role"], kind=ctx.get("kind")
+            )
 
             # The credits block is the ORG POOL, never rolled from here (the
             # dispersal sweep owns the pool's period). Built ONLY when
@@ -433,7 +435,10 @@ class EntitlementsService:
             return None
 
         org = self._first_row(
-            self.supabase.table("organizations").select("id, name, status, archived_at").eq("id", org_id).execute()
+            self.supabase.table("organizations")
+            .select("id, name, status, archived_at, kind")
+            .eq("id", org_id)
+            .execute()
         )
         if not org or org.get("archived_at") is not None:
             self._clear_billing_context(user_id)
@@ -449,6 +454,7 @@ class EntitlementsService:
             "org_member_id": seat.get("id"),
             "role": seat.get("role"),
             "pending": org.get("status") == "pending",
+            "kind": org.get("kind"),
         }
 
     def _clear_billing_context(self, user_id: str) -> None:
@@ -487,7 +493,7 @@ class EntitlementsService:
             org_ids = [r["org_id"] for r in rows]
             orgs = (
                 self.supabase.table("organizations")
-                .select("id, name, status, archived_at")
+                .select("id, name, status, archived_at, kind")
                 .in_("id", org_ids)
                 .execute()
             )
@@ -505,6 +511,7 @@ class EntitlementsService:
                         "orgName": org.get("name"),
                         "role": r.get("role"),
                         "pending": org.get("status") == "pending",
+                        "kind": org.get("kind"),
                     }
                 )
         except Exception:
@@ -530,7 +537,10 @@ class EntitlementsService:
         and project-link derivation paths so they cannot diverge on what
         'billable org' means."""
         org = self._first_row(
-            self.supabase.table("organizations").select("id, name, status, archived_at").eq("id", org_id).execute()
+            self.supabase.table("organizations")
+            .select("id, name, status, archived_at, kind")
+            .eq("id", org_id)
+            .execute()
         )
         if not org or org.get("status") != "active" or org.get("archived_at") is not None:
             return None
@@ -549,6 +559,7 @@ class EntitlementsService:
             "org_name": org.get("name"),
             "org_member_id": member["id"],
             "role": member.get("role"),
+            "kind": org.get("kind"),
         }
 
     def resolve_billing_org_for_project(self, user_id: str, project_id: str) -> dict | None:
@@ -1613,15 +1624,17 @@ class EntitlementsService:
     def debit_for_action(self, user_id: str, grant) -> None:
         """Debit a CreditGrant after the action succeeded. Best-effort, never raises.
 
-        The amount is METERED, not flat: it is derived from the tokens the
-        TrackedOpenAI proxy actually saw during this request (real OpenAI cost x
-        CREDIT_MARKUP / price-per-credit). `grant.price` is only the pre-flight
-        estimate the balance check reserved against — it is the fallback when
-        the spend is unmeasurable (no tracked scope, or a model missing from
-        MODEL_RATES), never the price.
+        The amount is max(BASE, METERED). `grant.price` is the per-action BASE
+        RATE from credit_prices — the published price of the deliverable, and a
+        floor. `measured` is what the TrackedOpenAI proxy saw this request (real
+        OpenAI cost x CREDIT_MARKUP / price-per-credit) and only wins when the
+        run cost more than the base already covers. Unmeasurable spend (no
+        tracked scope, or a model missing from MODEL_RATES) charges the base.
 
-        Two consequences worth knowing: an action that made no LLM call (cache
-        hit) measures 0 and is skipped — no per-tool special-casing needed — and
+        Two consequences worth knowing: an action that made no LLM call — a cache
+        hit — measures 0 and still pays the base, because the user received the
+        same deliverable (cache-hit debits are deduped per period by a
+        deterministic request_id, see enforcement.gated_credits' dedupe_key); and
         a heavy run can measure ABOVE the reserved estimate, which the
         debit_credits RPC absorbs as bundle drift exactly like a raced debit.
 
@@ -1636,7 +1649,12 @@ class EntitlementsService:
         if grant is None or not grant.enabled or grant.price <= 0:
             return
         measured = credits_for_llm_usage()
-        amount = grant.price if measured is None else measured
+        # BASE RATE (spec 2026-08-17 §2): grant.price is the per-action base, not
+        # an estimate. It is a FLOOR — the metered value only decides the charge
+        # when the run cost more than the base already covers. A 30-credit base
+        # covers ~$0.20 of COGS, roughly 20x a median run, so the tail fires only
+        # on a pathological input (e.g. a derive over ~18 contracts).
+        amount = grant.price if measured is None else max(grant.price, measured)
         if amount <= 0:
             return
         try:
@@ -1660,7 +1678,18 @@ class EntitlementsService:
             # unanswerable from the ledger alone. `estimated` records what the
             # gate reserved, so over/under-runs are measurable.
             usage = llm_usage_snapshot() or {}
-            metadata = {"estimated": grant.price, "metered": measured is not None}
+            # `metered` answers "was this charge cost-driven?", NOT "was cost
+            # readable?". Under base rates `measured is not None` is true on
+            # nearly every LLM-touching row while the amount is still the base,
+            # so the old meaning would make it impossible to find the rows where
+            # metering actually decided the price. Keep both facts, separately.
+            metadata = {
+                "estimated": grant.price,
+                "base": grant.price,
+                "measurable": measured is not None,
+                "metered_credits": measured,
+                "metered": measured is not None and measured > grant.price,
+            }
             if usage:
                 metadata.update(
                     {
@@ -1889,7 +1918,12 @@ class EntitlementsService:
         reserve = pool.get("reserve_balance", 0) if show_pool else None
         return {
             "enabled": True,
-            "managedByOrg": {"orgId": ctx["org_id"], "orgName": ctx["org_name"], "role": ctx["role"]},
+            "managedByOrg": {
+                "orgId": ctx["org_id"],
+                "orgName": ctx["org_name"],
+                "role": ctx["role"],
+                "kind": ctx.get("kind"),
+            },
             "periodStart": period_start,
             "periodEnd": pool.get("period_end"),
             "monthlyGrant": cap or 0,

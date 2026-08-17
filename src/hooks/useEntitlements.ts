@@ -33,16 +33,17 @@ export interface EntitlementCaps {
 }
 
 /**
- * Per-action credit ESTIMATES (backend `credit_prices`, camelCase).
+ * Per-action credit BASE RATES (backend `credit_prices`, camelCase).
  *
- * NOT what a run costs — the charge is metered off the AI tokens the run
- * actually burns. This is the amount the balance check reserves up front, so
- * treat it as "roughly this much" in any copy that shows it.
+ * This IS the price, not an estimate: the charge is max(base, metered), and the
+ * metered half only wins on a pathological run (spec 2026-08-17 §2). Safe to
+ * render as a firm number — "Runs for 30 credits" — rather than hedged copy.
  */
 export interface CreditPrices {
   zoeMessage: number;
   oneclickRun: number;
   registryParse: number;
+  splitSheet: number;
 }
 
 /**
@@ -53,6 +54,9 @@ export interface OrgBillingContext {
   orgId: string;
   orgName: string;
   role: string;
+  /** "self_serve" | "enterprise" | null (pre-migration org row). Drives
+   * orgNoun()/orgNounCap() in @/lib/tiers for team-vs-organization copy. */
+  kind?: "self_serve" | "enterprise" | null;
 }
 
 /**

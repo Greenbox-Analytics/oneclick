@@ -279,7 +279,7 @@ def test_get_org_invite_preview_ok(client, mock_supabase):
     def _side(name):
         b = MockQueryBuilder()
         if name == "organizations":
-            b.execute.return_value = MagicMock(data={"name": "Acme Records"}, count=1)
+            b.execute.return_value = MagicMock(data={"name": "Acme Records", "kind": "self_serve"}, count=1)
         elif name == "profiles":
             b.execute.return_value = MagicMock(data={"full_name": "Ada Admin"}, count=1)
         return b
@@ -290,7 +290,7 @@ def test_get_org_invite_preview_ok(client, mock_supabase):
         resp = client.get(f"/orgs/invites/{TOKEN}/preview")
 
     assert resp.status_code == 200
-    assert resp.json() == {"orgName": "Acme Records", "inviterName": "Ada Admin"}
+    assert resp.json() == {"orgName": "Acme Records", "kind": "self_serve", "inviterName": "Ada Admin"}
 
 
 def test_get_org_invite_preview_unknown_token_404(client):
@@ -320,7 +320,7 @@ def test_get_org_invite_preview_missing_inviter_profile_still_returns(client, mo
     def _side(name):
         b = MockQueryBuilder()
         if name == "organizations":
-            b.execute.return_value = MagicMock(data={"name": "Acme Records"}, count=1)
+            b.execute.return_value = MagicMock(data={"name": "Acme Records", "kind": "enterprise"}, count=1)
         elif name == "profiles":
             b.execute.return_value = MagicMock(data=None, count=0)
         return b
@@ -333,7 +333,7 @@ def test_get_org_invite_preview_missing_inviter_profile_still_returns(client, mo
         resp = client.get(f"/orgs/invites/{TOKEN}/preview")
 
     assert resp.status_code == 200
-    assert resp.json() == {"orgName": "Acme Records", "inviterName": None}
+    assert resp.json() == {"orgName": "Acme Records", "kind": "enterprise", "inviterName": None}
 
 
 def test_get_org_invite_preview_requires_no_auth():
@@ -476,6 +476,37 @@ def test_invite_member_duplicate_409(client):
     with patch("orgs.router.service.invite_member", new=AsyncMock(side_effect=DuplicateInviteError("dup"))):
         resp = client.post(f"/orgs/{ORG_ID}/invites", json={"email": "a@b.com", "role": "member"})
     assert resp.status_code == 409
+
+
+def test_invite_member_team_full_402_fires_seat_wall_analytics(client):
+    """orgs.router's mapping of TeamFullError -> 402: structured {reason,
+    limit, nextStep} detail (owner decision 2026-08-16 — no per-org override,
+    no seat add-on, the wall points to upgrade/contact), plus the
+    team_seat_wall_hit analytics event fired before the raise."""
+    from orgs.service import TeamFullError
+
+    with (
+        patch(
+            "orgs.router.service.invite_member",
+            new=AsyncMock(
+                side_effect=TeamFullError(
+                    "This team is at its 5-member limit on Pro. For bigger teams, talk to us about Enterprise.",
+                    5,
+                    "contact",
+                )
+            ),
+        ),
+        patch("orgs.router.analytics_capture") as mock_capture,
+    ):
+        resp = client.post(f"/orgs/{ORG_ID}/invites", json={"email": "a@b.com", "role": "member"})
+    assert resp.status_code == 402
+    detail = resp.json()["detail"]
+    assert detail["limit"] == 5
+    assert detail["nextStep"] == "contact"
+    assert "Enterprise" in detail["reason"]
+    mock_capture.assert_called_once()
+    assert mock_capture.call_args.args[1] == "team_seat_wall_hit"
+    assert mock_capture.call_args.args[2] == {"org_id": ORG_ID, "limit": 5, "next_step": "contact"}
 
 
 def test_invite_member_invalid_role_400(client):

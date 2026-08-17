@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useMarkNotificationRead, type RegistryNotification } from "@/hooks/useRegistryNotifications";
-import { useAcceptTeamInvite, useDeclineTeamInvite } from "@/hooks/useTeams";
 import { useAcceptOrgInvite, useDeclineOrgInvite } from "@/hooks/useOrgs";
 
 export const TYPE_COLORS: Record<string, string> = {
@@ -13,40 +12,31 @@ export const TYPE_COLORS: Record<string, string> = {
   confirmation: "bg-green-100 text-green-800",
   dispute: "bg-red-100 text-red-800",
   status_change: "bg-purple-100 text-purple-800",
-  team_invite: "bg-indigo-100 text-indigo-700",
 };
 
 export function NotificationRow({ n }: { n: RegistryNotification }) {
   const navigate = useNavigate();
   const markRead = useMarkNotificationRead();
-  const acceptTeam = useAcceptTeamInvite();
-  const declineTeam = useDeclineTeamInvite();
-  const acceptOrg = useAcceptOrgInvite();
-  const declineOrg = useDeclineOrgInvite();
+  const accept = useAcceptOrgInvite();
+  const decline = useDeclineOrgInvite();
 
-  // An org invite is type='invitation' + entity_type='org' — it must NOT reuse
-  // 'team_invite', whose buttons submit to the teams API. Registry's own
-  // 'invitation' rows carry entity_type 'work'/null and stay button-less.
+  // An org invite is type='invitation' + entity_type='org' — the only
+  // actionable notification. Registry's own 'invitation' rows carry
+  // entity_type 'work'/null and stay button-less.
   const isOrgInvite = n.type === "invitation" && n.entity_type === "org";
-  const isTeamInvite = n.type === "team_invite";
-  const isInvite = isOrgInvite || isTeamInvite;
-
-  const accept = isOrgInvite ? acceptOrg : acceptTeam;
-  const decline = isOrgInvite ? declineOrg : declineTeam;
+  const isInvite = isOrgInvite;
 
   // The org hooks stay silent by design (OrgInviteClaim owns that page's copy),
-  // so org feedback belongs here; the team hooks already toast themselves.
+  // so the feedback for this row belongs here.
   const runInvite = (mutation: typeof accept, successMsg: string) => () => {
     const token = n.metadata?.token;
     if (!token) return;
     mutation.mutate(String(token), {
       onSuccess: () => {
         markRead.mutate(n.id);
-        if (isOrgInvite) toast.success(successMsg);
+        toast.success(successMsg);
       },
-      onError: (e: Error) => {
-        if (isOrgInvite) toast.error(e.message);
-      },
+      onError: (e: Error) => toast.error(e.message),
     });
   };
 
@@ -78,7 +68,7 @@ export function NotificationRow({ n }: { n: RegistryNotification }) {
               <Button
                 size="sm"
                 disabled={accept.isPending || decline.isPending}
-                onClick={runInvite(accept, "Joined organization")}
+                onClick={runInvite(accept, "Invite accepted")}
               >
                 Accept
               </Button>

@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
 import { useAcceptOrgInvite, useDeclineOrgInvite } from "@/hooks/useOrgs";
+import { orgNoun } from "@/lib/tiers";
 
 const Shell = ({ children }: { children: React.ReactNode }) => (
   <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-secondary to-background p-4">
@@ -40,7 +41,7 @@ const SignedOut = ({ invitePath }: { invitePath: string }) => {
           <div className="mx-auto mb-2 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
             <Building2 className="h-6 w-6 text-primary" />
           </div>
-          <CardTitle>You&apos;ve been invited to join an organization</CardTitle>
+          <CardTitle>You&apos;ve been invited to join a team</CardTitle>
           <CardDescription>
             Sign in or create an account to review and accept the invitation.
           </CardDescription>
@@ -108,6 +109,13 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
       : typeof invitePreview?.org_name === "string"
         ? invitePreview.org_name
         : null;
+  // "self_serve" | "enterprise" | null/undefined (preview not loaded yet, or a
+  // pre-migration org row) — orgNoun() reads anything but "self_serve" as
+  // "organization", which is the right neutral default while loading.
+  const previewKind =
+    typeof invitePreview?.kind === "string" ? (invitePreview.kind as "self_serve" | "enterprise") : null;
+  const previewNoun = orgNoun(previewKind);
+  const previewArticle = previewNoun === "team" ? "a" : "an";
 
   const handleAccept = async () => {
     setErrorState(null);
@@ -115,8 +123,8 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
       const result = await acceptInvite.mutateAsync(token);
       // Best-effort: fetch the org's name for the welcome toast — the accept
       // response only carries org_id. A failure here never blocks the
-      // (already-successful) accept from landing the user on /organization.
-      let orgName = "your organization";
+      // (already-successful) accept from landing the user on /teams.
+      let orgName = `your ${previewNoun}`;
       try {
         const org = await apiFetch<{ name: string }>(`${API_URL}/orgs/${result.org_id}`);
         orgName = org.name;
@@ -124,7 +132,7 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
         // fall back to the generic label above
       }
       toast.success(`You're on ${orgName}'s license — your work now runs on their credits`);
-      navigate("/organization");
+      navigate("/teams");
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 403) {
@@ -174,7 +182,7 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
     return (
       <CenteredMessage
         title="This invitation has expired"
-        description="Ask the organization's admin to send a new invite, then open the new link."
+        description={`Ask ${previewOrgName ? `${previewOrgName}'s` : `the ${previewNoun}'s`} admin to send a new invite, then open the new link.`}
       />
     );
   }
@@ -192,7 +200,7 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
     return (
       <CenteredMessage
         title="Invitation declined"
-        description="You've declined this invitation. If that was a mistake, ask the organization's admin to send a new one."
+        description={`You've declined this invitation. If that was a mistake, ask ${previewOrgName ? `${previewOrgName}'s` : `the ${previewNoun}'s`} admin to send a new one.`}
       />
     );
   }
@@ -207,7 +215,7 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
           <CardTitle>
             {previewOrgName
               ? `You've been invited to join ${previewOrgName}`
-              : "You've been invited to join an organization"}
+              : `You've been invited to join ${previewArticle} ${previewNoun}`}
           </CardTitle>
           <CardDescription>
             Accepting moves your Msanii credits and billing to their shared pool. Your artists, projects,

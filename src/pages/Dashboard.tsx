@@ -231,9 +231,9 @@ const Dashboard = () => {
                   <User className="mr-2 h-4 w-4" />
                   <span>Profile & billing</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => navigate("/organization")}>
+                <DropdownMenuItem onClick={() => navigate("/teams")}>
                   <Building2 className="mr-2 h-4 w-4" />
-                  <span>Organization</span>
+                  <span>Teams</span>
                 </DropdownMenuItem>
                 {isAdmin && (
                   <DropdownMenuItem onClick={() => navigate("/admin/users")}>

@@ -72,6 +72,12 @@ export function OrgLifecyclePanel({
         <div className="mt-4 bg-background border border-border rounded-xl px-4 py-3.5">
           <div className="text-sm font-medium">Covering admin</div>
           <p className="text-[12.5px] text-muted-foreground mt-1 max-w-[460px]">{coverageCopy(org, currentUserId)}</p>
+          <p className="text-[12.5px] text-muted-foreground mt-2 max-w-[460px]">
+            One admin covers a team at a time: the coverer&apos;s plan provides the team slot and team storage, and
+            their card is billed for any storage overage. Other admins manage the team without paying for it. Coverage
+            never moves on its own — if the coverer releases it or their plan lapses, every admin is notified and has
+            the grace period to claim it before the team pauses.
+          </p>
           <div className="mt-3 flex gap-2 flex-wrap">
             {isActiveCoverer ? (
               <Button size="sm" variant="outline" onClick={() => release.mutate({ orgId })} disabled={release.isPending}>
@@ -115,8 +121,8 @@ export function OrgLifecyclePanel({
               <div>
                 <div className="text-sm font-medium">Archive</div>
                 <p className="text-[12.5px] text-muted-foreground mt-0.5 max-w-[440px]">
-                  Frees your team slot and hides the team for everyone. Reversible — unarchive any
-                  time, slot and storage allowing.
+                  Frees your team slot and hides the team — including its boards — for everyone.
+                  Reversible: unarchive any time, slot and storage allowing.
                 </p>
               </div>
               <AlertDialogTrigger asChild>

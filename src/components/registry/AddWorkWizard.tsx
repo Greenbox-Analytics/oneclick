@@ -108,6 +108,8 @@ interface QueuedContract {
   managedByOrg?: boolean;
   capReached?: boolean;
   requestUrl?: string;
+  /** `error` came from the credit gate (structured 402), not a bad contract. */
+  isCreditWall?: boolean;
   parties?: ParsedParty[]; // raw parse result, kept for provenance + re-merge
   mainArtistFound?: boolean;
 }
@@ -432,12 +434,18 @@ export function AddWorkWizard({
       return;
     }
     const done: QueuedContract[] = [];
+    // Counted into LOCALS, never re-read off `queuedContracts`: patchQueued is
+    // a setState, so the array in this synchronous handler is still the
+    // pre-loop snapshot. Same reason `done` exists.
+    let attempted = 0;
+    let walled = 0;
     for (const qc of queuedContracts) {
       if (qc.status === "done" && qc.parties) {
         // already parsed — reuse the result, don't re-run the AI
         done.push(qc);
         continue;
       }
+      attempted += 1;
       patchQueued(qc.id, { status: "parsing", error: undefined });
       try {
         const result = await parseSplits.mutateAsync(
@@ -459,6 +467,7 @@ export function AddWorkWizard({
         done.push(parsed);
       } catch (e) {
         const cw = parseCreditWallDetail(e instanceof ApiError ? e.detail : undefined);
+        if (cw.isCreditWall) walled += 1;
         patchQueued(qc.id, {
           status: "error",
           error: (e as Error).message || "Parse failed",
@@ -467,9 +476,16 @@ export function AddWorkWizard({
       }
     }
     if (done.length === 0) {
-      // every contract failed to parse — stay in AI mode so the per-file
-      // errors remain visible and the user can retry or remove files
-      toast.error("We couldn't read these contracts — see the errors below");
+      // every contract failed — stay in AI mode so the per-file errors remain
+      // visible and the user can retry or remove files. Don't blame the
+      // contracts when the real cause was a credit wall: at 30 credits a parse
+      // that is a likely outcome, and "we couldn't read these" sends the user
+      // off editing perfectly good files.
+      toast.error(
+        walled > 0 && walled === attempted
+          ? "You're out of credits — top up or upgrade to read these contracts"
+          : "We couldn't read these contracts — see the errors below",
+      );
       return;
     }
     applyMerge(done);
@@ -1828,7 +1844,7 @@ function RoyaltyStep({
                       {q.status === "error" && q.managedByOrg && q.capReached && (
                         <>
                           {" · "}
-                          <Link to={q.requestUrl || "/organization"} className="underline underline-offset-2">
+                          <Link to={q.requestUrl || "/teams"} className="underline underline-offset-2">
                             Ask for a higher limit
                           </Link>
                         </>
@@ -1872,13 +1888,16 @@ function RoyaltyStep({
                     ? "Read contract"
                     : `Read ${queuedContracts.length} contracts`}
               </Button>
-              <CreditsChip />
+              <CreditsChip action="registry_parse" />
             </div>
             {queuedContracts.length === 0 && (
               <p className="mt-1.5 text-[11px] text-muted-foreground">
                 Select or upload at least one contract first.
               </p>
             )}
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              You won&apos;t be charged twice for the same result this month.
+            </p>
           </div>
         </>
       )}

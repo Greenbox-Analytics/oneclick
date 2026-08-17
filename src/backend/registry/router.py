@@ -38,7 +38,7 @@ from registry.models import (
     WorkRoleUpdate,
     WorkUpdate,
 )
-from subscriptions.enforcement import free_credit_grant, gated_create, gated_credits, gated_feature
+from subscriptions.enforcement import gated_create, gated_credits, gated_feature
 from subscriptions.models import Action, CreditAction
 from subscriptions.service import credits_enabled
 from utils.llm.tracking import set_llm_context
@@ -841,15 +841,25 @@ async def derive_from_contracts(body: DeriveFromContractsBody, user_id: str = De
     # nothing, which leaked the entire cost of the Derive dialog.
     # Access-before-derivation (rule 4): the work_files link check above already
     # ran, so a derived org can never be billed for a file the caller can't see.
-    # ponytail: no pre-gate cache peek like parse-contract-splits has — the
-    # parse happens per-file inside derive_service, so a peek would mean
-    # re-resolving and re-downloading every file here. Consequence: a
-    # zero-balance user is walled on a derive that would have been a free cache
-    # hit. Add the peek if that turns up in support.
+    # ONE request, ONE deliverable, ONE base charge (spec 2026-08-17 §2): this
+    # answers a single question — one collaborator's split — however many files
+    # it had to read, so it is not priced per file. Cost multiplicity is handled
+    # by the metered tail instead: the crossover is around 18 contracts
+    # (~$0.21 measured ≈ 32 credits > the 30 base), past which max(base, metered)
+    # charges what the batch actually cost. A cache hit pays the base, same as
+    # every other parse.
     parse_grant = gated_credits(
         user_id,
         CreditAction.REGISTRY_PARSE,
         resource_contract_ids=list(body.contract_file_ids) if body.contract_file_ids else None,
+        # Same deliverable = same charge, once per period. A double-submitted
+        # Derive dialog is a 60-credit event otherwise. Keyed on the collaborator
+        # AND the contract set, so deriving a DIFFERENT collaborator from the same
+        # contracts is correctly a separate, chargeable question.
+        dedupe_key=(
+            f"derive|{body.work_id}|{body.name or ''}|{body.email or ''}|"
+            f"{'|'.join(sorted(body.contract_file_ids or []))}"
+        ),
     )
     with set_llm_context(user_id, "registry"):
         result = await derive_service.derive_for_collaborator(
@@ -1183,7 +1193,7 @@ async def parse_contract_splits(
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=f"Failed to download contract: {exc}") from exc
 
-    from utils.contract_parsing.cache import get_or_parse, peek_cached_parse
+    from utils.contract_parsing.cache import content_key, get_or_parse
     from utils.ingestion.pdf_markdown import pdf_to_markdown
 
     def _load_text() -> str:
@@ -1204,9 +1214,12 @@ async def parse_contract_splits(
                 except OSError:
                     pass
 
-    # Load the text FIRST (pdf→markdown is local compute, no LLM cost), then peek the parse
-    # cache: a guaranteed hit is free (spec §3) and must not be walled at zero balance.
-    # Legacy mode (credits off) skips the peek and always takes the gate below.
+    # Load the text first (pdf→markdown is local compute, no LLM cost). There is
+    # deliberately NO pre-gate cache peek any more: a cache hit is a complete
+    # deliverable and pays the base rate like any other parse (spec 2026-08-17
+    # §4), so a zero-balance user is walled either way and the peek only bought
+    # a round-trip. peek_cached_parse still exists — get_or_parse uses it
+    # internally — it is just no longer a billing decision.
     try:
         text = _load_text()
     except ValueError as e:
@@ -1216,23 +1229,24 @@ async def parse_contract_splits(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Contract parsing failed: {e}")
 
-    cached_peek = peek_cached_parse(_get_supabase(), text) if credits_enabled() else None
-    if credits_enabled() and cached_peek is not None:
-        parse_grant = free_credit_grant(CreditAction.REGISTRY_PARSE)
-    else:
-        # SP3/credits: gate the contract parse; 402 without access or credits.
-        # Resource-derived billing (Licensing Phase C, rule 5): a PICKED existing
-        # contract (contract_file_id) derives its project's linked-org billing —
-        # passed as a one-element list; an UPLOAD has no resource → ambient.
-        # Derivation-vs-access ordering (rule 4, Phase A access-first):
-        # verify_user_owns_contract on the picked file ran above BEFORE this gate,
-        # so derivation can never bill an org for a contract the caller can't
-        # access; charge-on-success is the backstop.
-        parse_grant = gated_credits(
-            user_id,
-            CreditAction.REGISTRY_PARSE,
-            resource_contract_ids=[contract_file_id] if has_picked else None,
-        )
+    # SP3/credits: gate the contract parse; 402 without access or credits.
+    # Resource-derived billing (Licensing Phase C, rule 5): a PICKED existing
+    # contract (contract_file_id) derives its project's linked-org billing —
+    # passed as a one-element list; an UPLOAD has no resource → ambient.
+    # Derivation-vs-access ordering (rule 4, Phase A access-first):
+    # verify_user_owns_contract on the picked file ran above BEFORE this gate,
+    # so derivation can never bill an org for a contract the caller can't
+    # access; charge-on-success is the backstop.
+    # The deliverable is a pure function of the canonical contract text and the
+    # artist the pivot is built for, so re-parsing the same contract this period
+    # charges once. content_key is the parse cache's own key function, so the
+    # dedupe can never drift from what the cache considers "the same parse".
+    parse_grant = gated_credits(
+        user_id,
+        CreditAction.REGISTRY_PARSE,
+        resource_contract_ids=[contract_file_id] if has_picked else None,
+        dedupe_key=f"{content_key(text)}|{main_artist_name or ''}",
+    )
 
     try:
         with set_llm_context(user_id, "registry"):
@@ -1243,10 +1257,10 @@ async def parse_contract_splits(
                 contract_data=contract_data,
                 main_artist_name=main_artist_name or "",
             )
-            # INSIDE the scope: the debit is metered off the tokens this parse
-            # burned, which is only readable while the context is live. A cache
-            # hit burns none, so it measures 0 and charges nothing — the
-            # on_miss/cache_missed flag this used to need is now redundant.
+            # INSIDE the scope: the metered TAIL is read off the tokens this
+            # parse burned, which is only readable while the context is live. A
+            # cache hit burns none, measures 0, and so pays exactly the base —
+            # max(base, 0) — which is the intended price of the deliverable.
             from subscriptions.deps import _get_entitlements_service
 
             _get_entitlements_service().debit_for_action(user_id, parse_grant)

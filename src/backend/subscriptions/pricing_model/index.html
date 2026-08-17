@@ -69,21 +69,39 @@
   .tab-panel[hidden]{display:none}
 
   /* knobs */
-  .assume{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);padding:clamp(16px,2.4vw,24px);display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:clamp(14px,2vw,22px)}
-  .field{display:flex;flex-direction:column;gap:7px;min-width:0}
-  .field label{font-size:12px;font-weight:600;color:var(--ink-soft);display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  .assume{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);padding:clamp(16px,2.4vw,24px);display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:18px clamp(14px,2vw,22px);align-items:start}
+  .field{display:grid;grid-template-rows:38px 36px auto;gap:6px;min-width:0;align-content:start}
+  .field.wide{grid-column:span 2}
+  .field label{font-size:12px;line-height:1.35;font-weight:600;color:var(--ink-soft);display:flex;flex-wrap:wrap;justify-content:space-between;column-gap:8px;align-items:baseline;align-content:flex-end;align-self:end;overflow:hidden}
+  .field label .sub{flex:0 0 100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+  .field label .val{margin-left:auto}
+  .field>input[type=range]{align-self:center}
+  .field>.toggle,.field>.prefix,.field>select,.field>input[type=number]{align-self:stretch}
+  .field .toggle{display:flex}
+  .field .toggle button{flex:1;padding:6px 8px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .field .prefix input{height:36px}
   .field .val{font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums}
   .field .sub{font-size:11px;color:var(--faint);font-weight:400}
   input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:4px;background:var(--hair);outline:none;margin:4px 0}
   input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--accent-line)}
   input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--surface)}
-  input[type=number]{font-family:var(--mono);font-size:13.5px;font-variant-numeric:tabular-nums;background:var(--surface-2);border:1px solid var(--hair);border-radius:8px;color:var(--ink);padding:8px 10px;width:100%}
+  input[type=number],select{font-family:var(--mono);font-size:13.5px;font-variant-numeric:tabular-nums;background:var(--surface-2);border:1px solid var(--hair);border-radius:8px;color:var(--ink);padding:8px 10px;width:100%}
   input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .prefix{position:relative}
   .prefix span{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--faint);font-family:var(--mono);font-size:13px;pointer-events:none}
   .prefix input{padding-left:22px}
   .prefix.suffix span{left:auto;right:10px}
   .prefix.suffix input{padding-left:10px;padding-right:26px}
+  .rule-row{grid-template-columns:minmax(300px,1fr) 2fr;align-items:center}
+  .rule-row .field{grid-column:auto}
+  .rule-copy{font-size:13px;color:var(--muted);line-height:1.55}
+  .rule-copy b{color:var(--ink-soft);display:block;margin-bottom:2px}
+  @media (max-width:640px){.rule-row{grid-template-columns:1fr}}
+  .tools3{display:grid;grid-template-columns:repeat(auto-fit,minmax(236px,1fr));gap:14px}
+  .tool-card{grid-template-columns:1fr 1fr;gap:12px 14px;align-content:start}
+  .tool-head{grid-column:1/-1;display:flex;flex-direction:column;gap:3px;font-weight:640;color:var(--ink);padding-bottom:8px;border-bottom:1px solid var(--hair-2)}
+  .tool-head .val{font-size:14px;white-space:nowrap}
+  .est-note{grid-column:1/-1;margin:0;font-size:11.5px;color:var(--faint);font-family:var(--mono);font-variant-numeric:tabular-nums}
 
   /* tables */
   .tablecard{background:var(--surface);border:1px solid var(--hair);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
@@ -192,17 +210,23 @@
 
   <p class="eyebrow">Msanii · Unit economics</p>
   <h1>Credit &amp; licensing economics</h1>
-  <p class="lede">Turn one dial — <b>the price of a credit</b> — and watch it fall through the whole model: what each tool costs to run, how many credits a plan must include, what that plan has to charge to hold its margin, and what an enterprise pool earns per credit. Baselines are the <b>live values in the code</b>; every field is editable.</p>
+  <p class="lede">Turn one dial — <b>the price of a credit</b> — and watch it fall through the whole model: what each tool costs to run and charges, how many credits a plan must include, what that plan has to charge to hold its margin, what a self-serve team is worth, and what an enterprise pool earns per credit. Baselines are the <b>live values in the code</b>; every field is editable.</p>
 
   <div class="disclaim">
     <span class="dot">▲</span>
-    <div><b>Token counts are modeled, prices are live.</b> Credit prices, plan grants, plan prices and pack prices are the values shipped in <code>credit_prices</code> / <code>tier_entitlements</code> / <code>credit_packs</code>. Token counts per call are still <em>estimates</em> from the call graph — <code>ai_usage_log</code> now records real spend, so reconcile against it before locking anything in. Credits and licensing both sit behind flags (<code>CREDITS_ENABLED</code>, <code>LICENSING_ENABLED</code>).</div>
+    <div><b>Token counts are modeled, prices are live.</b> Base rates, plan grants, plan prices, team dials and pack prices are the values shipped in <code>credit_prices</code> / <code>tier_entitlements</code> / <code>lib/tiers.ts</code> / <code>credit_packs</code>. Token counts per call are still <em>estimates</em> from the call graph — <code>ai_usage_log</code> now records real spend, so reconcile against it before locking anything in. Credits and licensing both sit behind flags (<code>CREDITS_ENABLED</code>, <code>LICENSING_ENABLED</code>).</div>
+  </div>
+
+  <div class="disclaim">
+    <span class="dot">▲</span>
+    <div><b>Prices are BASE RATES now (2026-08-17).</b> The charge is <code>max(base, metered)</code>: <code>credit_prices</code> holds the published price of the deliverable and acts as a floor, and the token-derived amount only wins when a run costs more than the base already covers (~$0.20 of COGS at a 30-credit base — roughly 20&times; a median run). So <b>the base rate sets the effective markup</b>, and <code>CREDIT_MARKUP</code> below now only decides where the outlier tail begins. Read tab 1's per-action COGS as the tail boundary, not as the price. A cache hit measures $0 and still pays the base, deduped to one charge per deliverable per billing period.</div>
   </div>
 
   <div class="tabs" id="tabs" role="tablist">
     <button type="button" data-tab="cost" class="active" role="tab">1 · Cost per action</button>
     <button type="button" data-tab="plans" role="tab">2 · Plans &amp; margins</button>
-    <button type="button" data-tab="ent" role="tab">3 · Licensing (Enterprise)</button>
+    <button type="button" data-tab="teams" role="tab">3 · Teams (self-serve)</button>
+    <button type="button" data-tab="ent" role="tab">4 · Licensing (Enterprise)</button>
     <button type="button" data-tab="rates" role="tab">Model rates</button>
   </div>
 
@@ -210,30 +234,80 @@
   <div class="tab-panel" id="tab-cost">
 
     <section>
-      <div class="sec-head"><h2>The two dials everything hangs off</h2><span class="sec-note">Everything below is derived from these</span></div>
+      <div class="sec-head"><h2>The dials everything hangs off</h2><span class="sec-note">Everything below is derived from these</span></div>
       <div class="assume">
         <div class="field"><label>Price per credit <span class="sub">what you sell 1 for</span></label><div class="prefix"><span>$</span><input type="number" id="creditPrice" min="0.001" max="1" step="0.001" value="0.02"></div><span class="sub" id="v_cpNote"></span></div>
-        <div class="field"><label>Target markup on COGS <span class="val" id="v_markup">3.0×</span></label><input type="range" id="markup" min="1" max="10" step="0.25" value="3"><span class="sub">sets credits per action</span></div>
+        <div class="field"><label>Default margin <span class="val" id="v_markup">67%</span><span class="sub">on token cost</span></label><input type="range" id="markup" min="0" max="95" step="1" value="67"><span class="sub">67% ≈ 3× cost (<code>CREDIT_MARKUP</code> 3.0)</span></div>
         <div class="field"><label>Contract length <span class="val" id="v_pages">15 pg</span></label><input type="range" id="pages" min="3" max="45" step="1" value="15"><span class="sub">≈ 650 tokens / page</span></div>
-        <div class="field"><label>Contracts / OneClick run <span class="val" id="v_contracts">1</span></label><input type="range" id="contracts" min="1" max="8" step="1" value="1"><span class="sub">1 is the common case</span></div>
-        <div class="field"><label>Parse-cache hit rate <span class="val" id="v_hit">70%</span></label><input type="range" id="hit" min="0" max="100" step="5" value="70"><span class="sub">cached extraction is free</span></div>
+        <div class="field"><label>Contracts / run <span class="val" id="v_contracts">1</span></label><input type="range" id="contracts" min="1" max="8" step="1" value="1"><span class="sub">1 is the common case</span></div>
+        <div class="field"><label>Parse-cache hit rate <span class="val" id="v_hit">70%</span></label><input type="range" id="hit" min="0" max="100" step="5" value="70"><span class="sub">costs us $0 · still charges the base</span></div>
       </div>
       <div class="stats" id="dialStats"></div>
     </section>
 
     <section>
-      <div class="sec-head"><h2>What each tool should cost, in credits</h2><span class="sec-note">Modeled COGS × markup ÷ price per credit — compared with the price shipped in <code>credit_prices</code></span></div>
+      <div class="sec-head"><h2>Per-tool pricing</h2><span class="sec-note">metered = token cost ÷ (1 − <b>margin</b>) ÷ price per credit</span></div>
+      <div class="assume rule-row">
+        <div class="field wide"><label>How a run is charged <span class="sub">base vs tokens</span></label>
+          <div class="toggle" id="ruleToggle" role="group" aria-label="charge rule">
+            <button type="button" data-r="max" class="active">Base is a floor</button>
+            <button type="button" data-r="add">Base + tokens</button>
+          </div><span class="sub" id="ruleSub">shipped: pay the base; tokens only matter past it</span></div>
+        <div class="rule-copy"><b id="ruleLabel"></b><span id="ruleCopy"></span></div>
+      </div>
+      <div class="tools3" id="toolPricing" style="margin-top:14px">
+        <div class="assume tool-card">
+          <div class="tool-head"><span>Zoe message</span><span class="val" id="est_zoe_message"></span></div>
+          <div class="field"><label>Base rate <span class="sub">flat, per call</span></label><div class="prefix suffix"><input type="number" id="base_zoe_message" min="0" step="1" value="5"><span>cr</span></div></div>
+          <div class="field"><label>Margin <span class="sub">% on token usage</span></label><div class="prefix suffix"><input type="number" id="mk_zoe_message" min="0" max="95" step="1" placeholder="67"><span>%</span></div></div>
+          <p class="est-note" id="estn_zoe_message"></p>
+        </div>
+        <div class="assume tool-card">
+          <div class="tool-head"><span>OneClick run</span><span class="val" id="est_oneclick_run"></span></div>
+          <div class="field"><label>Base rate <span class="sub">flat, per call</span></label><div class="prefix suffix"><input type="number" id="base_oneclick_run" min="0" step="1" value="30"><span>cr</span></div></div>
+          <div class="field"><label>Margin <span class="sub">% on token usage</span></label><div class="prefix suffix"><input type="number" id="mk_oneclick_run" min="0" max="95" step="1" placeholder="67"><span>%</span></div></div>
+          <p class="est-note" id="estn_oneclick_run"></p>
+        </div>
+        <div class="assume tool-card">
+          <div class="tool-head"><span>Registry parse</span><span class="val" id="est_registry_parse"></span></div>
+          <div class="field"><label>Base rate <span class="sub">flat, per call</span></label><div class="prefix suffix"><input type="number" id="base_registry_parse" min="0" step="1" value="30"><span>cr</span></div></div>
+          <div class="field"><label>Margin <span class="sub">% on token usage</span></label><div class="prefix suffix"><input type="number" id="mk_registry_parse" min="0" max="95" step="1" placeholder="67"><span>%</span></div></div>
+          <p class="est-note" id="estn_registry_parse"></p>
+        </div>
+        <div class="assume tool-card">
+          <div class="tool-head"><span>Split sheet</span><span class="val" id="est_split_sheet"></span></div>
+          <div class="field"><label>Base rate <span class="sub">flat, per sheet</span></label><div class="prefix suffix"><input type="number" id="base_split_sheet" min="0" step="1" value="20"><span>cr</span></div></div>
+          <div class="field"><label>Margin <span class="sub">no LLM — n/a</span></label><div class="prefix suffix"><input type="number" id="mk_split_sheet" min="0" max="95" step="1" placeholder="—" disabled><span>%</span></div></div>
+          <p class="est-note" id="estn_split_sheet"></p>
+        </div>
+      </div>
+      <p class="sec-note" style="margin-top:11px;max-width:84ch;line-height:1.6">Two numbers exist for every run: the <b style="color:var(--ink-soft)">base</b> (a flat price you set) and the <b style="color:var(--ink-soft)">metered</b> figure (what the tokens the run actually burned would cost at the margin %). The toggle above decides how they combine. <b style="color:var(--ink-soft)">Base is a floor</b> — what the backend ships — charges whichever is <em>higher</em>: an ordinary run pays exactly the base, and only a run whose tokens cost more than the base already covers is charged more. <b style="color:var(--ink-soft)">Base + tokens</b> charges both every time, so the advertised price is never what a run actually debits. Under the floor rule a tool's <em>effective</em> margin (the number in each card header) is set by its base rate, not the margin dial; blank margin inherits the default. Cache hits charge the base too — the deliverable is identical; only Zoe's greeting/thanks fast-path is free. Live base rates are <code>credit_prices</code>; the margin dial is one global <code>CREDIT_MARKUP</code> today — per-tool values here are a spec for a backend change.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Action mix</h2><span class="sec-note">how a typical 10 actions split — weights the blended cost of a credit that tabs 2–4 run on</span></div>
+      <div class="assume">
+        <div class="field"><label>Zoe messages <span class="val" id="v_mix_zoe"></span></label><input type="range" id="mix_zoe_message" min="0" max="10" step="1" value="6"></div>
+        <div class="field"><label>OneClick runs <span class="val" id="v_mix_oc"></span></label><input type="range" id="mix_oneclick_run" min="0" max="10" step="1" value="1"></div>
+        <div class="field"><label>Registry parses <span class="val" id="v_mix_reg"></span></label><input type="range" id="mix_registry_parse" min="0" max="10" step="1" value="2"></div>
+        <div class="field"><label>Split sheets <span class="val" id="v_mix_ss"></span></label><input type="range" id="mix_split_sheet" min="0" max="10" step="1" value="1"></div>
+      </div>
+      <div class="stats" id="blendStats"></div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>What each tool costs, in credits</h2><span class="sec-note">base vs metered → charge, and the margin that charge earns against modeled COGS</span></div>
       <div class="tablecard"><div class="tscroll"><table>
-        <thead><tr><th>Action</th><th class="num">Real COGS</th><th class="num">Suggested credits</th><th class="num">Live price</th><th class="num">Charged</th><th class="num">Margin</th><th style="min-width:110px">Margin %</th></tr></thead>
+        <thead><tr><th>Action</th><th class="num">Base</th><th class="num">Metered</th><th class="num">Charge</th><th class="num">Real COGS</th><th class="num">Charged</th><th class="num">Margin</th><th style="min-width:110px">Margin %</th></tr></thead>
         <tbody id="actionRows"></tbody>
       </table></div></div>
-      <p class="sec-note" style="margin-top:11px;max-width:80ch;line-height:1.6">Drop the price per credit and the <b style="color:var(--ink-soft)">suggested credits</b> per action rise to keep the same dollar margin — the live prices stay where they are until you change <code>credit_prices</code>, so the <b style="color:var(--ink-soft)">Margin</b> column is what actually happens today. Negative means that action loses money at every use.</p>
+      <p class="sec-note" style="margin-top:11px;max-width:80ch;line-height:1.6"><b style="color:var(--ink-soft)">Metered</b> is what token usage alone would charge at the tool's margin; <b style="color:var(--ink-soft)">Charge</b> is what the rule actually debits. When the base is above the metered figure the margin dial is doing nothing — the base is the price. Drop the price per credit and the metered column rises to hold the same dollar margin while the base stays put, so the base's <em>dollar</em> value falls.</p>
     </section>
 
     <section>
       <div class="sec-head"><h2>Scenario detail</h2><span class="sec-note"><span id="ocHeadline"></span></span></div>
       <div class="tablecard"><div class="tscroll"><table>
-        <thead><tr><th>Tool &amp; scenario</th><th>Load</th><th class="num">Calls</th><th>Models</th><th class="num">Tok in/out</th><th class="num">$ / use</th><th style="min-width:110px">Relative</th><th class="num">Credits</th></tr></thead>
+        <thead><tr><th>Tool &amp; scenario</th><th>Load</th><th class="num">Calls</th><th>Models</th><th class="num">Tok in/out</th><th class="num">$ / use</th><th style="min-width:110px">Relative</th><th class="num">Charge</th></tr></thead>
         <tbody id="rows"></tbody>
       </table></div></div>
     </section>
@@ -246,9 +320,9 @@
       <div class="sec-head"><h2>Plan shape</h2><span class="sec-note">Grants and prices as shipped — edit to test a repricing</span></div>
       <div class="assume">
         <div class="field"><label>Free credits / mo <span class="val" id="v_fc">150</span></label><input type="range" id="freeCredits" min="0" max="1000" step="10" value="150"><span class="sub">pure COGS — no card on file</span></div>
-        <div class="field"><label>Basic credits / mo <span class="val" id="v_bc">3000</span></label><input type="range" id="basicCredits" min="200" max="12000" step="100" value="3000"></div>
-        <div class="field"><label>Pro credits / mo <span class="val" id="v_pc">8000</span></label><input type="range" id="proCredits" min="500" max="30000" step="250" value="8000"></div>
-        <div class="field"><label>Basic price <span class="sub">$ / mo</span></label><div class="prefix"><span>$</span><input type="number" id="basicPrice" min="0" step="1" value="25"></div></div>
+        <div class="field"><label>Basic credits / mo <span class="val" id="v_bc">2000</span></label><input type="range" id="basicCredits" min="200" max="12000" step="100" value="2000"></div>
+        <div class="field"><label>Pro credits / mo <span class="val" id="v_pc">5000</span></label><input type="range" id="proCredits" min="500" max="30000" step="250" value="5000"></div>
+        <div class="field"><label>Basic price <span class="sub">$ / mo</span></label><div class="prefix"><span>$</span><input type="number" id="basicPrice" min="0" step="1" value="30"></div></div>
         <div class="field"><label>Pro price <span class="sub">$ / mo</span></label><div class="prefix"><span>$</span><input type="number" id="proPrice" min="0" step="1" value="50"></div></div>
       </div>
     </section>
@@ -259,7 +333,7 @@
         <div class="field"><label>Free utilization <span class="val" id="v_uf">60%</span></label><input type="range" id="utilFree" min="0" max="100" step="5" value="60"><span class="sub">of the free grant</span></div>
         <div class="field"><label>Basic utilization <span class="val" id="v_ub">45%</span></label><input type="range" id="utilBasic" min="0" max="100" step="5" value="45"></div>
         <div class="field"><label>Pro utilization <span class="val" id="v_up">55%</span></label><input type="range" id="utilPro" min="0" max="100" step="5" value="55"></div>
-        <div class="field"><label>Fixed infra / user <span class="sub">$ / mo — Supabase, Cloud Run, Resend</span></label><div class="prefix"><span>$</span><input type="number" id="fixedPerUser" min="0" step="0.05" value="0.35"></div></div>
+        <div class="field"><label>Fixed infra / user <span class="sub">$ / mo · Supabase, Cloud Run, Resend</span></label><div class="prefix"><span>$</span><input type="number" id="fixedPerUser" min="0" step="0.05" value="0.35"></div></div>
         <div class="field"><label>Target gross margin <span class="val" id="v_tm">80%</span></label><input type="range" id="targetMargin" min="0" max="95" step="5" value="80"><span class="sub">drives "price needed"</span></div>
       </div>
       <div class="stats" id="freeStats"></div>
@@ -286,7 +360,91 @@
     </section>
   </div>
 
-  <!-- ============================ TAB 3: LICENSING ============================ -->
+  <!-- ============================ TAB 3: TEAMS ============================ -->
+  <div class="tab-panel" id="tab-teams" hidden>
+
+    <section>
+      <div class="sec-head"><h2>What each tier includes</h2><span class="sec-note"><code>tier_entitlements</code> · shipped values · prices from <code>lib/tiers.ts</code></span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Tier</th><th class="num">Price</th><th class="num">Credits / mo</th><th class="num">Teams you can own</th><th class="num">Members / team</th><th class="num">Team storage</th><th>Past the storage cap</th><th>Joining a team</th></tr></thead>
+        <tbody id="tierRows"></tbody>
+      </table></div></div>
+      <p class="sec-note" style="margin-top:11px;max-width:84ch;line-height:1.6">Members are counted <b style="color:var(--ink-soft)">excluding the covering owner</b>. Owning (covering) a team draws on a slot; joining is free on every tier, Free included. Team storage is one pool per <em>owner</em>, summed across every team they cover: Basic's is a hard cap, Pro's overflows to pay-as-you-go at $<span id="v_stoRate"></span> / GB / mo billed to the owner's card. A Msanii admin's own dials resolve as Pro regardless of plan.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>How a team pool is funded and spent</h2><span class="sec-note">Every inflow lands in the pool's RESERVE — purchased credits never expire</span></div>
+      <div class="grid2">
+        <div class="card">
+          <h3><span class="tag live">built</span> Ways credits enter</h3>
+          <ul>
+            <li><b>Transfer from your own reserve.</b> Personal reserve → pool via <code>transfer_credits</code> (409 on insufficient, never a silent clamp). Only <em>reserve</em> moves — packs and admin grants — never the monthly plan grant, which stays personal and expires.</li>
+            <li><b>Buy a pack into the pool.</b> Same ladder as personal packs, checkout on the admin's card, lands in reserve.</li>
+            <li><b>Recurring top-up.</b> The same pack on a monthly Stripe subscription riding the buying admin's <em>personal</em> customer (<code>kind='org_topup'</code>). Offboarding that admin cancels it.</li>
+            <li><b>Nothing else.</b> No dispersal, no overage, no pay-as-you-go on a pool. A dry pool means only an admin buying credits helps — a member sees no CTA.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><span class="tag live">built</span> How it's spent</h3>
+          <ul>
+            <li><b>Members hold no wallet.</b> They spend straight from the pool, bounded by a monthly cap (<code>org_members.monthly_cap</code> → org default 2,000 → <code>-1</code> = no limit).</li>
+            <li><b>Caps are ceilings, not reservations.</b> They may sum past the pool; the pool bounds spend, the caps only ration it.</li>
+            <li><b>Over-cap debits are flagged, never refused</b> (charge-on-success). <code>capReached</code> → the member asks an admin to raise the cap; approving moves nothing.</li>
+            <li><b>Standing is a daily predicate.</b> An owner short on slots starts a 14-day grace on the extra teams, then they lapse and the whole subtree is denied. Archive frees a slot and keeps the pool; dissolve returns the artists and forfeits the reserve.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Team calculator</h2><span class="sec-note">One paying owner and the teams they cover — steady state, per month</span></div>
+      <div class="assume">
+        <div class="field wide"><label>Owner's tier <span class="sub">who covers the teams</span></label>
+          <div class="toggle" id="tierToggle" role="group" aria-label="owner tier">
+            <button type="button" data-t="basic" class="active">Basic</button>
+            <button type="button" data-t="pro">Pro</button>
+          </div><span class="sub" id="v_tierNote"></span></div>
+        <div class="field"><label>Teams owned <span class="val" id="v_teams">1</span></label><input type="range" id="teamsOwned" min="1" max="3" step="1" value="1"><span class="sub">clamped to the tier's slots</span></div>
+        <div class="field"><label>Members per team <span class="val" id="v_tmembers">3</span></label><input type="range" id="teamMembers" min="0" max="10" step="1" value="3"><span class="sub">excluding the owner · clamped to tier</span></div>
+        <div class="field"><label>Member cap <span class="val" id="v_tcap">2000</span></label><input type="range" id="teamCap" min="0" max="8000" step="100" value="2000"><span class="sub">cr / member / mo</span></div>
+        <div class="field"><label>Member utilization <span class="val" id="v_tutil">50%</span></label><input type="range" id="teamUtil" min="0" max="100" step="5" value="50"><span class="sub">of the cap actually burned</span></div>
+        <div class="field"><label>Packs into pool <span class="sub">bought each month</span></label><select id="teamPack"></select></div>
+        <div class="field"><label>Recurring top-up <span class="sub">same pack, monthly</span></label><select id="teamTopup"></select></div>
+        <div class="field"><label>Reserve transferred <span class="sub">cr / mo, from owner's reserve</span></label><input type="number" id="teamTransfer" min="0" step="100" value="0"></div>
+        <div class="field"><label>Team storage used <span class="sub">GB, all owned teams</span></label><input type="number" id="teamStorageGb" min="0" step="10" value="20"></div>
+      </div>
+      <div class="stats" id="teamStats"></div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Owner + teams P&amp;L</h2><span class="sec-note">What one owner with these teams is worth to Msanii, per month</span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Line</th><th class="num">Credits</th><th class="num">Revenue</th><th class="num">COGS</th><th class="num">Margin</th><th class="num">Margin %</th></tr></thead>
+        <tbody id="teamRows"></tbody>
+        <tfoot id="teamFoot"></tfoot>
+      </table></div></div>
+      <p class="sec-note" id="teamNote" style="margin-top:11px;max-width:84ch;line-height:1.6"></p>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>What the pool buys, per tool</h2><span class="sec-note">This month's inflow at your base rates, priced at the blended $/credit the owner is paying</span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Tool</th><th class="num">Base</th><th class="num">Runs the inflow buys</th><th class="num">COGS / run</th><th class="num">Paid / run</th><th class="num">Margin / run</th><th class="num">Margin %</th></tr></thead>
+        <tbody id="teamBuyRows"></tbody>
+      </table></div></div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Full house, per tier</h2><span class="sec-note">Every slot filled and every seat taken, at the member cap &amp; utilization above, demand met with packs</span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Tier</th><th>Teams × members</th><th class="num">Demand / mo</th><th>Packs to cover it</th><th class="num">Revenue / mo</th><th class="num">COGS / mo</th><th class="num">Margin / mo</th><th class="num">Margin %</th></tr></thead>
+        <tbody id="fullRows"></tbody>
+      </table></div></div>
+      <p class="sec-note" style="margin-top:11px;max-width:84ch;line-height:1.6">Revenue here is the owner's plan plus the packs that would cover the members' demand (cheapest fit on the ladder). Team credits are <b style="color:var(--ink-soft)">margin-positive by construction</b> — every credit a member burns was bought at pack rates above the blended cost — so the only unfunded lines are fixed infra per member and, on Basic, storage parked under the hard cap.</p>
+    </section>
+  </div>
+
+  <!-- ============================ TAB 4: LICENSING ============================ -->
   <div class="tab-panel" id="tab-ent" hidden>
 
     <section>
@@ -338,7 +496,7 @@
           <text class="dg-b" x="66" y="418">· Project-based roles: editor / viewer / admin  —  built</text>
           <text class="dg-b" x="66" y="436">· Default open; admin assigns gates  —  built</text>
           <text class="dg-b" x="66" y="454">· Contract-based scoping  —  derives from project + work links</text>
-          <text class="dg-b" x="66" y="472" fill="var(--warn)">· Time-gated permissions  —  NOT BUILT (only invites expire, 7d)</text>
+          <text class="dg-b" x="66" y="472" fill="var(--warn)">· Time-gated permissions  —  NOT BUILT (only invites expire, 48h)</text>
           <text class="dg-b" x="66" y="490" fill="var(--warn)">· Non-admins draft payments only, admins notified  —  NOT BUILT</text>
           <text class="dg-s" x="66" y="506" style="font-size:10.5px">payout rows already carry status 'draft' | 'paid' — no role gate on who confirms</text>
 
@@ -401,7 +559,7 @@
         <div class="card">
           <h3><span class="tag watch">still open</span> What the contract wrapper needs</h3>
           <p>The credit mechanics are built; the <b>commercial</b> terms are not. There is no org subscription object, so the 12-month term, the monthly payment, the cancellation grace period and the "remaining months still owed" rule live in the contract you sign, not in the app — an admin buys credits or an operator sets the dispersal.</p>
-          <p>Also unbuilt: time-gated permissions (only invites expire, after 7 days), and role-gated payment drafting (payouts carry <code>draft</code>/<code>paid</code> but nothing restricts who confirms).</p>
+          <p>Also unbuilt: time-gated permissions (only invites expire, after 48 hours), and role-gated payment drafting (payouts carry <code>draft</code>/<code>paid</code> but nothing restricts who confirms).</p>
         </div>
       </div>
     </section>
@@ -417,13 +575,41 @@
         <div class="field"><label>Monthly dispersal <span class="sub">credits added to the pool / mo</span></label><input type="number" id="dispersal" min="0" step="500" value="10000"></div>
         <div class="field"><label>Negotiated $ / credit <span class="sub">sets the monthly payment</span></label><div class="prefix"><span>$</span><input type="number" id="lumpRate" min="0.001" step="0.001" value="0.011"></div></div>
         <div class="field"><label>PAYG credits / mo <span class="val" id="v_payg">0</span></label><input type="range" id="paygCredits" min="0" max="20000" step="250" value="0"><span class="sub">billed at the base rate on top</span></div>
-        <div class="field"><label>Unspent dispersal <span class="sub">at month end</span></label>
+        <div class="field wide"><label>Unspent dispersal <span class="sub">at month end</span></label>
           <div class="toggle" id="expiryToggle" role="group" aria-label="unspent credits">
             <button type="button" data-x="expires" class="active">Expires</button>
             <button type="button" data-x="rolls">Rolls over</button>
           </div><span class="sub">rollover turns unspent credits into deferred cost</span></div>
       </div>
       <div class="stats" id="entStats"></div>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>Private Cloud Run service</h2><span class="sec-note">A dedicated backend kept warm for this org · Google's list prices for us-central1, 730 h/mo, no free tier</span></div>
+      <div class="assume">
+        <div class="field wide"><label>Billing mode <span class="sub">Cloud Run setting</span></label>
+          <div class="toggle" id="crModeToggle" role="group" aria-label="Cloud Run billing mode">
+            <button type="button" data-m="request" class="active">Request-based</button>
+            <button type="button" data-m="instance">Always-on</button>
+          </div><span class="sub" id="crModeSub"></span></div>
+        <div class="field"><label>vCPU <span class="sub">per instance</span></label><input type="number" id="crVcpu" min="1" max="8" step="1" value="1"><span class="sub">prod runs 1</span></div>
+        <div class="field"><label>Memory <span class="sub">GiB per instance</span></label><input type="number" id="crMem" min="0.5" max="32" step="0.5" value="1"><span class="sub">prod runs 1</span></div>
+        <div class="field"><label>Min instances <span class="val" id="v_crMin">1</span></label><input type="range" id="crMin" min="1" max="5" step="1" value="1"><span class="sub">kept warm — always billed</span></div>
+        <div class="field"><label>Serving requests <span class="val" id="v_crBusy">10%</span></label><input type="range" id="crBusy" min="0" max="100" step="5" value="10"><span class="sub">of the month at the active rate</span></div>
+        <div class="field"><label>Requests / mo <span class="sub">millions</span></label><input type="number" id="crReqM" min="0" step="0.1" value="0.5"><span class="sub">$0.40 per million</span></div>
+        <div class="field"><label>Fee billed to org <span class="sub">$ / mo, on top of credits</span></label><div class="prefix"><span>$</span><input type="number" id="crFee" min="0" step="5" value="0"></div><span class="sub">0 = you absorb it</span></div>
+      </div>
+      <div class="stats" id="crStats"></div>
+      <p class="sec-note" style="margin-top:11px;max-width:84ch;line-height:1.6">Same as Google's calculator with <b style="color:var(--ink-soft)">min instances = 1</b>: a warm instance is billed every second of the month — at the <em>idle</em> CPU rate ($0.0000025 / vCPU-s) while it waits and the <em>active</em> rate ($0.000024) while it serves, memory at $0.0000025 / GiB-s either way, plus $0.40 per million requests. <b style="color:var(--ink-soft)">Always-on</b> (instance-based billing) is a flat $0.000018 / vCPU-s + $0.000002 / GiB-s with no request charge — cheaper only when the service is busy most of the time. This lands as a cost line in the Contract P&amp;L below and in every margin figure above; the fee is what you add to the monthly payment to cover it.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><h2>What the dispersal buys, per tool</h2><span class="sec-note">Your base rates from tab 1 against the negotiated $/credit — where the enterprise margin actually comes from</span></div>
+      <div class="tablecard"><div class="tscroll"><table>
+        <thead><tr><th>Tool</th><th class="num">Base</th><th class="num">Runs the dispersal buys</th><th class="num">COGS / run</th><th class="num">Revenue / run</th><th class="num">Margin / run</th><th style="min-width:110px">Margin %</th></tr></thead>
+        <tbody id="entToolRows"></tbody>
+      </table></div></div>
+      <p class="sec-note" style="margin-top:11px;max-width:84ch;line-height:1.6">Revenue per run is the tool's base rate × the negotiated $/credit; COGS is the modeled token cost from tab 1. Because base rates sit far above metered cost, the enterprise margin is carried by the base rates and the negotiated rate — <b style="color:var(--ink-soft)">not</b> by the margin dial — so a discount on $/credit is really a discount on every tool's margin at once. The Contract P&amp;L below rolls these up at the blended cost per credit from your action mix.</p>
     </section>
 
     <section>
@@ -459,7 +645,7 @@
     </section>
   </div>
 
-  <!-- ============================ TAB 4: RATES ============================ -->
+  <!-- ============================ TAB 5: RATES ============================ -->
   <div class="tab-panel" id="tab-rates" hidden>
     <section>
       <div class="sec-head"><h2>OpenAI model rates</h2><span class="sec-note">USD per 1M tokens · standard tier · source: <a href="https://platform.openai.com/docs/pricing" target="_blank" rel="noopener">OpenAI pricing</a></span></div>
@@ -487,7 +673,7 @@
   </div>
 
   <footer>
-    <span>Prices &amp; grants: live from <code>credit_prices</code> / <code>tier_entitlements</code> / <code>credit_packs</code>. Token counts: modeled.</span>
+    <span>Base rates, grants, team dials &amp; packs: live from <code>credit_prices</code> / <code>tier_entitlements</code> / <code>credit_packs</code>. Token counts: modeled.</span>
     <span id="foot-rates"></span>
   </footer>
 
@@ -511,16 +697,33 @@ var PricingMath = (function(){
   var RATE_ORDER=['gpt-5.2','gpt-5','gpt-5-mini','gpt-5.4-mini','embed'];
   var TPP = 650;   // tokens per contract page (pdf→markdown average)
 
-  // Shipped values, for the "live vs suggested" comparisons.
+  // Shipped values, for the "live vs modeled" comparisons.
   var LIVE = {
-    prices:{oneclick_run:21, zoe_message:3, registry_parse:12},   // credit_prices
-    grants:{free:150, basic:3000, pro:8000},                       // tier_entitlements
-    planPrice:{basic:25, pro:50},                                  // lib/tiers.ts
+    prices:{zoe_message:5, oneclick_run:30, registry_parse:30, split_sheet:20},  // credit_prices — BASE rates (20260819000001)
+    grants:{free:150, basic:2000, pro:5000},                       // tier_entitlements.monthly_credits
+    planPrice:{basic:30, pro:50},                                  // lib/tiers.ts TIER_PRICES.monthly
+    annualPrice:{basic:300, pro:500},                              // lib/tiers.ts TIER_PRICES.annual
     overageUsd:0.02,                                               // CREDIT_OVERAGE_USD
+    markup:3.0,                                                    // CREDIT_MARKUP → default margin 1-1/3 ≈ 67%
     minOrgCredits:10000,                                           // ENTERPRISE_MIN_INITIAL_CREDITS
-    packs:[{key:'pack_500',credits:500,usd:10},{key:'pack_2000',credits:2000,usd:36},
-           {key:'pack_10000',credits:10000,usd:150},{key:'pack_50000',credits:50000,usd:600}]
+    memberCap:2000,                                                // organizations.default_member_cap
+    graceDays:14,                                                  // ORG_GRACE_DAYS
+    storageOverageUsdPerGb:0.025,                                  // TEAM_STORAGE_OVERAGE_USD_PER_GB
+    teams:{                                                        // tier_entitlements team dials
+      free: {teams:0, members:0,  storageGb:0,   payg:false},
+      basic:{teams:1, members:3,  storageGb:100, payg:false},      // hard cap
+      pro:  {teams:3, members:10, storageGb:250, payg:true}        // then PAYG
+    },
+    packs:[{key:'pack_300',credits:300,usd:5.5},{key:'pack_1200',credits:1200,usd:21},   // credit_packs (20260819000002)
+           {key:'pack_4000',credits:4000,usd:66},{key:'pack_15000',credits:15000,usd:240}]
   };
+  var ACTION_ORDER=['zoe_message','oneclick_run','registry_parse','split_sheet'];
+  // Cloud Run services, us-central1 list prices (cloud.google.com/run/pricing, read 2026-08-17).
+  // Google's calculator assumes 730 h/mo. Free tier is deliberately NOT netted off: it is per
+  // billing account and the shared backend already eats it.
+  var CLOUD_RUN={secondsPerMonth:730*3600,
+    request:{cpuActive:0.000024, cpuIdle:0.0000025, memActive:0.0000025, memIdle:0.0000025, perMillionRequests:0.40},
+    instance:{cpu:0.000018, mem:0.000002}};
 
   function cost(calls){var c=0;for(var i=0;i<calls.length;i++){var k=calls[i],m=MODELS[k.m];c+=(k.tin*m.in+k.tout*m.out)/1e6;}return c;}
   function tokens(calls){var ti=0,to=0;calls.forEach(function(k){ti+=k.tin;to+=k.tout;});return{ti:ti,to:to};}
@@ -533,39 +736,51 @@ var PricingMath = (function(){
   function zoeN(ct,N){return[{m:'gpt-5-mini',tin:800,tout:500},{m:'gpt-5',tin:1500+N*ct+2000,tout:2000},{m:'gpt-5-mini',tin:N*ct+2000,tout:1000},{m:'embed',tin:20,tout:0}];}
   function registry(ct){return[{m:'gpt-5.2',tin:ct+2100,tout:2500}];}
 
-  /** Credits an action SHOULD cost: COGS x markup, converted at the credit price.
-   *  Lower the credit price and this rises — the dollar margin is what's held constant.
+  /** Credits that token usage alone would charge, at a target GROSS MARGIN on the
+   *  token cost: price = cost / (1 - margin), converted at the credit price.
+   *  margin 2/3 == the backend's CREDIT_MARKUP 3.0. Lower the credit price and this
+   *  rises — the dollar margin is what's held constant. $0 of tokens meters 0.
    *  Rounded to 6dp before the ceiling: 0.10*3/0.02 is 15.000000000000002 in binary
    *  floating point, and a naive ceil turns that into 16 — a whole credit of
    *  invented price on every action. */
-  function toCredits(usd,markup,creditPrice){
-    if(usd===0) return 0;
-    return Math.max(1,Math.ceil(+(usd*markup/creditPrice).toFixed(6)));
+  function metered(usd,margin,creditPrice){
+    if(usd<=0) return 0;
+    var m=Math.min(Math.max(margin,0),0.99);
+    return Math.max(1,Math.ceil(+(usd/(1-m)/creditPrice).toFixed(6)));
   }
+  /** What the backend debits. `max` is shipped (subscriptions/service.py::debit_for_action):
+   *  the base rate includes its own worth of AI spend and the meter only fires past it, so
+   *  the advertised price stays true. `add` is the one-line alternative (spec §13). */
+  function charge(base,met,rule){return rule==='add' ? (base||0)+met : Math.max(base||0,met);}
+  function toCredits(usd,margin,creditPrice,base,rule){return charge(base,metered(usd,margin,creditPrice),rule);}
+  function multiple(margin){return 1/(1-Math.min(Math.max(margin,0),0.99));}
 
-  /** The three metered actions, with modeled COGS and the live credit price. */
+  /** The four metered actions, with modeled COGS and the live base rate. */
   function actions(a){
     var ct=a.pages*TPP;
     var blended=cost(ocSingle(ct,false))*(1-a.hit)+cost(ocSingle(ct,true))*a.hit;
     return [
-      {key:'oneclick_run',  name:'OneClick run',     note:'blended at '+Math.round(a.hit*100)+'% cache hit', usd:blended},
-      {key:'registry_parse',name:'Registry parse',   note:'one extraction call',                             usd:cost(registry(ct))},
-      {key:'zoe_message',   name:'Zoe message',      note:'single-contract question',                        usd:cost(zoe1(ct))}
+      {key:'zoe_message',   name:'Zoe message',      note:'single-contract question',                        usd:cost(zoe1(ct)),   llm:true},
+      {key:'oneclick_run',  name:'OneClick run',     note:'blended at '+Math.round(a.hit*100)+'% cache hit', usd:blended,          llm:true},
+      {key:'registry_parse',name:'Registry parse',   note:'one extraction call',                             usd:cost(registry(ct)),llm:true},
+      {key:'split_sheet',   name:'Split sheet',      note:'PDF/DOCX render — no LLM',                        usd:0,                llm:false}
     ];
   }
 
   /** Blended real cost of ONE credit: what the average spent credit costs us.
-   *  Weighted by an assumed action mix, because a credit spent on OneClick and a
-   *  credit spent on Zoe do not cost the same. */
-  function costPerCredit(a,mix){
-    mix = mix || {oneclick_run:1, zoe_message:6, registry_parse:1};
-    var acts=actions(a), usd=0, credits=0;
+   *  Weighted by the action mix, because a credit spent on OneClick and a credit
+   *  spent on Zoe do not cost the same. `credits` is the per-action charge to weight
+   *  by — the modeled charge from the dials, or LIVE.prices for "today". */
+  function costPerCredit(a,mix,credits){
+    mix = mix || {zoe_message:6, oneclick_run:1, registry_parse:2, split_sheet:1};
+    credits = credits || LIVE.prices;
+    var acts=actions(a), usd=0, cr=0;
     acts.forEach(function(x){
       var n=mix[x.key]||0;
       usd += n*x.usd;
-      credits += n*(LIVE.prices[x.key]||0);
+      cr += n*(credits[x.key]||0);
     });
-    return credits>0 ? usd/credits : 0;
+    return cr>0 ? usd/cr : 0;
   }
 
   /** Per-plan economics. `revenue` is 0 for free by construction. */
@@ -590,6 +805,67 @@ var PricingMath = (function(){
             vsList:LIVE.overageUsd>0?rate/LIVE.overageUsd-1:0};
   }
 
+  /** Cheapest way to buy at least `credits` off the pack ladder: one pack if a rung
+   *  covers it, else multiples of the largest rung. Returns {n, pack, credits, usd}. */
+  function packsFor(credits){
+    if(credits<=0) return {n:0, pack:null, credits:0, usd:0};
+    var ladder=LIVE.packs.slice().sort(function(a,b){return a.credits-b.credits;});
+    for(var i=0;i<ladder.length;i++){ if(ladder[i].credits>=credits) return {n:1, pack:ladder[i], credits:ladder[i].credits, usd:ladder[i].usd}; }
+    var big=ladder[ladder.length-1], n=Math.ceil(credits/big.credits);
+    return {n:n, pack:big, credits:n*big.credits, usd:n*big.usd};
+  }
+
+  /** Self-serve TEAM — one owner covering `teams` teams of `membersPerTeam`.
+   *
+   *  Members hold no wallet and spend from ONE pool bounded by a per-member cap; the
+   *  pool is funded only by purchases (packs, a recurring top-up) and by reserve the
+   *  owner already paid for (transfer). Nothing is dispersed and nothing rolls over
+   *  from a plan — so a member can never burn a credit that wasn't bought at pack rates,
+   *  which is why team credit COGS is always backed by revenue. Steady state per month:
+   *  burned = min(demand, inflow); an unspent surplus banks (reserve never expires),
+   *  a shortfall is unmet demand (members hit an empty pool, not their cap).
+   */
+  function team(o){
+    var members=o.teams*o.membersPerTeam;
+    var demand=members*o.memberCap*o.util;
+    var inflow=(o.packCredits||0)+(o.topupCredits||0)+(o.transferCredits||0);
+    var burned=Math.min(demand,inflow);
+    var shortfall=Math.max(0,demand-inflow);
+    var banked=Math.max(0,inflow-demand);
+    var poolRevenue=(o.packUsd||0)+(o.topupUsd||0);          // transfers were paid for when the pack was bought
+    var storageOverGb=Math.max(0,(o.storageGb||0)-o.storageCapGb);
+    var storageRev=o.payg?storageOverGb*o.storageUsdPerGb:0;
+    var storageBlocked=!o.payg&&storageOverGb>0;
+    var creditCogs=burned*o.costPerCredit;
+    var fixed=members*o.fixedPerUser;
+    var revenue=poolRevenue+storageRev;
+    var cogs=creditCogs+fixed;
+    var margin=revenue-cogs;
+    return {members:members, demand:demand, inflow:inflow, burned:burned, shortfall:shortfall, banked:banked,
+            poolRevenue:poolRevenue, storageOverGb:storageOverGb, storageRev:storageRev, storageBlocked:storageBlocked,
+            creditCogs:creditCogs, fixed:fixed, revenue:revenue, cogs:cogs, margin:margin,
+            marginPct:revenue>0?margin/revenue:null,
+            paidPerCredit:inflow>0?poolRevenue/inflow:0};
+  }
+
+  /** A private Cloud Run service kept warm for one org (min instances >= 1).
+   *  Request-based billing charges the idle rate while a min instance sits warm and the
+   *  active rate only while it serves requests (`busy` = fraction of the month serving);
+   *  instance-based billing charges the always-on rate the whole month. Memory bills at
+   *  the same rate idle or active. Returns the monthly bill split by line. */
+  function cloudRun(o){
+    var S=CLOUD_RUN.secondsPerMonth*Math.max(0,o.minInstances||0), cpu, mem, req=0;
+    if(o.mode==='instance'){
+      cpu=S*o.vcpu*CLOUD_RUN.instance.cpu; mem=S*o.memGib*CLOUD_RUN.instance.mem;
+    }else{
+      var busy=Math.min(1,Math.max(0,o.busy||0)), r=CLOUD_RUN.request;
+      cpu=S*o.vcpu*(r.cpuActive*busy + r.cpuIdle*(1-busy));
+      mem=S*o.memGib*(r.memActive*busy + r.memIdle*(1-busy));
+      req=(o.requestsM||0)*r.perMillionRequests;
+    }
+    return {cpu:cpu, mem:mem, req:req, total:cpu+mem+req};
+  }
+
   /** Enterprise CONTRACT — the dispersal model.
    *
    *  The org negotiates a monthly credit dispersal (e.g. 10,000 cr/mo) against a
@@ -601,9 +877,6 @@ var PricingMath = (function(){
    *  dispersal (deliberate overcommit: most users never reach their cap). What
    *  actually bounds spend is the pool. `overcommit` is that ratio, and
    *  `poolShortfall` is what happens when expected burn exceeds the dispersal.
-   *
-   *  NOT what the code implements today: it moves credits into per-seat wallets
-   *  and tops them up to an allowance, one wallet per member.
    */
   function contract(o){
     var capped = o.seats*o.capPerSeat + o.adminCap;   // ceiling if EVERY user maxed out
@@ -614,12 +887,14 @@ var PricingMath = (function(){
     var fixed = o.fixedPerSeat*(o.seats+1);           // admins hold a seat too
     var paygRev = (o.paygCredits||0)*o.paygRate;
     var paygCogs = (o.paygCredits||0)*o.costPerCredit;
-    var revenue = o.monthlyUsd + paygRev;
-    var cogs = creditCogs + fixed + paygCogs;
+    var infraUsd = o.infraUsd||0, infraFeeUsd = o.infraFeeUsd||0;   // private Cloud Run: cost, and what the org is billed for it
+    var revenue = o.monthlyUsd + paygRev + infraFeeUsd;
+    var cogs = creditCogs + fixed + paygCogs + infraUsd;
     var margin = revenue - cogs;
     var unspent = Math.max(0, dispersal - burned);
     return {capped:capped, dispersal:dispersal, wantBurn:wantBurn, burned:burned,
             creditCogs:creditCogs, fixed:fixed, paygRev:paygRev, paygCogs:paygCogs,
+            infraUsd:infraUsd, infraFeeUsd:infraFeeUsd,
             revenue:revenue, cogs:cogs, margin:margin,
             marginPct:revenue>0?margin/revenue:null,
             perSeat:o.seats>0?margin/o.seats:0,
@@ -633,9 +908,9 @@ var PricingMath = (function(){
             // deferred COGS: the org banks credits and can burn them all in one month.
             deferredCogs:o.expires?0:unspent*o.costPerCredit,
             bankedAfterTerm:o.expires?0:unspent*o.months,
-            tcv:o.monthlyUsd*o.months, termMargin:margin*o.months,
+            tcv:(o.monthlyUsd+infraFeeUsd)*o.months, termMargin:margin*o.months,
             // Their rule: cancel early and the remaining months are still owed.
-            remainingOwed:function(cancelAfter){return o.monthlyUsd*Math.max(0,o.months-cancelAfter);}};
+            remainingOwed:function(cancelAfter){return (o.monthlyUsd+infraFeeUsd)*Math.max(0,o.months-cancelAfter);}};
   }
 
   /** Enterprise pool: seats x allowance drives burn; the pool is a prepaid balance. */
@@ -655,22 +930,45 @@ var PricingMath = (function(){
   /** Smallest useful regression check — asserts the directional invariants the
    *  whole page rests on. Run headlessly (see the comment at the top). */
   function selfCheck(){
-    var a={pages:15,contracts:3,hit:0.7}, out=[];
+    var a={pages:15,contracts:3,hit:0.7}, out=[], M23=2/3;
     function ok(name,cond){out.push((cond?'PASS  ':'FAIL  ')+name); if(!cond) out.failed=true;}
-    var c1=toCredits(0.10,3,0.02), c2=toCredits(0.10,3,0.01);
-    ok('halving the credit price doubles credits per action', c2===c1*2);
-    ok('markup raises credits per action', toCredits(0.10,6,0.02) > c1);
-    ok('zero-cost action is zero credits', toCredits(0,3,0.02)===0);
-    ok('a cache hit is cheaper than a cold run', cost(ocSingle(9750,true)) < cost(ocSingle(9750,false)));
+    var c1=metered(0.10,M23,0.02), c2=metered(0.10,M23,0.01);
+    ok('67% margin on $0.10 at $0.02/cr meters 15 credits (the old 3x markup)', c1===15);
+    ok('halving the credit price doubles metered credits', c2===c1*2);
+    ok('a higher margin meters more credits', metered(0.10,0.9,0.02) > c1);
+    ok('zero token cost meters zero', metered(0,M23,0.02)===0);
+    ok('max rule: metered under the base charges the base', toCredits(0.10,M23,0.02,30,'max')===30);
+    ok('max rule: metered over the base charges the metered figure', toCredits(0.50,M23,0.02,30,'max')===75);
+    ok('add rule: base + metered', toCredits(0.10,M23,0.02,30,'add')===45);
+    ok('a cache hit ($0) still charges the base under both rules', toCredits(0,M23,0.02,30,'max')===30 && toCredits(0,M23,0.02,30,'add')===30);
+    ok('a base of 0 with $0 tokens is free', toCredits(0,M23,0.02,0,'max')===0);
+    ok('a cache hit is cheaper for us than a cold run', cost(ocSingle(9750,true)) < cost(ocSingle(9750,false)));
     ok('cost per credit is positive', costPerCredit(a) > 0);
-    var pl=planPL({grant:3000,util:0.45,costPerCredit:0.004,fixed:0.35,revenue:25,targetMargin:0.8});
-    ok('plan margin = revenue - cogs', Math.abs(pl.margin-(25-pl.cogs))<1e-9);
-    ok('price needed covers full-grant worst case', pl.needed > 3000*0.004);
+    ok('raising every base rate lowers the cost per credit', costPerCredit(a,null,{zoe_message:50,oneclick_run:300,registry_parse:300,split_sheet:200}) < costPerCredit(a));
+    var pl=planPL({grant:2000,util:0.45,costPerCredit:0.004,fixed:0.35,revenue:30,targetMargin:0.8});
+    ok('plan margin = revenue - cogs', Math.abs(pl.margin-(30-pl.cogs))<1e-9);
+    ok('price needed covers full-grant worst case', pl.needed > 2000*0.004);
     var free=planPL({grant:150,util:0.6,costPerCredit:0.004,fixed:0.35,revenue:0,targetMargin:0.8});
     ok('free margin is negative (it is a cost)', free.margin < 0);
-    var e=entry({credits:10000,usd:150,costPerCredit:0.004,utilization:1});
-    ok('pack margin = charge - burn cost', Math.abs(e.margin-(150-40))<1e-9);
+    var e=entry({credits:4000,usd:66,costPerCredit:0.004,utilization:1});
+    ok('pack margin = charge - burn cost', Math.abs(e.margin-(66-16))<1e-9);
     ok('pack rate is below list', e.vsList < 0);
+    ok('every pack is cheaper per credit than overage and dearer than Pro', LIVE.packs.every(function(p){return p.usd/p.credits<LIVE.overageUsd && p.usd/p.credits>LIVE.planPrice.pro/LIVE.grants.pro;}));
+    var pf=packsFor(1000);
+    ok('packsFor picks the smallest rung that covers the need', pf.n===1 && pf.pack.key==='pack_1200');
+    ok('packsFor stacks the largest rung past the ladder', packsFor(31000).n===3 && packsFor(31000).pack.key==='pack_15000');
+    var tArgs={teams:1,membersPerTeam:3,memberCap:2000,util:0.5,packCredits:4000,packUsd:66,topupCredits:0,topupUsd:0,transferCredits:0,
+               storageGb:20,storageCapGb:100,payg:false,storageUsdPerGb:0.025,costPerCredit:0.004,fixedPerUser:0.35};
+    var t=team(tArgs);
+    ok('team demand = members x cap x utilization', t.demand===3000);
+    ok('team burn is bounded by what was bought', t.burned===3000 && t.banked===1000 && t.shortfall===0);
+    ok('team margin = revenue - cogs', Math.abs(t.margin-(66-(3000*0.004+3*0.35)))<1e-9);
+    ok('team credits are margin-positive when packs beat cost per credit', t.margin>0);
+    var dry=team(Object.assign({},tArgs,{packCredits:0,packUsd:0}));
+    ok('an unfunded pool leaves demand unmet, not overdrawn', dry.burned===0 && dry.shortfall===3000);
+    ok('transfers move credits without new revenue', team(Object.assign({},tArgs,{transferCredits:1000})).revenue===t.revenue);
+    ok('Basic over its storage cap is blocked, not billed', team(Object.assign({},tArgs,{storageGb:120})).storageBlocked===true && team(Object.assign({},tArgs,{storageGb:120})).storageRev===0);
+    ok('Pro over its storage cap is billed PAYG', Math.abs(team(Object.assign({},tArgs,{storageGb:270,storageCapGb:250,payg:true})).storageRev-0.5)<1e-9);
     var p=pool({credits:100000,usd:1100,seats:10,allowance:800,util:0.7,costPerCredit:0.004});
     ok('runway = credits / allocated per month', Math.abs(p.runway-12.5)<1e-9);
     ok('unspent allocation improves margin',
@@ -686,9 +984,18 @@ var PricingMath = (function(){
     ok('shortfall is what the caps wanted beyond the pool', c.poolShortfall===6800);
     ok('contract margin = revenue - cogs', Math.abs(c.margin-(c.revenue-c.cogs))<1e-9);
     ok('term value = monthly x months', c.tcv===3000);
+    ok('a private-cloud fee is part of the term value', contract(Object.assign({},cArgs,{infraUsd:13.14,infraFeeUsd:20})).tcv===(250+20)*12);
     ok('early cancel still owes the remainder', c.remainingOwed(3)===250*9);
     ok('payg adds margin while its rate beats cost',
        contract(Object.assign({},cArgs,{paygCredits:1000})).margin > c.margin);
+    var cr=cloudRun({mode:'request',vcpu:1,memGib:1,minInstances:1,busy:0,requestsM:0});
+    ok('a warm 1 vCPU / 1 GiB min instance idles at ~$13.14/mo request-based', Math.abs(cr.total-(2628000*(0.0000025+0.0000025)))<1e-6);
+    ok('instance-based always-on costs more than idling', cloudRun({mode:'instance',vcpu:1,memGib:1,minInstances:1}).total > cr.total);
+    ok('serving requests raises the request-based bill', cloudRun({mode:'request',vcpu:1,memGib:1,minInstances:1,busy:0.5,requestsM:1}).total > cr.total);
+    ok('two min instances cost twice one', Math.abs(cloudRun({mode:'request',vcpu:1,memGib:1,minInstances:2,busy:0}).total-2*cr.total)<1e-9);
+    ok('private infra is a contract cost until it is billed back',
+       contract(Object.assign({},cArgs,{infraUsd:13.14})).margin < c.margin &&
+       Math.abs(contract(Object.assign({},cArgs,{infraUsd:13.14,infraFeeUsd:13.14})).margin - c.margin)<1e-9);
     var light=contract(Object.assign({},cArgs,{util:0.2}));
     ok('light usage leaves the pool unspent', light.unspent > 0 && light.burned < c.burned);
     ok('expiring dispersal books no deferred cost', light.deferredCogs===0);
@@ -698,71 +1005,119 @@ var PricingMath = (function(){
     return out.join('\n')+(out.failed?'\n\nSOME CHECKS FAILED':'\n\nAll checks passed');
   }
 
-  return {MODELS:MODELS, RATE_ORDER:RATE_ORDER, TPP:TPP, LIVE:LIVE,
+  return {MODELS:MODELS, RATE_ORDER:RATE_ORDER, TPP:TPP, LIVE:LIVE, ACTION_ORDER:ACTION_ORDER,
           cost:cost, tokens:tokens, modelSet:modelSet,
           ocSingle:ocSingle, ocMulti:ocMulti, zoe1:zoe1, zoeN:zoeN, registry:registry,
-          toCredits:toCredits, actions:actions, costPerCredit:costPerCredit,
-          planPL:planPL, entry:entry, pool:pool, contract:contract, selfCheck:selfCheck};
+          metered:metered, charge:charge, toCredits:toCredits, multiple:multiple,
+          actions:actions, costPerCredit:costPerCredit, packsFor:packsFor,
+          planPL:planPL, entry:entry, team:team, pool:pool, cloudRun:cloudRun, CLOUD_RUN:CLOUD_RUN, contract:contract, selfCheck:selfCheck};
 })();
 if (typeof module !== 'undefined') { module.exports = PricingMath; }
 </script>
 
 <script>
 (function(){
-  var M=PricingMath, LIVE=M.LIVE;
+  var M=PricingMath, LIVE=M.LIVE, TOOLS=M.ACTION_ORDER;
   function el(id){return document.getElementById(id);}
-  var expiry='expires';
+  var expiry='expires', rule='max', ownerTier='basic', crMode='request';
   var IN=['creditPrice','markup','pages','contracts','hit',
+          'base_zoe_message','mk_zoe_message','base_oneclick_run','mk_oneclick_run',
+          'base_registry_parse','mk_registry_parse','base_split_sheet','mk_split_sheet',
+          'mix_zoe_message','mix_oneclick_run','mix_registry_parse','mix_split_sheet',
           'freeCredits','basicCredits','proCredits','basicPrice','proPrice',
           'utilFree','utilBasic','utilPro','fixedPerUser','targetMargin',
           'nFree','nBasic','nPro',
+          'teamsOwned','teamMembers','teamCap','teamUtil','teamPack','teamTopup','teamTransfer','teamStorageGb',
           'seats','allowance','adminCap','utilEnt','termMonths',
-          'paygCredits','dispersal','lumpRate'].map(el);
+          'paygCredits','dispersal','lumpRate','crVcpu','crMem','crMin','crBusy','crReqM','crFee'].map(el);
 
-  function n(id){return +el(id).value;}
+  function n(id){return +el(id).value||0;}
   function fmtTok(v){if(v>=1000)return(v/1000).toFixed(v>=10000?0:1)+'k';return String(v);}
   function usd(v){if(v===0)return'$0';if(Math.abs(v)<0.01)return'$'+v.toFixed(4);if(Math.abs(v)<1)return'$'+v.toFixed(3);return'$'+v.toFixed(2);}
   function money(v){return (v<0?'−$':'$')+Math.abs(v).toFixed(2);}
   function pct(v){return v==null?'—':Math.round(v*100)+'%';}
+  function num(v){return Math.round(v).toLocaleString();}
   function stat(label,val,note,cls){return '<div class="stat'+(cls&&cls.indexOf('hero')>=0?' hero':'')+'"><div class="sl">'+label+'</div><div class="sv'+(cls?' '+cls.replace('hero','').trim():'')+'">'+val+'</div><div class="snote">'+note+'</div></div>';}
   var MO='<span style="font-size:12px;color:var(--muted)">/mo</span>';
+  var TOOL_NAME={zoe_message:'Zoe message',oneclick_run:'OneClick run',registry_parse:'Registry parse',split_sheet:'Split sheet'};
+  var TOOL_UNIT={zoe_message:'messages',oneclick_run:'runs',registry_parse:'parses',split_sheet:'sheets'};
 
   function bar(value,max,cls){
     var w=max>0?Math.max(value>0?4:0,Math.min(100,value/max*100)):0;
     return '<div class="bar-wrap"><div class="bar-track"><div class="bar-fill '+(cls||'')+'" style="width:'+w+'%"></div></div></div>';
   }
 
+  // Pack <select>s for the team calculator — value is the ladder index + 1, 0 = none.
+  ['teamPack','teamTopup'].forEach(function(id){
+    el(id).innerHTML='<option value="0">None</option>'+LIVE.packs.map(function(p,i){
+      return '<option value="'+(i+1)+'">'+p.credits.toLocaleString()+' cr · $'+p.usd+'</option>';}).join('');
+  });
+  function packAt(id){var i=n(id);return i>0?LIVE.packs[i-1]:null;}
+
   function render(){
     var a={pages:n('pages'),contracts:n('contracts'),hit:n('hit')/100};
-    var cp=Math.max(0.001,n('creditPrice')), mk=n('markup');
+    var cp=Math.max(0.001,n('creditPrice')), mPct=n('markup'), mDef=mPct/100;   // default GROSS MARGIN on token cost
     el('v_pages').textContent=a.pages+' pg'; el('v_contracts').textContent=a.contracts;
-    el('v_markup').textContent=mk.toFixed(2).replace(/0$/,'')+'×'; el('v_hit').textContent=Math.round(a.hit*100)+'%';
-    el('v_cpNote').textContent='list is $'+LIVE.overageUsd.toFixed(3)+' (pay-per-use)';
+    el('v_markup').textContent=mPct+'%'; el('v_hit').textContent=Math.round(a.hit*100)+'%';
+    el('v_cpNote').textContent='$1 = '+Math.floor(1/cp)+' cr · list price $'+LIVE.overageUsd.toFixed(3);
+    el('ruleLabel').textContent=rule==='add'?'charge = base + metered, every run':'charge = the higher of base or metered';
+    el('ruleSub').textContent=rule==='add'?'every run pays base AND its tokens':'shipped: pay the base; tokens only matter past it';
+    el('ruleCopy').textContent=rule==='add'?' Every run debits its base rate plus what its tokens cost at the margin %, so the advertised price is never quite what a run costs.':' An ordinary run pays exactly its base rate. Only a run whose tokens cost more than the base already covers is charged more — the base is a floor, not an add-on.';
 
-    // ---------- tab 1: dials ----------
-    var cpc=M.costPerCredit(a);
-    var acts=M.actions(a);
-    el('dialStats').innerHTML=
-      stat('Real cost of 1 credit',usd(cpc),'blended over the action mix',cpc<cp?'pos':'neg')+
-      stat('Gross margin per credit',pct(cp>0?(cp-cpc)/cp:null),'at $'+cp.toFixed(3)+' sell price',(cp-cpc)>=0?'pos':'neg')+
-      stat('Markup achieved',(cpc>0?(cp/cpc).toFixed(1):'∞')+'×','vs '+mk.toFixed(2).replace(/0$/,'')+'× target',(cpc>0&&cp/cpc>=mk)?'pos':'neg')+
-      stat('Credits per $1',(cp>0?Math.floor(1/cp):0)+' cr','what a dollar buys the customer',null);
-
-    var maxMargin=0;
-    var rows=acts.map(function(x){
-      var suggested=M.toCredits(x.usd,mk,cp), live=LIVE.prices[x.key];
-      var charged=live*cp, margin=charged-x.usd;
-      maxMargin=Math.max(maxMargin,Math.abs(margin));
-      return {x:x,suggested:suggested,live:live,charged:charged,margin:margin,
-              marginPct:charged>0?margin/charged:null};
+    // ---------- tab 1: per-tool pricing ----------
+    var TP={};
+    TOOLS.forEach(function(k){
+      var mkEl=el('mk_'+k); if(!mkEl.disabled) mkEl.placeholder=mPct;
+      var raw=mkEl.disabled?'':mkEl.value;   // '' inherits the default; '0' is a real 0% margin (charge at cost)
+      TP[k]={base:Math.max(0,n('base_'+k)), margin:raw===''?mDef:Math.min(0.95,Math.max(0,+raw)/100)};
     });
+    function priceOf(key,usdCost){var p=TP[key]||{base:0,margin:mDef};var met=M.metered(usdCost,p.margin,cp);return {met:met,charge:M.charge(p.base,met,rule),base:p.base,margin:p.margin};}
+    var mix={}; mix.zoe_message=n('mix_zoe_message'); mix.oneclick_run=n('mix_oneclick_run'); mix.registry_parse=n('mix_registry_parse'); mix.split_sheet=n('mix_split_sheet');
+    el('v_mix_zoe').textContent=mix.zoe_message; el('v_mix_oc').textContent=mix.oneclick_run; el('v_mix_reg').textContent=mix.registry_parse; el('v_mix_ss').textContent=mix.split_sheet;
+
+    var acts=M.actions(a), modeled={};
+    var rows=acts.map(function(x){
+      var pr=priceOf(x.key,x.usd); modeled[x.key]=pr.charge;
+      var charged=pr.charge*cp, margin=charged-x.usd;
+      return {x:x,pr:pr,live:LIVE.prices[x.key],charged:charged,margin:margin,marginPct:charged>0?margin/charged:null};
+    });
+    var cpc=M.costPerCredit(a,mix,modeled);          // blended real cost of a credit at YOUR pricing + mix
+    var cpcLive=M.costPerCredit(a,mix,LIVE.prices);  // …and at the shipped base rates
+    var mixTotal=TOOLS.reduce(function(s,k){return s+mix[k];},0);
+
+    el('dialStats').innerHTML=
+      stat('Real cost of 1 credit',usd(cpc),'blended over your action mix at your pricing',cpc<cp?'pos':'neg')+
+      stat('Gross margin per credit',pct(cp>0?(cp-cpc)/cp:null),'at $'+cp.toFixed(3)+' sell price',(cp-cpc)>=0?'pos':'neg')+
+      stat('Effective multiple',(cpc>0?(cp/cpc).toFixed(1):'∞')+'×','sell ÷ cost · the '+mPct+'% dial alone would be '+M.multiple(mDef).toFixed(1)+'×',(cpc>0&&cp/cpc>=M.multiple(mDef))?'pos':'neg')+
+      stat('What $1 buys',(cp>0?Math.floor(1/cp):0)+' cr','≈ '+(modeled.oneclick_run>0?(Math.floor(1/cp)/modeled.oneclick_run).toFixed(1):'—')+' OneClick runs · '+(modeled.zoe_message>0?Math.floor(Math.floor(1/cp)/modeled.zoe_message):'—')+' Zoe messages — base rates change what a credit buys, not its price',null);
+
+    // per-tool cards
+    rows.forEach(function(r){
+      var pr=r.pr, k=r.x.key;
+      el('est_'+k).textContent='≈ '+pr.charge+' cr / run · '+pct(r.marginPct)+' margin';
+      var tail=r.x.llm?('tokens '+usd(r.x.usd)+' at '+Math.round(pr.margin*100)+'% margin = '+pr.met+' cr'):'no LLM — $0 of tokens, base only';
+      var how=r.x.llm?(rule==='add'?' + base '+pr.base+' → charge '+pr.charge:(pr.met>pr.base?' > base '+pr.base+' → meter fires, charge '+pr.charge:' ≤ base '+pr.base+' → charge the base, '+pr.charge)):'';
+      el('estn_'+k).textContent=tail+how+' · live '+r.live+' cr';
+    });
+
+    // action mix stats
+    var mixUsd=0, mixCr=0; rows.forEach(function(r){mixUsd+=mix[r.x.key]*r.x.usd; mixCr+=mix[r.x.key]*r.pr.charge;});
+    el('blendStats').innerHTML=
+      stat('10 actions cost you',usd(mixUsd),'and debit '+num(mixCr)+' cr',null)+
+      stat('Charged',money(mixCr*cp),'at $'+cp.toFixed(3)+' / cr',null)+
+      stat('Blended margin',pct(mixCr*cp>0?(mixCr*cp-mixUsd)/(mixCr*cp):null),'across the mix at your pricing',(mixCr*cp-mixUsd)>=0?'pos':'neg')+
+      stat('At live base rates',usd(cpcLive)+' / cr','vs '+usd(cpc)+' at your dials'+(mixTotal!==10?' · mix sums to '+mixTotal+', not 10':''),null);
+
+    var maxMargin=0; rows.forEach(function(r){maxMargin=Math.max(maxMargin,Math.abs(r.margin));});
     el('actionRows').innerHTML=rows.map(function(r){
-      var short=r.suggested>r.live, cls=r.margin<0?'bad':'credits';
+      var pr=r.pr, cls=r.margin<0?'bad':'credits', baseWins=pr.charge===pr.base&&pr.met<=pr.base;
+      var diff=pr.base-r.live;
       return '<tr>'+
         '<td><div class="tool">'+r.x.name+'</div><div class="scen">'+r.x.note+'</div></td>'+
+        '<td class="num">'+pr.base+' cr'+(diff?' <span class="delta">'+(diff>0?'+':'−')+Math.abs(diff)+' vs live</span>':'')+'</td>'+
+        '<td class="num">'+(r.x.llm?pr.met+' cr <span class="delta">@'+Math.round(pr.margin*100)+'%</span>':'—')+'</td>'+
+        '<td class="num credits">'+pr.charge+' cr'+(r.x.llm?' <span class="delta">'+(rule==='add'?'base + tokens':(baseWins?'base is the floor':'meter fires'))+'</span>':'')+'</td>'+
         '<td class="num cost">'+usd(r.x.usd)+'</td>'+
-        '<td class="num credits">'+r.suggested+' cr</td>'+
-        '<td class="num">'+r.live+' cr'+(short?' <span class="delta">−'+(r.suggested-r.live)+'</span>':'')+'</td>'+
         '<td class="num cost">'+usd(r.charged)+'</td>'+
         '<td class="num '+cls+'">'+money(r.margin)+'</td>'+
         '<td>'+bar(Math.max(0,r.margin),maxMargin,r.margin<0?'high':'')+' <span class="delta">'+pct(r.marginPct)+'</span></td>'+
@@ -774,22 +1129,24 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
     var coldS=M.ocSingle(ct,false), warmS=M.ocSingle(ct,true);
     var blend=M.cost(coldS)*(1-a.hit)+M.cost(warmS)*a.hit;
     var scen=[
-      {tool:'Zoe',scen:'chat message · 1 contract',sev:'low',calls:M.zoe1(ct)},
-      {tool:'Registry',scen:'add work · new contract',sev:'low',calls:M.registry(ct)},
-      {tool:'Any tool',scen:'contract seen before (parse-cache hit)',sev:'free',calls:[]},
-      {tool:'OneClick',scen:'single · cold (extraction miss)',sev:'high',calls:coldS},
-      {tool:'OneClick',scen:'single · warm (extraction cached)',sev:'med',calls:warmS},
-      {tool:'OneClick',scen:'single · blended @ '+Math.round(a.hit*100)+'% hit',sev:'med',costOverride:blend,highlight:true,calls:[]},
-      {tool:'OneClick',scen:'result-cache hit (unchanged re-run)',sev:'free',calls:[]}
+      {tool:'Zoe',key:'zoe_message',scen:'chat message · 1 contract',sev:'low',calls:M.zoe1(ct)},
+      {tool:'Zoe',key:null,scen:'greeting / thanks (conversational fast-path)',sev:'free',calls:[],free:true},
+      {tool:'Registry',key:'registry_parse',scen:'add work · new contract',sev:'low',calls:M.registry(ct)},
+      {tool:'Registry',key:'registry_parse',scen:'contract seen before (parse-cache hit)',sev:'free',calls:[]},
+      {tool:'OneClick',key:'oneclick_run',scen:'single · cold (extraction miss)',sev:'high',calls:coldS},
+      {tool:'OneClick',key:'oneclick_run',scen:'single · warm (extraction cached)',sev:'med',calls:warmS},
+      {tool:'OneClick',key:'oneclick_run',scen:'single · blended @ '+Math.round(a.hit*100)+'% hit',sev:'med',costOverride:blend,highlight:true,calls:[]},
+      {tool:'OneClick',key:'oneclick_run',scen:'result-cache hit (unchanged re-run) · charged once per period',sev:'free',calls:[]},
+      {tool:'Split sheet',key:'split_sheet',scen:'PDF or DOCX · one format per request',sev:'free',calls:[]}
     ];
     // Multi-contract rows only when the slider is above 1 — at N=1 they'd restate
     // the single-contract rows, and Zoe's gpt-5 escalation only fires on 2+.
     if(N>1) scen.push(
-      {tool:'Zoe',scen:'chat message · '+N+' contracts (escalates to gpt-5)',sev:'med',calls:M.zoeN(ct,N)},
-      {tool:'OneClick',scen:N+' contracts · warm',sev:'med',calls:M.ocMulti(ct,N,true)}
+      {tool:'Zoe',key:'zoe_message',scen:'chat message · '+N+' contracts (escalates to gpt-5)',sev:'med',calls:M.zoeN(ct,N)},
+      {tool:'OneClick',key:'oneclick_run',scen:N+' contracts · warm',sev:'med',calls:M.ocMulti(ct,N,true)}
     );
     scen=scen.map(function(s){var c=(s.costOverride!=null)?s.costOverride:M.cost(s.calls);
-      return {s:s,c:c,tk:M.tokens(s.calls),credits:M.toCredits(c,mk,cp)};});
+      return {s:s,c:c,tk:M.tokens(s.calls),credits:s.free?0:priceOf(s.key,c).charge};});
     var maxC=Math.max.apply(null,scen.map(function(r){return r.c;}))||1;
     el('rows').innerHTML=scen.map(function(r){
       var s=r.s,over=(s.costOverride!=null),callN=s.calls.length;
@@ -804,7 +1161,7 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
         '<td class="num '+(r.credits===0?'creditsFree':'credits')+'">'+(r.credits===0?'free':r.credits)+'</td>'+
       '</tr>';
     }).join('');
-    el('ocHeadline').innerHTML='OneClick ≈ <b>'+M.toCredits(blend,mk,cp)+' cr</b> suggested vs <b>'+LIVE.prices.oneclick_run+' cr</b> live · 1 cr = $'+cp.toFixed(3);
+    el('ocHeadline').innerHTML='OneClick charges <b>'+priceOf('oneclick_run',blend).charge+' cr</b> at your dials vs <b>'+LIVE.prices.oneclick_run+' cr</b> live · 1 cr = $'+cp.toFixed(3);
     el('foot-rates').textContent='1 credit = $'+cp.toFixed(3)+' sell · '+usd(cpc)+' cost';
 
     // ---------- tab 2: plans ----------
@@ -822,6 +1179,8 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
       pl[p.k]=M.planPL({grant:grants[p.k],util:utils[p.k],costPerCredit:cpc,fixed:fixed,
                         revenue:prices[p.k],targetMargin:tm});
     });
+    function buys(credits){var oc=modeled.oneclick_run, z=modeled.zoe_message;
+      return (oc>0?Math.floor(credits/oc)+' OneClick':'')+(z>0?' · '+Math.floor(credits/z)+' Zoe':'');}
 
     var freeCost=-pl.free.margin;
     el('freeStats').innerHTML=
@@ -833,7 +1192,7 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
     el('planRows').innerHTML=PLANS.map(function(p){
       var r=pl[p.k], needed=r.needed, short=isFinite(needed)&&needed>prices[p.k]&&p.k!=='free';
       return '<tr>'+
-        '<td><div class="tool">'+p.label+'</div><div class="scen">'+(p.k==='free'?'acquisition cost':'$'+prices[p.k]+'/mo')+'</div></td>'+
+        '<td><div class="tool">'+p.label+'</div><div class="scen">'+(p.k==='free'?'acquisition cost':'$'+prices[p.k]+'/mo')+' · buys '+buys(grants[p.k])+'</div></td>'+
         '<td class="num">'+grants[p.k]+'</td>'+
         '<td class="num">'+Math.round(r.burned)+'</td>'+
         '<td class="num cost">'+money(r.credCogs)+'</td>'+
@@ -866,7 +1225,92 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
       stat('Free tier drag',money(counts.free*freeCost)+MO,counts.free+' free users at '+money(freeCost)+' each','neg')+
       stat('Margin per paying user',money((counts.basic+counts.pro)>0?totMargin/(counts.basic+counts.pro):0)+MO,'after carrying the free tier',null,'hero');
 
-    // ---------- tab 3: licensing ----------
+    // ---------- tab 3: teams ----------
+    el('v_stoRate').textContent=LIVE.storageOverageUsdPerGb.toFixed(3);
+    el('tierRows').innerHTML=PLANS.map(function(p){var t=LIVE.teams[p.k];
+      return '<tr><td><div class="tool">'+p.label+'</div><div class="scen">'+(p.k==='free'?'no card on file':'$'+prices[p.k]+'/mo · $'+LIVE.annualPrice[p.k]+'/yr')+'</div></td>'+
+        '<td class="num">'+(p.k==='free'?'$0':money(prices[p.k]))+'</td>'+
+        '<td class="num">'+grants[p.k].toLocaleString()+'</td>'+
+        '<td class="num">'+(t.teams||'—')+'</td>'+
+        '<td class="num">'+(t.members||'—')+'</td>'+
+        '<td class="num">'+(t.storageGb?t.storageGb+' GiB':'—')+'</td>'+
+        '<td style="font-size:12.5px;color:var(--muted)">'+(t.teams?(t.payg?'pay-as-you-go, $'+LIVE.storageOverageUsdPerGb.toFixed(3)+'/GB/mo on the owner\'s card':'hard cap — uploads refused'):'—')+'</td>'+
+        '<td style="font-size:12.5px;color:var(--muted)">free — join any team you\'re invited to</td></tr>';
+    }).join('');
+
+    var td=LIVE.teams[ownerTier];
+    el('teamsOwned').max=td.teams; el('teamMembers').max=td.members;
+    var teams=Math.min(n('teamsOwned'),td.teams), tmembers=Math.min(n('teamMembers'),td.members);
+    var tcap=n('teamCap'), tutil=n('teamUtil')/100, packSel=packAt('teamPack'), topSel=packAt('teamTopup');
+    var transfer=Math.max(0,n('teamTransfer')), stoGb=Math.max(0,n('teamStorageGb'));
+    el('v_teams').textContent=teams+' / '+td.teams; el('v_tmembers').textContent=tmembers+' / '+td.members;
+    el('v_tcap').textContent=tcap.toLocaleString(); el('v_tutil').textContent=Math.round(tutil*100)+'%';
+    el('v_tierNote').textContent=(ownerTier==='basic'?'Basic':'Pro')+' · '+td.teams+' team'+(td.teams>1?'s':'')+' × '+td.members+' · '+td.storageGb+' GiB '+(td.payg?'then PAYG':'hard cap');
+    var tm3=M.team({teams:teams,membersPerTeam:tmembers,memberCap:tcap,util:tutil,
+      packCredits:packSel?packSel.credits:0,packUsd:packSel?packSel.usd:0,
+      topupCredits:topSel?topSel.credits:0,topupUsd:topSel?topSel.usd:0,transferCredits:transfer,
+      storageGb:stoGb,storageCapGb:td.storageGb,payg:td.payg,storageUsdPerGb:LIVE.storageOverageUsdPerGb,
+      costPerCredit:cpc,fixedPerUser:fixed});
+    var owner=pl[ownerTier];
+    var allRev=prices[ownerTier]+tm3.revenue, allCogs=owner.cogs+tm3.cogs, allMargin=allRev-allCogs;
+    el('teamStats').innerHTML=
+      stat('Pool inflow',num(tm3.inflow)+' cr'+MO,(packSel?packSel.credits.toLocaleString()+' pack':'no pack')+(topSel?' + '+topSel.credits.toLocaleString()+' top-up':'')+(transfer?' + '+num(transfer)+' transferred':''),null)+
+      stat('Member demand',num(tm3.demand)+' cr'+MO,tm3.members+' members × '+tcap.toLocaleString()+' cap × '+Math.round(tutil*100)+'%',null)+
+      stat(tm3.shortfall>0?'Unmet demand':'Banked each month',num(tm3.shortfall>0?tm3.shortfall:tm3.banked)+' cr',
+           tm3.shortfall>0?'members hit an empty pool — only an admin buying credits helps':'reserve never expires — accumulates',tm3.shortfall>0?'neg':'pos')+
+      stat('Team revenue',money(tm3.revenue)+MO,'packs + top-up'+(tm3.storageRev>0?' + storage overage':'')+' · '+(tm3.paidPerCredit>0?'$'+tm3.paidPerCredit.toFixed(4)+'/cr':'nothing bought'),null)+
+      stat('Team margin',money(tm3.margin)+MO,pct(tm3.marginPct)+' · burn '+money(tm3.creditCogs)+' + infra '+money(tm3.fixed),tm3.margin>=0?'pos':'neg')+
+      stat('Owner + teams',money(allMargin)+MO,pct(allRev>0?allMargin/allRev:null)+' of '+money(allRev)+' revenue',allMargin>=0?'pos':'neg','hero')+
+      stat('Team storage',stoGb+' / '+td.storageGb+' GB',tm3.storageBlocked?'over the hard cap — uploads refused':(tm3.storageOverGb>0?num(tm3.storageOverGb)+' GB over → '+money(tm3.storageRev)+'/mo PAYG':'inside the pool'),tm3.storageBlocked?'neg':null);
+
+    var trows=[
+      {n:'Owner\'s '+(ownerTier==='basic'?'Basic':'Pro')+' plan',note:grants[ownerTier].toLocaleString()+' cr grant · '+Math.round(owner.burned)+' burned at '+Math.round(utils[ownerTier]*100)+'% · personal, not the pool',credits:grants[ownerTier],rev:prices[ownerTier],cogs:owner.cogs},
+      {n:'Packs into the pool',note:packSel?packSel.key+' each month':'none',credits:packSel?packSel.credits:0,rev:packSel?packSel.usd:0,cogs:0},
+      {n:'Recurring top-up',note:topSel?topSel.key+' on the admin\'s card, monthly':'none',credits:topSel?topSel.credits:0,rev:topSel?topSel.usd:0,cogs:0},
+      {n:'Reserve transferred in',note:transfer?'paid for when that pack was bought — no new revenue':'none',credits:transfer,rev:0,cogs:0},
+      {n:'Members\' spend',note:num(tm3.burned)+' cr burned at '+usd(cpc)+'/cr'+(tm3.shortfall>0?' · '+num(tm3.shortfall)+' cr unmet':''),credits:tm3.burned,rev:0,cogs:tm3.creditCogs},
+      {n:'Fixed infra · members',note:money(fixed)+' × '+tm3.members+' members',credits:0,rev:0,cogs:tm3.fixed},
+      {n:'Team storage overage',note:tm3.storageBlocked?'Basic hard cap — refused, not billed':(tm3.storageOverGb>0?num(tm3.storageOverGb)+' GB × $'+LIVE.storageOverageUsdPerGb.toFixed(3):'inside the pool'),credits:0,rev:tm3.storageRev,cogs:0}
+    ];
+    el('teamRows').innerHTML=trows.map(function(r){var m=r.rev-r.cogs;
+      return '<tr><td><div class="tool">'+r.n+'</div><div class="scen">'+r.note+'</div></td>'+
+        '<td class="num">'+(r.credits?num(r.credits):'—')+'</td>'+
+        '<td class="num cost">'+money(r.rev)+'</td><td class="num">'+money(r.cogs)+'</td>'+
+        '<td class="num '+(m>=0?'credits':'bad')+'">'+money(m)+'</td>'+
+        '<td class="num">'+pct(r.rev>0?m/r.rev:null)+'</td></tr>';
+    }).join('');
+    el('teamFoot').innerHTML='<tr><td>Owner + '+teams+' team'+(teams>1?'s':'')+' · '+tm3.members+' members</td><td class="num">'+num(tm3.inflow+grants[ownerTier])+'</td>'+
+      '<td class="num">'+money(allRev)+'</td><td class="num">'+money(allCogs)+'</td>'+
+      '<td class="num '+(allMargin>=0?'credits':'bad')+'">'+money(allMargin)+'</td><td class="num">'+pct(allRev>0?allMargin/allRev:null)+'</td></tr>';
+    el('teamNote').innerHTML='Members can only burn what was bought into the pool, so the members\' line is always funded by the pack lines above it — '+
+      (tm3.inflow>0?'this pool pays <b style="color:var(--ink-soft)">$'+tm3.paidPerCredit.toFixed(4)+'/cr</b> against a real cost of <b style="color:var(--ink-soft)">'+usd(cpc)+'</b>. ':'nothing is being bought, so members can\'t spend at all. ')+
+      'What is <em>not</em> funded is fixed infra for '+tm3.members+' members ('+money(tm3.fixed)+'/mo)'+(td.payg?'':' and storage parked under Basic\'s hard cap')+' — that comes out of the owner\'s plan margin ('+money(owner.margin)+'/mo).';
+
+    var buyRows=TOOLS.map(function(k){var base=modeled[k], act=rows.filter(function(r){return r.x.key===k;})[0];
+      var runs=base>0?Math.floor(tm3.inflow/base):0, paid=base*tm3.paidPerCredit, m=paid-act.x.usd;
+      return {k:k,base:base,runs:runs,cogs:act.x.usd,paid:paid,m:m};});
+    el('teamBuyRows').innerHTML=buyRows.map(function(r){
+      return '<tr><td><div class="tool">'+TOOL_NAME[r.k]+'</div></td><td class="num">'+r.base+' cr</td>'+
+        '<td class="num">'+num(r.runs)+' '+TOOL_UNIT[r.k]+'</td><td class="num cost">'+usd(r.cogs)+'</td>'+
+        '<td class="num">'+(tm3.inflow>0?usd(r.paid):'—')+'</td>'+
+        '<td class="num '+(r.m>=0?'credits':'bad')+'">'+(tm3.inflow>0?money(r.m):'—')+'</td>'+
+        '<td class="num">'+(tm3.inflow>0?pct(r.paid>0?r.m/r.paid:null):'—')+'</td></tr>';
+    }).join('');
+
+    el('fullRows').innerHTML=['basic','pro'].map(function(k){var t=LIVE.teams[k];
+      var demand=t.teams*t.members*tcap*tutil, pk=M.packsFor(demand);
+      var full=M.team({teams:t.teams,membersPerTeam:t.members,memberCap:tcap,util:tutil,packCredits:pk.credits,packUsd:pk.usd,
+        storageGb:0,storageCapGb:t.storageGb,payg:t.payg,storageUsdPerGb:LIVE.storageOverageUsdPerGb,costPerCredit:cpc,fixedPerUser:fixed});
+      var rev=prices[k]+full.revenue, cogs=pl[k].cogs+full.cogs, m=rev-cogs;
+      return '<tr'+(k===ownerTier?' style="background:var(--accent-soft)"':'')+'><td><div class="tool">'+(k==='basic'?'Basic':'Pro')+'</div><div class="scen">$'+prices[k]+'/mo owner</div></td>'+
+        '<td>'+t.teams+' × '+t.members+' = '+(t.teams*t.members)+' members</td>'+
+        '<td class="num">'+num(demand)+'</td>'+
+        '<td style="font-size:12.5px;color:var(--muted)">'+(pk.n?pk.n+' × '+pk.pack.credits.toLocaleString()+' cr = '+money(pk.usd):'—')+'</td>'+
+        '<td class="num cost">'+money(rev)+'</td><td class="num">'+money(cogs)+'</td>'+
+        '<td class="num '+(m>=0?'credits':'bad')+'">'+money(m)+'</td><td class="num">'+pct(rev>0?m/rev:null)+'</td></tr>';
+    }).join('');
+
+    // ---------- tab 4: licensing ----------
     var seats=n('seats'), allowance=n('allowance'), adminCap=n('adminCap'), utilE=n('utilEnt')/100;
     var term=n('termMonths'), dispersal=Math.max(0,n('dispersal')), paygCr=n('paygCredits');
     var lumpRate=Math.max(0.0001,n('lumpRate'));
@@ -875,12 +1319,24 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
     el('v_adm').textContent=adminCap; el('v_ue').textContent=Math.round(utilE*100)+'%';
     el('v_term').textContent=term+' mo'; el('v_payg').textContent=paygCr.toLocaleString();
 
+    // private Cloud Run service for this org
+    var crMin=n('crMin'), crBusy=n('crBusy')/100, crFee=Math.max(0,n('crFee'));
+    el('v_crMin').textContent=crMin; el('v_crBusy').textContent=Math.round(crBusy*100)+'%';
+    el('crModeSub').textContent=crMode==='instance'?'CPU always allocated · flat rate, no request charge':'idle rate while warm, active rate while serving';
+    var cr=M.cloudRun({mode:crMode,vcpu:Math.max(1,n('crVcpu')),memGib:Math.max(0.5,n('crMem')),minInstances:crMin,busy:crBusy,requestsM:Math.max(0,n('crReqM'))});
+    el('crStats').innerHTML=
+      stat('Cloud Run cost',money(cr.total)+MO,'CPU '+money(cr.cpu)+' · memory '+money(cr.mem)+(crMode==='request'?' · requests '+money(cr.req):''),null)+
+      stat('Per seat',money(seats>0?cr.total/seats:0)+MO,'spread over '+seats+' seats',null)+
+      stat('Fee vs cost',money(crFee-cr.total)+MO,crFee>0?'billing $'+crFee.toFixed(2)+' against '+money(cr.total):'not billed back — absorbed in the margin',(crFee-cr.total)>=0?'pos':'neg')+
+      stat('Fee that breaks even',money(cr.total)+MO,'add this to the monthly payment to make it free to you',null);
+
     var ct2=M.contract({seats:seats,capPerSeat:allowance,adminCap:adminCap,util:utilE,
       costPerCredit:cpc,fixedPerSeat:fixed,monthlyUsd:monthlyUsd,dispersal:dispersal,
-      paygCredits:paygCr,paygRate:LIVE.overageUsd,months:term,expires:(expiry==='expires')});
+      paygCredits:paygCr,paygRate:LIVE.overageUsd,months:term,expires:(expiry==='expires'),
+      infraUsd:cr.total,infraFeeUsd:crFee});
     var activated=dispersal>=LIVE.minOrgCredits;
     el('entStats').innerHTML=
-      stat('Monthly payment',money(monthlyUsd)+MO,dispersal.toLocaleString()+' cr at $'+lumpRate.toFixed(4)+'/cr',null)+
+      stat('Monthly payment',money(monthlyUsd+crFee)+MO,dispersal.toLocaleString()+' cr at $'+lumpRate.toFixed(4)+'/cr'+(crFee>0?' + $'+crFee.toFixed(2)+' private cloud':''),null)+
       stat('Contract value',money(ct2.tcv),term+' months — margin '+money(ct2.termMargin),ct2.termMargin>=0?'pos':'neg')+
       stat('Margin / mo',money(ct2.margin)+MO,pct(ct2.marginPct)+' of '+money(ct2.revenue)+' revenue',ct2.margin>=0?'pos':'neg')+
       stat('Margin / seat / mo',money(ct2.perSeat)+MO,seats+' seats at '+Math.round(utilE*100)+'% of cap',ct2.perSeat>=0?'pos':'neg')+
@@ -924,7 +1380,20 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
       (short?', which is <b style="color:var(--crit)">'+Math.round(ct2.poolShortfall).toLocaleString()+' cr more than the pool holds</b> — whoever spends first wins and the rest hit an empty pool, not their cap. Raise the dispersal or lower the caps.'
             :' and the pool holds '+dispersal.toLocaleString()+' — everyone stays inside their cap. Unspent: <b style="color:var(--ink-soft)">'+Math.round(ct2.unspent).toLocaleString()+' cr</b>.')+
       ' Realized price per credit burned: <b style="color:var(--ink-soft)">$'+(ct2.realizedRate||0).toFixed(4)+'</b>'+
-      (activated?'':' · under the '+LIVE.minOrgCredits.toLocaleString()+' cr activation floor, so seats would confer nothing today')+'.';
+      (activated?'':' · under the '+LIVE.minOrgCredits.toLocaleString()+' cr activation floor, so seats would confer nothing today')+
+      ' · a seat cap of '+allowance.toLocaleString()+' cr is '+(modeled.oneclick_run>0?Math.floor(allowance/modeled.oneclick_run):0)+' OneClick runs or '+(modeled.zoe_message>0?Math.floor(allowance/modeled.zoe_message):0)+' Zoe messages at your base rates.';
+
+    // per-tool view of the dispersal — ties the enterprise rate back to tool margins
+    var maxToolMargin=0;
+    var entTools=TOOLS.map(function(k){var base=modeled[k], act=rows.filter(function(r){return r.x.key===k;})[0];
+      var runs=base>0?Math.floor(dispersal/base):0, rev=base*lumpRate, m=rev-act.x.usd; maxToolMargin=Math.max(maxToolMargin,Math.abs(m));
+      return {k:k,base:base,runs:runs,cogs:act.x.usd,rev:rev,m:m};});
+    el('entToolRows').innerHTML=entTools.map(function(r){
+      return '<tr><td><div class="tool">'+TOOL_NAME[r.k]+'</div></td><td class="num">'+r.base+' cr</td>'+
+        '<td class="num">'+num(r.runs)+' '+TOOL_UNIT[r.k]+'</td><td class="num cost">'+usd(r.cogs)+'</td>'+
+        '<td class="num">'+usd(r.rev)+'</td><td class="num '+(r.m>=0?'credits':'bad')+'">'+money(r.m)+'</td>'+
+        '<td>'+bar(Math.max(0,r.m),maxToolMargin,r.m<0?'high':'')+' <span class="delta">'+pct(r.rev>0?r.m/r.rev:null)+'</span></td></tr>';
+    }).join('');
 
     // contract P&L rows
     var crows=[
@@ -933,7 +1402,9 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
       {n:'Pay-as-you-go',note:paygCr>0?'at $'+LIVE.overageUsd.toFixed(3)+'/cr — not implemented for seats':'none this month',
        credits:paygCr,rev:ct2.paygRev,cogs:ct2.paygCogs,perSeat:seats>0?(ct2.paygRev-ct2.paygCogs)/seats:0},
       {n:'Fixed infra',note:money(fixed)+' × '+(seats+1)+' users',credits:0,rev:0,cogs:ct2.fixed,
-       perSeat:seats>0?-ct2.fixed/seats:0}
+       perSeat:seats>0?-ct2.fixed/seats:0},
+      {n:'Private Cloud Run',note:crMin+' warm instance'+(crMin>1?'s':'')+' · '+(crMode==='instance'?'always-on':'request-based')+(crFee>0?' · billed at $'+crFee.toFixed(2)+'/mo':' · not billed back'),
+       credits:0,rev:ct2.infraFeeUsd,cogs:ct2.infraUsd,perSeat:seats>0?(ct2.infraFeeUsd-ct2.infraUsd)/seats:0}
     ];
     el('contractRows').innerHTML=crows.map(function(r){
       var m=r.rev-r.cogs;
@@ -962,6 +1433,7 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
     entries.push({name:'Pay-per-use overage',note:'personal plans only — never a seat',credits:1000,usd:1000*LIVE.overageUsd,util:1});
     entries.push({name:'Included in Basic',note:'grant bundled into the $'+prices.basic+' plan',credits:grants.basic,usd:prices.basic,util:utils.basic});
     entries.push({name:'Included in Pro',note:'grant bundled into the $'+prices.pro+' plan',credits:grants.pro,usd:prices.pro,util:utils.pro});
+    entries.push({name:'Included in Pro · annual',note:'$'+LIVE.annualPrice.pro+'/yr restated monthly',credits:grants.pro,usd:LIVE.annualPrice.pro/12,util:utils.pro});
     var maxEntryMargin=0;
     var entryRows=entries.map(function(e){
       var r=M.entry({credits:e.credits,usd:e.usd,costPerCredit:cpc,utilization:e.util});
@@ -986,7 +1458,8 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
     var scenarios=[0.25,0.5,0.75,1].map(function(u){
       return {u:u,c:M.contract({seats:seats,capPerSeat:allowance,adminCap:adminCap,util:u,
         costPerCredit:cpc,fixedPerSeat:fixed,monthlyUsd:monthlyUsd,dispersal:dispersal,
-        paygCredits:paygCr,paygRate:LIVE.overageUsd,months:term,expires:(expiry==='expires')})};
+        paygCredits:paygCr,paygRate:LIVE.overageUsd,months:term,expires:(expiry==='expires'),
+        infraUsd:cr.total,infraFeeUsd:crFee})};
     });
     el('burnRows').innerHTML=scenarios.map(function(s){
       var c=s.c, capped=c.poolShortfall>0;
@@ -1003,7 +1476,7 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
       '</tr>';
     }).join('');
 
-    // ---------- tab 4: rates ----------
+    // ---------- tab 5: rates ----------
     el('rateRows').innerHTML=M.RATE_ORDER.map(function(k){var m=M.MODELS[k];
       return '<tr><td class="tool" style="font-family:var(--mono);font-size:12.5px">'+m.name+'</td>'+
         '<td style="color:var(--muted);font-size:12.5px">'+m.use+'</td>'+
@@ -1013,19 +1486,25 @@ if (typeof module !== 'undefined') { module.exports = PricingMath; }
     }).join('');
   }
 
-  IN.forEach(function(i){i.addEventListener('input',render);});
-  Array.prototype.forEach.call(document.querySelectorAll('#expiryToggle button'),function(b){
-    b.addEventListener('click',function(){
-      expiry=b.getAttribute('data-x');
-      Array.prototype.forEach.call(document.querySelectorAll('#expiryToggle button'),function(x){x.classList.toggle('active',x===b);});
-      render();
+  IN.forEach(function(i){i.addEventListener('input',render);i.addEventListener('change',render);});
+  function wireToggle(sel,attr,set){
+    Array.prototype.forEach.call(document.querySelectorAll(sel+' button'),function(b){
+      b.addEventListener('click',function(){
+        set(b.getAttribute(attr));
+        Array.prototype.forEach.call(document.querySelectorAll(sel+' button'),function(x){x.classList.toggle('active',x===b);});
+        render();
+      });
     });
-  });
+  }
+  wireToggle('#expiryToggle','data-x',function(v){expiry=v;});
+  wireToggle('#ruleToggle','data-r',function(v){rule=v;});
+  wireToggle('#tierToggle','data-t',function(v){ownerTier=v;});
+  wireToggle('#crModeToggle','data-m',function(v){crMode=v;});
   Array.prototype.forEach.call(document.querySelectorAll('#tabs button'),function(b){
     b.addEventListener('click',function(){
       var t=b.getAttribute('data-tab');
       Array.prototype.forEach.call(document.querySelectorAll('#tabs button'),function(x){x.classList.toggle('active',x===b);});
-      ['cost','plans','ent','rates'].forEach(function(k){el('tab-'+k).hidden=(k!==t);});
+      ['cost','plans','teams','ent','rates'].forEach(function(k){el('tab-'+k).hidden=(k!==t);});
     });
   });
   render();

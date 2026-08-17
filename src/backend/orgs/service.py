@@ -24,6 +24,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from supabase import Client
 
+import artist_access
 from analytics import capture as analytics_capture
 from orgs import authz, wallets
 
@@ -61,19 +62,44 @@ class CreditRequestAlreadyResolvedError(Exception):
     409."""
 
 
+SEATS_PER_PRO = 5
+"""Pro seat-unlock block size (owner decision 2026-08-16, superseding the
+flat 5-member Pro cap from the previous same-day decision):
+`effective_limit = min(dials.max_team_members, SEATS_PER_PRO * (1 +
+pro_member_count))`, where `pro_member_count` is the org's ACTIVE members
+(excluding the coverer) whose resolved tier is Pro. The covering owner
+counts as the first Pro seat for free, so a lone Pro coverer unlocks 5; one
+Pro member joining unlocks 10 (== tier_entitlements.pro.max_team_members,
+the hard ceiling — Basic's 3-member cap is always below SEATS_PER_PRO so it
+never engages this formula). This gates ADDING a member only, never
+holding one: if the Pro member who unlocked a seat later leaves or
+downgrades, existing members are NOT removed — only new invites/accepts
+are refused until the team is back under the (re-shrunk) ceiling. No
+per-org overrides, no paid seat add-ons past the tier's max."""
+
+
 class TeamFullError(Exception):
-    """Self-serve org already holds `max_team_members` ACTIVE seats
-    (excluding the covering owner) — invite/accept refused until a seat
-    frees up or the coverer upgrades (Task 7, spec §3). Mapped by the
-    router to 402, with the limit baked into the message.
+    """Self-serve org already holds `effective_limit` ACTIVE seats (excluding
+    the covering owner) — invite/accept refused until a seat frees up, the
+    ceiling grows (another Pro member joins), or the coverer upgrades
+    (Task 7, spec §3; SEATS_PER_PRO formula owner decision 2026-08-16).
+    Mapped by the router to 402, with the limit baked into the message.
 
     `limit` carries the same number separately, for callers (accept_invite)
     that need to build their own message rather than surface this one
-    verbatim."""
+    verbatim.
 
-    def __init__(self, message: str, limit: int | None = None):
+    `next_step` is "contact" when the coverer is on Pro and already at
+    `max_team_members` (no per-org overrides / paid seat add-ons — bigger
+    teams are an Enterprise conversation), else "upgrade" (a Pro coverer
+    with unlockable seats left also gets "contact", pointed at Enterprise as
+    an alternative to waiting on another Pro member). The router forwards it
+    verbatim in the 402 detail for the frontend CTA."""
+
+    def __init__(self, message: str, limit: int | None = None, next_step: str | None = None):
         super().__init__(message)
         self.limit = limit
+        self.next_step = next_step
 
 
 class TeamLapsedError(Exception):
@@ -664,6 +690,17 @@ async def get_org_ledger(db: Client, user_id: str, org_id: str) -> list[dict]:
 # ============================================================================
 
 
+def _pro_max_team_members(db: Client) -> int | None:
+    """Pro tier's `max_team_members` (10), for the upsell message shown to a
+    non-Pro coverer at their wall — read straight off tier_entitlements
+    rather than duplicating the "10" as a literal. Only called building that
+    (rare) error message, never on the hot invite path. None if the row is
+    missing, so the caller can phrase around it rather than lie."""
+    res = db.table("tier_entitlements").select("max_team_members").eq("tier", "pro").maybe_single().execute()
+    row = res.data if res else None
+    return (row or {}).get("max_team_members") or None
+
+
 def _self_serve_seat_room(db: Client, org_id: str) -> None:
     """Self-serve team-size gate (Task 7, spec §3), called from BOTH ends of
     the invite flow (invite_member and accept_invite) so a limit can't be
@@ -682,6 +719,14 @@ def _self_serve_seat_room(db: Client, org_id: str) -> None:
     way there is no dials owner left to resolve a limit against, so the
     gate is skipped rather than guessed. A released org is already on the
     sweep's path to 'lapsed', which is the real backstop for that case.
+
+    The effective ceiling is SEATS_PER_PRO's formula (owner decision
+    2026-08-16): `min(dials.max_team_members, SEATS_PER_PRO * (1 +
+    pro_member_count))`, pro_member_count being this org's ACTIVE members
+    (excluding the coverer, who counts as the first Pro seat for free)
+    whose resolved tier is Pro. This gates ADDING only — a member who
+    unlocked a seat leaving later does NOT evict anyone, it just lowers the
+    ceiling new invites/accepts are checked against.
     """
     org = _first_org(db, org_id)
     if not org or org.get("kind") != "self_serve":
@@ -700,20 +745,50 @@ def _self_serve_seat_room(db: Client, org_id: str) -> None:
     # ahead of the sweep actually lapsing the org. That is intentional — a
     # team already heading toward lapse should not be allowed to grow — and
     # narrows spec §3's "invites still allowed during grace" for this case.
-    limit = standing.team_dials_for_user(db, covered_by).max_team_members
-    count_res = (
+    dials = standing.team_dials_for_user(db, covered_by)
+    members_res = (
         db.table("org_members")
-        .select("id", count="exact")
+        .select("user_id", count="exact")
         .eq("org_id", org_id)
         .eq("status", "active")
         .neq("user_id", covered_by)
         .execute()
     )
-    if (count_res.count or 0) >= limit:
-        raise TeamFullError(
-            f"This team is at its member limit ({limit}). Ask the covering admin to upgrade to add more seats.",
-            limit,
-        )
+    active_count = members_res.count if members_res.count is not None else len(members_res.data or [])
+    member_ids = [m["user_id"] for m in (members_res.data or [])]
+    # Per-member reads: acceptable here — at most SEATS_PER_PRO*(1+few) ~ 10
+    # members, and only on the invite/accept path, never a hot loop.
+    pro_member_count = sum(1 for uid in member_ids if standing.resolve_tier_for_user(db, uid) == "pro")
+    effective_limit = min(dials.max_team_members, SEATS_PER_PRO * (1 + pro_member_count))
+
+    if active_count >= effective_limit:
+        is_pro = dials.tier == "pro"
+        next_step = "contact" if is_pro else "upgrade"
+        tier_label = {"pro": "Pro", "basic": "Basic", "free": "Free"}.get(dials.tier) or "your plan"
+        if is_pro and effective_limit < dials.max_team_members:
+            message = (
+                f"This team has {effective_limit} seats on Pro. Another Pro member joining unlocks "
+                f"{SEATS_PER_PRO} more (up to {dials.max_team_members}) — or talk to us about Enterprise."
+            )
+        elif is_pro:
+            message = (
+                f"This team is at its {dials.max_team_members}-member limit on Pro. "
+                "For bigger teams, talk to us about Enterprise."
+            )
+        else:
+            pro_max = _pro_max_team_members(db)
+            if pro_max:
+                message = (
+                    f"This team is at its {effective_limit}-member limit on {tier_label}. "
+                    f"Upgrade to Pro for teams of up to {SEATS_PER_PRO} — and up to {pro_max} "
+                    "when another Pro member joins."
+                )
+            else:
+                message = (
+                    f"This team is at its {effective_limit}-member limit on {tier_label}. "
+                    f"Upgrade to Pro for teams of up to {SEATS_PER_PRO}."
+                )
+        raise TeamFullError(message, effective_limit, next_step)
 
 
 async def invite_member(db: Client, user_id: str, org_id: str, email: str, role: str) -> dict:
@@ -1028,13 +1103,12 @@ async def accept_invite(db: Client, user_id: str, user_email: str, token: str) -
 def create_org_invite_notification(
     db: Client, target_user_id: str, org_id: str, inviter_user_id: str, token: str
 ) -> None:
-    """In-app Accept/Decline row for an invited EXISTING user, mirroring
-    teams.service.create_team_invite_notification.
+    """In-app Accept/Decline row for an invited EXISTING user.
 
     type='invitation' + entity_type='org' is the pair NotificationRow keys the
-    org Accept/Decline buttons off. Deliberately NOT type='team_invite': that
-    type's buttons call the TEAMS endpoints (useAcceptTeamInvite), so an org row
-    carrying it would accept the wrong invite. 'invitation' is already
+    org Accept/Decline buttons off. (Until 2026-08-16 there was a second,
+    board-teams invite type on this table; it was removed with that module and
+    must not be reintroduced here.) 'invitation' is already
     CHECK-allowed (20260629000004), so this needs no migration — registry's
     'invitation' rows carry entity_type 'work'/NULL and keep rendering as before.
 
@@ -1059,8 +1133,7 @@ def create_org_invite_notification(
 
 def create_org_join_notifications(db: Client, org_id: str, member_user_id: str, member_email: str) -> None:
     """In-app notifications for a fresh seat acceptance, on the unified
-    `notifications` table (entity_type='org' — same writer shape as
-    teams.service.create_team_invite_notification).
+    `notifications` table (entity_type='org').
 
     Two recipients, because acceptance is the one org event both sides act on:
       - the new member, whose `billing_context_org_id` accept_invite just
@@ -1068,10 +1141,9 @@ def create_org_join_notifications(db: Client, org_id: str, member_user_id: str, 
         offboarding sends on the way OUT (orgs/router._notify_billing_reverted_background)
       - every ACTIVE admin, who now has a roster change and a cap to consider
 
-    Deliberately NOT type 'team_invite': NotificationRow renders that type's
-    Accept/Decline against the TEAMS endpoints (useAcceptTeamInvite), so an org
-    row carrying it would wire its buttons to the wrong API. These are
-    after-the-fact confirmations with no actions, so 'confirmation' is correct.
+    NOT an actionable 'invitation' row: NotificationRow renders Accept/Decline
+    for that type, and these are after-the-fact confirmations with no actions,
+    so 'confirmation' is correct.
 
     Best-effort and never raises — the seat is already active and committed by
     the time this runs; a notification failure must not fail the acceptance.
@@ -1175,7 +1247,94 @@ async def update_member_role(db: Client, user_id: str, org_id: str, member_id: s
     return res.data[0]
 
 
-def _revoke_offboarded_member_access(db: Client, org_id: str, member_user_id: str | None) -> None:
+async def list_org_roster(db: Client, user_id: str, org_id: str) -> list[dict]:
+    """Member-visible roster (spec 2026-08-16 §3): ACTIVE seats with profile
+    name/avatar, NO emails (those stay on the admin-only /usage seats). Feeds
+    the board assignee picker / "Created by" filter / board-members picker."""
+    authz.require_member(db, user_id, org_id)
+    # ...and LIVENESS, like every other predicate this feature added
+    # (boards.authz.is_live_org_member, require_org_admin, _live_org_ids).
+    # is_org_member alone ignores archived_at/'lapsed', so without this a
+    # lapsed org — whose boards and artists have all gone inert — would still
+    # hand out its full roster with names and avatars.
+    if org_id not in artist_access.live_org_ids(db, user_id):
+        raise HTTPException(status_code=404, detail="Organization not found")
+    rows = (
+        db.table("org_members").select("user_id, role").eq("org_id", org_id).eq("status", "active").execute().data or []
+    )
+    ids = [r["user_id"] for r in rows if r.get("user_id")]
+    profiles = {}
+    if ids:
+        res = db.table("profiles").select("id, full_name, avatar_url").in_("id", ids).execute()
+        profiles = {p["id"]: p for p in (res.data or [])}
+    return [
+        {
+            "user_id": r["user_id"],
+            "role": r["role"],
+            "full_name": profiles.get(r["user_id"], {}).get("full_name"),
+            "avatar_url": profiles.get(r["user_id"], {}).get("avatar_url"),
+        }
+        for r in rows
+        if r.get("user_id")
+    ]
+
+
+def _purge_member_from_org_boards(db: Client, org_id: str, member_user_id: str) -> None:
+    """REMOVAL only: drop the member's per-board visibility rows on this org's
+    boards, so a later re-invite doesn't silently hand back access to boards
+    that were narrowed to them.
+
+    Task ASSIGNMENTS are deliberately left alone (unlike the old
+    team_member_removal_cleanup trigger, which hard-deleted them): an
+    offboarded seat is not `active`, so live_org_ids/can_access_board already
+    deny the board and the board_task_assignees RLS policy already hides the
+    row. The UI renders such an assignee as "(no longer in team)". Deleting
+    history to enforce access that is already denied buys nothing and cannot
+    be undone.
+    """
+    board_ids = [b["id"] for b in (db.table("boards").select("id").eq("team_id", org_id).execute().data or [])]
+    if not board_ids:
+        return
+    db.table("board_members").delete().eq("user_id", member_user_id).in_("board_id", board_ids).execute()
+
+
+def _revert_org_boards(db: Client, org_id: str, fallback_user: str) -> None:
+    """Dissolve: every team board becomes a personal board of a PERSON, picked
+    exactly the way _dissolve_recipients picks one for an artist — the creator
+    if they still hold an ACTIVE seat, else the dissolving admin. A board left
+    owned by an already-removed member would be reachable by nobody once the
+    org is archived.
+
+    Not best-effort: a board still pointing at a dissolved org is invisible to
+    everyone, so a failure here must abort dissolve (which is retryable —
+    reverted boards no longer match team_id=org_id).
+    """
+    boards = db.table("boards").select("id, owner_id").eq("team_id", org_id).execute().data or []
+    if not boards:
+        return
+    active = {
+        m["user_id"]
+        for m in (
+            db.table("org_members").select("user_id").eq("org_id", org_id).eq("status", "active").execute().data or []
+        )
+    }
+    db.table("board_members").delete().in_("board_id", [b["id"] for b in boards]).execute()
+    for b in boards:
+        creator = b.get("owner_id")
+        recipient = creator if (creator and creator in active) else fallback_user
+        # artist_id is cleared too: uq_boards_personal_artist is UNIQUE
+        # (owner_id, artist_id) WHERE team_id IS NULL AND artist_id IS NOT NULL,
+        # so a team board carrying an artist_id whose recipient already owns a
+        # personal board for that artist would raise 23505 here — and every
+        # retry would hit the same row, wedging dissolve forever with the
+        # artists already handed back. The team's artist alias means nothing
+        # once the board belongs to a person.
+        db.table("boards").update({"team_id": None, "restricted": False, "owner_id": recipient, "artist_id": None}).eq(
+            "id", b["id"]
+        ).execute()
+
+
+def _revoke_offboarded_member_access(db: Client, org_id: str, member_user_id: str | None, final_status: str) -> None:
     """Licensing Phase C, Task 4 (rule 3 extended to seat offboarding):
     called AFTER `_offboard`'s reclaim step succeeds (whether or not any
     money actually moved — a zero-balance seat still needs its org-granted
@@ -1189,7 +1348,12 @@ def _revoke_offboarded_member_access(db: Client, org_id: str, member_user_id: st
     Delegates to `orgs.projects.revoke_org_granted_memberships` (Task 2's
     single implementation of rule 3), imported lazily to avoid a
     module-level import cycle: `orgs.projects` imports `_resolve_user_email`
-    from this module at its own top level."""
+    from this module at its own top level.
+
+    `final_status` distinguishes the two offboards: only 'removed' purges
+    board membership (see `_purge_member_from_org_boards`); a 'suspended'
+    seat destroys nothing, because reactivate_member can bring it back and
+    nothing would restore deleted rows."""
     if not member_user_id:
         return
     try:
@@ -1202,6 +1366,18 @@ def _revoke_offboarded_member_access(db: Client, org_id: str, member_user_id: st
         logger.exception(
             "_offboard: revoke_org_granted_memberships failed org_id=%s member_user_id=%s", org_id, member_user_id
         )
+
+    # Board visibility rows: REMOVAL only. Suspend is reversible
+    # (reactivate_member restores the seat) and nothing would restore these,
+    # so a suspend must not delete anything. Its OWN try/except, separate from
+    # the grant revoke above, so a board failure can't mask a grant failure.
+    if final_status == "removed":
+        try:
+            _purge_member_from_org_boards(db, org_id, member_user_id)
+        except Exception:
+            logger.exception(
+                "_offboard: board membership purge failed org_id=%s member_user_id=%s", org_id, member_user_id
+            )
 
 
 def cancel_topup(db: Client, org_id: str) -> bool:
@@ -1329,7 +1505,7 @@ async def _offboard(db: Client, user_id: str, org_id: str, member_id: str, final
         reread = db.table("org_members").select("*").eq("id", member_id).eq("org_id", org_id).maybe_single().execute()
         row = reread.data if (reread and reread.data) else updated.data[0]
 
-    _revoke_offboarded_member_access(db, org_id, row.get("user_id"))
+    _revoke_offboarded_member_access(db, org_id, row.get("user_id"), final_status)
     _cancel_topup_if_purchaser(db, org_id, row.get("user_id"))
     return row
 
@@ -1897,6 +2073,7 @@ async def dissolve_org(db: Client, user_id: str, org_id: str, confirm_name: str)
       2. cancel the top-up subscription at Stripe.
       3. revert every team artist to a person (creator if they still hold a
          seat, else the dissolving admin).
+      3b. revert every team board to a person, same recipient rule.
       4. re-derive the storage totals the revert just invalidated.
       5. soft-remove the seats, expire the open invites, drop org-granted
          project access.
@@ -1905,12 +2082,12 @@ async def dissolve_org(db: Client, user_id: str, org_id: str, confirm_name: str)
     Steps 1, 2, 4 and 5 are best-effort: a stale byte total, an uncanceled
     subscription or a surviving grant is a support ticket, not a reason to
     strand a team mid-dissolve (and the daily sweep re-reconciles 4 and 5).
-    Steps 3 and 6 ABORT with a 500 — the artist reverts are the entire point of
-    the operation, and they deliberately run BEFORE the seats are removed, so a
-    crash anywhere leaves an intact admin who can retry. A retry is safe and
-    convergent: the forfeit's request_id dedupes, an already-reverted artist no
-    longer matches team_id=org_id, and a second call after step 6 lands returns
-    {"already": True}.
+    Steps 3, 3b and 6 ABORT with a 500 — the artist and board reverts are the
+    entire point of the operation, and they deliberately run BEFORE the seats
+    are removed, so a crash anywhere leaves an intact admin who can retry. A
+    retry is safe and convergent: the forfeit's request_id dedupes, an
+    already-reverted artist or board no longer matches team_id=org_id, and a
+    second call after step 6 lands returns {"already": True}.
     """
     authz.require_admin(db, user_id, org_id)
     org = _require_self_serve_org(db, org_id)
@@ -1991,6 +2168,16 @@ async def dissolve_org(db: Client, user_id: str, org_id: str, confirm_name: str)
                 "Some artists were handed back but the team could not be dissolved. "
                 "Nothing was lost — run dissolve again to finish."
             ),
+        ) from exc
+
+    # 3b. Boards back to people — same recipient rule and same "not
+    # best-effort" reasoning as the artists above.
+    try:
+        _revert_org_boards(db, org_id, user_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Artists were handed back but boards could not be — nothing was lost; run dissolve again.",
         ) from exc
 
     # 4. Re-derive both sides' byte totals — same idiom (and same reason) as

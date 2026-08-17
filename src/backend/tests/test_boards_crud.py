@@ -22,10 +22,11 @@ def _db(tbl):
     return db
 
 
-async def test_create_team_board_requires_membership(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_team_member", lambda *a: False)
+async def test_create_team_board_requires_membership():
+    """No active seat in the org → live_org_ids is empty → PermissionError."""
+    db = _db({"org_members": MagicMock(data=[])})
     with pytest.raises(PermissionError):
-        await service.create_board(MagicMock(), USER, name="T", team_id=TEAM)
+        await service.create_board(db, USER, name="T", team_id=TEAM)
 
 
 async def test_list_personal_boards_active_only():
@@ -34,11 +35,18 @@ async def test_list_personal_boards_active_only():
 
 
 async def test_archive_team_board_requires_admin(monkeypatch):
+    """A live seat is not enough — is_board_admin also needs is_org_admin (rpc False here)."""
     board = {"id": BOARD, "team_id": TEAM, "owner_id": USER}
     monkeypatch.setattr(service.authz, "get_board", lambda db, b: board)
-    monkeypatch.setattr(service.authz, "is_team_admin", lambda *a: False)
+    db = _db(
+        {
+            "org_members": MagicMock(data=[{"org_id": TEAM, "user_id": USER}]),
+            "organizations": MagicMock(data=[{"id": TEAM}]),
+        }
+    )
+    db.rpc.return_value.execute.return_value = MagicMock(data=False)
     with pytest.raises(PermissionError):
-        await service.archive_board(MagicMock(), USER, BOARD)
+        await service.archive_board(db, USER, BOARD)
 
 
 async def test_subtask_auto_column_is_board_scoped(monkeypatch):

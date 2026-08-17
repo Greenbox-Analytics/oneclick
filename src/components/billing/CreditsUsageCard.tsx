@@ -25,11 +25,12 @@ import { fmtDate, fmtDay } from "@/lib/utils";
 type ToolMeta = { label: string; color: string; note?: string };
 const TOOL_META: Record<CreditAction, ToolMeta> = {
   oneclick_run: { label: "OneClick run", color: "var(--t-oneclick)" },
-  registry_parse: { label: "Registry parse", color: "var(--t-registry)", note: "cache hits free" },
+  registry_parse: { label: "Registry parse", color: "var(--t-registry)" },
   zoe_message: { label: "Zoe message", color: "var(--t-zoe)" },
+  split_sheet: { label: "Split sheet", color: "var(--t-split)" },
 };
 // Ring/list order matches the mockup.
-const ORDER: CreditAction[] = ["oneclick_run", "registry_parse", "zoe_message"];
+const ORDER: CreditAction[] = ["oneclick_run", "registry_parse", "zoe_message", "split_sheet"];
 
 interface Row {
   label: string;
@@ -85,7 +86,7 @@ export function CreditsUsageCard() {
               Your credits from {managedByOrg.orgName}
             </div>
           </div>
-          <Badge className="uppercase">{ENTERPRISE_LABEL}</Badge>
+          <Badge className="uppercase">{managedByOrg.kind === "self_serve" ? "Team" : ENTERPRISE_LABEL}</Badge>
         </div>
 
         <div className="flex items-center justify-between gap-4 flex-wrap px-6 pt-3.5 pb-[22px]">
@@ -105,12 +106,12 @@ export function CreditsUsageCard() {
                 <>
                   You&apos;ve used {capUsed.toLocaleString()} of your {cap.toLocaleString()} monthly limit.
                   {/* The pool balance is admin-only — a member sees their limit and nothing else. */}
-                  {poolBalance != null && <> Your organization has {poolBalance.toLocaleString()} in the shared pool.</>}{" "}
+                  {poolBalance != null && <> {managedByOrg.orgName} has {poolBalance.toLocaleString()} in the shared pool.</>}{" "}
                   Need more? Ask your admin to raise your limit.
                 </>
               ) : (
                 <>
-                  You draw from your organization&apos;s shared pool with no personal limit
+                  You draw from the shared pool with no personal limit
                   {poolBalance != null && <>, which holds {poolBalance.toLocaleString()} credits</>}. Running low? Ask
                   your admin to top the pool up.
                 </>
@@ -121,7 +122,7 @@ export function CreditsUsageCard() {
             variant="outline"
             size="sm"
             className="gap-1.5 flex-none"
-            onClick={() => navigate("/organization")}
+            onClick={() => navigate("/teams")}
           >
             <Send className="w-3.5 h-3.5" />
             Request a higher limit
@@ -150,16 +151,6 @@ export function CreditsUsageCard() {
       price: t?.price ?? null,
     };
   });
-  // Split sheets are not credit-metered — show activity, free.
-  rows.push({
-    label: "Split sheet",
-    color: "var(--t-split)",
-    note: "not metered",
-    spent: 0,
-    count: ent?.usage?.splitSheetsThisPeriod ?? 0,
-    price: null,
-  });
-
   const used = Math.max(0, grant - bundle);
   const maxSpent = Math.max(0, ...rows.map((r) => r.spent));
   const segments: RingSegment[] = ORDER.map((action) => ({
@@ -252,16 +243,16 @@ export function CreditsUsageCard() {
           <div>
             {rows.map((r) => {
               const pct = maxSpent ? Math.round((r.spent / maxSpent) * 100) : 0;
-              // Credits are metered per run off the AI tokens it actually used,
-              // so there is no flat "X cr each". Show the real average once
-              // there is something to average; before that, the estimate the
-              // balance check reserves per run.
+              // The base rate IS the price (spec 2026-08-17 §2), so quote it
+              // flat. Only surface an average when the metered tail actually
+              // moved the total — i.e. the period's spend exceeds count x base,
+              // which happens on pathological runs and nowhere else.
               const unit =
                 r.price == null
                   ? "free"
-                  : r.count > 0
-                    ? `~${Math.round(r.spent / r.count)} cr avg`
-                    : `~${r.price} cr est`;
+                  : r.count > 0 && r.spent > r.count * r.price
+                    ? `${r.price} cr ea · ${Math.round(r.spent / r.count)} cr avg`
+                    : `${r.price} cr ea`;
               return (
                 <div key={r.label} className="py-[13px] border-t border-border/60 first:border-t-0">
                   <div className="flex items-center justify-between gap-3">

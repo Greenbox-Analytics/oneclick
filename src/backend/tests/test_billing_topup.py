@@ -202,8 +202,8 @@ class TestCreateTopupSessionOrgTarget:
         assert kwargs["metadata"]["target"] == ORG_ID
         assert kwargs["metadata"]["user_id"] == TEST_USER_ID
         assert kwargs["metadata"]["pack_key"] == "pack_500"
-        assert "/organization?topup=success" in kwargs["success_url"]
-        assert "/organization?topup=canceled" in kwargs["cancel_url"]
+        assert "/teams?topup=success" in kwargs["success_url"]
+        assert "/teams?topup=canceled" in kwargs["cancel_url"]
 
     def test_user_flow_identical_kwargs_when_org_id_omitted(self, client, mock_supabase, monkeypatch):
         """Regression pin: with no org_id, kwargs must match the pre-Phase-B
@@ -391,7 +391,7 @@ class TestOrgTopupCheckout:
         # Same customer-resolution block as the pack path.
         assert kwargs.get("customer") == "cus_existing"
         assert "customer_email" not in kwargs
-        assert "/organization?topup=success" in kwargs["success_url"]
+        assert "/teams?topup=success" in kwargs["success_url"]
 
     def test_falls_back_to_customer_email(self, client, mock_supabase, monkeypatch):
         self._flags_on(monkeypatch)

@@ -7,11 +7,16 @@ from datetime import UTC, date, datetime
 from supabase import Client
 
 import artist_access
-from boards import calendar_import, ics
+from boards import authz, calendar_import, ics
 from confirm import ConfirmationError, normalize_name
 from integrations import events
 from pagination import PaginatedResponse, paginate_query
-from teams import authz
+
+
+class InvalidBoardMembersError(ValueError):
+    """update_board: a member id isn't an active seat of the board's org, or a
+    personal board was asked to change visibility (422 at the router)."""
+
 
 # --- Junction table helpers ---
 
@@ -257,49 +262,91 @@ def _personal_board_ids(db: Client, user_id: str) -> list[str]:
     return [r["id"] for r in rows]
 
 
-def _active_team_ids(db: Client, user_id: str) -> list[str]:
-    """Non-archived teams the caller is a member of."""
-    memberships = db.table("team_members").select("team_id").eq("user_id", user_id).execute().data or []
-    team_ids = [m["team_id"] for m in memberships]
-    if not team_ids:
-        return []
-    rows = db.table("teams").select("id").in_("id", team_ids).is_("archived_at", "null").execute().data or []
-    return [t["id"] for t in rows]
+def _live_org_ids(db: Client, user_id: str) -> list[str]:
+    """Orgs whose boards the caller may reach — active seat in a live (not archived,
+    not lapsed) org. Same helper artists use, so the two can't drift."""
+    return artist_access.live_org_ids(db, user_id)
 
 
-def _team_board_ids(db: Client, team_ids: list[str]) -> list[str]:
-    """Non-archived boards belonging to the given teams. Callers gate membership first."""
-    if not team_ids:
+def _visible_org_boards(db: Client, user_id: str, org_ids: list[str], *, archived: bool = False) -> list[dict]:
+    """Boards of `org_ids` (already known to be live orgs the caller belongs to)
+    the caller may SEE, each with `member_user_ids` attached. Restricted boards
+    show only to their owner, an org admin, or a listed member — the Python
+    mirror of SQL can_access_board()'s narrowing branch."""
+    if not org_ids:
         return []
-    rows = db.table("boards").select("id").in_("team_id", team_ids).eq("archived", False).execute().data or []
-    return [r["id"] for r in rows]
+    boards = (
+        db.table("boards")
+        .select("*")
+        .in_("team_id", org_ids)
+        .eq("archived", archived)
+        .order("position")
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+    if not boards:
+        return []
+    listing = (
+        db.table("board_members").select("board_id, user_id").in_("board_id", [b["id"] for b in boards]).execute().data
+        or []
+    )
+    members_by_board: dict[str, list[str]] = {}
+    for row in listing:
+        members_by_board.setdefault(row["board_id"], []).append(row["user_id"])
+    # ONE query for the caller's seats in these orgs, not an is_org_admin RPC per
+    # org: _calendar_board_ids runs on every calendar paint. The admin predicate
+    # itself (role='admin' AND status='active' — what the SQL is_org_admin helper
+    # answers) is applied here in Python so there is exactly one place it lives;
+    # single-org checks still go through orgs.authz so backend and RLS can't
+    # drift — this is the read-many path only.
+    seats = (
+        db.table("org_members").select("org_id, role, status").eq("user_id", user_id).in_("org_id", org_ids).execute()
+    )
+    admin_orgs = {s["org_id"] for s in (seats.data or []) if s.get("role") == "admin" and s.get("status") == "active"}
+    out = []
+    for b in boards:
+        b["member_user_ids"] = members_by_board.get(b["id"], [])
+        if (
+            not b.get("restricted")
+            or b["owner_id"] == user_id
+            or b["team_id"] in admin_orgs
+            or user_id in b["member_user_ids"]
+        ):
+            out.append(b)
+    return out
+
+
+def _team_board_ids(db: Client, user_id: str, org_ids: list[str]) -> list[str]:
+    """Non-archived org boards the caller can see (visibility-aware)."""
+    return [b["id"] for b in _visible_org_boards(db, user_id, org_ids)]
 
 
 def _calendar_board_ids(db: Client, user_id: str) -> list[str]:
-    """Every board whose tasks belong on the workspace calendar: the caller's personal
-    boards PLUS the non-archived boards of every non-archived team they're a member of.
+    """Personal boards PLUS every visible board of every live org the caller belongs to.
 
     Unlike _resolve_read_board_ids' personal-only default, the calendar is cross-board by
-    design. Membership is still the gate — no board the caller can't already read is added.
+    design. Access is still the gate — no board the caller can't already read is added.
     """
-    return _personal_board_ids(db, user_id) + _team_board_ids(db, _active_team_ids(db, user_id))
+    return _personal_board_ids(db, user_id) + _team_board_ids(db, user_id, _live_org_ids(db, user_id))
 
 
 def _stamp_team_context(db: Client, tasks: list) -> list:
-    """Attach team_id / team_name to each task via its board (both None → personal board).
+    """Attach team_id / team_name (org id / org name) to each task via its board.
 
-    The calendar colours and groups by team, so it needs the task→team edge that
-    board_tasks doesn't carry directly.
+    The calendar colours and groups by team, so it needs the task→org edge that
+    board_tasks doesn't carry directly. Both None → personal board.
     """
     board_ids = list({t["board_id"] for t in tasks if t.get("board_id")})
     if not board_ids:
         return tasks
     boards = db.table("boards").select("id, team_id").in_("id", board_ids).execute().data or []
     by_board = {b["id"]: b.get("team_id") for b in boards}
-    team_ids = list({tid for tid in by_board.values() if tid})
+    org_ids = list({tid for tid in by_board.values() if tid})
     names = {}
-    if team_ids:
-        rows = db.table("teams").select("id, name").in_("id", team_ids).execute().data or []
+    if org_ids:
+        rows = db.table("organizations").select("id, name").in_("id", org_ids).execute().data or []
         names = {r["id"]: r["name"] for r in rows}
     for task in tasks:
         team_id = by_board.get(task.get("board_id"))
@@ -731,32 +778,43 @@ def _team_feed_name(team_name: str) -> str:
     return f"Msanii platform - Team {team_name} Calendar"
 
 
-def feed_name(db: Client, scope: str) -> str:
-    """Display name for a feed scope — this becomes the calendar's name in Google/Apple."""
+GENERIC_FEED_NAME = "Msanii platform - Calendar"
+
+
+def feed_name(db: Client, user_id: str, scope: str) -> str:
+    """Display name for a feed scope — this becomes the calendar's name in Google/Apple.
+
+    Gated on the SAME membership as the tasks (`_live_org_ids`), not just on the
+    HMAC. The feed token has no membership component and no expiry, so an
+    offboarded member's subscribed URL keeps resolving: `get_feed_tasks` already
+    serves them zero tasks, but without this the calendar would still be titled
+    with the org's CURRENT name, tracking every later rename.
+    """
     if scope == "all":
         return ALL_FEED_NAME
     if scope == "personal":
         return PERSONAL_FEED_NAME
-    row = db.table("teams").select("name").eq("id", scope).limit(1).execute().data or []
-    # An unresolvable scope serves an empty feed (get_feed_tasks gates it), so it just needs a name.
-    return _team_feed_name(row[0]["name"]) if row else "Msanii platform - Calendar"
+    if scope not in _live_org_ids(db, user_id):
+        return GENERIC_FEED_NAME
+    row = db.table("organizations").select("name").eq("id", scope).limit(1).execute().data or []
+    return _team_feed_name(row[0]["name"]) if row else GENERIC_FEED_NAME
 
 
 async def list_calendar_feeds(db: Client, user_id: str) -> list[dict]:
-    """Calendar scopes the caller can subscribe to: everything, personal, one per active team.
+    """Calendar scopes the caller can subscribe to: everything, personal, one per live org.
 
     With no teams, "everything" and "personal" are the same set of boards — offering both
     would just be two identical links, so a solo user gets one calendar.
     """
-    team_ids = _active_team_ids(db, user_id)
-    if not team_ids:
+    org_ids = _live_org_ids(db, user_id)
+    if not org_ids:
         return [{"scope": "all", "name": ALL_FEED_NAME, "team_name": None}]
 
     feeds = [
         {"scope": "all", "name": ALL_FEED_NAME, "team_name": None},
         {"scope": "personal", "name": PERSONAL_FEED_NAME, "team_name": None},
     ]
-    rows = db.table("teams").select("id, name").in_("id", team_ids).execute().data or []
+    rows = db.table("organizations").select("id, name").in_("id", org_ids).execute().data or []
     # team_name is sent alongside the full name so the picker can label rows by the one
     # part that differs between them, instead of repeating the branded name four times.
     feeds += [
@@ -773,8 +831,8 @@ async def get_feed_tasks(db: Client, user_id: str, scope: str, start: str, end: 
         board_ids = _personal_board_ids(db, user_id)
     elif scope == "all":
         board_ids = _calendar_board_ids(db, user_id)
-    elif scope in _active_team_ids(db, user_id):
-        board_ids = _team_board_ids(db, [scope])
+    elif scope in _live_org_ids(db, user_id):
+        board_ids = _team_board_ids(db, user_id, [scope])
     else:
         board_ids = []
     return _tasks_in_range(db, user_id, board_ids, start, end)
@@ -1112,8 +1170,8 @@ async def create_board(
     artist_id: str | None = None,
     description: str | None = None,
 ) -> dict:
-    if team_id is not None and not authz.is_team_member(db, user_id, team_id):
-        raise PermissionError("Not a team member")
+    if team_id is not None and not authz.is_live_org_member(db, user_id, team_id):
+        raise PermissionError("Not a member of this team")
     res = (
         db.table("boards")
         .insert(
@@ -1121,50 +1179,117 @@ async def create_board(
         )
         .execute()
     )
-    return res.data[0] if res.data else {}
+    row = res.data[0] if res.data else {}
+    row["member_user_ids"] = []
+    return row
 
 
 async def list_boards(db: Client, user_id: str, team_id: str | None = None) -> list[dict]:
     if team_id is not None:
-        if not authz.is_team_member(db, user_id, team_id):
-            raise PermissionError("Not a team member")
-        # §5.8: an archived team's boards are hidden.
-        team = db.table("teams").select("archived_at").eq("id", team_id).limit(1).execute()
-        if team.data and team.data[0].get("archived_at"):
-            return []
-        q = db.table("boards").select("*").eq("team_id", team_id)
-    else:
-        q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
-    return q.eq("archived", False).order("position").order("created_at").execute().data or []
+        # A lapsed/archived org drops out of _live_org_ids, so its boards are hidden
+        # from everyone — same posture as team artists.
+        if team_id not in _live_org_ids(db, user_id):
+            raise PermissionError("Not a member of this team")
+        return _visible_org_boards(db, user_id, [team_id])
+    q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
+    rows = q.eq("archived", False).order("position").order("created_at").execute().data or []
+    for r in rows:
+        r["member_user_ids"] = []
+    return rows
 
 
-async def rename_board(db: Client, user_id: str, board_id: str, fields: dict) -> dict:
-    authz.require_board_edit(db, user_id, board_id)
-    clean = {k: v for k, v in fields.items() if v is not None}
-    if not clean:
-        return authz.get_board(db, board_id) or {}
-    return (db.table("boards").update(clean).eq("id", board_id).execute().data or [{}])[0]
-
-
-async def archive_board(db: Client, user_id: str, board_id: str) -> dict:
-    """Archive a board. Personal → owner; team → team admin (destructive for all members)."""
+async def update_board(db: Client, user_id: str, board_id: str, fields: dict) -> dict:
+    """name/description: anyone with edit access. restricted/member_user_ids:
+    can_manage_board (org admin or the board's creator), team boards only,
+    member ids must be ACTIVE seats of the board's org; member set is REPLACED."""
     board = authz.get_board(db, board_id)
     if not board:
         raise ValueError("Board not found")
-    if board["team_id"] is None:
-        if board["owner_id"] != user_id:
-            raise PermissionError("Not your board")
-    elif not authz.is_team_admin(db, user_id, board["team_id"]):
-        raise PermissionError("Admin access required to archive a team board")
+    authz.require_board_edit(db, user_id, board_id)
+    fields = dict(fields)
+    restricted = fields.pop("restricted", None)
+    member_ids = fields.pop("member_user_ids", None)
+    if restricted is not None or member_ids is not None:
+        if board["team_id"] is None:
+            raise InvalidBoardMembersError("Personal boards can't be shared — create the board in a team instead")
+        if not authz.can_manage_board(db, user_id, board):
+            raise PermissionError("Only a team admin or the board's creator can change who sees it")
+        if member_ids is not None:
+            member_ids = list(dict.fromkeys(member_ids))  # dedupe, keep order
+            # Only query when there is something to validate. An empty .in_()
+            # would need a placeholder, and any non-uuid placeholder makes
+            # Postgres raise 22P02 against this uuid column — on the MOST
+            # COMMON save (switching back to "Everyone on the team" sends []).
+            # MockQueryBuilder.in_() ignores its args, so no mock test can
+            # catch that; the HTTP QA script is what proves this path.
+            if member_ids:
+                active = {
+                    m["user_id"]
+                    for m in (
+                        db.table("org_members")
+                        .select("user_id")
+                        .eq("org_id", board["team_id"])
+                        .eq("status", "active")
+                        .in_("user_id", member_ids)
+                        .execute()
+                        .data
+                        or []
+                    )
+                }
+                # Only NEWLY ADDED ids must be active seats. An id already on
+                # this board stays valid even if that seat has since been
+                # suspended: suspend deliberately does not purge board_members
+                # (it is reversible), so validating the whole set would make
+                # every later save — including a pure rename — fail with an
+                # error the admin cannot act on until they drop the person.
+                # Adding a stranger is still refused.
+                already = {
+                    m["user_id"]
+                    for m in (db.table("board_members").select("user_id").eq("board_id", board_id).execute().data or [])
+                }
+                if set(member_ids) - active - already:
+                    raise InvalidBoardMembersError("Some of those people aren't on this team")
+            db.table("board_members").delete().eq("board_id", board_id).execute()
+            if member_ids:
+                db.table("board_members").insert(
+                    [{"board_id": board_id, "user_id": u, "added_by": user_id} for u in member_ids]
+                ).execute()
+        if restricted is not None:
+            fields["restricted"] = restricted
+    clean = {k: v for k, v in fields.items() if v is not None}
+    if clean:
+        db.table("boards").update(clean).eq("id", board_id).execute()
+    row = (db.table("boards").select("*").eq("id", board_id).limit(1).execute().data or [{}])[0]
+    # Guarded on team_id: a personal board can never have rows here, and during
+    # the deploy window (new backend live BEFORE migration 20260818000001) the
+    # table does not exist yet — an unconditional read would 500 every PUT,
+    # including a plain rename of a personal board. Same reasoning as
+    # authz.get_board's select("*").
+    row["member_user_ids"] = (
+        [
+            m["user_id"]
+            for m in (db.table("board_members").select("user_id").eq("board_id", board_id).execute().data or [])
+        ]
+        if row.get("team_id")
+        else []
+    )
+    return row
+
+
+async def archive_board(db: Client, user_id: str, board_id: str) -> dict:
+    """Archive a board. Personal → owner; team → org admin (destructive for all members)."""
+    board = authz.get_board(db, board_id)
+    if not board:
+        raise ValueError("Board not found")
+    if not authz.is_board_admin(db, user_id, board):
+        raise PermissionError("Admin access required to archive a team board" if board["team_id"] else "Not your board")
     db.table("boards").update({"archived": True}).eq("id", board_id).execute()
     return {"archived": board_id}
 
 
 def _can_archive_board(db, user_id: str, board: dict) -> bool:
-    """Same gate as archive_board: personal → owner; team board → team admin."""
-    if board.get("team_id") is None:
-        return board.get("owner_id") == user_id
-    return authz.is_team_admin(db, user_id, board["team_id"])
+    """Same gate as archive_board: personal → owner; team board → live org admin."""
+    return authz.is_board_admin(db, user_id, board)
 
 
 async def delete_board(db: Client, user_id: str, board_id: str, confirm_name: str) -> dict:
@@ -1196,16 +1321,26 @@ async def restore_board(db: Client, user_id: str, board_id: str) -> dict:
 
 
 async def list_archived_boards(db: Client, user_id: str, team_id: str | None = None) -> list[dict]:
-    """Archived boards with a task_count each. Team context → team admin only; else the
+    """Archived boards with a task_count each. Team context → org admin only; else the
     caller's archived personal boards. Same gate as restore/delete (no view-vs-act split)."""
     if team_id is not None:
-        if not authz.is_team_admin(db, user_id, team_id):
-            raise PermissionError("Admin access required")
-        q = db.table("boards").select("*").eq("team_id", team_id)
+        authz.require_org_admin(db, user_id, team_id)
+        boards = _visible_org_boards(db, user_id, [team_id], archived=True)
     else:
-        q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
-    boards = q.eq("archived", True).order("created_at").execute().data or []
-    for b in boards:
+        boards = (
+            db.table("boards")
+            .select("*")
+            .eq("owner_id", user_id)
+            .is_("team_id", "null")
+            .eq("archived", True)
+            .order("created_at")
+            .execute()
+            .data
+            or []
+        )
+        for b in boards:
+            b["member_user_ids"] = []
+    for b in boards:  # unchanged from the pre-merge version — the UI shows this count
         c = db.table("board_tasks").select("id", count="exact").eq("board_id", b["id"]).execute()
         b["task_count"] = c.count or 0
     return boards

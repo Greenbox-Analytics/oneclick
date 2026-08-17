@@ -1,5 +1,5 @@
 // src/pages/Organization.tsx
-// Licensing Phase B (spec §7, plan Tasks 12-13) — the /organization console:
+// Licensing Phase B (spec §7, plan Tasks 12-13) — the /teams console:
 // the admin view (Task 12) and the member view (Task 13, MemberPanel below —
 // their limit + usage, "Request a higher limit" form, own request history).
 // Reachable regardless of LICENSING_ENABLED: it self-handles the flag-off
@@ -45,6 +45,7 @@ import { OrgSettingsPanel } from "@/components/orgs/OrgSettingsPanel";
 import { OrgLinkedProjectsPanel } from "@/components/orgs/OrgLinkedProjectsPanel";
 import { OrgLifecyclePanel } from "@/components/orgs/OrgLifecyclePanel";
 import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
+import { orgNoun, orgNounCap } from "@/lib/tiers";
 
 const TOOL_LABELS: Record<CreditAction, string> = {
   oneclick_run: "OneClick run",
@@ -127,10 +128,10 @@ function CreateOrgPanel({ onCreated }: { onCreated?: (orgId: string) => void }) 
       <div className="w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mx-auto">
         <Building2 className="w-6 h-6" />
       </div>
-      <h1 className="text-xl font-semibold tracking-tight mt-4">Create an organization</h1>
+      <h1 className="text-xl font-semibold tracking-tight mt-4">Create a team</h1>
       <p className="text-[13.5px] text-muted-foreground mt-1.5 max-w-sm mx-auto">
-        Organizations share one credit pool across your whole team, with seats, invites, and admin
-        controls. A new organization starts <strong>pending</strong> and turns on automatically once
+        Teams share one credit pool across everyone you invite, with seats, invites, and admin
+        controls. A new team starts <strong>pending</strong> and turns on automatically once
         its first credit purchases reach the minimum — no separate activation step.
       </p>
       {maxTeams != null && maxTeams > 0 && (
@@ -140,7 +141,7 @@ function CreateOrgPanel({ onCreated }: { onCreated?: (orgId: string) => void }) 
       )}
 
       <div className="mt-6 text-left space-y-2 max-w-xs mx-auto">
-        <Label htmlFor="new-org-name">Organization name</Label>
+        <Label htmlFor="new-org-name">Team name</Label>
         <Input
           id="new-org-name"
           value={name}
@@ -152,7 +153,7 @@ function CreateOrgPanel({ onCreated }: { onCreated?: (orgId: string) => void }) 
 
       <Button className="mt-5" onClick={handleCreate} disabled={!name.trim() || createOrg.isPending}>
         {createOrg.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-        Create organization
+        Create team
       </Button>
     </Card>
   );
@@ -163,7 +164,7 @@ function OrgHeader({ org }: { org: OrgSummary }) {
     <div className="mb-6 flex items-center gap-3 flex-wrap">
       <div>
         <h1 className="text-3xl font-bold tracking-tight text-foreground">{org.name}</h1>
-        <p className="text-muted-foreground mt-1">Organization credits, seats, and members</p>
+        <p className="text-muted-foreground mt-1">{orgNounCap(org.kind)} credits, seats, and members</p>
       </div>
       {org.status === "pending" && (
         <Badge variant="outline" className="border-amber-500/30 text-amber-700 dark:text-amber-400 bg-amber-500/10">
@@ -244,12 +245,12 @@ function AdminConsole({ orgId }: { orgId: string }) {
       {isSelfServe && <StandingBanner orgId={orgId} org={org} />}
       <OrgPoolCard org={org} />
       {isSelfServe && <OrgBillingPanel org={org} />}
-      <OrgSeatsTable orgId={orgId} currentUserId={user?.id} />
+      <OrgSeatsTable orgId={orgId} currentUserId={user?.id} orgKind={org.kind} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-[22px] items-start">
-        <OrgInvitesPanel orgId={orgId} />
+        <OrgInvitesPanel orgId={orgId} orgKind={org.kind} />
         <OrgRequestsPanel orgId={orgId} seats={usage?.seats ?? []} />
       </div>
-      <OrgLinkedProjectsPanel orgId={orgId} seats={usage?.seats ?? []} />
+      <OrgLinkedProjectsPanel orgId={orgId} seats={usage?.seats ?? []} orgKind={org.kind} />
       <OrgSettingsPanel org={org} />
       {isSelfServe && <OrgLifecyclePanel orgId={orgId} org={org} currentUserId={user?.id} />}
     </div>
@@ -469,7 +470,7 @@ function MemberPanel({ org }: { org: OrgSummary }) {
                   {(ent.credits.memberCapUsed ?? 0).toLocaleString()} of{" "}
                   {ent.credits.memberCap.toLocaleString()} used
                   {ent.credits.balance != null && (
-                    <> · organization pool holds {ent.credits.balance.toLocaleString()}</>
+                    <> · {orgNoun(org.kind)} pool holds {ent.credits.balance.toLocaleString()}</>
                   )}
                 </div>
               )}
@@ -582,7 +583,7 @@ const Organization = () => {
 
   // `?new=1` reaches the same form when orgs ALREADY exist — without it there is
   // no path to a second org at all, since this empty state was the only place
-  // the create form lived. The header switcher's "Create organization" links here.
+  // the create form lived. The header switcher's "Create team" links here.
   if (licensingOff || orgList.length === 0 || searchParams.get("new") === "1") {
     return (
       <PageShell>

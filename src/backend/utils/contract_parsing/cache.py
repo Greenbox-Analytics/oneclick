@@ -37,6 +37,18 @@ def parser_version() -> str:
     return f"{PARSER_PROMPT_VERSION}:{model_for('contract_parser')}"
 
 
+def content_key(full_text: str) -> str:
+    """SHA-256 of the CANONICAL parse text — the cache key, and the identity of
+    the deliverable a parse produces.
+
+    Marker stripping is idempotent, so callers may pass raw or already-stripped
+    markdown. Shared with the credit layer: enforcement.gated_credits' dedupe_key
+    keys cache-hit debits off this exact value, so a hit dedupes against the
+    ledger row for the same content and no other.
+    """
+    return hashlib.sha256(strip_page_markers(full_text).encode("utf-8")).hexdigest()
+
+
 def serialize_contract_data(cd: ContractData) -> dict:
     """ContractData -> plain JSON-safe dict (nested dataclasses become dicts)."""
     return asdict(cd)
@@ -74,15 +86,18 @@ def peek_cached_parse(db, full_text: str) -> ContractData | None:
     `full_text` is canonicalized (idempotent [[PAGE n]] marker stripping) before hashing, so
     callers may pass either raw or already-stripped markdown. Never raises — a read failure
     or a missing/unreadable entry both resolve to None (logged on failure) — so callers can
-    treat a non-None result as a guaranteed, side-effect-free cache hit (e.g. to decide a
-    request is free BEFORE walling it on credits; spec §3).
+    treat a non-None result as a guaranteed, side-effect-free cache hit.
+
+    NOT a billing decision any more (spec 2026-08-17 §4): a cache hit is a complete
+    deliverable and pays the base rate like a fresh parse. This is now purely
+    get_or_parse's internal read.
     """
     if db is None or not full_text:
         return None
     text = strip_page_markers(full_text)
     if not text:
         return None
-    cache_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    cache_key = content_key(text)
     try:
         hit = (
             db.table("contract_parse_cache")
@@ -138,7 +153,7 @@ def get_or_parse(
     if not full_text:
         raise ValueError("full_text is required. The contract markdown must be provided.")
 
-    cache_key = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+    cache_key = content_key(full_text)
 
     if not bypass:
         # Single read implementation shared with the pre-gate peek (see peek_cached_parse) —

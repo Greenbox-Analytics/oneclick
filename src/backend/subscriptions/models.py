@@ -69,6 +69,9 @@ class ManagedByOrg:
     org_id: str
     org_name: str
     role: str
+    # Org's kind ("self_serve" | "enterprise"); may be None for a pre-migration
+    # row. Drives the frontend's team-vs-organization noun (orgNoun in tiers.ts).
+    kind: str | None = None
 
 
 @dataclass
@@ -123,10 +126,14 @@ class Entitlements:
                 "memberCap": self.credits.member_cap,
                 "memberCapUsed": self.credits.member_cap_used,
                 "periodEnd": self.credits.period_end.isoformat() if self.credits.period_end else None,
+                # Hand-built, so a new credit_prices row does NOT reach the
+                # client until it is added here. Keep in step with CreditAction
+                # and with CreditPrices in src/hooks/useEntitlements.ts.
                 "prices": {
                     "zoeMessage": self.credits.prices.get("zoe_message", 0),
                     "oneclickRun": self.credits.prices.get("oneclick_run", 0),
                     "registryParse": self.credits.prices.get("registry_parse", 0),
+                    "splitSheet": self.credits.prices.get("split_sheet", 0),
                 },
             }
             # Org context only — the KEY itself is absent in personal context, so
@@ -136,6 +143,7 @@ class Entitlements:
                     "orgId": self.managed_by_org.org_id,
                     "orgName": self.managed_by_org.org_name,
                     "role": self.managed_by_org.role,
+                    "kind": self.managed_by_org.kind,
                 }
 
         result = {
@@ -197,6 +205,7 @@ class Entitlements:
                     "orgId": self.managed_by_org.org_id,
                     "orgName": self.managed_by_org.org_name,
                     "role": self.managed_by_org.role,
+                    "kind": self.managed_by_org.kind,
                 }
             else:
                 result["billingContext"] = {"type": "personal"}
@@ -251,6 +260,9 @@ class CreditAction(StrEnum):
     ZOE_MESSAGE = "zoe_message"
     ONECLICK_RUN = "oneclick_run"
     REGISTRY_PARSE = "registry_parse"
+    # Non-AI: the generator makes no LLM call, so credits_for_llm_usage() returns
+    # None and the charge is always the base. No set_llm_context needed.
+    SPLIT_SHEET = "split_sheet"
 
 
 @dataclass

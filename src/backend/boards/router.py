@@ -77,13 +77,18 @@ async def list_boards(
 
 
 @router.put("/boards/{board_id}")
-async def rename_board(board_id: str, body: BoardUpdate, user_id: str = Depends(get_current_user_id)):
-    """Rename/update a board. Raises 404 (via require_board_edit) if the caller can't edit it."""
-    data = body.model_dump(exclude_none=True)
-    board = await service.rename_board(_get_supabase(), user_id, board_id, data)
-    if not board:
-        raise HTTPException(status_code=404, detail="Board not found")
-    return board
+async def update_board(board_id: str, body: BoardUpdate, user_id: str = Depends(get_current_user_id)):
+    """Rename, describe, or change who can see a board (spec 2026-08-16 §3).
+    404 for boards the caller can't reach; 403 when a plain member tries to
+    change visibility; 422 for member ids outside the team / personal boards."""
+    try:
+        return await service.update_board(_get_supabase(), user_id, board_id, body.model_dump(exclude_none=True))
+    except service.InvalidBoardMembersError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.delete("/boards/{board_id}")
@@ -293,7 +298,7 @@ async def calendar_feed(feed_user_id: str, scope: str, token: str):
     today = datetime.now(UTC).date()
     window = timedelta(days=ics.FEED_WINDOW_DAYS)
     tasks = await service.get_feed_tasks(supabase, feed_user_id, scope, str(today - window), str(today + window))
-    body = ics.build_ics(tasks, cal_name=service.feed_name(supabase, scope))
+    body = ics.build_ics(tasks, cal_name=service.feed_name(supabase, feed_user_id, scope))
     return Response(content=body, media_type="text/calendar; charset=utf-8")
 
 

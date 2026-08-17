@@ -60,21 +60,26 @@ def _queue_db(tbl: dict):
 
 async def test_calendar_spans_team_boards_and_stamps_team():
     """The unfiltered calendar is NOT personal-only: it also pulls the boards of every
-    team the caller belongs to, and stamps each task with its team so the UI can colour
+    org the caller belongs to, and stamps each task with its team so the UI can colour
     and legend by team."""
     team_board = "b0000000-0000-0000-0000-0000000000t1"
     db = _queue_db(
         {
             "boards": [
                 [{"id": BOARD}],  # _personal_board_ids
-                [{"id": team_board}],  # team boards
+                # _visible_org_boards — needs owner_id/team_id/restricted to narrow on
+                [{"id": team_board, "team_id": "team-1", "owner_id": USER, "restricted": False}],
                 [{"id": team_board, "team_id": "team-1"}],  # _stamp_team_context
             ],
-            "team_members": [[{"team_id": "team-1"}]],
-            "teams": [
-                [{"id": "team-1"}],  # non-archived filter
+            "org_members": [
+                [{"org_id": "team-1"}],  # artist_access.live_org_ids: active seat
+                [],  # _visible_org_boards: caller is not an admin of it
+            ],
+            "organizations": [
+                [{"id": "team-1"}],  # live (not archived, not lapsed)
                 [{"id": "team-1", "name": "Team One"}],  # name lookup
             ],
+            "board_members": [[]],  # _visible_org_boards: nobody listed on the board
             "board_tasks": [[{"id": "t1", "board_id": team_board, "user_id": USER}]],
         }
     )
@@ -94,7 +99,7 @@ async def test_calendar_stamps_personal_tasks_with_no_team():
                 [{"id": BOARD}],  # _personal_board_ids
                 [{"id": BOARD, "team_id": None}],  # _stamp_team_context
             ],
-            "team_members": [[]],  # no team memberships
+            "org_members": [[]],  # no active seats anywhere
             "board_tasks": [[{"id": "t1", "board_id": BOARD, "user_id": USER}]],
         }
     )

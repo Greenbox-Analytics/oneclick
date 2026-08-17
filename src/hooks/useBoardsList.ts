@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
-import type { Board } from "@/types/teams";
+import type { Board } from "@/types/boards";
 
 export function useBoardsList(teamId?: string | null) {
   const { user } = useAuth();
@@ -34,14 +34,22 @@ export function useCreateBoard() {
   });
 }
 
-export function useRenameBoard() {
+export interface BoardUpdate {
+  boardId: string;
+  name?: string;
+  description?: string;
+  restricted?: boolean;
+  member_user_ids?: string[];
+}
+
+export function useUpdateBoard() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ boardId, name }: { boardId: string; name: string }) =>
+    mutationFn: ({ boardId, ...body }: BoardUpdate) =>
       apiFetch<Board>(`${API_URL}/boards/boards/${boardId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(body),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["boards-list"] }),
     onError: (e: Error) => toast.error(e.message),

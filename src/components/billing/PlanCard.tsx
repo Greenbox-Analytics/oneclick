@@ -55,14 +55,14 @@ export function PlanCard() {
           </div>
           <div className="flex gap-1.5">
             <AdminBadge />
-            <Badge className="uppercase">{ENTERPRISE_LABEL}</Badge>
+            <Badge className="uppercase">{managedByOrg.kind === "self_serve" ? "Team" : ENTERPRISE_LABEL}</Badge>
           </div>
         </div>
 
         <div className="mt-4 bg-background border border-border rounded-xl px-[18px] py-4">
           <div className="text-sm font-semibold">Billing is managed by {managedByOrg.orgName}.</div>
           <p className="text-[12.5px] text-muted-foreground mt-1 max-w-[440px]">
-            Your organization covers your credits and access here — there&apos;s nothing to upgrade or pay for.
+            {managedByOrg.orgName} covers your credits and access here — there&apos;s nothing to upgrade or pay for.
           </p>
         </div>
 

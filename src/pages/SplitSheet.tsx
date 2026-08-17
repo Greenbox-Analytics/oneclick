@@ -38,7 +38,8 @@ import {
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 
-import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders, apiErrorFromBody } from "@/lib/apiFetch";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useGatedAction } from "@/hooks/useGatedAction";
 
 const ROLES = [
@@ -298,11 +299,18 @@ const SplitSheet = () => {
 
       if (!response.ok) {
         const err = await response.json().catch(() => null);
-        // Surface 402 as ApiError so PaywallModal fires
+        // Surface 402 as ApiError so PaywallModal fires. MUST go through
+        // apiErrorFromBody: split sheets now have TWO gates with two detail
+        // shapes — the cap sends a plain string, the credit gate sends an object
+        // ({reason, price, managedByOrg, capReached, requestUrl}). Constructing
+        // ApiError by hand passed `detail` as the MESSAGE, which rendered as
+        // "[object Object]" and dropped every org field on the floor.
         if (response.status === 402) {
-          throw new ApiError(err?.detail || "Upgrade required", 402);
+          throw apiErrorFromBody(err, 402, "Upgrade required");
         }
-        throw new Error(err?.detail || "Failed to generate split sheet");
+        throw new Error(
+          typeof err?.detail === "string" ? err.detail : "Failed to generate split sheet",
+        );
       }
 
       return response.blob();
@@ -1017,8 +1025,9 @@ const SplitSheet = () => {
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Back
               </Button>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
                 {!hasGenerated ? (
+                  <>
                   <Button disabled={!canGenerate} onClick={handleGenerate}>
                     {isGenerating ? (
                       <>
@@ -1036,6 +1045,8 @@ const SplitSheet = () => {
                       </>
                     )}
                   </Button>
+                  <CreditsChip action="split_sheet" />
+                  </>
                 ) : (
                   <Button onClick={handleDownload} className="gap-2">
                     <Download className="w-4 h-4" />

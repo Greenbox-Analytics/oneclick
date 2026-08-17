@@ -1363,10 +1363,8 @@ async def mark_notification_read(db: Client, user_id: str, notification_id: str)
 # read retires its buttons, so "Mark all read" must skip them or a single click
 # silently strands every outstanding invitation.
 def _is_actionable_invite(row: dict) -> bool:
-    if row.get("type") == "team_invite":
-        return True
-    # Registry's own 'invitation' rows carry entity_type 'work'/NULL and have no
-    # buttons — only the org ones are actionable.
+    # Only org invites carry Accept/Decline buttons (NotificationRow.tsx isOrgInvite).
+    # Registry's own 'invitation' rows carry entity_type 'work'/NULL and have none.
     return row.get("type") == "invitation" and row.get("entity_type") == "org"
 
 

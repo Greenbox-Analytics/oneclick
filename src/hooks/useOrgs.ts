@@ -1,7 +1,7 @@
 // src/hooks/useOrgs.ts
 // Licensing Phase B (spec §7, plan Task 12) — typed hooks for every /orgs/*
-// endpoint the `/organization` admin console consumes. Mirrors useTeams.ts's
-// idioms: query keys namespaced ["orgs", ...], mutations invalidate the
+// endpoint the `/teams` admin console consumes. House idioms:
+// query keys namespaced ["orgs", ...], mutations invalidate the
 // relevant keys, and hook-level toasts surface backend errors (409s carry
 // human-written copy — apiFetch's ApiError.message already IS that string
 // verbatim for plain-string `detail` bodies, so `toast.error(e.message)`
@@ -201,9 +201,11 @@ export function useAcceptOrgInvite() {
   return useMutation<OrgInviteActionResult, Error, string>({
     mutationFn: (token) =>
       apiFetch<OrgInviteActionResult>(`${API_URL}/orgs/invites/${token}/accept`, { method: "POST" }),
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["orgs", "list"] });
       qc.invalidateQueries({ queryKey: ["entitlements"] });
+      // A new seat changes the roster the board pickers read.
+      qc.invalidateQueries({ queryKey: ["orgs", data.org_id, "roster"] });
     },
   });
 }
@@ -512,9 +514,14 @@ export function useCancelOrgTopup() {
 // Members: role, suspend, reactivate, remove
 // ---------------------------------------------------------------------------
 
+// Every caller writes org_members (role / suspend / reactivate / remove / cap),
+// so the roster the board pickers read goes stale with them — invalidate it here
+// rather than in each hook, or the assignee/filter/member pickers keep showing
+// people who no longer hold a seat.
 function invalidateOrgUsage(qc: ReturnType<typeof useQueryClient>, orgId: string) {
   qc.invalidateQueries({ queryKey: ["orgs", orgId, "usage"] });
   qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
+  qc.invalidateQueries({ queryKey: ["orgs", orgId, "roster"] });
 }
 
 export function useUpdateOrgMemberRole() {
@@ -620,9 +627,18 @@ export function useInviteOrgMember() {
       }),
     onSuccess: (data, { orgId }) => {
       qc.invalidateQueries({ queryKey: ["orgs", orgId, "invites"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "roster"] });
       toast.success(data?.notify_user_id ? "Invitation sent (email + in-app)" : "Invitation email sent");
     },
-    onError: (e) => toast.error(errMessage(e, "Couldn't send invite.")),
+    onError: (e) => {
+      // Seat-wall 402s carry a {reason, limit, nextStep} detail — the caller
+      // (OrgInvitesPanel) renders that inline with an upgrade/contact CTA
+      // instead, so skip the generic toast to avoid saying it twice.
+      if (e instanceof ApiError && e.detail && typeof e.detail === "object" && "nextStep" in (e.detail as object)) {
+        return;
+      }
+      toast.error(errMessage(e, "Couldn't send invite."));
+    },
   });
 }
 
@@ -803,5 +819,40 @@ export function useRemoveOrgProjectMember() {
       qc.invalidateQueries({ queryKey: ["orgs", orgId, "linked-projects"] });
     },
     onError: (e) => toast.error(errMessage(e, "Couldn't remove this member's access.")),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Roster — member-visible names/avatars (no emails), feeds the board assignee /
+// filter / board-member pickers. Distinct from the admin console's seat table,
+// which needs emails and caps.
+// ---------------------------------------------------------------------------
+
+export interface OrgRosterMember {
+  user_id: string;
+  role: OrgRole;
+  full_name?: string | null;
+  avatar_url?: string | null;
+}
+
+/**
+ * GET /orgs/{id}/members — the member-visible roster: ACTIVE seats only
+ * (suspended and removed seats are excluded), with name/avatar and no emails.
+ * Requires a LIVE org too — a lapsed or archived org 404s, matching every other
+ * predicate in this feature.
+ *
+ * The active-only filter is why any picker seeded from a stored id list (e.g. a
+ * board's `member_user_ids`) must render a synthetic option for ids missing
+ * here — see BoardSettingsDialog. Otherwise a suspended teammate becomes an
+ * invisible, unremovable entry.
+ */
+export function useOrgRoster(orgId?: string | null) {
+  const { user } = useAuth();
+  return useQuery<OrgRosterMember[]>({
+    queryKey: ["orgs", orgId, "roster"],
+    queryFn: async () =>
+      (await apiFetch<{ members: OrgRosterMember[] }>(`${API_URL}/orgs/${orgId}/members`)).members,
+    enabled: !!user?.id && !!orgId,
+    staleTime: 30_000,
   });
 }

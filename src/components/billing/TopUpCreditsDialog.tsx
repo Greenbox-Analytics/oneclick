@@ -56,7 +56,9 @@ export function TopUpCreditsDialog({ open, onOpenChange, orgId, orgName }: TopUp
           <DialogTitle>Add credits</DialogTitle>
           <DialogDescription>
             {orgId
-              ? `Top up ${orgName ?? "your organization"}'s credit pool with a one-time pack.`
+              ? orgName
+                ? `Top up ${orgName}'s credit pool with a one-time pack.`
+                : "Top up the shared credit pool with a one-time pack."
               : "Top up with a one-time pack — no change to your subscription."}
           </DialogDescription>
         </DialogHeader>
@@ -109,7 +111,7 @@ export function TopUpCreditsDialog({ open, onOpenChange, orgId, orgName }: TopUp
 
         <p className="text-xs text-muted-foreground/70">
           {orgId
-            ? "Credits never expire and are shared across every seat in the organization."
+            ? "Credits never expire and are shared across every seat."
             : "Credits never expire and are used after your monthly credits run out."}
         </p>
       </DialogContent>

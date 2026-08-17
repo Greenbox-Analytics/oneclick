@@ -165,6 +165,7 @@ Storage is a **hard cap on every tier**, with no pay-per-use.
 | GET / PUT | `/orgs/{org_id}` | member / admin (`default_member_cap` lives here) |
 | POST | `/orgs/{org_id}/archive` | admin |
 | GET | `/orgs/{org_id}/usage` | member |
+| GET | `/orgs/{org_id}/members` | member — roster for board pickers: `user_id`/`full_name`/`avatar_url`/`role`, **no emails** |
 | POST / GET / DELETE | `/orgs/{org_id}/invites`, `/invites/{invite_id}` | admin |
 | POST | `/orgs/invites/{token}/accept` · `/decline` | invitee |
 | GET | `/orgs/invites/{token}/preview` | anyone holding the token (unauthenticated) — returns only `orgName` / `inviterName` for the claim page |
@@ -260,14 +261,18 @@ Spec: `docs/superpowers/specs/2026-08-15-pricing-tiers-teams-design.md`. Same `o
 | Tier | Monthly grant | Grandfathered grant (until `grandfathered_until`) | Team slots (`max_teams`) | Team size excl. owner (`max_team_members`) | Team storage pool (`team_storage_bytes`) |
 |---|---|---|---|---|---|
 | Free | 100 | — | 0 | 0 | 0 |
-| Basic | 2,000 | 3,000 | 1 | 3 | 10 GiB |
-| Pro | 5,000 | 8,000 | 3 | 10 | 100 GiB |
+| Basic | 2,000 | 3,000 | 1 | 3 | 100 GiB |
+| Pro | 5,000 | 8,000 | 3 | 10¹ | 250 GiB then PAYG |
 
-All three team dials live on `tier_entitlements` (migration `20260816000001`), read through `orgs.standing.team_dials_for_user` — a Msanii admin's own dials always resolve as Pro, regardless of their subscription tier. **Joining a team is free on every tier; only owning (covering) one draws on a slot.**
+¹ Pro's team size is not a flat number: seats unlock in blocks of `SEATS_PER_PRO` (5) per Pro member, the covering owner counting as the first Pro for free — `effective_limit = min(max_team_members, SEATS_PER_PRO * (1 + pro_member_count))`. A lone Pro coverer gets 5; one more Pro member joining unlocks the full 10 (`tier_entitlements.pro.max_team_members`, unchanged). See below.
+
+All three team dials live on `tier_entitlements` (migration `20260816000001`), read through `orgs.standing.team_dials_for_user` — a Msanii admin's own dials always resolve as Pro, regardless of their subscription tier. **Joining a team is free on every tier; only owning (covering) one draws on a slot.** A Pro team's effective ceiling is `orgs.service.SEATS_PER_PRO`'s formula (owner decision 2026-08-16, superseding a same-day flat-5-member cap that was never applied): `min(dials.max_team_members, SEATS_PER_PRO * (1 + pro_member_count))`, where `pro_member_count` is the org's other ACTIVE members (excluding the coverer) whose resolved tier is Pro (`orgs.standing.resolve_tier_for_user`, the same admin-implicit-Pro resolution `team_dials_for_user` uses, factored out so the two can't drift). Basic's 3-member cap sits below `SEATS_PER_PRO` so the formula never raises it — a Pro-tier user being a member on a Basic-covered team changes nothing. The gate is ADDING-only, never holding: `_self_serve_seat_room` re-checks on both `invite_member` and `accept_invite`, and a Pro member leaving or downgrading later lowers the ceiling for future invites but does not evict anyone already in. Hitting the ceiling gets no per-org override and no paid seat add-on: `TeamFullError` raises with `next_step="contact"` once at `max_team_members`, and the invite dialog points the admin at Enterprise instead (`team_seat_wall_hit` analytics event fired at the router).
 
 **Grandfathering:** subscribers paid at merge time keep their pre-rescale grant (Basic 3,000 / Pro 8,000) via `subscriptions.grandfathered_monthly_credits`, honored only while `now() < grandfathered_until` — stamped ONCE at the backfill from the row's `current_period_end` (so a monthly subscriber keeps the old grant until this month's renewal, an annual subscriber until their term ends). The stamp is never extended by an interval switch; only a tier change ends it, and ends it EARLY by nulling both columns immediately in the same webhook write. Precedence (explicit admin override > unexpired grandfather > tier value) lives in exactly one helper, `EntitlementsService._resolve_monthly_grant`, called at all five grant sites — a mismatch there is the one way two users could see two different bundles for the same tier.
 
 ### Coverage is claimed, never assigned
+
+**One coverer per team, and admin ≠ payer.** A team may have several admins (all Pro, even) — they all manage it, but exactly one of them covers it: that person's plan supplies the slot, their per-owner pool absorbs the team's storage, and their personal Stripe customer is billed for Pro PAYG overage. The others' slots stay free for teams of their own. Pro-ness matters in two independent ways: the *coverer* provides slot + storage; any Pro *member* (admin or not) unlocks the next `SEATS_PER_PRO` block. **Coverage never moves automatically** (owner decision 2026-08-16 — claiming means "put this on my plan and my card", so it must be a deliberate act): the sweep does not hunt for a co-admin with a free slot; it grace-stamps, `_notify_standing` tells every active admin to claim, and past `ORG_GRACE_DAYS` the team lapses if nobody did.
 
 `covered_by` / `covered_at` on `organizations` name who is spending a team slot on this org. Two endpoints move it, both self-serve-only (`_require_self_serve_org`, 409 otherwise) and admin-only:
 
@@ -316,11 +321,30 @@ Self-serve orgs have no dispersal. Every credit lands in the pool's **reserve** 
 
 Team storage is **not** the enterprise `ENTERPRISE_SEAT_STORAGE_BYTES × seats` cap, and it is **not** personal storage. `orgs.storage_guard.pool_state(owner_id)` sums `organizations.storage_bytes` across every self-serve org `covered_by` still points at — **active and archived, excluding only dissolved** (a parked archived team's bytes still count, so archive-then-recreate can't dodge the cap).
 
-- **Basic:** 10 GiB hard cap. Uploads that would exceed it are refused (`storage_guard.upload_allowed`, shared message `TEAM_STORAGE_FULL_MSG`).
-- **Pro:** 100 GiB, then PAYG. "Pro-like" (`team_storage_bytes > 10 GiB`, which also covers Msanii admin dials) owners always pass the upload gate and the reactivation guard — overage bills instead of blocking.
+- **Basic:** 100 GiB hard cap (matches personal storage; `20260817000001`). Uploads that would exceed it are refused (`storage_guard.upload_allowed`, shared message `TEAM_STORAGE_FULL_MSG`).
+- **Pro:** 250 GiB, then PAYG. "Pro-like" (`TeamDials.tier == "pro"`, which also covers Msanii admin dials — keyed on tier, not pool size, since Basic's pool is now as big as Pro's used to be) owners always pass the upload gate and the reactivation guard — overage bills instead of blocking.
 - **PAYG billing:** a daily sweep step (`storage_guard.bill_team_storage_overage`) turns overage into a Stripe InvoiceItem on the owner's **personal** customer, once per owner-period (stamped on `subscriptions.last_team_storage_invoiced_period`, keyed off the personal wallet's `period_start` — zero overage still stamps, or a fully-covered owner would be re-evaluated forever). Rate is `TEAM_STORAGE_OVERAGE_USD_PER_GB` (env, seeded $0.025/GB/mo). Billing is **per owner**, not per org — `pool_state` already sums across every org that owner covers, so per-org billing would double-count.
 - **Reactivation guard:** `reactivation_allowed` — a lapsed or archived team may not wake up (via coverage claim, unarchive, or the standing sweep's recovery branch) while the owner sits over-pool, unless they're pro-like (PAYG absorbs it).
 - Two other byte inlets besides upload: `artist_subtree_bytes` sizes an artist transfer before it happens (so a transfer that would blow the pool can be refused up front), and the reactivation guard above.
+
+### Boards
+
+Spec `2026-08-16-boards-on-teams`. The workspace used to have its **own** notion of a team (`teams` / `team_members` / `pending_team_invites`, the backend package `src/backend/teams/`, the Workspace "Teams" tab) sitting beside this one. They are now one thing: **a board belongs to an organization, or to one person.**
+
+- **The edge.** `boards.team_id → organizations(id) ON DELETE RESTRICT` — the same edge as `artists.team_id`, and the column finally means what its name says. `NULL` = personal board. Membership is the org's ACTIVE seats in a LIVE org; **invites happen only in the `/teams` console**, never in the workspace.
+- **One predicate, two languages.** SQL `can_access_board(p_board_id, p_user_id)` (RLS on `boards`, `board_members`, `board_task_assignees`, `board_task_works`) is mirrored by `boards/authz._can_access` in Python, whose liveness half is `artist_access.live_org_ids` — the same "live seat" definition team artists use. Keep them in step:
+
+  ```
+  personal → owner
+  team     → live seat AND (NOT boards.restricted OR owner OR org admin OR listed in board_members)
+  ```
+- **RLS is not the writer-side gate on its own.** A `FOR UPDATE` policy with no `WITH CHECK` reuses `USING` as the check, so "can see it" would mean "can write it". The `boards` UPDATE policy is therefore **owner-or-admin, not `can_access_board`**, and because `WITH CHECK` cannot see `OLD`, the `boards_lock_team_id` BEFORE UPDATE trigger refuses any `team_id` change made under an end-user JWT (same shape as `artists_lock_team_id`). Without both, a plain member could flip `restricted` — locking colleagues out — or move a board to another org they belong to, straight from the anon-key client the frontend ships. `is_live_org_member` (SQL) backs all three write policies, so a member of an archived/lapsed org cannot INSERT or DELETE a board there either.
+- **Restricted narrowing is a visibility list, not a role.** `PUT /boards/boards/{id}` gained `restricted` and `member_user_ids` (a **replace-set**; every id must be an ACTIVE seat of the board's org, else 422), gated to an org admin **or the board's creator**. Rename/description stay open to anyone who can see the board; archive / delete / restore / the archived list stay org-admin. Assigning a task requires the **target** to satisfy `can_access_board` — you can't be assigned to a board you can't open.
+- **Roster.** `GET /orgs/{org_id}/members` is the member-visible roster (names/avatars, no emails — those stay on the admin-only `/usage` seats) that feeds the assignee picker, the "Created by" filter and the board-members picker.
+- **Free = personal boards only**, and that is not a boards check: a Free user simply can't *own* an org (`standing.require_free_slot` inside `create_org`, which only runs when `standing.self_serve_enabled()` — both flags on; with self-serve off there is no slot check at all). Joining someone else's team is free on every tier, and a Free member of a Basic-covered team may create boards in it.
+- **Lifecycle follows the org.** Archived or lapsed → the org's boards are invisible to everyone, admins included, and come back on unarchive/reactivate. **Removing** a member purges their `board_members` rows on that org's boards (`_purge_member_from_org_boards`) so a re-invite can't silently restore narrowed access; **suspending purges nothing** — it is reversible and nothing would restore deleted rows. Task assignments survive both: an inactive seat already fails the predicate, so deleting history buys nothing. **Dissolve** reverts each board to a personal board of its creator, or of the dissolving admin when the creator no longer holds a seat (`_revert_org_boards`, the same recipient rule as `_dissolve_recipients`) — not best-effort: a board still pointing at a dissolved org is reachable by nobody.
+- **Migrations, in this order.** `20260818000001_boards_to_orgs.sql` (repoint the FK, add `restricted` + `board_members`, the predicate and the policies; pre-existing board-team boards become their creators' **personal** boards) — apply immediately after the new backend is live, it is forward-breaking for the old one. Then, only once that is verified, `20260818000002_drop_board_teams.sql` drops the old tables, their triggers (including `process_pending_team_invites_on_signup`, which lives on `auth.users` and would otherwise survive), `is_team_member`/`is_team_admin`, and `'team_invite'` from `notifications_type_check`.
+- **QA.** `scripts/qa_boards_on_teams.py` — the empty-`member_user_ids` save, the 422, the suspend/remove footprint and the `boards_lock_team_id_trg` refusal are all things `MockQueryBuilder` cannot express, so pytest cannot cover them.
 
 ## Not built (deliberate)
 

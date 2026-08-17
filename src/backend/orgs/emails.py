@@ -42,8 +42,8 @@ def send_org_invite_email(
     # It previously pointed at /notifications (existing user) and /auth (new
     # user). Both dead-ended: nothing writes an in-app row at invite time, the
     # org's pending-invites list is admin-only so the INVITEE can never see it,
-    # and — unlike teams' process_pending_team_invites_on_signup — there is no
-    # signup trigger converting a pending_org_invites row, so "you'll be added
+    # and there is no signup trigger converting a pending_org_invites row (the
+    # board-teams module that had one was removed 2026-08-16), so "you'll be added
     # automatically" was never true. The token is the only thing that carries
     # the invite; the link has to hold it.
     cta_href = f"{frontend_url}/orgs/invite/{token}"
@@ -110,7 +110,7 @@ def send_credit_request_email(
         if note
         else ""
     )
-    cta_href = f"{frontend_url}/organization"
+    cta_href = f"{frontend_url}/teams"
 
     html_body = f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
@@ -200,7 +200,7 @@ def send_standing_email(recipient_emails: list[str], org_name: str, kind: str):
 
     frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
     safe_org = html.escape(org_name)
-    cta_href = f"{frontend_url}/organization"
+    cta_href = f"{frontend_url}/teams"
 
     copy = {
         "grace_started": (
@@ -260,7 +260,7 @@ def send_credit_request_resolved_email(
     optional deny note."""
     frontend_url = os.getenv("VITE_FRONTEND_URL", "http://localhost:8080")
     safe_org = html.escape(org_name)
-    cta_href = f"{frontend_url}/organization"
+    cta_href = f"{frontend_url}/teams"
 
     if approved:
         headline = "Your credit limit request was approved."

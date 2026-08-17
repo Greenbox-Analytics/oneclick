@@ -42,6 +42,7 @@ import {
   type OrgSeatUsage,
   type OrgRole,
 } from "@/hooks/useOrgs";
+import { orgNoun, orgNounCap } from "@/lib/tiers";
 
 /** Stored `monthly_cap` meaning "no ceiling", as opposed to null = inherit the
  * org default. Needed because every org now carries a default (2,000), so
@@ -61,12 +62,14 @@ const STATUS_STYLE: Record<string, string> = {
 function CapDialog({
   seat,
   orgId,
+  orgKind,
   defaultCap,
   open,
   onOpenChange,
 }: {
   seat: OrgSeatUsage | null;
   orgId: string;
+  orgKind?: string | null;
   defaultCap: number | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -119,7 +122,7 @@ function CapDialog({
               <div className="flex items-center gap-2">
                 <RadioGroupItem value="default" id="cap-default" />
                 <Label htmlFor="cap-default" className="font-normal">
-                  Organization default ({defaultCap.toLocaleString()} credits / month)
+                  {orgNounCap(orgKind)} default ({defaultCap.toLocaleString()} credits / month)
                 </Label>
               </div>
             )}
@@ -173,7 +176,15 @@ function CapDialog({
   );
 }
 
-export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; currentUserId?: string }) {
+export function OrgSeatsTable({
+  orgId,
+  currentUserId,
+  orgKind,
+}: {
+  orgId: string;
+  currentUserId?: string;
+  orgKind?: string | null;
+}) {
   const { data: usage, isLoading, isError } = useOrgUsage(orgId);
   const updateRole = useUpdateOrgMemberRole();
   const suspend = useSuspendOrgMember();
@@ -200,7 +211,7 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
 
   const seats = usage.seats;
   const confirmDescription = confirmAction
-    ? `${confirmAction.seat.email ?? "This member"} will lose access to this organization. Nothing is deducted — they never held credits, only a limit. ${
+    ? `${confirmAction.seat.email ?? "This member"} will lose access to this ${orgNoun(orgKind)}. Nothing is deducted — they never held credits, only a limit. ${
         confirmAction.type === "suspend" ? "You can reactivate them later." : "You can re-invite them later."
       }`
     : "";
@@ -338,6 +349,7 @@ export function OrgSeatsTable({ orgId, currentUserId }: { orgId: string; current
       <CapDialog
         seat={capSeat}
         orgId={orgId}
+        orgKind={orgKind}
         defaultCap={usage.defaultMemberCap}
         open={!!capSeat}
         onOpenChange={(o) => !o && setCapSeat(null)}

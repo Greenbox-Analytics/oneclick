@@ -73,6 +73,10 @@ interface CalculationErrorState {
   managedByOrg?: boolean;
   capReached?: boolean;
   requestUrl?: string;
+  /** Denial came from the credit gate (structured 402). A PERSONAL credit wall
+   * previously rendered message-plus-toast and nothing to click — survivable
+   * when a run cost ~2 credits, not at 30. */
+  isCreditWall?: boolean;
 }
 interface Project { id: string; name: string; }
 interface ArtistFile { id: string; file_name: string; created_at: string; folder_category: string; file_path: string; project_id: string; }
@@ -765,7 +769,10 @@ const OneClickDocuments = () => {
               "Calculate Royalties"
             )}
           </Button>
-          <CreditsChip />
+          <CreditsChip action="oneclick_run" />
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            You won&apos;t be charged twice for the same result this month.
+          </p>
         </div>
 
         {/* Error Alert */}
@@ -782,10 +789,22 @@ const OneClickDocuments = () => {
                             size="sm"
                             variant="outline"
                             className="mt-3"
-                            onClick={() => navigate(error.requestUrl || "/organization")}
+                            onClick={() => navigate(error.requestUrl || "/teams")}
                         >
                             Ask for a higher limit
                         </Button>
+                    )}
+                    {/* Personal credit wall: buying credits or upgrading both fix
+                        it, so offer both rather than a dead-end error message. */}
+                    {error.isCreditWall && !error.managedByOrg && (
+                        <div className="mt-3 flex gap-2">
+                            <Button size="sm" onClick={() => navigate("/profile")}>
+                                Buy credits
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => navigate("/pricing")}>
+                                Upgrade
+                            </Button>
+                        </div>
                     )}
                     {error.code === 'NO_SONG_MATCHES' && error.details?.contract_works && error.details?.statement_songs && (
                         <SongMismatchComparison

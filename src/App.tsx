@@ -73,6 +73,12 @@ function SubscriptionRedirect() {
   return <Navigate to={`/profile${search}`} replace />;
 }
 
+// /organization renamed to /teams (2026-08-16 teams rebrand); same shape.
+function TeamsRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/teams${search}`} replace />;
+}
+
 /**
  * Reset scroll on navigation. React Router keeps the current scroll offset
  * across route changes, so following a link from a page footer (e.g. Contact)
@@ -197,13 +203,17 @@ const App = () => (
             />
             <Route path="/subscription" element={<SubscriptionRedirect />} />
             <Route
-              path="/organization"
+              path="/teams"
               element={
                 <ProtectedRoute>
                   <Organization />
                 </ProtectedRoute>
               }
             />
+            {/* Legacy path: invite emails, Stripe return URLs and bookmarks from
+                before the teams rename. Redirect keeps the query string
+                (?new=1, ?topup=success). */}
+            <Route path="/organization" element={<TeamsRedirect />} />
             {/* Public: invited members may not be signed in yet — the page
                 shows a sign-in gate and only calls the (auth-required) accept/
                 decline endpoints once a user session exists. */}

@@ -1,6 +1,7 @@
 """Thin wrappers around EntitlementsService.can() that raise HTTPException(402)
 on denial. One-line gates at endpoint entry; consistent error shape."""
 
+import hashlib
 import logging
 import uuid
 
@@ -146,6 +147,8 @@ _CREDIT_TO_LEGACY = {
     CreditAction.ZOE_MESSAGE: Action.USE_ZOE,
     CreditAction.ONECLICK_RUN: Action.USE_ONECLICK,
     CreditAction.REGISTRY_PARSE: Action.USE_REGISTRY,
+    # Legacy mode reproduces today's behavior exactly: the cap, and only the cap.
+    CreditAction.SPLIT_SHEET: Action.GENERATE_SPLIT_SHEET,
 }
 
 
@@ -156,6 +159,7 @@ def gated_credits(
     *,
     resource_project_id: str | None = None,
     resource_contract_ids: list[str] | None = None,
+    dedupe_key: str | None = None,
 ) -> CreditGrant:
     """Credit gate for metered AI actions. Returns a CreditGrant to hand to
     debit_for_action() after the action SUCCEEDS (charge-on-success, spec §3).
@@ -163,6 +167,13 @@ def gated_credits(
     request_id is a fresh uuid4 per invocation: internal RPC retries dedupe on
     it; an intentional user re-run is a new invocation and charges again.
     The ACTING user pays — host_user_id only feeds the legacy fallback.
+
+    `dedupe_key` identifies the DELIVERABLE (not the request) and makes the
+    debit idempotent for the rest of the billing period. Pass it when the same
+    inputs must not be charged twice — cache hits, where the user gets nothing
+    new on a re-run. The debit_credits RPC fast-paths a repeated request_id and
+    returns {'duplicate': true} without writing a second row, so this needs no
+    RPC change. Omit it for real work: an intentional re-run charges again.
 
     `resource_project_id` / `resource_contract_ids` (Licensing Phase C) are the
     resource the action operates on; they thread straight into check_credits so
@@ -212,7 +223,7 @@ def gated_credits(
             # own monthly ceiling (ask for a raise) versus a dry pool (only an admin
             # buying credits fixes that, so a member sees no actionable CTA).
             detail["managedByOrg"] = True
-            detail["requestUrl"] = "/organization"
+            detail["requestUrl"] = "/teams"
             detail["capReached"] = result.cap_reached
         if result.owner_can_unlink:
             # Owner-aware dry-seat wall (Licensing Phase C, rule 11): the caller
@@ -226,8 +237,18 @@ def gated_credits(
             detail["ownerCanUnlink"] = True
             detail["projectId"] = result.project_id
         raise HTTPException(status_code=402, detail=detail)
+    request_id = str(uuid.uuid4())
+    if dedupe_key is not None and result.wallet_id:
+        # Deterministic per (action, wallet, deliverable, period). Scoped to the
+        # period so the same cached deliverable is free for the rest of THIS
+        # month and chargeable again next month — the user gets nothing new, so
+        # they pay nothing new. Falls back to uuid4 when there is no wallet to
+        # scope against (legacy / zero-price grants, which never debit anyway).
+        digest = hashlib.sha256(dedupe_key.encode("utf-8")).hexdigest()[:32]
+        period = result.reset_date.isoformat() if result.reset_date else "noperiod"
+        request_id = f"dedupe:{action}:{result.wallet_id}:{digest}:{period}"
     return CreditGrant(
-        request_id=str(uuid.uuid4()),
+        request_id=request_id,
         action=str(action),
         price=result.price,
         kind="overage_debit" if result.use_overage else "debit",
@@ -242,10 +263,14 @@ def gated_credits(
 
 
 def free_credit_grant(action: CreditAction) -> CreditGrant:
-    """Grant for a PRE-VERIFIED zero-cost invocation (result-cache hit,
-    conversational fast-path): skips the wall AND the debit. Only correct when
-    the caller has deterministically established no LLM cost will be incurred
-    (spec §3: cached/canned actions are free and must stay reachable at zero
-    balance). Callers gate usage on credits_enabled() so legacy-mode feature
-    gating is preserved when the flag is off."""
+    """Grant for a canned, ZERO-DELIVERABLE invocation: skips the wall AND the
+    debit. Exactly ONE caller remains — Zoe's conversational fast-path, where
+    is_zero_cost_query guarantees a canned reply with no LLM call and no answer.
+
+    Result-cache hits are NOT free any more (spec 2026-08-17 §4): a cached parse
+    or calculation hands back the same complete deliverable as a fresh one, so it
+    pays the base rate. The rule is "charge for the deliverable, not the
+    computation" — this helper is for invocations that produce no deliverable at
+    all. Callers gate usage on credits_enabled() so legacy-mode feature gating is
+    preserved when the flag is off."""
     return CreditGrant(request_id="", action=str(action), price=0, kind="debit", enabled=False)

@@ -19,6 +19,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useUpdateOrg, useArchiveOrg, type OrgDetail } from "@/hooks/useOrgs";
+import { orgNoun, orgNounCap } from "@/lib/tiers";
 
 // Client-side-only suggested default (plan Task 12/14, round 5: cut the
 // backend env fallback — the sweep reads the STORED column and NULL/0 means
@@ -72,11 +73,11 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
   return (
     <Card className="p-6">
       <div className="text-[15px] font-semibold">Settings</div>
-      <div className="text-[13.5px] text-muted-foreground mt-0.5">Organization name and contract terms</div>
+      <div className="text-[13.5px] text-muted-foreground mt-0.5">{orgNounCap(org.kind)} name and contract terms</div>
 
       <div className="mt-4 space-y-5">
         <div className="space-y-2">
-          <Label htmlFor="org-name">Organization name</Label>
+          <Label htmlFor="org-name">{orgNounCap(org.kind)} name</Label>
           <Input id="org-name" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
 
@@ -98,7 +99,7 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
               </>
             ) : (
               <>
-                No monthly contract on this organization — you&apos;re running on credits you buy,
+                No monthly contract on this {orgNoun(org.kind)} — you&apos;re running on credits you buy,
                 which never expire. Talk to us to set up a monthly allocation.
               </>
             )}

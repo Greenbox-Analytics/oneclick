@@ -64,7 +64,7 @@ COHORTS = {
                 "values": [
                     {
                         "key": "plan",
-                        # Both paid keys: 'basic' ($25) and 'pro' ($50). Pre-rename
+                        # Both paid keys: 'basic' ($30, was $25) and 'pro' ($50). Pre-rename
                         # events used 'pro' for the $25 plan — still matched here.
                         "value": ["basic", "pro"],
                         "operator": "exact",

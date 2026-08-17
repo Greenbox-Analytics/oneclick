@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
-import { Archive, History, MoreHorizontal, Pencil, Plus, Trash2, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { Archive, History, MoreHorizontal, Plus, Settings2, Trash2, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,17 +31,18 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useTeams } from "@/hooks/useTeams";
+import { useAuth } from "@/contexts/AuthContext";
+import { useMyOrgs } from "@/hooks/useOrgs";
 import {
   useArchiveBoard,
   useArchivedBoards,
   useBoardsList,
   useCreateBoard,
   useDeleteBoard,
-  useRenameBoard,
   useRestoreBoard,
 } from "@/hooks/useBoardsList";
 import { DeleteConfirmDialog } from "@/components/workspace/boards/DeleteConfirmDialog";
+import { BoardSettingsDialog } from "@/components/workspace/boards/BoardSettingsDialog";
 
 const PERSONAL = "personal";
 
@@ -58,7 +59,15 @@ interface BoardSwitcherProps {
  * switcher only reads props and emits `onBoardChange`.
  */
 export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherProps) {
-  const { data: teams, isLoading: teamsLoading } = useTeams();
+  const { user } = useAuth();
+  // Contexts = the live orgs the caller actually holds a seat in. An archived /
+  // lapsed org (or a suspended seat) can't own a board you may act on, so it never
+  // appears — the stale-team guard below then bounces a dangling selection.
+  const { data: orgs, isLoading: teamsLoading } = useMyOrgs();
+  const teams = useMemo(
+    () => (orgs ?? []).filter((o) => o.my_status === "active" && !o.archived_at && o.status !== "lapsed"),
+    [orgs],
+  );
   const {
     data: boards,
     isLoading: boardsLoading,
@@ -66,14 +75,12 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
   } = useBoardsList(teamId);
 
   const createBoard = useCreateBoard();
-  const renameBoard = useRenameBoard();
   const archiveBoard = useArchiveBoard();
   const deleteBoard = useDeleteBoard();
 
   const [newDialogOpen, setNewDialogOpen] = useState(false);
   const [newBoardName, setNewBoardName] = useState("");
-  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
-  const [renameName, setRenameName] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -85,6 +92,10 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
   // never see these affordances (the backend enforces the same gate).
   const activeTeam = teams?.find((t) => t.id === teamId);
   const canManage = teamId == null || activeTeam?.my_role === "admin";
+  // Visibility is a WIDER gate than delete: the board's own creator may also
+  // narrow who sees it, even as a plain team member.
+  const canManageBoard =
+    teamId == null || activeTeam?.my_role === "admin" || selectedBoard?.owner_id === user?.id;
   // The empty state is a TEAM concept only. Personal keeps boardId undefined = the
   // personal-boards union (today's behavior), so it never shows "No boards yet".
   const hasNoBoards =
@@ -146,27 +157,6 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
           onBoardChange(newBoard.id, teamId);
           setNewBoardName("");
           setNewDialogOpen(false);
-        },
-      },
-    );
-  };
-
-  const openRename = () => {
-    if (!selectedBoard) return;
-    setRenameName(selectedBoard.name);
-    setRenameDialogOpen(true);
-  };
-
-  const handleRenameBoard = () => {
-    if (renameBoard.isPending) return;
-    const name = renameName.trim();
-    if (!name || !boardId) return;
-    renameBoard.mutate(
-      { boardId, name },
-      {
-        onSuccess: () => {
-          toast.success("Board renamed");
-          setRenameDialogOpen(false);
         },
       },
     );
@@ -254,9 +244,9 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
               <Plus className="mr-2 h-4 w-4" />
               New board
             </DropdownMenuItem>
-            <DropdownMenuItem disabled={!selectedBoard} onSelect={openRename}>
-              <Pencil className="mr-2 h-4 w-4" />
-              Rename board
+            <DropdownMenuItem disabled={!selectedBoard} onSelect={() => setSettingsOpen(true)}>
+              <Settings2 className="mr-2 h-4 w-4" />
+              Board settings…
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -290,6 +280,27 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
         </DropdownMenu>
       )}
 
+      {/* Nudge for users with no teams at all — the only way to share a board. */}
+      {!teamsLoading && teamId == null && teams.length === 0 && (
+        <p className="w-full text-xs text-muted-foreground">
+          {(orgs ?? []).length > 0 ? (
+            <>
+              Your team isn&apos;t active right now.{" "}
+              <Link to="/teams" className="underline">
+                Check its status →
+              </Link>
+            </>
+          ) : (
+            <>
+              Want to share boards with people?{" "}
+              <Link to="/teams" className="underline">
+                Create a team →
+              </Link>
+            </>
+          )}
+        </p>
+      )}
+
       {/* New board dialog */}
       <Dialog
         open={newDialogOpen}
@@ -316,7 +327,9 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
               autoFocus
             />
             <p className="text-xs text-muted-foreground">
-              {teamId ? "This board will belong to the selected team." : "This board will be personal to you."}
+              {teamId
+                ? "This board will be visible to everyone on the team — you can narrow it later in Board settings."
+                : "This board will be personal to you."}
             </p>
           </div>
           <DialogFooter>
@@ -331,36 +344,17 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
         </DialogContent>
       </Dialog>
 
-      {/* Rename board dialog */}
-      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Rename board</DialogTitle>
-            <DialogDescription>Give this board a new name.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="rename-board-name">Board name</Label>
-            <Input
-              id="rename-board-name"
-              value={renameName}
-              onChange={(e) => setRenameName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameBoard();
-              }}
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRenameDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleRenameBoard} disabled={!renameName.trim() || renameBoard.isPending}>
-              {renameBoard.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Board settings (name + who can see it). Mounted only with a board selected —
+          the dialog reads board.name/restricted/member_user_ids as its seed. */}
+      {selectedBoard && (
+        <BoardSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          board={selectedBoard}
+          teamId={teamId}
+          canManage={canManageBoard}
+        />
+      )}
 
       {/* Archive confirm */}
       <AlertDialog open={archiveDialogOpen} onOpenChange={setArchiveDialogOpen}>

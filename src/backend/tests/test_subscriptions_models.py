@@ -223,11 +223,51 @@ class TestOverridePayload:
         assert p.max_artists == -1
 
 
+def _entitlements_with_credits():
+    """A fully-populated Entitlements carrying a credits block, for to_dict tests."""
+    from subscriptions.models import Caps, CreditsInfo, Entitlements, Features, Usage
+
+    return Entitlements(
+        user_id="u1",
+        tier="pro_max",
+        status="active",
+        caps=Caps(
+            max_artists=-1,
+            max_projects=-1,
+            max_tasks=-1,
+            max_storage_bytes=-1,
+            max_split_sheets_per_month=-1,
+            max_oneclick_runs_per_month=-1,
+            monthly_credits=8000,
+            max_works=-1,
+            included_storage_bytes=268435456000,
+        ),
+        features=Features(True, True, True, ["google_drive"]),
+        usage=Usage(0, 0, 0, 0, datetime(2026, 8, 1, tzinfo=UTC)),
+        has_overrides=False,
+        credits=CreditsInfo(
+            bundle_balance=7000,
+            reserve_balance=100,
+            monthly_grant=8000,
+            overage_this_period=0,
+            overage_enabled=False,
+            overage_cap_credits=None,
+            period_end=datetime(2026, 8, 1, tzinfo=UTC),
+            prices={"zoe_message": 3, "oneclick_run": 21, "registry_parse": 12, "split_sheet": 20},
+        ),
+    )
+
+
 class TestCreditModels:
     def test_credit_action_keys_match_seeded_prices(self):
         from subscriptions.models import CreditAction
 
-        assert {a.value for a in CreditAction} == {"zoe_message", "oneclick_run", "registry_parse"}
+        assert {a.value for a in CreditAction} == {
+            "zoe_message",
+            "oneclick_run",
+            "registry_parse",
+            "split_sheet",
+        }
 
     def test_create_work_action_exists(self):
         from subscriptions.models import Action
@@ -235,37 +275,7 @@ class TestCreditModels:
         assert Action.CREATE_WORK == "create_work"
 
     def test_to_dict_includes_credits_block(self):
-        from subscriptions.models import Caps, CreditsInfo, Entitlements, Features, Usage
-
-        ent = Entitlements(
-            user_id="u1",
-            tier="pro_max",
-            status="active",
-            caps=Caps(
-                max_artists=-1,
-                max_projects=-1,
-                max_tasks=-1,
-                max_storage_bytes=-1,
-                max_split_sheets_per_month=-1,
-                max_oneclick_runs_per_month=-1,
-                monthly_credits=8000,
-                max_works=-1,
-                included_storage_bytes=268435456000,
-            ),
-            features=Features(True, True, True, ["google_drive"]),
-            usage=Usage(0, 0, 0, 0, datetime(2026, 8, 1, tzinfo=UTC)),
-            has_overrides=False,
-            credits=CreditsInfo(
-                bundle_balance=7000,
-                reserve_balance=100,
-                monthly_grant=8000,
-                overage_this_period=0,
-                overage_enabled=False,
-                overage_cap_credits=None,
-                period_end=datetime(2026, 8, 1, tzinfo=UTC),
-                prices={"zoe_message": 3, "oneclick_run": 21, "registry_parse": 12},
-            ),
-        )
+        ent = _entitlements_with_credits()
         d = ent.to_dict()
         c = d["credits"]
         assert c["balance"] == 7100  # bundle + reserve
@@ -273,6 +283,21 @@ class TestCreditModels:
         assert c["monthlyGrant"] == 8000
         assert c["prices"]["oneclickRun"] == 21
         assert d["caps"]["maxWorks"] == -1
+
+    def test_every_credit_action_is_in_the_prices_payload(self):
+        """to_dict hand-builds `prices`; a new CreditAction that never reaches the
+        client renders as a missing price in the UI, not an error."""
+        from subscriptions.models import CreditAction
+
+        payload = _entitlements_with_credits().to_dict()["credits"]["prices"]
+        camel = {
+            "zoe_message": "zoeMessage",
+            "oneclick_run": "oneclickRun",
+            "registry_parse": "registryParse",
+            "split_sheet": "splitSheet",
+        }
+        for action in CreditAction:
+            assert camel[str(action)] in payload, f"{action} missing from the prices payload"
 
     def test_to_dict_credits_none_when_absent(self):
         from subscriptions.models import Caps, Entitlements, Features, Usage

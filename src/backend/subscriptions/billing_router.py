@@ -190,7 +190,7 @@ async def create_topup_session(
     sub_res = sb.table("subscriptions").select("stripe_customer_id").eq("user_id", user_id).execute()
     customer_id = sub_res.data[0].get("stripe_customer_id") if sub_res.data else None
     customer_kwargs = {"customer": customer_id} if customer_id else {"customer_email": email}
-    return_base = "/organization" if target != "user" else "/profile"
+    return_base = "/teams" if target != "user" else "/profile"
     session = stripe.checkout.Session.create(
         mode="payment",
         line_items=[{"price": pack["stripe_price_id"], "quantity": 1}],
@@ -299,8 +299,8 @@ async def create_org_topup_checkout(
         line_items=[{"price": pack["recurring_stripe_price_id"], "quantity": 1}],
         metadata=metadata,
         subscription_data={"metadata": dict(metadata)},
-        success_url=f"{frontend_url}/organization?topup=success",
-        cancel_url=f"{frontend_url}/organization?topup=canceled",
+        success_url=f"{frontend_url}/teams?topup=success",
+        cancel_url=f"{frontend_url}/teams?topup=canceled",
         **customer_kwargs,
     )
     analytics_capture(user_id, "checkout_started", {"plan": pack["key"], "kind": "org_topup", "org_id": body.org_id})

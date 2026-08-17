@@ -660,10 +660,9 @@ def _burn(*, model="gpt-5-mini", input_tokens=0, output_tokens=0):
 
 
 class TestMeteredDebit:
-    """The charge is the tokens actually burned, not the flat action price.
-
-    `grant.price` survives ONLY as the pre-flight estimate the balance check
-    reserved against, and as the fallback when spend is unmeasurable.
+    """The charge is max(BASE, metered): `grant.price` is the per-action base
+    rate and a FLOOR, and the measured spend only decides the amount when a run
+    cost more than the base already covers.
     """
 
     @staticmethod
@@ -688,25 +687,26 @@ class TestMeteredDebit:
         assert args["p_metadata"]["estimated"] == 3
         assert args["p_metadata"]["metered"] is True
 
-    def test_cheap_call_costs_less_than_the_flat_price(self, monkeypatch):
-        """The whole point: a small request is not billed like a big one."""
+    def test_cheap_call_still_pays_the_base(self, monkeypatch):
+        """A small request meters to 1 credit, but the base rate is a FLOOR."""
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _paid_supabase(bundle=100)
         with set_llm_context(TEST_USER_ID, "zoe"):
-            _burn(input_tokens=2_000)  # $0.0005 -> 1 credit (the floor)
+            _burn(input_tokens=2_000)  # $0.0005 -> 1 metered credit
             EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant(price=21))
-        assert self._debit_args(sb)["p_amount"] == 1
+        assert self._debit_args(sb)["p_amount"] == 21
 
-    def test_no_llm_call_charges_nothing(self, monkeypatch):
-        """A cache hit inside a tracked scope burns no tokens -> no RPC at all.
+    def test_no_llm_call_still_pays_the_base(self, monkeypatch):
+        """A cache hit inside a tracked scope burns no tokens -> measures 0 and
+        pays exactly the base, because the deliverable is the same one.
 
-        This is what makes cache hits free without per-tool special-casing.
+        This is the cache-hit rule at the service layer (spec 2026-08-17 §4).
         """
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _paid_supabase(bundle=100)
         with set_llm_context(TEST_USER_ID, "registry"):
             EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
-        assert self._debit_args(sb) is None
+        assert self._debit_args(sb)["p_amount"] == 3
 
     def test_unpriced_model_falls_back_to_the_estimate(self, monkeypatch):
         """A model missing from MODEL_RATES has unknowable cost — charge the
@@ -733,7 +733,8 @@ class TestMeteredDebit:
             _burn(input_tokens=200_000)
             EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant(price=21, kind="overage_debit"))
         args = self._debit_args(sb)
-        assert args["p_kind"] == "overage_debit" and args["p_amount"] == 8
+        # metered 8 sits under the 21 base — the floor applies to overage too.
+        assert args["p_kind"] == "overage_debit" and args["p_amount"] == 21
 
 
 class TestCreditsForCost:
@@ -1821,3 +1822,71 @@ class TestSelfServeOrgUploadGate:
         r = self._can_upload(sb, size=1)
 
         assert r.allowed is True, "must fall through to the tiny personal cap, not the lapsed org's 999GB total"
+
+
+class TestBaseRateCharge:
+    """charge = max(base, metered) — spec 2026-08-17 §2."""
+
+    @staticmethod
+    def _grant(price=30, kind="debit"):
+        return CreditGrant(request_id="req-b", action="oneclick_run", price=price, kind=kind, enabled=True)
+
+    @staticmethod
+    def _debit_args(sb):
+        calls = [c.args[1] for c in sb.rpc.call_args_list if c.args[0] == "debit_credits"]
+        return calls[0] if calls else None
+
+    def test_metered_below_base_charges_base(self, monkeypatch):
+        """$0.05 of gpt-5-mini meters to 8, but the 30-credit base is a FLOOR."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=1000)
+        with set_llm_context(TEST_USER_ID, "oneclick"):
+            _burn(input_tokens=200_000)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
+        args = self._debit_args(sb)
+        assert args["p_amount"] == 30
+        assert args["p_metadata"]["base"] == 30
+        assert args["p_metadata"]["measurable"] is True
+        assert args["p_metadata"]["metered_credits"] == 8
+        assert args["p_metadata"]["metered"] is False  # the tail did NOT decide it
+
+    def test_metered_above_base_charges_metered(self, monkeypatch):
+        """$0.25 meters to 38 — past the base, so the tail wins."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=1000)
+        with set_llm_context(TEST_USER_ID, "oneclick"):
+            _burn(input_tokens=1_000_000)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
+        args = self._debit_args(sb)
+        assert args["p_amount"] == 38
+        assert args["p_metadata"]["metered_credits"] == 38
+        assert args["p_metadata"]["metered"] is True
+
+    def test_cache_hit_measures_zero_and_still_charges_base(self, monkeypatch):
+        """THE behaviour change: a tracked scope that burns no tokens still pays
+        the base, because the user received the same deliverable."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=1000)
+        with set_llm_context(TEST_USER_ID, "oneclick"):
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
+        assert self._debit_args(sb)["p_amount"] == 30
+
+    def test_unmeasurable_charges_base(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=1000)
+        with set_llm_context(TEST_USER_ID, "oneclick"):
+            _burn(model="some-unlisted-model", input_tokens=1_000_000)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
+        args = self._debit_args(sb)
+        assert args["p_amount"] == 30
+        assert args["p_metadata"]["measurable"] is False
+        assert args["p_metadata"]["metered_credits"] is None
+        assert args["p_metadata"]["metered"] is False
+
+    def test_zero_price_grant_still_charges_nothing(self, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=1000)
+        with set_llm_context(TEST_USER_ID, "oneclick"):
+            _burn(input_tokens=1_000_000)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant(price=0))
+        assert self._debit_args(sb) is None

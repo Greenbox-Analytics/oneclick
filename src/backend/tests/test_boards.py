@@ -208,9 +208,8 @@ def _single_builder(row: dict | None) -> BoardMockBuilder:
 
 def _authz_board_builder(name):
     """Return a well-formed personal board (owned by TEST_USER_ID) for the `boards`
-    table, and an empty result for `team_members`, so future `teams/authz.py`
-    lookups (get_board / is_team_member / require_board_access/edit) resolve to
-    an authorized personal board instead of crashing or 403ing.
+    table, so `boards/authz.py` lookups (get_board / require_board_access/edit)
+    resolve to an authorized personal board instead of crashing or 403ing.
 
     Returns None for any other table name so callers can fall through to their
     own domain-specific mock data.
@@ -221,8 +220,6 @@ def _authz_board_builder(name):
         # builder (`_builder`), not `_single_builder` (which always collapses
         # `.data` to a bare dict and breaks that `[0]` indexing).
         return _builder([{"id": BOARD_ID, "team_id": None, "owner_id": TEST_USER_ID, "archived": False}])
-    if name == "team_members":
-        return _builder([])
     if name == "org_members":
         # artist_access.live_org_ids (reached via _owned_artist_ids /
         # _accessible_project_ids) reads seats before deciding artist
@@ -903,7 +900,7 @@ class TestCalendar:
         assert response.status_code == 200
         assert len(response.json()["tasks"]) == 1
         # Only one board_tasks range query should run (due_date). _resolve_read_board_ids
-        # reads `boards`/`team_members`, and _enrich_tasks reads the junction tables — none
+        # reads `boards`/`org_members`, and _enrich_tasks reads the junction tables — none
         # of those is `board_tasks`, and this task has no parent, so board_tasks is queried
         # exactly once. Before this change it was queried twice (due_date + start_date).
         board_task_queries = [c for c in mock_supabase.table.call_args_list if c.args and c.args[0] == "board_tasks"]

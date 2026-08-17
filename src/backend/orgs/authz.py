@@ -4,8 +4,8 @@ The backend uses the Supabase service-role client, which BYPASSES RLS — so
 these per-request checks are the real authorization gate (RLS is
 defense-in-depth for any direct frontend reads). Spec §4/§5.
 
-Unlike teams/authz.py (which queries team_members directly), these call the
-is_org_member/is_org_admin SQL helpers via `rpc` — the same SECURITY DEFINER
+These call the is_org_member/is_org_admin SQL helpers via `rpc` rather than
+querying org_members directly — the same SECURITY DEFINER
 functions the RLS policies use (supabase/migrations/20260721000001_licensing_core.sql)
 — so the backend's membership answer and RLS's membership answer can never
 drift apart. Both SQL helpers only count ACTIVE rows (status='active'); a

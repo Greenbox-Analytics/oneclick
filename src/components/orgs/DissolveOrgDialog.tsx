@@ -43,7 +43,7 @@ export function DissolveOrgDialog({
       {
         onSuccess: () => {
           handleOpenChange(false);
-          navigate("/organization");
+          navigate("/teams");
         },
       },
     );
@@ -55,7 +55,7 @@ export function DissolveOrgDialog({
         <DialogHeader>
           <DialogTitle>Dissolve {orgName}?</DialogTitle>
           <DialogDescription>
-            This permanently closes the team. Artists return to their creators, purchased credits in
+            This permanently closes the team. Artists and boards return to their creators, purchased credits in
             the pool are forfeited, and this can&apos;t be undone.
           </DialogDescription>
         </DialogHeader>

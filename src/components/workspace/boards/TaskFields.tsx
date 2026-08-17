@@ -18,7 +18,8 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { ColorPicker } from "./ColorPicker";
 import { MultiSelectCombobox } from "./MultiSelectCombobox";
-import { useTeamMembers } from "@/hooks/useTeams";
+import { useOrgRoster } from "@/hooks/useOrgs";
+import { useBoardsList } from "@/hooks/useBoardsList";
 import { useAddAssignee, useRemoveAssignee } from "@/hooks/useTaskAssignees";
 import { useAuth } from "@/contexts/AuthContext";
 import type { BoardColumn, BoardTaskDetail, ParentTaskWithChildren } from "@/types/integrations";
@@ -90,7 +91,21 @@ export function TaskFields({
 }: TaskFieldsProps) {
   const { user } = useAuth();
   // Only fetches when teamId is set (hook is enabled-gated on teamId).
-  const { data: members } = useTeamMembers(teamId ?? undefined);
+  const { data: members } = useOrgRoster(teamId);
+  // A restricted board's audience is narrower than the org roster, and
+  // `can_assign_user` (boards/service.py) rejects anyone outside it — so
+  // offering the whole roster means an optimistic chip that rolls back with an
+  // error. Resolve the board from the already-cached list (task.board_id is on
+  // the detail payload) and intersect. Open board / not found -> whole roster,
+  // which is the pre-restriction behaviour.
+  const { data: teamBoards } = useBoardsList(teamId);
+  const board = teamBoards?.find((b) => b.id === task.board_id);
+  const assignable = useMemo(() => {
+    const roster = members ?? [];
+    if (!board?.restricted) return roster;
+    const listed = new Set(board.member_user_ids ?? []);
+    return roster.filter((m) => m.role === "admin" || m.user_id === board.owner_id || listed.has(m.user_id));
+  }, [members, board]);
   const addAssignee = useAddAssignee();
   const removeAssignee = useRemoveAssignee();
 
@@ -429,14 +444,15 @@ export function TaskFields({
             <div className={assignPending ? "opacity-60 pointer-events-none" : ""}>
               <MultiSelectCombobox
                 options={[
-                  ...(members ?? []).map((m) => ({
+                  ...assignable.map((m) => ({
                     id: m.user_id,
                     label: m.full_name || "Unnamed member",
                   })),
-                  // Assignees who have since left the team: keep them in the
+                  // Assignees who have since left the team — or who were
+                  // assigned before the board was narrowed: keep them in the
                   // options so their chip renders and can be deselected.
                   ...(task.assignees ?? [])
-                    .filter((a) => !(members ?? []).some((m) => m.user_id === a.user_id))
+                    .filter((a) => !assignable.some((m) => m.user_id === a.user_id))
                     .map((a) => ({
                       id: a.user_id,
                       label: `${a.full_name || "Unnamed member"} (no longer in team)`,

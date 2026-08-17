@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/apiFetch";
 import { PaywallModal } from "@/components/paywall/PaywallModal";
+import { parseCreditWallDetail } from "@/components/paywall/creditWall";
 import type { GatedFeature, CountableResource } from "@/hooks/useEntitlements";
 
 interface UseGatedActionOptions<TData, TVars, TContext> {
@@ -46,6 +47,7 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
   // upgrade CTA for a "Request credits" one instead of losing that signal
   // down to just `reason`'s plain text.
   const [paywallDetail, setPaywallDetail] = useState<{
+    isCreditWall?: boolean;
     managedByOrg?: boolean;
     capReached?: boolean;
     requestUrl?: string;
@@ -78,14 +80,8 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
 
       if (err instanceof ApiError && err.status === 402) {
         setPaywallReason(err.message);
-        const detail = err.detail as
-          | { managedByOrg?: boolean; capReached?: boolean; requestUrl?: string }
-          | undefined;
-        setPaywallDetail({
-          managedByOrg: detail?.managedByOrg === true,
-          capReached: detail?.capReached === true,
-          requestUrl: typeof detail?.requestUrl === "string" ? detail.requestUrl : undefined,
-        });
+        // One derivation for every 402 surface — see creditWall.tsx.
+        setPaywallDetail(parseCreditWallDetail(err.detail));
         setPaywallOpen(true);
         return; // swallow: paywall surfaces in the modal, not via consumer toast
       }
@@ -109,6 +105,7 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
       reason={paywallReason}
       feature={opts.feature}
       resource={opts.resource}
+      creditWall={paywallDetail.isCreditWall}
       managedByOrg={paywallDetail.managedByOrg}
       capReached={paywallDetail.capReached}
       requestUrl={paywallDetail.requestUrl}

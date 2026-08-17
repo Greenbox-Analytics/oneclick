@@ -100,6 +100,8 @@ class BoardCreate(BaseModel):
 class BoardUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    restricted: bool | None = None
+    member_user_ids: list[str] | None = None
 
 
 class AssigneeAdd(BaseModel):

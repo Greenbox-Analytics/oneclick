@@ -9,6 +9,7 @@ interface PaywallModalProps {
   feature?: GatedFeature;
   resource?: CountableResource;
   /** Licensing Phase B (plan Task 13) — see PaywallCard. */
+  creditWall?: boolean;
   managedByOrg?: boolean;
   capReached?: boolean;
   requestUrl?: string;
@@ -20,6 +21,7 @@ export const PaywallModal = ({
   reason,
   feature,
   resource,
+  creditWall,
   managedByOrg,
   capReached,
   requestUrl,
@@ -31,6 +33,7 @@ export const PaywallModal = ({
         resource={resource}
         reason={reason}
         variant="modal"
+        creditWall={creditWall}
         managedByOrg={managedByOrg}
         capReached={capReached}
         requestUrl={requestUrl}

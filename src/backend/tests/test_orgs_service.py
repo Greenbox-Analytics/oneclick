@@ -901,6 +901,102 @@ async def test_invite_member_at_limit_raises_team_full(monkeypatch):
     assert "3" in str(exc_info.value)  # limit is in the message
 
 
+PRO_MEMBER = "60000000-0000-0000-0000-000000000001"
+
+
+def _active_members(n, pro_id=None):
+    """n distinct active org_members rows (user_id only, matching the gate's
+    .select("user_id")); pro_id, if given, replaces the first id so a test
+    can point resolve_tier_for_user at exactly one Pro member."""
+    ids = [f"70000000-0000-0000-0000-{i:012d}" for i in range(n)]
+    if pro_id:
+        ids[0] = pro_id
+    return [{"user_id": uid} for uid in ids]
+
+
+async def test_invite_member_pro_coverer_zero_pro_members_at_five_raises(monkeypatch):
+    """Owner decision 2026-08-16 (SEATS_PER_PRO formula): a lone Pro coverer
+    (no other Pro members) unlocks only the first 5-seat block. At 5 active
+    members the wall hits — next_step points at another Pro member joining
+    or Enterprise, never a per-org override."""
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    monkeypatch.setattr(standing, "team_dials_for_user", lambda db, uid: TeamDials(max_team_members=10, tier="pro"))
+    monkeypatch.setattr(standing, "resolve_tier_for_user", lambda db, uid: "basic")
+    db = _db_seq(
+        {
+            "organizations": [MagicMock(data=_org_row(covered_by=U1), count=1)],
+            "org_members": [MagicMock(data=_active_members(5), count=5)],
+        }
+    )
+    with pytest.raises(service.TeamFullError) as exc_info:
+        await service.invite_member(db, U1, ORG, "new@example.com", "member")
+    exc = exc_info.value
+    assert exc.limit == 5
+    assert exc.next_step == "contact"
+    assert "unlocks" in str(exc)
+    assert "up to 10" in str(exc)
+
+
+async def test_invite_member_pro_coverer_one_pro_member_under_ten_proceeds(monkeypatch):
+    """One Pro member (besides the coverer) unlocks the second 5-seat block,
+    up to 10 — 5 active members is comfortably under that, so the gate lets
+    the invite through (no TeamFullError)."""
+    monkeypatch.setattr(standing, "team_dials_for_user", lambda db, uid: TeamDials(max_team_members=10, tier="pro"))
+    monkeypatch.setattr(standing, "resolve_tier_for_user", lambda db, uid: "pro" if uid == PRO_MEMBER else "basic")
+    db = _db_seq(
+        {
+            "organizations": [MagicMock(data=_org_row(covered_by=U1), count=1)],
+            "org_members": [MagicMock(data=_active_members(5, pro_id=PRO_MEMBER), count=5)],
+        }
+    )
+    service._self_serve_seat_room(db, ORG)  # must not raise
+
+
+async def test_invite_member_pro_coverer_one_pro_member_at_ten_raises(monkeypatch):
+    """The same one-Pro-member team hits its OWN wall at 10 — the hard
+    ceiling (tier_entitlements.pro.max_team_members) is never exceeded no
+    matter how many Pro members join."""
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    monkeypatch.setattr(standing, "team_dials_for_user", lambda db, uid: TeamDials(max_team_members=10, tier="pro"))
+    monkeypatch.setattr(standing, "resolve_tier_for_user", lambda db, uid: "pro" if uid == PRO_MEMBER else "basic")
+    db = _db_seq(
+        {
+            "organizations": [MagicMock(data=_org_row(covered_by=U1), count=1)],
+            "org_members": [MagicMock(data=_active_members(10, pro_id=PRO_MEMBER), count=10)],
+        }
+    )
+    with pytest.raises(service.TeamFullError) as exc_info:
+        await service.invite_member(db, U1, ORG, "new@example.com", "member")
+    exc = exc_info.value
+    assert exc.limit == 10
+    assert exc.next_step == "contact"
+    assert "10-member limit" in str(exc)
+
+
+async def test_invite_member_basic_coverer_pro_member_does_not_raise_cap(monkeypatch):
+    """A Pro member sitting on a Basic-covered team does NOT raise the cap
+    above Basic's 3 — the formula's min() always defers to
+    dials.max_team_members for a non-Pro coverer, and next_step stays
+    'upgrade' (not on Pro yet)."""
+    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
+    monkeypatch.setattr(standing, "team_dials_for_user", lambda db, uid: TeamDials(max_team_members=3, tier="basic"))
+    monkeypatch.setattr(standing, "resolve_tier_for_user", lambda db, uid: "pro" if uid == PRO_MEMBER else "basic")
+    db = _db_seq(
+        {
+            "organizations": [MagicMock(data=_org_row(covered_by=U1), count=1)],
+            "org_members": [MagicMock(data=_active_members(3, pro_id=PRO_MEMBER), count=3)],
+        }
+    )
+    with pytest.raises(service.TeamFullError) as exc_info:
+        await service.invite_member(db, U1, ORG, "new@example.com", "member")
+    exc = exc_info.value
+    assert exc.next_step == "upgrade"
+    assert exc.limit == 3
+    assert "3" in str(exc)
+    assert "Basic" in str(exc)
+    assert "Upgrade to Pro" in str(exc)
+
+
 async def test_invite_member_under_limit_proceeds(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
     monkeypatch.setattr(service, "_find_user_id_by_email", lambda *a: None)
@@ -1754,7 +1850,8 @@ def test_join_notifications_go_to_the_member_and_every_other_admin():
     assert rows[0]["title"] == "You joined Acme"
     assert "shared credit pool" in rows[0]["message"]
     assert rows[1]["message"] == "new@acme.com joined Acme."
-    # 'team_invite' would wire NotificationRow's Accept/Decline at the TEAMS API.
+    # 'confirmation', not 'invitation': NotificationRow renders Accept/Decline
+    # for 'invitation', and a join notice has nothing to action.
     assert {r["type"] for r in rows} == {"confirmation"}
     assert {r["entity_type"] for r in rows} == {"org"}
     assert {r["entity_id"] for r in rows} == {ORG}
@@ -1780,8 +1877,8 @@ def test_join_notification_falls_back_when_org_name_missing():
 def test_invite_email_links_to_the_tokened_claim_page(monkeypatch):
     """The token is the ONLY thing that carries the invite. /notifications and
     /auth both dead-ended (no in-app row existed at invite time, the pending
-    list is admin-only, and there is no signup trigger for org invites the way
-    teams has process_pending_team_invites_on_signup)."""
+    list is admin-only, and no signup trigger converts a pending_org_invites
+    row)."""
     from orgs import emails
 
     monkeypatch.setenv("VITE_FRONTEND_URL", "https://app.msanii.test")
@@ -1802,9 +1899,9 @@ def test_invite_email_links_to_the_tokened_claim_page(monkeypatch):
         assert "/notifications" not in sent["html_body"]
 
 
-def test_invite_notification_is_an_org_invitation_not_a_team_one():
-    """type='team_invite' would point NotificationRow's Accept at the TEAMS
-    endpoint — the org row must be invitation + entity_type='org'."""
+def test_invite_notification_is_an_org_invitation():
+    """NotificationRow keys the Accept/Decline buttons off the PAIR
+    invitation + entity_type='org'; either half alone renders no buttons."""
     captured = {}
 
     def _side(name):

@@ -15,11 +15,12 @@ import { TopUpCreditsDialog } from "@/components/billing/TopUpCreditsDialog";
 import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
 
 // Popover labels are activity phrasing ("runs"), unlike CreditsUsageCard's
-// price-list phrasing ("OneClick run · 20 cr ea") — hence not shared.
+// per-tool rows, which quote the base rate — hence not shared.
 const TOOLS: { action: CreditAction; label: string; color: string }[] = [
   { action: "oneclick_run", label: "OneClick runs", color: "var(--t-oneclick)" },
   { action: "registry_parse", label: "Contract parses", color: "var(--t-registry)" },
   { action: "zoe_message", label: "Zoe analyses", color: "var(--t-zoe)" },
+  { action: "split_sheet", label: "Split sheets", color: "var(--t-split)" },
 ];
 
 export function HeaderCreditsTicker() {
@@ -56,7 +57,7 @@ export function HeaderCreditsTicker() {
 
   // Members buy nothing on a pool — their remedy is asking the org.
   const openBuy = () => {
-    if (managedByOrg && !isOrgAdmin) navigate("/organization");
+    if (managedByOrg && !isOrgAdmin) navigate("/teams");
     else setTopUpOpen(true);
   };
 
@@ -93,7 +94,7 @@ export function HeaderCreditsTicker() {
             )}
           </>
         ) : (
-          <span className="font-medium text-muted-foreground">Org credits</span>
+          <span className="font-medium text-muted-foreground">Shared pool</span>
         )}
       </span>
       {!out && standing && (

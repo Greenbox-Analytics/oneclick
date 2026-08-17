@@ -25,7 +25,7 @@ import { useBoards } from "@/hooks/useBoards";
 import { useParentTasks } from "@/hooks/useParentTasks";
 import { useBoardPeriod } from "@/hooks/useBoardPeriod";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
-import { useTeamMembers } from "@/hooks/useTeams";
+import { useOrgRoster } from "@/hooks/useOrgs";
 import { BoardFilterBar, type BoardFilterValue } from "./BoardFilterBar";
 
 interface KanbanBoardProps {
@@ -73,7 +73,7 @@ export function KanbanBoard({ artistId, boardId, teamId, initialSelectedTaskId }
 
   // --- Filter bar (Created by + By artist), persisted in the URL ---
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: teamMembers } = useTeamMembers(teamId ?? undefined);
+  const { data: teamMembers } = useOrgRoster(teamId);
 
   const filterValue = useMemo<BoardFilterValue>(
     () => ({

@@ -71,7 +71,7 @@ def _send_org_invite_email_background(
     db_url: str, db_key: str, org_id: str, user_id: str, email: str, role: str, token: str, existing_user: bool = False
 ):
     """Runs on a FastAPI BackgroundTask — its own service-role client, not
-    the request's (mirrors teams.router._send_team_invite_email_background)."""
+    the request's — a BackgroundTask outlives the request scope."""
     from supabase import create_client
 
     from orgs.emails import send_org_invite_email
@@ -210,8 +210,7 @@ def _notify_billing_reverted_background(
     transition seat statuses, so active seats are exactly who just lost
     coverage). Each member gets an email (orgs/emails.py) plus an in-app
     notification on the unified `notifications` table — type 'status_change'
-    (an existing CHECK-allowed type) with entity_type='org', mirroring
-    teams.service.create_team_invite_notification's writer shape."""
+    (an existing CHECK-allowed type) with entity_type='org'."""
     from supabase import create_client
 
     from orgs.emails import send_billing_reverted_email
@@ -281,7 +280,7 @@ async def get_org_invite_preview(token: str):
     if expires_at and datetime.fromisoformat(expires_at) < datetime.now(UTC):
         raise HTTPException(status_code=404, detail="Invite not found")
 
-    org = db.table("organizations").select("name").eq("id", invite["org_id"]).maybe_single().execute()
+    org = db.table("organizations").select("name, kind").eq("id", invite["org_id"]).maybe_single().execute()
     inviter_name = None
     if invite.get("invited_by"):
         prof = db.table("profiles").select("full_name").eq("id", invite["invited_by"]).maybe_single().execute()
@@ -289,6 +288,10 @@ async def get_org_invite_preview(token: str):
 
     return {
         "orgName": (org.data or {}).get("name") if org else None,
+        # "self_serve" | "enterprise" | None (pre-migration row) — still minimal
+        # and still unauthenticated: the invite email already says team vs
+        # organization, so this reveals nothing the recipient doesn't have.
+        "kind": (org.data or {}).get("kind") if org else None,
         "inviterName": inviter_name,
     }
 
@@ -355,6 +358,13 @@ async def get_org(org_id: str, user_id: str = Depends(get_current_user_id)):
         return await service.get_org(_get_supabase(), user_id, org_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{org_id}/members")
+async def list_org_members(org_id: str, user_id: str = Depends(get_current_user_id)):
+    """Member-visible roster (names/avatars, no emails) for board pickers.
+    `authz.require_member` raises the 404 itself, so no try/except here."""
+    return {"members": await service.list_org_roster(_get_supabase(), user_id, org_id)}
 
 
 @router.put("/{org_id}")
@@ -608,7 +618,8 @@ async def invite_member(
     except TeamLapsedError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except TeamFullError as e:
-        raise HTTPException(status_code=402, detail=str(e))
+        analytics_capture(user_id, "team_seat_wall_hit", {"org_id": org_id, "limit": e.limit, "next_step": e.next_step})
+        raise HTTPException(status_code=402, detail={"reason": str(e), "limit": e.limit, "nextStep": e.next_step})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

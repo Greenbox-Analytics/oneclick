@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useEntitlements, type GatedFeature, type CountableResource } from "@/hooks/useEntitlements";
 import { useAnalytics, type PaywallFeature } from "@/hooks/useAnalytics";
+import { orgNoun } from "@/lib/tiers";
 
 interface PaywallCardProps {
   feature?: GatedFeature;
@@ -13,6 +14,11 @@ interface PaywallCardProps {
   reason?: string;
   onUpgrade?: () => void;
   variant?: "page" | "inline" | "modal";
+  /** True when the 402 came from the CREDIT gate and the user genuinely lacks
+   * credits (structured detail with a positive `price` — see creditWall.tsx).
+   * A personal credit wall is not fixed by "Upgrade to Pro" alone: buying a
+   * pack fixes it too, so the copy and CTA order change. */
+  creditWall?: boolean;
   /** Licensing Phase B (spec §5, rule 8): true when the denial came from an ORG
    * billing context. There's no upgrade or overage path on a pool — the member
    * asks their org admin instead, so this branch REPLACES the upgrade CTA. */
@@ -23,7 +29,7 @@ interface PaywallCardProps {
    * them to a form that can't fix anything. */
   capReached?: boolean;
   /** Where the "Ask for a higher limit" CTA navigates — defaults to
-   * /organization (the member view's request form) when the 402 didn't carry
+   * /teams (the member view's request form) when the 402 didn't carry
    * one. */
   requestUrl?: string;
 }
@@ -46,6 +52,7 @@ export const PaywallCard = ({
   reason,
   onUpgrade,
   variant = "page",
+  creditWall,
   managedByOrg,
   capReached,
   requestUrl,
@@ -60,6 +67,11 @@ export const PaywallCard = ({
   const orgRole =
     ent?.billingContext?.type === "org" ? ent.billingContext.role : ent?.credits?.managedByOrg?.role;
   const isOrgAdmin = orgRole === "admin";
+  // Kind-aware noun ("team" for self-serve, "organization" for enterprise —
+  // undefined/unknown also reads as "organization", see orgNoun in @/lib/tiers).
+  const orgKind =
+    ent?.billingContext?.type === "org" ? ent.billingContext.kind : ent?.credits?.managedByOrg?.kind;
+  const noun = orgNoun(orgKind);
   // Credit packs are only sellable when the credits system is on and the
   // wall is personal — never suggest packs on a legacy tier-gate wall.
   const packsAvailable = !managedByOrg && ent?.credits != null;
@@ -74,14 +86,16 @@ export const PaywallCard = ({
     capturePaywallUpgradeClicked(pwFeature, variant ?? "page");
     upgrade();
   };
-  const handleRequestCredits = () => navigate(requestUrl || "/organization");
+  const handleRequestCredits = () => navigate(requestUrl || "/teams");
 
   const title = capReached
     ? "You've reached your monthly limit"
     : managedByOrg
     ? isOrgAdmin
-      ? "Your team's credit pool is empty"
-      : "Your organization is out of credits"
+      ? `Your ${noun}'s credit pool is empty`
+      : `Your ${noun} is out of credits`
+    : creditWall
+    ? "You're out of credits"
     : feature
     ? `${FEATURE_LABELS[feature]} is a Pro feature`
     : resource
@@ -89,11 +103,13 @@ export const PaywallCard = ({
     : "Upgrade to Pro";
 
   const body = capReached
-    ? reason ?? "You've used your monthly credit limit. Ask your organization's admin to raise it."
+    ? reason ?? `You've used your monthly credit limit. Ask your ${noun}'s admin to raise it.`
     : managedByOrg
     ? isOrgAdmin
-      ? "Your team's shared credit pool is empty. Buy credits to get everyone working again."
-      : reason ?? "Your organization is out of credits. Ask your admin to top up."
+      ? `Your ${noun}'s shared credit pool is empty. Buy credits to get everyone working again.`
+      : reason ?? `Your ${noun} is out of credits. Ask your admin to top up.`
+    : creditWall
+    ? reason ?? "You've used this month's credits. Buy a top-up pack or upgrade your plan."
     : reason ??
       (feature
         ? `${FEATURE_LABELS[feature]} is included in Pro. Upgrade to access it.`
@@ -123,7 +139,7 @@ export const PaywallCard = ({
               </Button>
             )}
             {!capReached && isOrgAdmin && (
-              <Button onClick={() => navigate("/organization")} className="mt-2">
+              <Button onClick={() => navigate("/teams")} className="mt-2">
                 Buy credits
               </Button>
             )}
@@ -131,7 +147,7 @@ export const PaywallCard = ({
         ) : (
           <>
             <Button onClick={handleUpgradeClick} className="mt-2">
-              Upgrade to Pro
+              {creditWall ? "Upgrade for more credits" : "Upgrade to Pro"}
             </Button>
             {packsAvailable && (
               <p className="text-xs text-muted-foreground">

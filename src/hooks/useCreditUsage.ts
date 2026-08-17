@@ -2,14 +2,14 @@ import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
-export type CreditAction = "oneclick_run" | "registry_parse" | "zoe_message";
+export type CreditAction = "oneclick_run" | "registry_parse" | "zoe_message" | "split_sheet";
 
 export interface CreditToolUsage {
   action: CreditAction;
-  /** Pre-flight ESTIMATE per run, not a fixed rate — see CreditPrices. */
+  /** The action's BASE RATE — what a run costs, barring a pathological outlier. */
   price: number | null;
   count: number;
-  /** Credits actually charged, metered off the AI tokens each run burned. */
+  /** Credits actually charged: max(base, metered) summed over the period. */
   spent: number;
 }
 

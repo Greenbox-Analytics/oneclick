@@ -1,7 +1,7 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, HardDrive, CalendarDays, Settings, Users } from "lucide-react";
+import { LayoutGrid, HardDrive, CalendarDays, Settings } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,6 @@ import { WorkspaceSettings } from "@/components/workspace/WorkspaceSettings";
 import { KanbanBoard } from "@/components/workspace/boards/KanbanBoard";
 import { BoardSwitcher } from "@/components/workspace/boards/BoardSwitcher";
 import { CalendarView } from "@/components/workspace/boards/CalendarView";
-import TeamsPanel from "@/components/workspace/teams/TeamsPanel";
 import { toast } from "sonner";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
@@ -33,10 +32,15 @@ const Workspace = () => {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
-  // The Notifications tab moved to its own /notifications page — redirect legacy deep links.
+  // Retired tabs — redirect legacy deep links rather than rendering a shell
+  // with no tab selected. Notifications moved to its own page; the Teams tab
+  // was merged into the /teams console (2026-08-16 boards-on-teams).
   useEffect(() => {
-    if (searchParams.get("tab") === "notifications") {
+    const tab = searchParams.get("tab");
+    if (tab === "notifications") {
       navigate("/notifications", { replace: true });
+    } else if (tab === "teams") {
+      navigate("/teams", { replace: true });
     }
   }, [searchParams, navigate]);
 
@@ -136,7 +140,7 @@ const Workspace = () => {
             {formattedDateTime}
           </p>
           <p className="text-muted-foreground mt-1">
-            Manage integrations, project boards, and teams
+            Manage integrations, project boards, and calendar
           </p>
         </div>
 
@@ -155,11 +159,6 @@ const Workspace = () => {
                 <SelectItem value="boards">
                   <span className="inline-flex items-center gap-2">
                     <LayoutGrid className="w-4 h-4" /> Project Boards
-                  </span>
-                </SelectItem>
-                <SelectItem value="teams">
-                  <span className="inline-flex items-center gap-2">
-                    <Users className="w-4 h-4" /> Teams
                   </span>
                 </SelectItem>
                 <SelectItem value="calendar">
@@ -183,10 +182,6 @@ const Workspace = () => {
               <TabsTrigger value="boards" className="gap-2">
                 <LayoutGrid className="w-4 h-4" />
                 Project Boards
-              </TabsTrigger>
-              <TabsTrigger value="teams" className="gap-2">
-                <Users className="w-4 h-4" />
-                Teams
               </TabsTrigger>
               <TabsTrigger value="calendar" className="gap-2">
                 <CalendarDays className="w-4 h-4" />
@@ -222,10 +217,6 @@ const Workspace = () => {
                 initialSelectedTaskId={initialTaskId}
               />
             )}
-          </TabsContent>
-
-          <TabsContent value="teams">
-            <TeamsPanel />
           </TabsContent>
 
           <TabsContent value="calendar" data-walkthrough="workspace-calendar">

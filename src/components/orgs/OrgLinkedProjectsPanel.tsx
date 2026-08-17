@@ -25,6 +25,7 @@ import {
   type OrgSeatUsage,
   type OrgProjectRole,
 } from "@/hooks/useOrgs";
+import { orgNoun } from "@/lib/tiers";
 import { fmtDate } from "@/lib/utils";
 
 type RowFeedback =
@@ -126,10 +127,12 @@ function LinkedProjectRow({
   orgId,
   project,
   seats,
+  orgKind,
 }: {
   orgId: string;
   project: OrgLinkedProject;
   seats: OrgSeatUsage[];
+  orgKind?: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const activeSeats = seats.filter((s) => s.status === "active");
@@ -161,7 +164,7 @@ function LinkedProjectRow({
         <div>
           {activeSeats.length === 0 ? (
             <div className="px-4 py-4 text-sm text-muted-foreground text-center border-t border-border/60">
-              No active seats to manage yet — invite someone to the organization first.
+              No active seats to manage yet — invite someone to the {orgNoun(orgKind)} first.
             </div>
           ) : (
             activeSeats.map((seat) => (
@@ -174,7 +177,15 @@ function LinkedProjectRow({
   );
 }
 
-export function OrgLinkedProjectsPanel({ orgId, seats }: { orgId: string; seats: OrgSeatUsage[] }) {
+export function OrgLinkedProjectsPanel({
+  orgId,
+  seats,
+  orgKind,
+}: {
+  orgId: string;
+  seats: OrgSeatUsage[];
+  orgKind?: string | null;
+}) {
   const { data: projects, isLoading, isError } = useOrgLinkedProjects(orgId);
 
   return (
@@ -205,7 +216,7 @@ export function OrgLinkedProjectsPanel({ orgId, seats }: { orgId: string; seats:
         ) : (
           <div className="space-y-2">
             {projects.map((p) => (
-              <LinkedProjectRow key={p.projectId} orgId={orgId} project={p} seats={seats} />
+              <LinkedProjectRow key={p.projectId} orgId={orgId} project={p} seats={seats} orgKind={orgKind} />
             ))}
           </div>
         )}

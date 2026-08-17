@@ -23,6 +23,7 @@ class TeamDials:
     max_teams: int = 0
     max_team_members: int = 0  # seats EXCLUDING the covering owner
     team_storage_bytes: int = 0  # per-OWNER pool across all owned teams
+    tier: str = ""  # resolved tier key ("free"/"basic"/"pro"); "pro" for admins
 
 
 def grace_days() -> int:
@@ -35,6 +36,19 @@ def _first(res):
     return rows[0] if rows else None
 
 
+def resolve_tier_for_user(db, user_id: str) -> str | None:
+    """A user's resolved tier key ("free"/"basic"/"pro"), or None with no
+    subscription row. Msanii admins resolve as "pro" (admin-implicit-Pro),
+    same as team_dials_for_user below — factored out so the two can't drift,
+    since orgs.service's Pro-seat-unlock counting needs this same resolution
+    per member, not the team dials that hang off it."""
+    prof = _first(db.table("profiles").select("is_admin").eq("id", user_id).execute())
+    if prof and prof.get("is_admin") is True:
+        return "pro"
+    sub = _first(db.table("subscriptions").select("tier").eq("user_id", user_id).execute())
+    return (sub or {}).get("tier") or None
+
+
 def team_dials_for_user(db, user_id: str) -> TeamDials:
     """The user's team dials. Msanii admins resolve as Pro (consistent with
     admin-implicit-Pro caps); everyone else reads their subscription tier's
@@ -44,12 +58,7 @@ def team_dials_for_user(db, user_id: str) -> TeamDials:
     different failure (an outage, not "this user has zero dials") and is
     deliberately left to propagate as a 500 rather than being swallowed into
     a misleading upsell 402."""
-    prof = _first(db.table("profiles").select("is_admin").eq("id", user_id).execute())
-    if prof and prof.get("is_admin") is True:
-        tier = "pro"
-    else:
-        sub = _first(db.table("subscriptions").select("tier").eq("user_id", user_id).execute())
-        tier = (sub or {}).get("tier")
+    tier = resolve_tier_for_user(db, user_id)
     if not tier:
         return TeamDials()
     row = _first(
@@ -64,6 +73,7 @@ def team_dials_for_user(db, user_id: str) -> TeamDials:
         max_teams=row.get("max_teams") or 0,
         max_team_members=row.get("max_team_members") or 0,
         team_storage_bytes=row.get("team_storage_bytes") or 0,
+        tier=tier,
     )
 
 
