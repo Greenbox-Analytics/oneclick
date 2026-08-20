@@ -264,7 +264,8 @@ async def test_dissolve_runs_six_steps_in_order(calls):
     kinds = [(c[0], c[1]) if c[0] in ("update", "rpc") else (c[0],) for c in _writes(calls)]
     assert kinds == [
         ("rpc", "debit_credits"),  # 1. money first
-        ("stripe_cancel",),  # 2. stop the meter
+        ("stripe_cancel",),  # 2. stop the meter...
+        ("update", "organizations"),  # ...and clear the two top-up columns (cancel_topup)
         ("update", "artists"),  # 3. artists back to people...
         ("update", "artists"),
         ("update", "artists"),
@@ -348,13 +349,13 @@ async def test_dissolve_soft_removes_seats_and_expires_invites(calls):
 
 async def test_dissolve_stamps_archived_at_and_keeps_an_existing_one(calls):
     await service.dissolve_org(_fake_db(_reads(), calls), U1, ORG, NAME)
-    patch = next(c[2] for c in calls if c[0] == "update" and c[1] == "organizations")
+    patch = next(c[2] for c in calls if c[0] == "update" and c[1] == "organizations" and "dissolved_at" in c[2])
     assert patch["archived_at"] == patch["dissolved_at"]  # not previously archived
 
     calls.clear()
     db = _fake_db(_reads(org=_org_row(archived_at="2026-07-01T00:00:00+00:00")), calls)
     await service.dissolve_org(db, U1, ORG, NAME)
-    patch = next(c[2] for c in calls if c[0] == "update" and c[1] == "organizations")
+    patch = next(c[2] for c in calls if c[0] == "update" and c[1] == "organizations" and "dissolved_at" in c[2])
     assert patch["archived_at"] == "2026-07-01T00:00:00+00:00"
     assert patch["dissolved_at"] != patch["archived_at"]
 
@@ -382,7 +383,11 @@ async def test_dissolve_aborts_when_an_artist_revert_fails(calls):
         "Some artists were handed back but the team could not be dissolved. "
         "Nothing was lost — run dissolve again to finish."
     )
-    assert not [c for c in calls if c[0] == "update" and c[1] in ("org_members", "organizations")]
+    # No seat is closed and the terminal patch never lands (the only
+    # organizations update allowed before the abort is cancel_topup's
+    # column clear in step 2).
+    assert not [c for c in calls if c[0] == "update" and c[1] == "org_members"]
+    assert not [c for c in calls if c[0] == "update" and c[1] == "organizations" and "dissolved_at" in c[2]]
 
 
 async def test_dissolve_survives_a_failed_forfeit(calls):

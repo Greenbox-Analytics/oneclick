@@ -299,17 +299,13 @@ const SplitSheet = () => {
 
       if (!response.ok) {
         const err = await response.json().catch(() => null);
-        // Surface 402 as ApiError so PaywallModal fires. MUST go through
-        // apiErrorFromBody: split sheets now have TWO gates with two detail
-        // shapes — the cap sends a plain string, the credit gate sends an object
-        // ({reason, price, managedByOrg, capReached, requestUrl}). Constructing
-        // ApiError by hand passed `detail` as the MESSAGE, which rendered as
-        // "[object Object]" and dropped every org field on the floor.
-        if (response.status === 402) {
-          throw apiErrorFromBody(err, 402, "Upgrade required");
-        }
-        throw new Error(
-          typeof err?.detail === "string" ? err.detail : "Failed to generate split sheet",
+        // apiErrorFromBody keeps both 402 detail shapes readable (plain-string
+        // cap, structured credit gate) — useGatedAction only paywalls on 402,
+        // so other statuses just surface the message.
+        throw apiErrorFromBody(
+          err,
+          response.status,
+          response.status === 402 ? "Upgrade required" : "Failed to generate split sheet",
         );
       }
 

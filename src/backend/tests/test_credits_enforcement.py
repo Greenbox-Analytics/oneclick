@@ -212,54 +212,6 @@ class TestSeatWall:
 
 
 # ---------------------------------------------------------------------------
-# Licensing Phase C — Task 6: owner-aware dry-seat wall. The 402 detail maps
-# CreditCheckResult.owner_can_unlink/project_id/project_name to ownerCanUnlink/
-# projectId/projectName, CO-OCCURRING with managedByOrg/requestUrl (round 4).
-# ---------------------------------------------------------------------------
-
-
-class TestOwnerAwareDrySeatWall:
-    def test_owner_dry_seat_402_carries_unlink_alongside_managed_by_org(self, fake_service):
-        fake_service.check_credits.return_value = CreditCheckResult(
-            allowed=False,
-            price=3,
-            managed_by_org=True,
-            owner_can_unlink=True,
-            project_id="proj-123",
-            reason=(
-                "You've used the credits your organization allocated. Ask your admin for more. "
-                "Or unlink this project in its settings to use your own plan here."
-            ),
-        )
-        with pytest.raises(HTTPException) as exc:
-            enforcement.gated_credits(TEST_USER, CreditAction.ZOE_MESSAGE)
-        detail = exc.value.detail
-        # Owner CTA present, projectId REQUIRED alongside the flag (round 5).
-        assert detail["ownerCanUnlink"] is True
-        assert detail["projectId"] == "proj-123"
-        assert "projectName" not in detail  # absent when the read didn't carry it
-        # CO-OCCURS with the buy/request affordance — never mutually exclusive.
-        assert detail["managedByOrg"] is True
-        assert detail["requestUrl"] == "/teams"
-
-    def test_seat_wall_without_owner_has_no_owner_keys(self, fake_service):
-        """A non-owner seat wall keeps the plain managed-by-org shape — no owner
-        keys leak in."""
-        fake_service.check_credits.return_value = CreditCheckResult(
-            allowed=False,
-            price=3,
-            managed_by_org=True,
-            reason="You've used the credits your organization allocated. Ask your admin for more.",
-        )
-        with pytest.raises(HTTPException) as exc:
-            enforcement.gated_credits(TEST_USER, CreditAction.ZOE_MESSAGE)
-        detail = exc.value.detail
-        assert "ownerCanUnlink" not in detail
-        assert "projectId" not in detail
-        assert detail["managedByOrg"] is True
-
-
-# ---------------------------------------------------------------------------
 # Licensing Phase C — Task 7: gated_create / gated_upload thread the optional
 # resource_project_id into can() so caps derivation can fire (rule 9). The kwarg
 # defaults None → byte-identical to today.
@@ -280,13 +232,11 @@ class TestResourceProjectIdThreading:
         assert kwargs["resource_project_id"] == "proj-1"
         assert kwargs["current_count"] == 5
 
-    def test_gated_create_none_call_is_byte_identical(self, monkeypatch):
-        # When no project id is supplied, the kwarg is omitted entirely so the
-        # can() call matches pre-Phase-C exactly (existing exact-arg tests unmodified).
+    def test_gated_create_defaults_resource_project_id_to_none(self, monkeypatch):
         svc = self._svc(monkeypatch)
         enforcement.gated_create(TEST_USER, "work", 5)
         _, kwargs = svc.can.call_args
-        assert "resource_project_id" not in kwargs
+        assert kwargs["resource_project_id"] is None
         assert kwargs["current_count"] == 5
 
     def test_gated_create_unknown_resource_never_calls_can(self, monkeypatch):
@@ -303,12 +253,11 @@ class TestResourceProjectIdThreading:
         assert kwargs["host_user_id"] == TEST_USER
         assert kwargs["size"] == 100
 
-    def test_gated_upload_none_call_is_byte_identical(self, monkeypatch):
-        # No project id → kwarg omitted, byte-identical to pre-Phase-C.
+    def test_gated_upload_defaults_resource_project_id_to_none(self, monkeypatch):
         svc = self._svc(monkeypatch)
         enforcement.gated_upload(TEST_USER, size=100)
         _, kwargs = svc.can.call_args
-        assert "resource_project_id" not in kwargs
+        assert kwargs["resource_project_id"] is None
         assert kwargs["host_user_id"] is None
         assert kwargs["size"] == 100
 

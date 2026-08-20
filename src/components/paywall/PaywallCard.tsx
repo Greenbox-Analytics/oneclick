@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useEntitlements, type GatedFeature, type CountableResource } from "@/hooks/useEntitlements";
 import { useAnalytics, type PaywallFeature } from "@/hooks/useAnalytics";
 import { orgNoun } from "@/lib/tiers";
+import { orgContext } from "@/lib/credits";
 
 interface PaywallCardProps {
   feature?: GatedFeature;
@@ -64,14 +65,10 @@ export const PaywallCard = ({
   // Is the viewer an ADMIN of the org whose pool ran dry? An admin can buy
   // credits themselves — "ask your admin" would be telling them to email
   // themselves.
-  const orgRole =
-    ent?.billingContext?.type === "org" ? ent.billingContext.role : ent?.credits?.managedByOrg?.role;
-  const isOrgAdmin = orgRole === "admin";
+  const isOrgAdmin = orgContext(ent)?.role === "admin";
   // Kind-aware noun ("team" for self-serve, "organization" for enterprise —
   // undefined/unknown also reads as "organization", see orgNoun in @/lib/tiers).
-  const orgKind =
-    ent?.billingContext?.type === "org" ? ent.billingContext.kind : ent?.credits?.managedByOrg?.kind;
-  const noun = orgNoun(orgKind);
+  const noun = orgNoun(orgContext(ent)?.kind);
   // Credit packs are only sellable when the credits system is on and the
   // wall is personal — never suggest packs on a legacy tier-gate wall.
   const packsAvailable = !managedByOrg && ent?.credits != null;

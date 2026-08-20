@@ -24,7 +24,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { ApiError } from "@/lib/apiFetch";
 import { fmtDate } from "@/lib/utils";
 import { useEntitlements } from "@/hooks/useEntitlements";
-import { useCreditUsage, type CreditAction } from "@/hooks/useCreditUsage";
+import { useCreditUsage } from "@/hooks/useCreditUsage";
 import {
   useMyOrgs,
   useOrg,
@@ -44,14 +44,9 @@ import { OrgRequestsPanel } from "@/components/orgs/OrgRequestsPanel";
 import { OrgSettingsPanel } from "@/components/orgs/OrgSettingsPanel";
 import { OrgLinkedProjectsPanel } from "@/components/orgs/OrgLinkedProjectsPanel";
 import { OrgLifecyclePanel } from "@/components/orgs/OrgLifecyclePanel";
-import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
+import { creditStanding, orgContext, POOL_ONLY_LABEL, TOOL_META } from "@/lib/credits";
 import { orgNoun, orgNounCap } from "@/lib/tiers";
-
-const TOOL_LABELS: Record<CreditAction, string> = {
-  oneclick_run: "OneClick run",
-  registry_parse: "Registry parse",
-  zoe_message: "Zoe message",
-};
+import { requestStatusClass } from "@/components/orgs/OrgRequestsPanel";
 
 function PageShell({ children }: { children: React.ReactNode }) {
   return (
@@ -189,7 +184,8 @@ function addDaysLabel(iso: string, days: number): string {
  * instead. `org.graceDays` is real (Task 15, `orgs.standing.grace_days()`,
  * present for every org/role); the "soon" fallback below is defensive only,
  * for a payload served before the backend shipped the field. */
-function StandingBanner({ orgId, org }: { orgId: string; org: OrgDetail }) {
+function StandingBanner({ org }: { org: OrgDetail }) {
+  const orgId = org.id;
   const claim = useClaimCoverage();
 
   if (org.status === "lapsed") {
@@ -242,7 +238,7 @@ function AdminConsole({ orgId }: { orgId: string }) {
   return (
     <div className="flex flex-col gap-[22px]">
       <OrgHeader org={org} />
-      {isSelfServe && <StandingBanner orgId={orgId} org={org} />}
+      {isSelfServe && <StandingBanner org={org} />}
       <OrgPoolCard org={org} />
       {isSelfServe && <OrgBillingPanel org={org} />}
       <OrgSeatsTable orgId={orgId} currentUserId={user?.id} orgKind={org.kind} />
@@ -251,8 +247,8 @@ function AdminConsole({ orgId }: { orgId: string }) {
         <OrgRequestsPanel orgId={orgId} seats={usage?.seats ?? []} />
       </div>
       <OrgLinkedProjectsPanel orgId={orgId} seats={usage?.seats ?? []} orgKind={org.kind} />
-      <OrgSettingsPanel org={org} />
-      {isSelfServe && <OrgLifecyclePanel orgId={orgId} org={org} currentUserId={user?.id} />}
+      <OrgSettingsPanel key={`${org.id}:${org.name}:${org.default_member_cap ?? ""}`} org={org} />
+      {isSelfServe && <OrgLifecyclePanel org={org} currentUserId={user?.id} />}
     </div>
   );
 }
@@ -323,14 +319,33 @@ function MemberRequestForm({ orgId, hasPending }: { orgId: string; hasPending: b
   );
 }
 
-function statusBadgeClass(status: string): string {
-  if (status === "approved") {
-    return "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 capitalize";
-  }
-  if (status === "pending") {
-    return "border-amber-500/30 text-amber-700 dark:text-amber-400 bg-amber-500/10 capitalize";
-  }
-  return "border-border text-muted-foreground bg-muted capitalize";
+/** The org's admin contact list — rendered identically in the lapsed notice
+ * ("Its admins") and the normal member view ("Your admins"). */
+function AdminContacts({ admins, heading }: { admins: { userId: string; fullName?: string | null; email?: string | null }[]; heading: string }) {
+  if (admins.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <div className="text-[11px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 mb-2">
+        {heading}
+      </div>
+      <div className="space-y-1.5">
+        {admins.map((a) => (
+          <div key={a.userId} className="flex items-center justify-between gap-3 text-sm">
+            <span className="min-w-0 truncate">{a.fullName || a.email || "Admin"}</span>
+            {a.email && (
+              <a
+                href={`mailto:${a.email}`}
+                className="flex-none inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground underline underline-offset-2"
+              >
+                <Mail className="w-3.5 h-3.5" />
+                {a.email}
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function MemberPanel({ org }: { org: OrgSummary }) {
@@ -342,11 +357,7 @@ function MemberPanel({ org }: { org: OrgSummary }) {
   const { data: detail } = useOrg(org.id);
   const admins = detail?.admins ?? [];
 
-  // billingContext is the canonical org-context signal (present even when
-  // CREDITS_ENABLED is off); credits.managedByOrg is the back-compat fallback.
-  const managedByOrg =
-    ent?.billingContext?.type === "org" ? ent.billingContext : ent?.credits?.managedByOrg;
-  const isActiveContext = managedByOrg?.orgId === org.id;
+  const isActiveContext = orgContext(ent)?.orgId === org.id;
   const hasPending = (myRequests ?? []).some((r) => r.status === "pending");
   // `usage.tools` is the caller's OWN spend out of the pool (backend scopes it
   // by org_member_id) — it used to be the org-wide total mislabelled as "Your
@@ -371,29 +382,7 @@ function MemberPanel({ org }: { org: OrgSummary }) {
           <p className="text-[13.5px] text-muted-foreground mt-1.5 max-w-md">
             This team is paused — its admin needs to reactivate it. Nothing has been deleted.
           </p>
-          {admins.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[11px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 mb-2">
-                {admins.length === 1 ? "Its admin" : "Its admins"}
-              </div>
-              <div className="space-y-1.5">
-                {admins.map((a) => (
-                  <div key={a.userId} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="min-w-0 truncate">{a.fullName || a.email || "Admin"}</span>
-                    {a.email && (
-                      <a
-                        href={`mailto:${a.email}`}
-                        className="flex-none inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground underline underline-offset-2"
-                      >
-                        <Mail className="w-3.5 h-3.5" />
-                        {a.email}
-                      </a>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <AdminContacts admins={admins} heading={admins.length === 1 ? "Its admin" : "Its admins"} />
         </Card>
       </div>
     );
@@ -410,29 +399,7 @@ function MemberPanel({ org }: { org: OrgSummary }) {
           admin manages invites and credit limits
         </div>
 
-        {admins.length > 0 && (
-          <div className="mt-4">
-            <div className="text-[11px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 mb-2">
-              {admins.length === 1 ? "Your admin" : "Your admins"}
-            </div>
-            <div className="space-y-1.5">
-              {admins.map((a) => (
-                <div key={a.userId} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="min-w-0 truncate">{a.fullName || a.email || "Admin"}</span>
-                  {a.email && (
-                    <a
-                      href={`mailto:${a.email}`}
-                      className="flex-none inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground underline underline-offset-2"
-                    >
-                      <Mail className="w-3.5 h-3.5" />
-                      {a.email}
-                    </a>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        <AdminContacts admins={admins} heading={admins.length === 1 ? "Your admin" : "Your admins"} />
 
         {org.my_status === "suspended" && (
           <div className="mt-4 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3.5 text-[13px] text-amber-700 dark:text-amber-400">
@@ -489,7 +456,7 @@ function MemberPanel({ org }: { org: OrgSummary }) {
                   <div className="space-y-1.5">
                     {usedTools.map((t) => (
                       <div key={t.action} className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">{TOOL_LABELS[t.action] ?? t.action}</span>
+                        <span className="text-muted-foreground">{TOOL_META[t.action]?.label ?? t.action}</span>
                         <span className="tabular-nums">
                           {t.spent.toLocaleString()} cr · {t.count}x
                         </span>
@@ -545,7 +512,7 @@ function MemberPanel({ org }: { org: OrgSummary }) {
                           {(r.resolved_cap ?? 0).toLocaleString()} / mo
                         </span>
                       )}
-                      <Badge variant="outline" className={statusBadgeClass(r.status)}>
+                      <Badge variant="outline" className={requestStatusClass(r.status)}>
                         {r.status}
                       </Badge>
                     </div>

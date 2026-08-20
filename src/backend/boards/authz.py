@@ -85,11 +85,6 @@ def can_access_board(db: Client, user_id: str, board_id: str) -> bool:
     return bool(board) and _can_access(db, user_id, board)
 
 
-def can_edit_board(db: Client, user_id: str, board_id: str) -> bool:
-    """No viewer role: anyone who can see a board can edit its columns/tasks."""
-    return can_access_board(db, user_id, board_id)
-
-
 def can_assign_user(db: Client, target_user_id: str, board_id: str) -> bool:
     """A task can only be assigned to someone who can open the board.
 
@@ -126,9 +121,8 @@ def require_board_access(db: Client, user_id: str, board_id: str) -> None:
         raise HTTPException(status_code=404, detail="Board not found")
 
 
-def require_board_edit(db: Client, user_id: str, board_id: str) -> None:
-    if not can_edit_board(db, user_id, board_id):
-        raise HTTPException(status_code=404, detail="Board not found")
+# No viewer role: anyone who can see a board can edit its columns/tasks.
+require_board_edit = require_board_access
 
 
 def require_org_admin(db: Client, user_id: str, org_id: str) -> None:

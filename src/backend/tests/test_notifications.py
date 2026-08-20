@@ -235,45 +235,19 @@ def test_mark_all_notifications_read_bulk(client, mock_supabase):
 
 
 async def test_mark_all_read_skips_org_invites():
-    from registry import service
-
-    rows = [
-        {"id": "n-org-invite", "type": "invitation", "entity_type": "org"},
-        {"id": "n-work-invite", "type": "invitation", "entity_type": "work"},
-        {"id": "n-status", "type": "status_change", "entity_type": "org"},
-        {"id": "n-registry", "type": "invitation", "entity_type": None},
-    ]
-    db = MagicMock()
-    select_chain = db.table.return_value.select.return_value.eq.return_value.eq.return_value
-    select_chain.execute.return_value = MagicMock(data=rows)
-
-    await service.mark_all_notifications_read(db, TEST_USER_ID)
-
-    marked = db.table.return_value.update.return_value.in_.call_args.args[1]
-    # The one ACTIONABLE invite survives; everything else is marked read —
-    # including registry 'invitation' rows, which carry no buttons.
-    assert set(marked) == {"n-work-invite", "n-status", "n-registry"}
-
-
-async def test_mark_all_read_is_a_noop_when_only_invites_are_unread():
-    """No update at all rather than an empty .in_() — an unfiltered update
-    would mark the whole inbox read."""
+    """One UPDATE whose filter is the exact negation of NotificationRow.tsx's
+    isOrgInvite (type == 'invitation' AND entity_type == 'org'), spelled with
+    an explicit NULL arm so registry 'invitation' rows (entity_type NULL) are
+    still marked."""
     from registry import service
 
     db = MagicMock()
-    select_chain = db.table.return_value.select.return_value.eq.return_value.eq.return_value
-    select_chain.execute.return_value = MagicMock(data=[{"id": "n1", "type": "invitation", "entity_type": "org"}])
-
     await service.mark_all_notifications_read(db, TEST_USER_ID)
 
-    db.table.return_value.update.assert_not_called()
-
-
-def test_actionable_invite_predicate_matches_the_ui():
-    """Mirrors NotificationRow.tsx's isInvite exactly."""
-    from registry.service import _is_actionable_invite
-
-    assert _is_actionable_invite({"type": "invitation", "entity_type": "org"})
-    assert not _is_actionable_invite({"type": "invitation", "entity_type": "work"})
-    assert not _is_actionable_invite({"type": "invitation", "entity_type": None})
-    assert not _is_actionable_invite({"type": "status_change", "entity_type": "org"})
+    update_chain = db.table.return_value.update
+    update_chain.assert_called_once_with({"read": True})
+    eq_calls = [c.args for c in update_chain.return_value.eq.call_args_list]
+    assert ("user_id", TEST_USER_ID) in eq_calls
+    or_chain = update_chain.return_value.eq.return_value.eq.return_value.or_
+    or_chain.assert_called_once_with("type.neq.invitation,entity_type.is.null,entity_type.neq.org")
+    or_chain.return_value.execute.assert_called_once()

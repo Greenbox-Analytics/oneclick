@@ -17,7 +17,7 @@ import {
   useAdminOrgMutations,
   type AdminOrgRow,
 } from "@/hooks/useAdminOrgs";
-import { ORG_STATUS_TONE, Tag } from "@/components/admin/ui";
+import { KeyValue, ORG_STATUS_TONE, SectionLabel, shortDate, Tag } from "@/components/admin/ui";
 
 export function AdminOrgsPanel({
   selectedOrgId,
@@ -231,7 +231,7 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
           <Tag>
             {org.memberCount} member{org.memberCount === 1 ? "" : "s"}
           </Tag>
-          {org.archivedAt && <Tag tone="bad">Archived {org.archivedAt.split("T")[0]}</Tag>}
+          {org.archivedAt && <Tag tone="bad">Archived {shortDate(org.archivedAt)}</Tag>}
         </div>
 
         <Tabs value={tab} onValueChange={setTab} className="mt-4">
@@ -406,22 +406,5 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
         </Tabs>
       </SheetContent>
     </Sheet>
-  );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
-      {children}
-    </div>
-  );
-}
-
-function KeyValue({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-dashed border-border py-1.5 text-[13px] last:border-b-0">
-      <span>{k}</span>
-      <b className="font-mono tabular-nums">{v}</b>
-    </div>
   );
 }

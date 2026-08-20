@@ -328,18 +328,6 @@ class CreditCheckResult:
     org_member_id: str | None = None
     managed_by_org: bool = False
     cap_reached: bool = False
-    # Licensing Phase C (spec §6/§11, rule 11) — owner-aware dry-seat wall. Set
-    # ONLY on a DERIVED-resource org DENY where the caller OWNS the linked
-    # project (a lazy, deny-path-only ownership check in `_check_credits_org`).
-    # `owner_can_unlink` tells the enforcement 402 to render a second CTA —
-    # unlink this project to fall back to the owner's personal plan — which
-    # CO-OCCURS with managedByOrg/requestUrl (the owner-who-is-also-admin persona
-    # is the common one; the two are never mutually exclusive). `project_id` is
-    # the linked project to unlink, REQUIRED alongside the flag (contract-derived
-    # surfaces like Zoe hold no project locally, so the hint would be dead text
-    # without it).
-    owner_can_unlink: bool = False
-    project_id: str | None = None
 
 
 @dataclass

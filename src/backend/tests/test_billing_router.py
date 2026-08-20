@@ -8,7 +8,7 @@ from tests.conftest import TEST_USER_ID, MockQueryBuilder
 
 
 class TestCreateCheckoutSession:
-    def test_monthly_returns_checkout_url(self, client, mock_supabase, monkeypatch):
+    def test_basic_monthly_returns_checkout_url(self, client, mock_supabase, monkeypatch):
         monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
         monkeypatch.setenv("STRIPE_PRICE_MONTHLY", "price_monthly_test")
         monkeypatch.setenv("STRIPE_PRICE_ANNUAL", "price_annual_test")
@@ -21,7 +21,7 @@ class TestCreateCheckoutSession:
 
         fake_session = MagicMock(url="https://checkout.stripe.com/c/pay/cs_test_123")
         with patch("stripe.checkout.Session.create", return_value=fake_session) as m:
-            resp = client.post("/billing/create-checkout-session", json={"plan": "monthly"})
+            resp = client.post("/billing/create-checkout-session", json={"plan": "basic_monthly"})
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["url"] == "https://checkout.stripe.com/c/pay/cs_test_123"
@@ -32,7 +32,7 @@ class TestCreateCheckoutSession:
         # Ensure subscription_data.metadata.user_id is also set (so subscription.updated events have it)
         assert call_kwargs["subscription_data"]["metadata"]["user_id"] == TEST_USER_ID
 
-    def test_annual_uses_annual_price(self, client, mock_supabase, monkeypatch):
+    def test_basic_annual_uses_annual_price(self, client, mock_supabase, monkeypatch):
         monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
         monkeypatch.setenv("STRIPE_PRICE_MONTHLY", "price_monthly_test")
         monkeypatch.setenv("STRIPE_PRICE_ANNUAL", "price_annual_test")
@@ -43,7 +43,7 @@ class TestCreateCheckoutSession:
 
         fake_session = MagicMock(url="https://checkout.stripe.com/c/pay/cs_test_annual")
         with patch("stripe.checkout.Session.create", return_value=fake_session) as m:
-            resp = client.post("/billing/create-checkout-session", json={"plan": "annual"})
+            resp = client.post("/billing/create-checkout-session", json={"plan": "basic_annual"})
 
         assert resp.status_code == 200, resp.text
         assert m.call_args.kwargs["line_items"][0]["price"] == "price_annual_test"

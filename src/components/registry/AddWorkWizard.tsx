@@ -41,7 +41,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
-import { parseCreditWallDetail } from "@/components/paywall/creditWall";
+import { parseCreditWallDetail, type CreditWallInfo } from "@/components/paywall/creditWall";
 import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
@@ -93,7 +93,9 @@ const TYPES = [
 // A contract queued for AI split parsing. Splits are often spread across
 // several contracts (producer deal, feature deal, …) that only together
 // account for 100% — the queue lets the user parse them all and merge.
-interface QueuedContract {
+// Credit-wall fields (CreditWallInfo) are set when `error` came from a
+// credit-402 — see creditWall.tsx for the two org walls' semantics.
+interface QueuedContract extends Partial<CreditWallInfo> {
   id: string;
   kind: "upload" | "project";
   file?: File;
@@ -101,15 +103,6 @@ interface QueuedContract {
   displayName: string;
   status: "pending" | "parsing" | "done" | "error";
   error?: string;
-  /** Licensing Phase B (plan Task 13) — set when `error` came from a
-   * credit-402 billed to an organization. `capReached` = the member's own
-   * monthly limit (remedy: ask an admin for a raise via `requestUrl`); a dry
-   * pool has no member-side remedy, so no link renders for it. */
-  managedByOrg?: boolean;
-  capReached?: boolean;
-  requestUrl?: string;
-  /** `error` came from the credit gate (structured 402), not a bad contract. */
-  isCreditWall?: boolean;
   parties?: ParsedParty[]; // raw parse result, kept for provenance + re-merge
   mainArtistFound?: boolean;
 }

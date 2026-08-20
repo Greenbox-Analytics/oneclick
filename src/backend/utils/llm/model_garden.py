@@ -3,9 +3,9 @@
 Call sites ask by SLOT — model_for("zoe_routing") — and never name a model id.
 Precedence per slot: MODEL_<SLOT> env > the slot's legacy_env > the YAML value.
 
-Reloaded by mtime, so editing the YAML takes effect on the next request. A parse
-error propagates: a broken garden is a config bug to fix, not something to paper
-over with a stale fallback that hides which model is actually running.
+Loaded once per process (the YAML is baked into the image). A parse error
+propagates: a broken garden is a config bug to fix, not something to paper over
+with a stale fallback that hides which model is actually running.
 """
 
 import logging
@@ -21,17 +21,10 @@ logger = logging.getLogger(__name__)
 
 GARDEN_PATH = Path(__file__).resolve().parents[2] / "config_panel" / "model_garden.yaml"
 
-# ponytail: unlocked read-modify — two threads racing both parse and both write the
-# same value, which is harmless. Add a lock only if parsing ever gets expensive.
-_cached: tuple[float, dict] | None = None
 
-
+@cache
 def _garden() -> dict:
-    global _cached
-    mtime = GARDEN_PATH.stat().st_mtime
-    if _cached is None or _cached[0] != mtime:
-        _cached = (mtime, yaml.safe_load(GARDEN_PATH.read_text()) or {})
-    return _cached[1]
+    return yaml.safe_load(GARDEN_PATH.read_text()) or {}
 
 
 @cache
@@ -57,8 +50,3 @@ def model_for(slot: str) -> str:
     if model not in MODEL_RATES:
         _warn_unpriced(model, slot)
     return model
-
-
-def resolved_slots() -> dict[str, str]:
-    """Every slot -> the model it resolves to right now. For debugging/admin display."""
-    return {slot: model_for(slot) for slot in _garden()}

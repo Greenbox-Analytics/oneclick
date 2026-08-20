@@ -1252,7 +1252,7 @@ async def parse_contract_splits(
         with set_llm_context(user_id, "registry"):
             # Route through the shared parse cache so this Add-Work parse is cached and
             # canonicalized (marker-stripped) like every other contract parse.
-            contract_data = get_or_parse(_get_supabase(), lambda: text, on_miss=None)
+            contract_data = get_or_parse(_get_supabase(), lambda: text)
             result = contract_splits.parse_royalty_splits(
                 contract_data=contract_data,
                 main_artist_name=main_artist_name or "",

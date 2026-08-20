@@ -93,44 +93,32 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
   const [errorState, setErrorState] = useState<ErrorKind | null>(null);
   const [declined, setDeclined] = useState(false);
 
-  // Best-effort invite preview so the card can NAME the org (mirrors the
-  // registry claim page's /preview convention). Defensive on purpose: the
-  // endpoint/payload may not exist yet — any failure or missing field just
-  // leaves the generic "an organization" copy below.
-  const { data: invitePreview } = useQuery<Record<string, unknown>>({
+  // Best-effort invite preview so the card can NAME the org (GET /orgs/invites/
+  // {token}/preview, backend orgs/router.py). It 404s for an unknown/expired
+  // token — any failure just leaves the generic "an organization" copy below.
+  const { data: invitePreview } = useQuery<{
+    orgName: string | null;
+    // "self_serve" | "enterprise" | null (pre-migration org row) — orgNoun()
+    // reads anything but "self_serve" as "organization", which is also the
+    // right neutral default while the preview loads.
+    kind: "self_serve" | "enterprise" | null;
+  }>({
     queryKey: ["org-invite-preview", token],
-    queryFn: () => apiFetch<Record<string, unknown>>(`${API_URL}/orgs/invites/${token}/preview`),
+    queryFn: () => apiFetch(`${API_URL}/orgs/invites/${token}/preview`),
     retry: false,
     staleTime: Infinity,
   });
-  const previewOrgName =
-    typeof invitePreview?.orgName === "string"
-      ? invitePreview.orgName
-      : typeof invitePreview?.org_name === "string"
-        ? invitePreview.org_name
-        : null;
-  // "self_serve" | "enterprise" | null/undefined (preview not loaded yet, or a
-  // pre-migration org row) — orgNoun() reads anything but "self_serve" as
-  // "organization", which is the right neutral default while loading.
-  const previewKind =
-    typeof invitePreview?.kind === "string" ? (invitePreview.kind as "self_serve" | "enterprise") : null;
-  const previewNoun = orgNoun(previewKind);
+  const previewOrgName = invitePreview?.orgName ?? null;
+  const previewNoun = orgNoun(invitePreview?.kind);
   const previewArticle = previewNoun === "team" ? "a" : "an";
 
   const handleAccept = async () => {
     setErrorState(null);
     try {
-      const result = await acceptInvite.mutateAsync(token);
-      // Best-effort: fetch the org's name for the welcome toast — the accept
-      // response only carries org_id. A failure here never blocks the
-      // (already-successful) accept from landing the user on /teams.
-      let orgName = `your ${previewNoun}`;
-      try {
-        const org = await apiFetch<{ name: string }>(`${API_URL}/orgs/${result.org_id}`);
-        orgName = org.name;
-      } catch {
-        // fall back to the generic label above
-      }
+      await acceptInvite.mutateAsync(token);
+      // The preview already named the org; fall back to the generic label
+      // when it failed to load.
+      const orgName = previewOrgName ?? `your ${previewNoun}`;
       toast.success(`You're on ${orgName}'s license — your work now runs on their credits`);
       navigate("/teams");
     } catch (err) {

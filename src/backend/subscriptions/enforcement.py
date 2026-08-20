@@ -51,13 +51,7 @@ def gated_create(
             resource,
         )
         return
-    can_kwargs = {"current_count": current_count}
-    # Thread the resource id ONLY when present so the None case is a byte-identical
-    # call to pre-Phase-C (can() defaults it to None either way) — existing exact-arg
-    # tests stay unmodified, per the plan's regression discipline.
-    if resource_project_id is not None:
-        can_kwargs["resource_project_id"] = resource_project_id
-    result = _service().can(user_id, action, **can_kwargs)
+    result = _service().can(user_id, action, current_count=current_count, resource_project_id=resource_project_id)
     if not result.allowed:
         analytics_capture(
             user_id,
@@ -106,13 +100,9 @@ def gated_upload(
     (rule 9 — derivation NEVER fires when host_user_id is a different owner).
     Default None → today's owner-scoped check, byte-identical.
     """
-    can_kwargs = {"size": size, "host_user_id": host_user_id}
-    # Thread the resource id ONLY when present so the None case is a byte-identical
-    # call to pre-Phase-C (can() defaults it to None either way) — existing exact-arg
-    # tests stay unmodified, per the plan's regression discipline.
-    if resource_project_id is not None:
-        can_kwargs["resource_project_id"] = resource_project_id
-    result = _service().can(user_id, Action.UPLOAD_BYTES, **can_kwargs)
+    result = _service().can(
+        user_id, Action.UPLOAD_BYTES, size=size, host_user_id=host_user_id, resource_project_id=resource_project_id
+    )
     if not result.allowed:
         analytics_capture(
             user_id,
@@ -225,17 +215,6 @@ def gated_credits(
             detail["managedByOrg"] = True
             detail["requestUrl"] = "/teams"
             detail["capReached"] = result.cap_reached
-        if result.owner_can_unlink:
-            # Owner-aware dry-seat wall (Licensing Phase C, rule 11): the caller
-            # OWNS the linked project, so offer a second CTA — unlink it to fall
-            # back to their personal plan. `projectId` is REQUIRED alongside the
-            # flag (round 5: contract-derived surfaces like Zoe hold no project
-            # locally, so the hint is dead text without it). These CO-OCCUR with
-            # managedByOrg/requestUrl above — an owner who is also an org admin
-            # sees BOTH the buy/request path and the unlink path; they are never
-            # rendered mutually exclusive (round 4).
-            detail["ownerCanUnlink"] = True
-            detail["projectId"] = result.project_id
         raise HTTPException(status_code=402, detail=detail)
     request_id = str(uuid.uuid4())
     if dedupe_key is not None and result.wallet_id:

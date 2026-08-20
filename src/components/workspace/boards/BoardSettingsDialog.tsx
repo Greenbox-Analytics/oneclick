@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -33,6 +33,9 @@ interface Props {
  * Board settings (spec 2026-08-16 §3). Name for anyone who can open the board;
  * "who can see this board" for admins/creator on TEAM boards. Membership itself
  * lives in the Teams console — this dialog only picks from the roster.
+ *
+ * Mount only while open: the form seeds from `board` once, so a Cancel discards
+ * edits by unmounting rather than by re-seeding.
  */
 export function BoardSettingsDialog({ open, onOpenChange, board, teamId, canManage }: Props) {
   const update = useUpdateBoard();
@@ -40,17 +43,6 @@ export function BoardSettingsDialog({ open, onOpenChange, board, teamId, canMana
   const [name, setName] = useState(board.name);
   const [restricted, setRestricted] = useState(!!board.restricted);
   const [memberIds, setMemberIds] = useState<string[]>(board.member_user_ids ?? []);
-
-  // Re-seed on every OPEN, not just when a different board is selected. The
-  // component stays mounted for as long as a board is selected (Radix unmounts
-  // the content, not the component), so without `open` here a Cancel would
-  // leave the abandoned edits in state — and the next Save would silently
-  // apply a change the user thought they had discarded.
-  useEffect(() => {
-    setName(board.name);
-    setRestricted(!!board.restricted);
-    setMemberIds(board.member_user_ids ?? []);
-  }, [open, board.id, board.name, board.restricted, board.member_user_ids]);
 
   const showVisibility = teamId != null && canManage;
   const rosterIds = new Set((roster ?? []).map((m) => m.user_id));

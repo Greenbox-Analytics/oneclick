@@ -35,6 +35,28 @@ def _normalize_tester_reason(raw: str | None) -> str:
     return f"tester ({r})"
 
 
+def _tester_override_payload(user_id: str, reason: str, expires_at: str | None, granted_at: str) -> dict:
+    """The full-Pro tester `tier_overrides` row. ONE shape for every tester
+    path (admin grant, pending-claim, env bootstrap in main.py) so feature
+    gating is identical however the tester was made."""
+    return {
+        "user_id": user_id,
+        "max_artists": -1,
+        "max_projects": -1,
+        "max_tasks": -1,
+        "max_storage_bytes": -1,
+        "max_split_sheets_per_month": -1,
+        "max_oneclick_runs_per_month": -1,
+        "zoe_enabled": True,
+        "oneclick_enabled": True,
+        "registry_enabled": True,
+        "integrations_allowed": ["google_drive", "dropbox"],
+        "reason": reason,
+        "expires_at": expires_at,
+        "granted_at": granted_at,
+    }
+
+
 class AdminService:
     def __init__(self, supabase: Client, entitlements_service: EntitlementsService):
         self.supabase = supabase
@@ -338,22 +360,7 @@ class AdminService:
             # time for an existing user.
             expires_at = (datetime.now(UTC) + timedelta(days=grant_duration_days)).isoformat()
 
-        payload = {
-            "user_id": user_id,
-            "max_artists": -1,
-            "max_projects": -1,
-            "max_tasks": -1,
-            "max_storage_bytes": -1,
-            "max_split_sheets_per_month": -1,
-            "max_oneclick_runs_per_month": -1,
-            "zoe_enabled": True,
-            "oneclick_enabled": True,
-            "registry_enabled": True,
-            "integrations_allowed": ["google_drive", "dropbox"],
-            "reason": normalized_reason,
-            "expires_at": expires_at,
-            "granted_at": datetime.now(UTC).isoformat(),
-        }
+        payload = _tester_override_payload(user_id, normalized_reason, expires_at, datetime.now(UTC).isoformat())
         self.supabase.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
 
         # Initial credit allocation — once-per-user idempotent, so an admin
@@ -636,26 +643,10 @@ def claim_pending_tester_grant(supabase, pending: dict, user_id: str, email_norm
     expires_at = (datetime.now(UTC) + timedelta(days=days)).isoformat() if days else None
     granted_at = datetime.now(UTC).isoformat()
 
-    # Same shape as create_tester_grant / bootstrap env path — feature gating
-    # must be identical. Upsert on user_id also OVERRIDES a tester_revoked
-    # sticky marker, exactly like an admin re-grant: the admin designating
-    # this email is the later, stronger intent.
-    payload = {
-        "user_id": user_id,
-        "max_artists": -1,
-        "max_projects": -1,
-        "max_tasks": -1,
-        "max_storage_bytes": -1,
-        "max_split_sheets_per_month": -1,
-        "max_oneclick_runs_per_month": -1,
-        "zoe_enabled": True,
-        "oneclick_enabled": True,
-        "registry_enabled": True,
-        "integrations_allowed": ["google_drive", "dropbox"],
-        "reason": _normalize_tester_reason(pending.get("reason")),
-        "expires_at": expires_at,
-        "granted_at": granted_at,
-    }
+    # Upsert on user_id also OVERRIDES a tester_revoked sticky marker, exactly
+    # like an admin re-grant: the admin designating this email is the later,
+    # stronger intent.
+    payload = _tester_override_payload(user_id, _normalize_tester_reason(pending.get("reason")), expires_at, granted_at)
     supabase.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
 
     # Best-effort, at parity with every other tester path: skips (warn) when
@@ -782,43 +773,25 @@ def grant_org_credits(supabase, org_id: str, amount: int, reason: str, granted_b
     return result
 
 
-# Per-owner-type clawback config — the ONLY things that differ between the
-# user-wallet and org-pool clawback paths: the idempotency-namespace prefix, the
-# no-wallet ValueError text, and the bad-RPC-shape RuntimeError text. `{id}` is
-# filled with the owner id (the user no-wallet message has no placeholder, which
-# .format harmlessly ignores). Everything else is the shared debit_credits invariant.
-_CLAWBACK_CONF = {
-    "user": {
-        "prefix": "admin-adjust",
-        "no_wallet": "User has no credit wallet",
-        "bad_shape": "clawback: debit_credits returned unexpected shape for user {id}",
-    },
-    "org": {
-        "prefix": "admin-org-adjust",
-        "no_wallet": "Organization has no pool wallet: {id}",
-        "bad_shape": "org clawback: debit_credits returned unexpected shape for org {id}",
-    },
-}
-
-
-def _admin_clawback(supabase, owner_type: str, owner_id: str, amount: int, metadata: dict, request_id: str) -> dict:
-    """Shared clawback core for adjust_user_credits / adjust_org_pool. Per-path
-    strings come from _CLAWBACK_CONF; the wallet lookup, the debit_credits RPC
-    shape, and the never-fabricate-a-removal shape guard are IDENTICAL and live
-    here once. Callers own the `metadata` dict (the only structural difference)."""
-    conf = _CLAWBACK_CONF[owner_type]
+def _admin_clawback(
+    supabase, owner_type: str, owner_id: str, amount: int, metadata: dict, request_id: str, *, prefix: str
+) -> dict:
+    """Shared clawback core for adjust_user_credits / adjust_org_pool: the
+    wallet lookup, the debit_credits RPC shape, and the never-fabricate-a-removal
+    shape guard live here once. `prefix` is the idempotency-key namespace (the
+    two paths must not collide); callers own the `metadata` dict."""
     wallet_res = (
         supabase.table("credit_wallets").select("id").eq("owner_type", owner_type).eq("owner_id", owner_id).execute()
     )
     if not wallet_res.data:
-        raise ValueError(conf["no_wallet"].format(id=owner_id))
+        raise ValueError(f"No {owner_type} credit wallet: {owner_id}")
     res = supabase.rpc(
         "debit_credits",
         {
             "p_wallet_id": wallet_res.data[0]["id"],
             "p_amount": amount,
             "p_action": "admin_adjust",
-            "p_request_id": f"{conf['prefix']}:{request_id}",
+            "p_request_id": f"{prefix}:{request_id}",
             "p_kind": "clawback",
             "p_metadata": metadata,
         },
@@ -826,7 +799,7 @@ def _admin_clawback(supabase, owner_type: str, owner_id: str, amount: int, metad
     if not isinstance(res.data, dict):
         # Never claim a removal we can't confirm — an unexpected RPC shape is
         # an error to surface, not a success to fabricate.
-        raise RuntimeError(conf["bad_shape"].format(id=owner_id))
+        raise RuntimeError(f"clawback: debit_credits returned unexpected shape for {owner_type} {owner_id}")
     return res.data
 
 
@@ -864,7 +837,13 @@ def adjust_user_credits(supabase, user_id: str, amount: int, reason: str, adjust
     ledger are).
     """
     return _admin_clawback(
-        supabase, "user", user_id, amount, {"reason": reason, "adjusted_by": adjusted_by}, request_id
+        supabase,
+        "user",
+        user_id,
+        amount,
+        {"reason": reason, "adjusted_by": adjusted_by},
+        request_id,
+        prefix="admin-adjust",
     )
 
 
@@ -907,7 +886,13 @@ def adjust_org_pool(supabase, org_id: str, amount: int, reason: str, adjusted_by
     ledger are) — same stance as the per-user clawback.
     """
     return _admin_clawback(
-        supabase, "org", org_id, amount, {"reason": reason, "adjusted_by": adjusted_by, "org_id": org_id}, request_id
+        supabase,
+        "org",
+        org_id,
+        amount,
+        {"reason": reason, "adjusted_by": adjusted_by, "org_id": org_id},
+        request_id,
+        prefix="admin-org-adjust",
     )
 
 
@@ -936,36 +921,26 @@ def get_org_pool(supabase, org_id: str) -> dict:
     org = org_rows[0]
 
     wallet_res = supabase.table("credit_wallets").select("*").eq("owner_type", "org").eq("owner_id", org_id).execute()
-    wallet_rows = wallet_res.data or []
-    if not wallet_rows:
-        return {
-            "orgId": org_id,
-            "status": org.get("status"),
-            "archivedAt": org.get("archived_at"),
-            "poolBalance": 0,
-            "cumulativePaidIn": 0,
-            "ledger": [],
-        }
-    wallet = wallet_rows[0]
-    wallet_id = wallet["id"]
-    pool_balance = (wallet.get("bundle_balance") or 0) + (wallet.get("reserve_balance") or 0)
-
-    ledger_res = (
-        supabase.table("credit_ledger")
-        .select("*")
-        .eq("wallet_id", wallet_id)
-        .order("created_at", desc=True)
-        .limit(50)
-        .execute()
-    )
+    wallet = (wallet_res.data or [None])[0]
+    wallet_id = (wallet or {}).get("id")
+    ledger = []
+    if wallet_id:
+        ledger = (
+            supabase.table("credit_ledger")
+            .select("*")
+            .eq("wallet_id", wallet_id)
+            .order("created_at", desc=True)
+            .limit(50)
+            .execute()
+        ).data or []
 
     return {
         "orgId": org_id,
         "status": org.get("status"),
         "archivedAt": org.get("archived_at"),
-        "poolBalance": pool_balance,
-        "cumulativePaidIn": cumulative_paid_in(supabase, wallet_id),
-        "ledger": ledger_res.data or [],
+        "poolBalance": ((wallet or {}).get("bundle_balance") or 0) + ((wallet or {}).get("reserve_balance") or 0),
+        "cumulativePaidIn": cumulative_paid_in(supabase, wallet_id) if wallet_id else 0,
+        "ledger": ledger,
     }
 
 

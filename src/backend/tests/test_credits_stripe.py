@@ -6,7 +6,7 @@ Covers:
   - handle_subscription_updated: tier sync + upgrade top-up (with farming guard)
   - overage_billing.bill_overage_row / bill_pending_overage
   - handle_invoice_created safety-net handler
-  - billing_router plan->env price mapping (canonical <tier>_<period> + legacy aliases)
+  - billing_router plan->env price mapping (canonical <tier>_<period>)
 """
 
 from unittest.mock import MagicMock, patch
@@ -1151,7 +1151,7 @@ class TestSubscriptionDeletedFinalBilling:
 
 
 # ---------------------------------------------------------------------------
-# billing_router — plan -> env price mapping (pro_max_monthly / pro_max_annual)
+# billing_router — plan -> env price mapping
 # ---------------------------------------------------------------------------
 
 
@@ -1166,26 +1166,6 @@ class TestCreateCheckoutSessionPlanParams:
         from subscriptions import stripe_client
 
         monkeypatch.setattr(stripe_client, "_initialized", False)
-
-    def test_legacy_pro_max_monthly_alias_resolves_top_tier_price(self, client, mock_supabase, monkeypatch):
-        self._set_env(monkeypatch)
-
-        fake_session = MagicMock(url="https://checkout.stripe.com/c/pay/cs_test_pm_monthly")
-        with patch("stripe.checkout.Session.create", return_value=fake_session) as m:
-            resp = client.post("/billing/create-checkout-session", json={"plan": "pro_max_monthly"})
-
-        assert resp.status_code == 200, resp.text
-        assert m.call_args.kwargs["line_items"][0]["price"] == "price_pro_max_monthly_test"
-
-    def test_legacy_pro_max_annual_alias_resolves_top_tier_price(self, client, mock_supabase, monkeypatch):
-        self._set_env(monkeypatch)
-
-        fake_session = MagicMock(url="https://checkout.stripe.com/c/pay/cs_test_pm_annual")
-        with patch("stripe.checkout.Session.create", return_value=fake_session) as m:
-            resp = client.post("/billing/create-checkout-session", json={"plan": "pro_max_annual"})
-
-        assert resp.status_code == 200, resp.text
-        assert m.call_args.kwargs["line_items"][0]["price"] == "price_pro_max_annual_test"
 
     def test_canonical_plan_params_resolve_their_prices(self, client, mock_supabase, monkeypatch):
         """basic_* / pro_* are the canonical params after the tier-key rename."""

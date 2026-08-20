@@ -121,17 +121,14 @@ class TestUploadAllowed:
 
 class TestArtistSubtreeBytes:
     """Mirrors recalc_team_storage's two joins (20260803000003_team_storage.sql)
-    scoped to one artist instead of a whole team."""
+    scoped to one artist instead of a whole team — two embedded-filter queries
+    (projects!inner / audio_folders!inner)."""
 
     def test_sums_project_files_and_audio_files_across_the_artist(self):
         def side_effect(name):
             b = MockQueryBuilder()
-            if name == "projects":
-                b.execute.return_value = MagicMock(data=[{"id": "p1"}, {"id": "p2"}], count=2)
-            elif name == "project_files":
+            if name == "project_files":
                 b.execute.return_value = MagicMock(data=[{"file_size": 3 * GB}, {"file_size": None}], count=2)
-            elif name == "audio_folders":
-                b.execute.return_value = MagicMock(data=[{"id": "f1"}], count=1)
             elif name == "audio_files":
                 b.execute.return_value = MagicMock(data=[{"file_size": 2 * GB}], count=1)
             return b
@@ -141,20 +138,9 @@ class TestArtistSubtreeBytes:
 
         assert storage_guard.artist_subtree_bytes(db, ARTIST_ID) == 5 * GB
 
-    def test_no_projects_or_folders_skips_the_file_queries(self):
-        """Empty project/folder id lists must not fire an IN (...) query with
-        no ids — the join has nothing to filter on."""
-
-        def side_effect(name):
-            b = MockQueryBuilder()
-            if name in ("projects", "audio_folders"):
-                b.execute.return_value = MagicMock(data=[], count=0)
-            elif name in ("project_files", "audio_files"):
-                raise AssertionError(f"{name} queried with no ids to filter on")
-            return b
-
+    def test_empty_subtree_sums_to_zero(self):
         db = MagicMock()
-        db.table.side_effect = side_effect
+        db.table.side_effect = lambda name: MockQueryBuilder()
 
         assert storage_guard.artist_subtree_bytes(db, ARTIST_ID) == 0
 

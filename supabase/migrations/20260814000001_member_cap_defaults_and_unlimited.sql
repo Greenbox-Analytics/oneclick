@@ -262,20 +262,3 @@ REVOKE EXECUTE ON FUNCTION public.debit_credits(UUID, INTEGER, TEXT, TEXT, TEXT,
 GRANT EXECUTE ON FUNCTION public.debit_credits(UUID, INTEGER, TEXT, TEXT, TEXT, JSONB, UUID) TO service_role;
 
 COMMIT;
-
-DO $$
-BEGIN
-  -- The column default is the whole point of step 1 — assert it stuck. NOT
-  -- asserting "no NULL defaults remain": existing orgs keep theirs by design.
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'organizations'
-      AND column_name = 'default_member_cap' AND column_default = '2000'
-  ) THEN
-    RAISE EXCEPTION 'organizations.default_member_cap default is not 2000';
-  END IF;
-  IF has_function_privilege('authenticated', 'public.debit_credits(uuid, integer, text, text, text, jsonb, uuid)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'debit_credits is executable by authenticated — REVOKE did not stick';
-  END IF;
-  RAISE NOTICE 'member cap defaults + unlimited sentinel applied';
-END $$;

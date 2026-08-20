@@ -18,6 +18,7 @@ window.
 import logging
 import math
 import os
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -110,13 +111,6 @@ class TeamLapsedError(Exception):
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _epoch(iso_ts: str) -> int:
-    """Integer epoch seconds for a stored TIMESTAMPTZ string — the offboard
-    reclaim's request_id keys off THIS (the STORED revoked_at), never a
-    freshly computed now() (rule 5)."""
-    return int(datetime.fromisoformat(iso_ts).timestamp())
 
 
 def _is_last_admin_error(exc: Exception) -> bool:
@@ -380,15 +374,7 @@ async def get_org(db: Client, user_id: str, org_id: str) -> dict:
     )
     my_role = (member_row.data or {}).get("role") if member_row else None
 
-    wallet_res = (
-        db.table("credit_wallets")
-        .select("id, bundle_balance, reserve_balance")
-        .eq("owner_type", "org")
-        .eq("owner_id", org_id)
-        .execute()
-    )
-    wallet_rows = wallet_res.data or []
-    wallet = wallet_rows[0] if wallet_rows else None
+    wallet = wallets.read_wallet(db, "org", org_id)
     pool_balance = (wallet.get("bundle_balance", 0) + wallet.get("reserve_balance", 0)) if wallet else 0
 
     cumulative_paid_in = wallets.cumulative_paid_in(db, wallet["id"]) if wallet else 0
@@ -591,16 +577,7 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
     org_row = (org_res.data or [{}])[0]
     default_cap = org_row.get("default_member_cap")
 
-    pool_rows = (
-        db.table("credit_wallets")
-        .select("id, bundle_balance, reserve_balance, period_start, period_end")
-        .eq("owner_type", "org")
-        .eq("owner_id", org_id)
-        .execute()
-        .data
-        or []
-    )
-    pool_wallet = pool_rows[0] if pool_rows else None
+    pool_wallet = wallets.read_wallet(db, "org", org_id)
     pool_balance = (pool_wallet.get("bundle_balance", 0) + pool_wallet.get("reserve_balance", 0)) if pool_wallet else 0
 
     ledger_rows: list[dict] = []
@@ -615,14 +592,11 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
     # spentThisPeriod is sum(|delta|) over kind='debit' rows grouped by the
     # member who spent them. Pools have no overage path (rule 8), so there is
     # no 'overage_debit' kind to fold in as there is on the personal view.
-    spent_by_member: dict[str, int] = {}
+    spent_by_member: Counter[str] = Counter()
     for r in ledger_rows:
-        if r.get("kind") != "debit":
-            continue
         member_id = (r.get("metadata") or {}).get("org_member_id")
-        if not member_id:
-            continue
-        spent_by_member[member_id] = spent_by_member.get(member_id, 0) + abs(r.get("delta", 0))
+        if r.get("kind") == "debit" and member_id:
+            spent_by_member[member_id] += abs(r.get("delta", 0))
 
     seats = []
     for m in members:
@@ -688,17 +662,6 @@ async def get_org_ledger(db: Client, user_id: str, org_id: str) -> list[dict]:
 # Invite flow (mirrors teams/service.py's invite_member/accept_invite/
 # decline_invite; deltas noted inline where org semantics diverge)
 # ============================================================================
-
-
-def _pro_max_team_members(db: Client) -> int | None:
-    """Pro tier's `max_team_members` (10), for the upsell message shown to a
-    non-Pro coverer at their wall — read straight off tier_entitlements
-    rather than duplicating the "10" as a literal. Only called building that
-    (rare) error message, never on the hot invite path. None if the row is
-    missing, so the caller can phrase around it rather than lie."""
-    res = db.table("tier_entitlements").select("max_team_members").eq("tier", "pro").maybe_single().execute()
-    row = res.data if res else None
-    return (row or {}).get("max_team_members") or None
 
 
 def _self_serve_seat_room(db: Client, org_id: str) -> None:
@@ -776,18 +739,10 @@ def _self_serve_seat_room(db: Client, org_id: str) -> None:
                 "For bigger teams, talk to us about Enterprise."
             )
         else:
-            pro_max = _pro_max_team_members(db)
-            if pro_max:
-                message = (
-                    f"This team is at its {effective_limit}-member limit on {tier_label}. "
-                    f"Upgrade to Pro for teams of up to {SEATS_PER_PRO} — and up to {pro_max} "
-                    "when another Pro member joins."
-                )
-            else:
-                message = (
-                    f"This team is at its {effective_limit}-member limit on {tier_label}. "
-                    f"Upgrade to Pro for teams of up to {SEATS_PER_PRO}."
-                )
+            message = (
+                f"This team is at its {effective_limit}-member limit on {tier_label}. "
+                f"Upgrade to Pro for teams of up to {SEATS_PER_PRO}."
+            )
         raise TeamFullError(message, effective_limit, next_step)
 
 
@@ -807,8 +762,6 @@ async def invite_member(db: Client, user_id: str, org_id: str, email: str, role:
     authz.require_admin(db, user_id, org_id)
     _require_live_org(_first_org(db, org_id))
     _self_serve_seat_room(db, org_id)
-    if role not in ("admin", "member"):
-        raise ValueError("Invalid role")
     email_l = email.lower()
 
     existing_user_id = _find_user_id_by_email(db, email)
@@ -1056,7 +1009,6 @@ async def accept_invite(db: Client, user_id: str, user_email: str, token: str) -
         .execute()
     )
     existing_row = existing.data if existing else None
-    seat_activated = False
     if existing_row and existing_row.get("status") != "active":
         db.table("org_members").update(
             {
@@ -1067,7 +1019,6 @@ async def accept_invite(db: Client, user_id: str, user_email: str, token: str) -
                 "email": invite["email"],
             }
         ).eq("id", existing_row["id"]).execute()
-        seat_activated = True
     elif not existing_row:
         db.table("org_members").insert(
             {
@@ -1079,18 +1030,7 @@ async def accept_invite(db: Client, user_id: str, user_email: str, token: str) -
                 "email": invite["email"],
             }
         ).execute()
-        seat_activated = True
     # else: existing_row is already active -> leave it untouched.
-
-    if seat_activated:
-        active_count = (
-            db.table("org_members")
-            .select("id", count="exact")
-            .eq("org_id", invite["org_id"])
-            .eq("status", "active")
-            .execute()
-        ).count
-        logger.info("accept_invite: seat activated org_id=%s active_members=%s", invite["org_id"], active_count)
 
     db.table("pending_org_invites").update({"status": "accepted"}).eq("id", invite["id"]).execute()
     # Plain write, not an RPC — see docstring re: validation happening at resolution.
@@ -1234,8 +1174,6 @@ async def update_member_role(db: Client, user_id: str, org_id: str, member_id: s
     from the guard's own RAISE message)."""
     authz.require_admin(db, user_id, org_id)
     _require_live_org(_first_org(db, org_id))
-    if role not in ("admin", "member"):
-        raise ValueError("Invalid role")
     try:
         res = db.table("org_members").update({"role": role}).eq("id", member_id).eq("org_id", org_id).execute()
     except Exception as exc:
@@ -1384,8 +1322,9 @@ def cancel_topup(db: Client, org_id: str) -> bool:
     """Cancel this org's recurring credit top-up at Stripe and release the two
     columns that point at it. Returns False when there was nothing to cancel.
 
-    ONE implementation, two callers: POST /orgs/{id}/cancel-topup and
-    `_cancel_topup_if_purchaser` below (the paying admin being offboarded).
+    ONE implementation, three callers: POST /orgs/{id}/cancel-topup,
+    `_cancel_topup_if_purchaser` below (the paying admin being offboarded)
+    and dissolve_org step 2.
 
     Order matters: Stripe first, columns second. A failed cancel PROPAGATES
     with the columns intact — the pointer is what lets an admin retry, and
@@ -1502,8 +1441,7 @@ async def _offboard(db: Client, user_id: str, org_id: str, member_id: str, final
             raise
         if not updated.data:
             raise ValueError("Member not found")
-        reread = db.table("org_members").select("*").eq("id", member_id).eq("org_id", org_id).maybe_single().execute()
-        row = reread.data if (reread and reread.data) else updated.data[0]
+        row = updated.data[0]
 
     _revoke_offboarded_member_access(db, org_id, row.get("user_id"), final_status)
     _cancel_topup_if_purchaser(db, org_id, row.get("user_id"))
@@ -1592,9 +1530,6 @@ async def set_member_cap(db: Client, user_id: str, org_id: str, member_id: str, 
     authz.require_admin(db, user_id, org_id)
     _require_live_org(_first_org(db, org_id))
     _require_org_member(db, org_id, member_id)
-    if cap is not None and cap < UNLIMITED_CAP:
-        raise ValueError("cap must be >= 0, or -1 for no limit")
-
     res = db.table("org_members").update({"monthly_cap": cap}).eq("id", member_id).eq("org_id", org_id).execute()
     if not res.data:
         raise ValueError("Member not found")
@@ -1621,9 +1556,6 @@ async def set_org_dispersal(db: Client, org_id: str, monthly_dispersal_credits: 
     so a mid-month change takes effect at the next boundary. That keeps ONE path
     writing dispersal credits, which is what makes its monthly idempotency hold.
     """
-    if monthly_dispersal_credits < 0:
-        raise ValueError("monthly_dispersal_credits must be >= 0")
-
     res = (
         db.table("organizations")
         .update({"monthly_dispersal_credits": monthly_dispersal_credits})
@@ -1639,6 +1571,20 @@ async def set_org_dispersal(db: Client, org_id: str, monthly_dispersal_credits: 
 # higher ceiling. Approving one moves NO money, which is why it needs none of
 # the transfer machinery it used to: it writes org_members.monthly_cap.
 # ============================================================================
+
+
+def _active_seat_id(db: Client, org_id: str, user_id: str) -> str | None:
+    """org_members.id of the caller's ACTIVE seat in this org, or None."""
+    res = (
+        db.table("org_members")
+        .select("id")
+        .eq("org_id", org_id)
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .maybe_single()
+        .execute()
+    )
+    return ((res.data if res else None) or {}).get("id")
 
 
 async def submit_credit_request(
@@ -1657,23 +1603,14 @@ async def submit_credit_request(
     authz.require_member(db, user_id, org_id)
     _require_live_org(_first_org(db, org_id))
 
-    member_row = (
-        db.table("org_members")
-        .select("id")
-        .eq("org_id", org_id)
-        .eq("user_id", user_id)
-        .eq("status", "active")
-        .maybe_single()
-        .execute()
-    )
-    member = member_row.data if member_row else None
-    if not member:
+    member_id = _active_seat_id(db, org_id, user_id)
+    if not member_id:
         # Defensive: require_member just confirmed an active seat exists —
         # this should be unreachable outside of a race with a concurrent
         # offboard.
         raise ValueError("Member not found")
 
-    payload: dict = {"org_id": org_id, "org_member_id": member["id"]}
+    payload: dict = {"org_id": org_id, "org_member_id": member_id}
     if requested_cap is not None:
         payload["requested_cap"] = requested_cap
     if note is not None:
@@ -1687,7 +1624,7 @@ async def submit_credit_request(
         raise
 
     request = created.data[0] if created.data else None
-    return {"request": request, "org_member_id": member["id"]}
+    return {"request": request, "org_member_id": member_id}
 
 
 async def list_credit_requests(db: Client, user_id: str, org_id: str) -> list[dict]:
@@ -1697,18 +1634,7 @@ async def list_credit_requests(db: Client, user_id: str, org_id: str) -> list[di
 
     query = db.table("credit_requests").select("*").eq("org_id", org_id)
     if not authz.is_org_admin(db, user_id, org_id):
-        member_row = (
-            db.table("org_members")
-            .select("id")
-            .eq("org_id", org_id)
-            .eq("user_id", user_id)
-            .eq("status", "active")
-            .maybe_single()
-            .execute()
-        )
-        member = member_row.data if member_row else None
-        member_id = member["id"] if member else None
-        query = query.eq("org_member_id", member_id)
+        query = query.eq("org_member_id", _active_seat_id(db, org_id, user_id))
 
     res = query.order("created_at", desc=True).execute()
     return res.data or []
@@ -1735,8 +1661,6 @@ async def approve_credit_request(db: Client, user_id: str, org_id: str, request_
         raise CreditRequestNotFoundError("Credit request not found")
     if request["status"] != "pending":
         raise CreditRequestAlreadyResolvedError("This request has already been resolved")
-    if cap < 0:
-        raise ValueError("cap must be >= 0")
 
     db.table("org_members").update({"monthly_cap": cap}).eq("id", request["org_member_id"]).eq(
         "org_id", org_id
@@ -2094,12 +2018,9 @@ async def dissolve_org(db: Client, user_id: str, org_id: str, confirm_name: str)
     if org.get("dissolved_at"):
         return {"already": True}
 
-    # Name + top-up id in ONE read: the confirmation needs the name verbatim
-    # (not _org_name's "your organization" fallback, which a user could type),
-    # and step 2 needs the subscription id.
-    res = (
-        db.table("organizations").select("name, topup_stripe_subscription_id").eq("id", org_id).maybe_single().execute()
-    )
+    # The confirmation needs the name verbatim (not _org_name's "your
+    # organization" fallback, which a user could type).
+    res = db.table("organizations").select("name").eq("id", org_id).maybe_single().execute()
     row = (res.data if res else None) or {}
     # Both sides trimmed: a stored name that picked up a trailing space is
     # otherwise IMPOSSIBLE to type back, i.e. impossible to dissolve.
@@ -2130,25 +2051,20 @@ async def dissolve_org(db: Client, user_id: str, org_id: str, confirm_name: str)
     except Exception:
         logger.exception("dissolve_org: pool forfeit failed org_id=%s", org_id)
 
-    # 2. Stop the meter. Lazy import so /orgs never needs Stripe configured
-    # when there is no top-up subscription to cancel.
+    # 2. Stop the meter (cancel_topup: Stripe first, columns second; a failed
+    # cancel LEAVES topup_stripe_subscription_id on the row — the pointer
+    # support needs to finish the cancellation by hand).
     #
     # LOAD-BEARING: the top-up subscription must carry Task 11's org_topup
     # metadata contract (kind='org_topup' and NO user_id). This delete fires
     # customer.subscription.deleted back at us, and stripe_events resolves that
     # webhook by metadata.user_id — a top-up that carried one would downgrade
     # the covering admin's PERSONAL plan to free the moment a team dissolves.
-    # A failed cancel deliberately LEAVES topup_stripe_subscription_id on the
-    # row: it is the pointer support needs to finish the cancellation by hand.
-    topup_sub = row.get("topup_stripe_subscription_id")
-    if topup_sub:
-        try:
-            from subscriptions.stripe_client import get_stripe
-
-            get_stripe().Subscription.delete(topup_sub)
+    try:
+        if cancel_topup(db, org_id):
             analytics_capture(user_id, "org_topup_canceled", {"org_id": org_id, "trigger": "dissolve"})
-        except Exception:
-            logger.exception("dissolve_org: top-up cancel failed org_id=%s sub=%s", org_id, topup_sub)
+    except Exception:
+        logger.exception("dissolve_org: top-up cancel failed org_id=%s", org_id)
 
     # 3. Artists back to people. NOT best-effort: a team_id left pointing at a
     # dissolved org locks its creator out of their own subtree

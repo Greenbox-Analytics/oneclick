@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -106,13 +106,6 @@ export function DriveImportDialog({ open, onOpenChange, projectId, provider = "g
   const [selectedFiles, setSelectedFiles] = useState<DriveFile[]>([]);
   const [importing, setImporting] = useState(false);
   const [category, setCategory] = useState("contract");
-
-  // Dialog instance is reused across providers (FilesTab swaps `provider` on
-  // the same mounted dialog) — reset the breadcrumb + selection when it changes.
-  useEffect(() => {
-    setFolderStack([{ id: "root", name: PROVIDER_LABELS[provider].root }]);
-    setSelectedFiles([]);
-  }, [provider]);
 
   const currentFolder = folderStack[folderStack.length - 1];
   const { data: files, isLoading } = useDriveBrowse(currentFolder.id, open, searchQuery, provider);

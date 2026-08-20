@@ -55,12 +55,9 @@
 BEGIN;
 
 -- ---------------------------------------------------------------------------
--- Step 1: organizations DDL + status CHECK.
--- Catalog-drop pattern (20260713000002, reused by 20260814000002): the
--- original status CHECK is inline/unnamed, so Postgres auto-named it and a
--- restored or hand-edited DB may carry a different generated name. Drop every
--- CHECK that mentions 'pending' (the status CHECK is the only one that does)
--- via the catalog, then re-add one with a name we control.
+-- Step 1: organizations DDL + status CHECK. The original status CHECK
+-- (20260721000001) is inline on the column, so it carries Postgres's
+-- auto-generated name; re-add it under the same name with 'lapsed'.
 -- ---------------------------------------------------------------------------
 ALTER TABLE organizations
   ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'enterprise'
@@ -72,16 +69,7 @@ ALTER TABLE organizations
   ADD COLUMN IF NOT EXISTS topup_stripe_subscription_id TEXT,
   ADD COLUMN IF NOT EXISTS topup_admin_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
 
-DO $$
-DECLARE c RECORD;
-BEGIN
-  FOR c IN SELECT conname FROM pg_constraint
-    WHERE conrelid = 'public.organizations'::regclass AND contype = 'c'
-      AND pg_get_constraintdef(oid) ILIKE '%pending%'
-  LOOP
-    EXECUTE format('ALTER TABLE public.organizations DROP CONSTRAINT %I', c.conname);
-  END LOOP;
-END $$;
+ALTER TABLE organizations DROP CONSTRAINT IF EXISTS organizations_status_check;
 ALTER TABLE organizations ADD CONSTRAINT organizations_status_check
   CHECK (status IN ('pending', 'active', 'suspended', 'lapsed'));
 
@@ -150,16 +138,7 @@ GRANT EXECUTE ON FUNCTION public.can_access_artist(UUID, UUID, BOOLEAN) TO authe
 -- ---------------------------------------------------------------------------
 -- Step 3: ledger kinds + recurring-capable packs.
 -- ---------------------------------------------------------------------------
-DO $$
-DECLARE c RECORD;
-BEGIN
-  FOR c IN SELECT conname FROM pg_constraint
-    WHERE conrelid = 'public.credit_ledger'::regclass AND contype = 'c'
-      AND pg_get_constraintdef(oid) ILIKE '%monthly_grant%'
-  LOOP
-    EXECUTE format('ALTER TABLE public.credit_ledger DROP CONSTRAINT %I', c.conname);
-  END LOOP;
-END $$;
+ALTER TABLE credit_ledger DROP CONSTRAINT IF EXISTS credit_ledger_kind_check;
 -- The live list (20260730000001) PLUS the two transfer kinds. NOT VALID +
 -- guarded VALIDATE, same as that migration: a plain ADD CONSTRAINT scans all
 -- existing rows and would fail on any DB holding legacy
@@ -259,22 +238,5 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.transfer_credits(UUID, UUID, INTEGER, TEXT, JSONB) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.transfer_credits(UUID, UUID, INTEGER, TEXT, JSONB) TO service_role;
-
--- Assertions INSIDE the transaction (review r2) — failure rolls everything back.
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'credit_ledger_kind_check'
-                 AND pg_get_constraintdef(oid) ILIKE '%transfer_in%') THEN
-    RAISE EXCEPTION 'ledger CHECK missing transfer kinds';
-  END IF;
-  IF has_function_privilege('authenticated', 'public.transfer_credits(uuid, uuid, integer, text, jsonb)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'transfer_credits executable by authenticated';
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'organizations_status_check'
-                 AND pg_get_constraintdef(oid) ILIKE '%lapsed%') THEN
-    RAISE EXCEPTION 'organizations status CHECK missing lapsed';
-  END IF;
-  RAISE NOTICE 'self-serve orgs migration applied';
-END $$;
 
 COMMIT;

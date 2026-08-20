@@ -8,6 +8,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from analytics import capture as analytics_capture
+from orgs.projects import revoke_org_granted_memberships
 from orgs.service import _now_iso
 from subscriptions.admin_auth import env_admin_emails, is_user_admin
 from subscriptions.stripe_client import get_stripe
@@ -137,93 +138,13 @@ def _emit(user_id: str, event: str, props: dict | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Licensing Phase B (Task 10): org seat reclaim + sole-admin org teardown.
-#
-# Reused idioms from orgs.service._offboard (money-first ordering, the
-# offboard:{member_id}:{epoch(revoked_at)} request_id grammar) but
-# reimplemented locally rather than calling _offboard/remove_member/
-# suspend_member directly: those are gated on authz.require_admin(acting_
-# user, org_id), which doesn't apply here — account deletion acts on the
-# deleting user's OWN seats (they need not be an org admin at all) and, in
-# the sole-admin case, on every OTHER member's seat during a system-
-# initiated teardown (the deleting user IS the admin, but this is not an
-# in-app admin action). orgs/service.py and orgs/wallets.py are imported
-# for their epoch/timestamp/wallet-lookup helpers but never modified.
+# Licensing Phase B (Task 10): sole-admin org teardown. Reimplemented locally
+# rather than calling orgs.service.archive_org: that is gated on
+# authz.require_admin, which doesn't apply to a system-initiated deletion.
 # ---------------------------------------------------------------------------
 
 
-def _remove_own_memberships(supabase: Client, user_id: str, own_rows: list[dict], archived_org_ids: set[str]) -> None:
-    """Soft-remove every org_members row this user holds, EXCEPT orgs already
-    handled by `_archive_sole_admin_orgs` (see the skip below), BEFORE the user
-    row is deleted. Nothing is reclaimed — a member never held credits, only a
-    monthly cap on the org pool. Best-effort per membership: a failure is logged
-    and never blocks deletion; the
-    status transition below is deliberately not rolled back either —
-    money-first, same stance as `_offboard` (a retry re-derives the
-    identical request_id and converges).
-
-    `own_rows` and `archived_org_ids` are supplied by the caller
-    (`delete_user_account`), which fetches org_members ONCE and runs
-    `_archive_sole_admin_orgs` FIRST — see that call site's comment for why
-    the ordering matters (Phase B review finding 1).
-    """
-    for row in own_rows:
-        org_id = row["org_id"]
-        member_id = row["id"]
-        if org_id in archived_org_ids:
-            # `_archive_sole_admin_orgs` already archived this org and
-            # reclaimed EVERY member's seat balance — including this user's
-            # own — WITHOUT writing to org_members at all (see that
-            # function's docstring). Attempting the status flip below
-            # ('active' -> 'removed') on the sole ACTIVE admin's own row
-            # would trip `org_members_admin_guard`
-            # (supabase/migrations/20260721000001_licensing_core.sql):
-            # is_cascade is FALSE here (pg_trigger_depth() == 1 — this is a
-            # direct UPDATE from the service-role client, not a FK cascade,
-            # and the user row is still in auth.users mid-flow), and with no
-            # other active admins the guard RAISEs instead of
-            # auto-archiving. That RAISE would be swallowed by the broad
-            # except below and logged as a scary ERROR-level traceback on
-            # every sole-admin deletion, even though the org is already
-            # correctly torn down. Skip outright — nothing left to do here.
-            continue
-        if row.get("status") == "removed" and row.get("revoked_at"):
-            continue  # already removed by a prior attempt — nothing left to do
-        try:
-            supabase.table("org_members").update({"status": "removed", "revoked_at": _now_iso()}).eq(
-                "id", member_id
-            ).execute()
-        except Exception:
-            logger.exception("account deletion: membership removal failed member=%s org=%s", member_id, org_id)
-
-
-def _teardown_archived_org_grants(supabase: Client, org_id: str) -> None:
-    """Licensing Phase C, Task 4 (rule 12): mirrors
-    `orgs.service._teardown_archived_org_grants` exactly — `archived_at` is an
-    UPDATE, so nothing cascades, and without this an archived org can strand a
-    live `project_members` grant. Reimplemented locally rather than calling
-    the `orgs.service` helper directly, for the same reason every other
-    teardown helper in this module is local (see the module-section
-    docstring above `_seat_wallet_balance`): this runs during a
-    system-initiated account deletion, not an in-app admin action, and
-    `orgs/service.py` is out of scope for this task's touch list.
-
-    Reuses `orgs.projects.revoke_org_granted_memberships` (Task 2's single
-    implementation of rule 3) rather than re-deriving the delete filter —
-    imported lazily to avoid a needless module-level cross-package import at
-    process start. Never raises — logs and returns, matching this module's
-    other best-effort teardown helper (`_reclaim_seat_to_pool`); a cleanup
-    failure here must never block account deletion.
-    """
-    try:
-        from orgs.projects import revoke_org_granted_memberships
-
-        revoke_org_granted_memberships(supabase, org_id)
-    except Exception:
-        logger.exception("account deletion: org-granted membership revocation failed org=%s", org_id)
-
-
-def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict]) -> set[str]:
+def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict]) -> None:
     """For every org where this user is the LAST ACTIVE admin, archive the
     org and reclaim EVERY member's seat balance to the pool — INCLUDING the
     deleting admin's own — BEFORE the user is deleted (review round 4 /
@@ -233,28 +154,18 @@ def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict
     credits in seat wallets of an org whose admin endpoints just died with
     it.
 
-    Deliberately runs BEFORE `_remove_own_memberships` (see the call site in
-    `delete_user_account`) and deliberately NEVER writes to org_members: the
-    archived org confers nothing once `archived_at` is set, so there is no
-    need to soft-remove any membership row — and critically, a direct
-    status flip on the sole active admin's OWN row here would trip
-    `org_members_admin_guard` and RAISE (see the skip comment in
-    `_remove_own_memberships`). Other members' org_members rows are likewise left
-    untouched (status, revoked_at unchanged) — archived_at alone already
-    zeroes their entitlement resolution, per spec.
+    Deliberately NEVER writes to org_members: the archived org confers nothing
+    once `archived_at` is set, and a direct status flip on the sole active
+    admin's OWN row would trip `org_members_admin_guard` and RAISE. The
+    auth.users delete that follows CASCADEs every membership row anyway.
 
     Also tears down (Task 4, rule 12) every `project_members` grant this org
-    holds, via `_teardown_archived_org_grants`
-    — same best-effort, never-blocks-deletion posture as the seat reclaim
-    above, and run for BOTH a fresh archive and a retry-detected
-    already-archived org (a prior attempt may have archived the org but
-    crashed before this cleanup ran; re-running it is idempotent).
-
-    Returns the set of org_ids archived (whether archived just now or on a
-    prior retry) so `_remove_own_memberships` knows which orgs to skip.
+    holds — same best-effort, never-blocks-deletion posture, and run for BOTH
+    a fresh archive and a retry-detected already-archived org (a prior
+    attempt may have archived the org but crashed before this cleanup ran;
+    re-running it is idempotent).
     """
     admin_org_ids = {r["org_id"] for r in own_rows if r.get("role") == "admin" and r.get("status") == "active"}
-    archived_org_ids: set[str] = set()
     for org_id in admin_org_ids:
         try:
             other_admins = (
@@ -275,14 +186,12 @@ def _archive_sole_admin_orgs(supabase: Client, user_id: str, own_rows: list[dict
             if not ((org_res.data or {}).get("archived_at") if org_res else None):
                 supabase.table("organizations").update({"archived_at": _now_iso()}).eq("id", org_id).execute()
 
-            archived_org_ids.add(org_id)
             # No per-member reclaim: members hold no credits. Whatever the POOL
             # still holds stays there for support to dispose of (the admin
             # clawback endpoint), exactly as with an in-app archive.
-            _teardown_archived_org_grants(supabase, org_id)
+            revoke_org_granted_memberships(supabase, org_id)
         except Exception:
             logger.exception("account deletion: sole-admin org teardown failed org=%s", org_id)
-    return archived_org_ids
 
 
 def delete_user_account(supabase: Client, user_id: str, user_email: str | None) -> None:
@@ -295,24 +204,12 @@ def delete_user_account(supabase: Client, user_id: str, user_email: str | None) 
     ever existed). The caller can retry; `.remove()` is idempotent on
     already-deleted paths.
 
-    Org seat reclaim/teardown (licensing Phase B, Task 10) runs last, still
+    Sole-admin org teardown (licensing Phase B, Task 10) runs last, still
     BEFORE the auth user (and its org_members CASCADE) disappear, but is
-    wrapped so that ANY failure here — not just a per-seat reclaim failure —
-    is logged and never blocks deletion: a personal account deletion must
-    never fail over an org role (privacy implications), and the org_members
-    CASCADE is a safe fallback for whatever this step didn't reach.
-
-    Within that step, `_archive_sole_admin_orgs` MUST run before
-    `_remove_own_memberships` (Phase B review finding 1): archiving reclaims
-    every member's seat balance — including this user's own — without ever
-    writing to org_members, so those orgs become a pure skip for
-    `_remove_own_memberships`. Reversed, `_remove_own_memberships` would flip this
-    user's own row to 'removed' BEFORE the org is archived; for a sole
-    ACTIVE admin that direct status flip trips `org_members_admin_guard`
-    (supabase/migrations/20260721000001_licensing_core.sql) — is_cascade is
-    false (trigger depth 1, user still in auth.users, no other active
-    admins) — so the guard RAISEs, the broad except below swallows it, and
-    the reclaim for that seat never runs.
+    wrapped so that ANY failure here is logged and never blocks deletion: a
+    personal account deletion must never fail over an org role (privacy
+    implications), and the org_members CASCADE handles every membership row
+    on its own — the deleting user's seats need no soft-remove first.
     """
     if would_be_last_admin(supabase, user_id, user_email):
         _emit(user_id, "account_delete_blocked", {"reason": "last_admin", "email": user_email})
@@ -333,8 +230,7 @@ def delete_user_account(supabase: Client, user_id: str, user_email: str | None) 
 
     try:
         own_org_rows = supabase.table("org_members").select("*").eq("user_id", user_id).execute().data or []
-        archived_org_ids = _archive_sole_admin_orgs(supabase, user_id, own_org_rows)
-        _remove_own_memberships(supabase, user_id, own_org_rows, archived_org_ids)
+        _archive_sole_admin_orgs(supabase, user_id, own_org_rows)
     except Exception:
         logger.exception("account deletion: org seat reclaim/teardown failed user=%s", user_id)
 

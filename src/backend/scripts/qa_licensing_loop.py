@@ -35,19 +35,15 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from dotenv import load_dotenv
+
 # Backend modules (subscriptions, orgs) — needed for the two in-process
 # steps (activation helper + money path).
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 # Flags must be set BEFORE backend imports read them.
-ENV_PATH = str(BACKEND_DIR.parents[1] / ".env")
-with open(ENV_PATH) as _f:
-    for line in _f:
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, _, v = line.partition("=")
-            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+load_dotenv(BACKEND_DIR.parents[1] / ".env")
 os.environ["LICENSING_ENABLED"] = "true"
 os.environ["CREDITS_ENABLED"] = "true"
 os.environ["ENTERPRISE_MIN_INITIAL_CREDITS"] = "500"
@@ -386,9 +382,9 @@ try:
     # distinct from a dry pool, and the reason cap_reached exists.
     res_c = svc.check_credits(collab["id"], CreditAction.ZOE_MESSAGE, resource_project_id=project_id)
     check(
-        "8e. collab cap wall: cap_reached, managedByOrg, NOT ownerCanUnlink",
-        not res_c.allowed and res_c.cap_reached and res_c.managed_by_org and not res_c.owner_can_unlink,
-        f"allowed={res_c.allowed} cap_reached={res_c.cap_reached} ocu={res_c.owner_can_unlink}",
+        "8e. collab cap wall: cap_reached, managedByOrg",
+        not res_c.allowed and res_c.cap_reached and res_c.managed_by_org,
+        f"allowed={res_c.allowed} cap_reached={res_c.cap_reached}",
     )
 
     # A member asks for a raise; the admin approves; the wall clears — with no

@@ -6,6 +6,7 @@ import { Lock } from "lucide-react";
 import type { Message, AssistantQuickAction } from "@/hooks/useStreamingChat";
 import { ContractSlideOver } from "@/components/zoe/ContractSlideOver";
 import { PaywallCard } from "@/components/paywall/PaywallCard";
+import { parseCreditWallDetail } from "@/components/paywall/creditWall";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useEntitlements } from "@/hooks/useEntitlements";
@@ -350,13 +351,6 @@ export function ZoeChatMessages({
 // so they're small local cards in the same visual language (Lock badge,
 // centered copy, Card shell).
 
-function formatResetDate(iso?: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, { month: "long", day: "numeric" });
-}
-
 function CreditWallCard({
   reason,
   detail,
@@ -374,12 +368,15 @@ function CreditWallCard({
   // Two-source org identity (review round 2, finding 2): the enriched detail
   // flag covers the primary path; the billingContext fallback covers any 402
   // that arrives without it (legacy / degraded shapes).
-  const managedByOrg = detail?.managedByOrg === true || billingContextIsOrg;
+  const cw = parseCreditWallDetail(detail);
+  const managedByOrg = cw.managedByOrg || billingContextIsOrg;
   const upgradeRequired = !managedByOrg && detail?.upgradeRequired === true;
   const overageAvailable = !managedByOrg && !upgradeRequired && detail?.overageAvailable === true;
-  const resetDate = formatResetDate(detail?.resetDate);
-  const resetNote = resetDate ? (
-    <p className="text-xs text-muted-foreground mt-2">Your credits reset on {resetDate}.</p>
+  const resetNote = detail?.resetDate ? (
+    <p className="text-xs text-muted-foreground mt-2">
+      Your credits reset on{" "}
+      {new Date(detail.resetDate).toLocaleDateString(undefined, { month: "long", day: "numeric" })}.
+    </p>
   ) : null;
 
   if (managedByOrg || upgradeRequired) {
@@ -389,8 +386,8 @@ function CreditWallCard({
           variant="inline"
           reason={reason}
           managedByOrg={managedByOrg}
-          capReached={detail?.capReached}
-          requestUrl={detail?.requestUrl}
+          capReached={cw.capReached}
+          requestUrl={cw.requestUrl}
         />
         {resetNote}
       </div>

@@ -33,13 +33,13 @@ class InviteCreate(BaseModel):
     """POST /orgs/{org_id}/invites body. Mirrors teams.models.InviteCreate."""
 
     email: EmailStr
-    role: str = "member"  # 'admin' | 'member'
+    role: Literal["admin", "member"] = "member"
 
 
 class MemberRoleUpdate(BaseModel):
     """PUT /orgs/{org_id}/members/{member_id}/role body."""
 
-    role: str  # 'admin' | 'member'
+    role: Literal["admin", "member"]
 
 
 class MemberCapUpdate(BaseModel):

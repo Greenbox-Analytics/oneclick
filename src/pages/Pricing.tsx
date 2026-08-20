@@ -7,7 +7,7 @@ import { Check, X, Music, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { useCreateCheckoutSession } from "@/hooks/useBilling";
+import { useCreateCheckoutSession, type CheckoutPlan } from "@/hooks/useBilling";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { tierLabel, usd, annualPerMonth, ENTERPRISE_LABEL, TIER_PRICES, TEAM_STORAGE_OVERAGE_USD_PER_GB } from "@/lib/tiers";
 
@@ -80,47 +80,94 @@ const FeatureItem = ({ included, label }: Feature) => (
   </li>
 );
 
+/** Basic and Pro differ only in tier, blurb, features, and the "Most popular"
+ * highlight — each card owns its own billing-period toggle and checkout call. */
+const PaidPlanCard = ({
+  tier,
+  description,
+  features,
+  highlight,
+}: {
+  tier: "basic" | "pro";
+  description: string;
+  features: Feature[];
+  highlight?: boolean;
+}) => {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const [period, setPeriod] = useState<Period>("monthly");
+  const { mutateAsync: createCheckout, isPending } = useCreateCheckoutSession();
+  const { captureCheckoutStarted } = useAnalytics();
+
+  const handleClick = async () => {
+    const planParam: CheckoutPlan = period === "annual" ? `${tier}_annual` : `${tier}_monthly`;
+    if (!user) {
+      navigate(`/auth?redirect=/pricing&plan=${planParam}`);
+      return;
+    }
+    try {
+      const url = await createCheckout(planParam);
+      captureCheckoutStarted(period);
+      window.location.href = url;
+    } catch {
+      toast.error("Couldn't start checkout. Try again or contact support.");
+    }
+  };
+
+  return (
+    <Card className={highlight ? "p-8 flex flex-col border-primary relative" : "p-8 flex flex-col relative"}>
+      {highlight && <Badge className="absolute -top-3 left-8">Most popular</Badge>}
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold mb-1">{tierLabel(tier)}</h2>
+        <p className="text-sm text-muted-foreground">
+          {description}
+        </p>
+      </div>
+
+      <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)} className="mb-6">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="monthly">Monthly</TabsTrigger>
+          <TabsTrigger value="annual">Annual</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {period === "monthly" ? (
+        <div className="mb-8">
+          <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES[tier].monthly)}</span>
+          <span className="text-muted-foreground ml-1">/month</span>
+        </div>
+      ) : (
+        <div className="mb-8">
+          <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES[tier].annual)}</span>
+          <span className="text-muted-foreground ml-1">/year</span>
+          <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth(tier)}/month — save 2 months</div>
+        </div>
+      )}
+
+      <ul className="space-y-3 flex-1 mb-8">
+        {features.map((f) => (
+          <FeatureItem key={f.label} {...f} />
+        ))}
+      </ul>
+      <Button
+        size="lg"
+        variant={highlight ? "default" : "outline"}
+        className="w-full"
+        onClick={handleClick}
+        disabled={isPending}
+      >
+        {isPending ? "Starting checkout…" : `Upgrade to ${tierLabel(tier)}`}
+      </Button>
+    </Card>
+  );
+};
+
 const Pricing = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [basicPeriod, setBasicPeriod] = useState<Period>("monthly");
-  const [proPeriod, setProPeriod] = useState<Period>("monthly");
-  const { mutateAsync: createBasicCheckout, isPending: isBasicPending } = useCreateCheckoutSession();
-  const { mutateAsync: createProCheckout, isPending: isProPending } = useCreateCheckoutSession();
-  const { captureCheckoutStarted } = useAnalytics();
 
   const handleFreeClick = () => {
     navigate(user ? "/dashboard" : "/auth");
-  };
-
-  const handleBasicClick = async () => {
-    const planParam = basicPeriod === "annual" ? "basic_annual" : "basic_monthly";
-    if (!user) {
-      navigate(`/auth?redirect=/pricing&plan=${planParam}`);
-      return;
-    }
-    try {
-      const url = await createBasicCheckout(planParam);
-      captureCheckoutStarted(basicPeriod);
-      window.location.href = url;
-    } catch {
-      toast.error("Couldn't start checkout. Try again or contact support.");
-    }
-  };
-
-  const handleProClick = async () => {
-    const planParam = proPeriod === "annual" ? "pro_annual" : "pro_monthly";
-    if (!user) {
-      navigate(`/auth?redirect=/pricing&plan=${planParam}`);
-      return;
-    }
-    try {
-      const url = await createProCheckout(planParam);
-      captureCheckoutStarted(proPeriod);
-      window.location.href = url;
-    } catch {
-      toast.error("Couldn't start checkout. Try again or contact support.");
-    }
   };
 
   return (
@@ -207,89 +254,19 @@ const Pricing = () => {
           </Card>
 
           {/* Basic */}
-          <Card className="p-8 flex flex-col border-primary relative">
-            <Badge className="absolute -top-3 left-8">Most popular</Badge>
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold mb-1">{tierLabel("basic")}</h2>
-              <p className="text-sm text-muted-foreground">
-                For independent managers and serious creators
-              </p>
-            </div>
-
-            <Tabs value={basicPeriod} onValueChange={(v) => setBasicPeriod(v as Period)} className="mb-6">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="monthly">Monthly</TabsTrigger>
-                <TabsTrigger value="annual">Annual</TabsTrigger>
-              </TabsList>
-            </Tabs>
-
-            {basicPeriod === "monthly" ? (
-              <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.basic.monthly)}</span>
-                <span className="text-muted-foreground ml-1">/month</span>
-              </div>
-            ) : (
-              <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.basic.annual)}</span>
-                <span className="text-muted-foreground ml-1">/year</span>
-                <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth("basic")}/month — save 2 months</div>
-              </div>
-            )}
-
-            <ul className="space-y-3 flex-1 mb-8">
-              {BASIC_FEATURES.map((f) => (
-                <FeatureItem key={f.label} {...f} />
-              ))}
-            </ul>
-            <Button size="lg" className="w-full" onClick={handleBasicClick} disabled={isBasicPending}>
-              {isBasicPending ? "Starting checkout…" : `Upgrade to ${tierLabel("basic")}`}
-            </Button>
-          </Card>
+          <PaidPlanCard
+            tier="basic"
+            description="For independent managers and serious creators"
+            features={BASIC_FEATURES}
+            highlight
+          />
 
           {/* Pro */}
-          <Card className="p-8 flex flex-col relative">
-            <div className="mb-6">
-              <h2 className="text-xl font-semibold mb-1">{tierLabel("pro")}</h2>
-              <p className="text-sm text-muted-foreground">
-                For power users and small teams
-              </p>
-            </div>
-
-            <Tabs value={proPeriod} onValueChange={(v) => setProPeriod(v as Period)} className="mb-6">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="monthly">Monthly</TabsTrigger>
-                <TabsTrigger value="annual">Annual</TabsTrigger>
-              </TabsList>
-            </Tabs>
-
-            {proPeriod === "monthly" ? (
-              <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro.monthly)}</span>
-                <span className="text-muted-foreground ml-1">/month</span>
-              </div>
-            ) : (
-              <div className="mb-8">
-                <span className="text-4xl font-semibold tracking-tight">{usd(TIER_PRICES.pro.annual)}</span>
-                <span className="text-muted-foreground ml-1">/year</span>
-                <div className="text-sm text-muted-foreground mt-1">≈ {annualPerMonth("pro")}/month — save 2 months</div>
-              </div>
-            )}
-
-            <ul className="space-y-3 flex-1 mb-8">
-              {PRO_FEATURES.map((f) => (
-                <FeatureItem key={f.label} {...f} />
-              ))}
-            </ul>
-            <Button
-              size="lg"
-              variant="outline"
-              className="w-full"
-              onClick={handleProClick}
-              disabled={isProPending}
-            >
-              {isProPending ? "Starting checkout…" : `Upgrade to ${tierLabel("pro")}`}
-            </Button>
-          </Card>
+          <PaidPlanCard
+            tier="pro"
+            description="For power users and small teams"
+            features={PRO_FEATURES}
+          />
 
           {/* Enterprise is never created in-app (owner decision, 2026-08-16) —
               this card is a pure "Talk to us" contact CTA, not a signup flow. */}

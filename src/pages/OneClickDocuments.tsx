@@ -17,7 +17,7 @@ import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { API_URL, apiFetch, getAuthHeaders, ApiError, apiErrorFromBody } from "@/lib/apiFetch";
-import { parseCreditWallDetail } from "@/components/paywall/creditWall";
+import { parseCreditWallDetail, type CreditWallInfo } from "@/components/paywall/creditWall";
 import { CreditsChip } from "@/components/billing/CreditsChip";
 import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 import ContractSelector from "@/components/oneclick/ContractSelector";
@@ -53,7 +53,9 @@ interface SplitFinding {
 }
 interface SplitReview { overall: "verified" | "needs_review" | "unavailable"; checked: number; flagged: number; findings: SplitFinding[]; }
 interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; calculation_id?: string; expense_review_required?: boolean; expenses?: ReviewExpense[]; review?: SplitReview | null; }
-interface CalculationErrorState {
+// Credit-wall fields (CreditWallInfo) are set when the calculation was denied
+// by a credit-402 — see creditWall.tsx for the two org walls' semantics.
+interface CalculationErrorState extends Partial<CreditWallInfo> {
   message: string;
   code?: string;
   suggestion?: string;
@@ -65,18 +67,6 @@ interface CalculationErrorState {
     looking_for?: string[];
     excluded_payor_count?: number;
   };
-  /** Licensing Phase B (plan Task 13) — set when the calculation was denied by
-   * a credit-402 billed to an organization. Two org walls with different
-   * remedies: `capReached` (the member's own monthly limit — ask an admin to
-   * raise it via `requestUrl`) vs a dry pool (only an admin buying credits
-   * helps, so no member CTA). */
-  managedByOrg?: boolean;
-  capReached?: boolean;
-  requestUrl?: string;
-  /** Denial came from the credit gate (structured 402). A PERSONAL credit wall
-   * previously rendered message-plus-toast and nothing to click — survivable
-   * when a run cost ~2 credits, not at 30. */
-  isCreditWall?: boolean;
 }
 interface Project { id: string; name: string; }
 interface ArtistFile { id: string; file_name: string; created_at: string; folder_category: string; file_path: string; project_id: string; }

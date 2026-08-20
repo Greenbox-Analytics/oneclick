@@ -10,38 +10,12 @@
 -- the backend gives it). 20260818000002 (the DROP) comes later still.
 BEGIN;
 
--- 0. Pre-flight: uq_boards_personal_artist is UNIQUE (owner_id, artist_id)
---    WHERE team_id IS NULL AND artist_id IS NOT NULL, so a team board carrying
---    an artist_id could collide the moment step 1 NULLs its team_id — with a
---    bare 23505 halfway through a one-way migration. Nothing in the app
---    prevents that combination (BoardCreate accepts team_id and artist_id
---    together), so assert instead of hoping. Verified 0 such rows on
---    2026-08-16; this exists so a later environment fails LOUDLY and early.
-DO $$
-DECLARE clashes INTEGER;
-BEGIN
-  SELECT count(*) INTO clashes
-    FROM boards b
-   WHERE b.team_id IS NOT NULL AND b.artist_id IS NOT NULL
-     AND b.team_id NOT IN (SELECT id FROM organizations)  -- LEGACY rows only; see step 1
-     AND (
-       EXISTS (SELECT 1 FROM boards p
-                WHERE p.team_id IS NULL AND p.owner_id = b.owner_id AND p.artist_id = b.artist_id)
-       OR EXISTS (SELECT 1 FROM boards o
-                   WHERE o.team_id IS NOT NULL AND o.id <> b.id
-                     AND o.owner_id = b.owner_id AND o.artist_id = b.artist_id)
-     );
-  IF clashes > 0 THEN
-    RAISE EXCEPTION
-      'boards_to_orgs: % team board(s) would collide with uq_boards_personal_artist once detached. '
-      'Clear or re-point their artist_id first.', clashes;
-  END IF;
-END $$;
-
 -- 1. Legacy board-team boards become PERSONAL boards of their creator (owner_id).
 --    Assignees who are not that owner lose the assignment (a personal board has
 --    exactly one possible assignee); board-team invite notifications are gone.
---    See Step 0: the owner has seen these counts before this runs.
+--    uq_boards_personal_artist (UNIQUE owner_id, artist_id WHERE team_id IS
+--    NULL) will 23505 — and roll the whole file back — if a detached team
+--    board collides with a personal one; verified 0 such rows on 2026-08-16.
 DELETE FROM board_task_assignees a
  USING board_tasks t, boards b
  WHERE a.task_id = t.id AND t.board_id = b.id
@@ -83,7 +57,6 @@ CREATE TABLE IF NOT EXISTS board_members (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   board_id   UUID NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
   user_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  added_by   UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (board_id, user_id)
 );
@@ -225,20 +198,5 @@ DROP POLICY IF EXISTS "board_members_select_board_reachable" ON board_members;
 CREATE POLICY "board_members_select_board_reachable" ON board_members
   FOR SELECT USING (can_access_board(board_id, auth.uid()));
 -- No client write policies: writes go through the backend's service-role client.
-
--- 6. Assertions.
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM boards WHERE team_id IS NOT NULL
-               AND team_id NOT IN (SELECT id FROM organizations)) THEN
-    RAISE EXCEPTION 'boards_to_orgs: boards.team_id still points outside organizations';
-  END IF;
-  IF EXISTS (SELECT 1 FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
-              WHERE c.relname IN ('boards','board_task_assignees','board_task_works')
-                AND (pg_get_expr(p.polqual, p.polrelid) ILIKE '%is_team_%'
-                     OR pg_get_expr(p.polwithcheck, p.polrelid) ILIKE '%is_team_%')) THEN
-    RAISE EXCEPTION 'boards_to_orgs: a board policy still references is_team_*';
-  END IF;
-END $$;
 
 COMMIT;

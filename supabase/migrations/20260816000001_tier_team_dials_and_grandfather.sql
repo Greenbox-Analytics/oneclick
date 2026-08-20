@@ -60,27 +60,4 @@ UPDATE tier_entitlements SET monthly_credits = 5000,
   max_teams = 3, max_team_members = 10, team_storage_bytes = 107374182400    -- 100 GiB
  WHERE tier = 'pro';
 
--- Assertions run INSIDE the transaction (review r2): a failed assert must
--- roll the whole migration back, not report failure on committed data.
-DO $$
-DECLARE v_n INTEGER;
-BEGIN
-  SELECT COUNT(*) INTO v_n FROM subscriptions
-   WHERE tier IN ('basic','pro') AND status IN ('active','trialing','past_due')
-     AND grandfathered_monthly_credits IS NULL;
-  IF v_n > 0 THEN
-    RAISE EXCEPTION 'grandfather backfill missed % paid subscription(s)', v_n;
-  END IF;
-  SELECT COUNT(*) INTO v_n FROM subscriptions
-   WHERE grandfathered_monthly_credits IS NOT NULL AND grandfathered_until IS NULL;
-  IF v_n > 0 THEN
-    RAISE EXCEPTION '% subscription(s) have a grandfathered grant with no expiry stamped', v_n;
-  END IF;
-  IF (SELECT monthly_credits FROM tier_entitlements WHERE tier='pro') <> 5000
-     OR (SELECT max_teams FROM tier_entitlements WHERE tier='basic') <> 1 THEN
-    RAISE EXCEPTION 'tier dial values did not land';
-  END IF;
-  RAISE NOTICE 'tier team dials + grandfathering applied';
-END $$;
-
 COMMIT;

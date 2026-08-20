@@ -10,14 +10,11 @@ import time
 
 from supabase import Client
 
-from subscriptions.enforcement import gated_upload
-
 
 class StorageCapExceededError(Exception):
-    """The project_files INSERT trigger rejected the row for storage cap —
-    either the pre-check below was skipped (caller-is-owner unknown) or a
-    race beat it. Callers' routers map this to 402, same as the direct-upload
-    endpoint in main.py."""
+    """The project_files INSERT trigger rejected the row for storage cap.
+    Callers' routers map this to 402, same as the direct-upload endpoint in
+    main.py."""
 
 
 def store_imported_file(
@@ -30,33 +27,19 @@ def store_imported_file(
     mime: str,
     folder_category: str,
     file_size: int | None = None,
-    owner_user_id: str | None = None,
 ) -> dict:
-    """Gate against the storage cap, write to the project-files bucket, and insert
-    the project_files row — removing the uploaded object if the insert is rejected.
+    """Write to the project-files bucket and insert the project_files row —
+    removing the uploaded object if the insert is rejected.
 
-    Shared by the Google Drive and Dropbox import paths.
-
-    `owner_user_id` must be passed ONLY when the caller is known to be the
-    project's storage-counter owner (the storage triggers route by ARTIST
-    ownership — the org for a team artist, else the creator — which a plain
-    project-member role check cannot establish). When it is None, the
-    pre-check is skipped entirely and the DB trigger is the sole enforcement;
-    StorageCapExceededError is that backstop, not merely a race-loser branch.
-    Gating a non-owner's wallet would produce false 402s for editors
-    importing into someone else's project, so never guess this value.
+    Shared by the Google Drive and Dropbox import paths. There is no storage
+    pre-check: the storage triggers route by ARTIST ownership (the org for a
+    team artist, else the creator), which the callers' project-member role
+    check cannot establish, so the DB trigger is the sole enforcement and
+    StorageCapExceededError is how it surfaces.
 
     Returns the inserted project_files row, or {} if the insert echoed no data
     (pre-existing shape both callers already handle).
     """
-    if owner_user_id is not None:
-        gated_upload(
-            owner_user_id,
-            size=file_size if file_size is not None else len(content),
-            host_user_id=owner_user_id,
-            resource_project_id=project_id,
-        )
-
     timestamp = int(time.time())
     storage_path = f"{user_id}/{project_id}/{timestamp}_{file_name}"
     supabase.storage.from_("project-files").upload(

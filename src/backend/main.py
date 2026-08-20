@@ -699,6 +699,7 @@ async def bootstrap_tester(
 
     from analytics import identify as analytics_identify
     from subscriptions.admin_auth import is_active_tester_row, is_env_tester
+    from subscriptions.admin_service import _tester_override_payload, claim_pending_tester_grant
 
     sb = get_supabase_client()
     email_norm = (user_email or "").strip().lower()
@@ -708,8 +709,6 @@ async def bootstrap_tester(
     # deliberately designating this email overrides the marker, same as an
     # admin re-grant). Never let a claim failure break sign-in.
     try:
-        from subscriptions.admin_service import claim_pending_tester_grant
-
         pending_res = (
             sb.table("pending_tester_grants").select("*").eq("email", email_norm).is_("claimed_at", "null").execute()
         )
@@ -736,22 +735,7 @@ async def bootstrap_tester(
         return {"granted": False, "reason": "already_tester"}
 
     granted_at = datetime.now(UTC).isoformat()
-    payload = {
-        "user_id": user_id,
-        "max_artists": -1,
-        "max_projects": -1,
-        "max_tasks": -1,
-        "max_storage_bytes": -1,
-        "max_split_sheets_per_month": -1,
-        "max_oneclick_runs_per_month": -1,
-        "zoe_enabled": True,
-        "oneclick_enabled": True,
-        "registry_enabled": True,
-        "integrations_allowed": ["google_drive", "dropbox"],
-        "reason": "tester_env",
-        "expires_at": None,
-        "granted_at": granted_at,
-    }
+    payload = _tester_override_payload(user_id, "tester_env", None, granted_at)
     sb.table("tier_overrides").upsert(payload, on_conflict="user_id").execute()
 
     # Initial tester credits: once-per-user idempotent (tester-init request_id),

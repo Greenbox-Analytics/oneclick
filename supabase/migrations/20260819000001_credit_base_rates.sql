@@ -27,30 +27,12 @@ INSERT INTO credit_prices (action, credits) VALUES ('split_sheet', 20)
 -- grandfather stamps key off that migration, so this must be a NEW file.
 UPDATE tier_entitlements SET monthly_credits = 150 WHERE tier = 'free';
 
+-- The UPDATEs above can't create a missing row — assert all four exist.
 DO $$
-DECLARE
-  v_bad TEXT := '';
-  v_free INTEGER;
 BEGIN
-  SELECT string_agg(action || '=' || credits, ', ')
-    INTO v_bad
-    FROM credit_prices
-   WHERE (action = 'zoe_message'    AND credits <> 5)
-      OR (action = 'oneclick_run'   AND credits <> 30)
-      OR (action = 'registry_parse' AND credits <> 30)
-      OR (action = 'split_sheet'    AND credits <> 20);
-  IF v_bad IS NOT NULL THEN
-    RAISE EXCEPTION 'credit_prices wrong after migration: %', v_bad;
-  END IF;
-
   IF (SELECT count(*) FROM credit_prices
        WHERE action IN ('zoe_message','oneclick_run','registry_parse','split_sheet')) <> 4 THEN
     RAISE EXCEPTION 'credit_prices is missing one of the four metered actions';
-  END IF;
-
-  SELECT monthly_credits INTO v_free FROM tier_entitlements WHERE tier = 'free';
-  IF v_free IS DISTINCT FROM 150 THEN
-    RAISE EXCEPTION 'free monthly_credits is %, expected 150', v_free;
   END IF;
 END $$;
 

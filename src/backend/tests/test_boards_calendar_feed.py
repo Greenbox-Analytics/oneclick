@@ -46,7 +46,7 @@ def test_feed_names(monkeypatch):
     db.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
         {"name": "test"}
     ]
-    monkeypatch.setattr(service, "_live_org_ids", lambda _db, _uid: ["team-uuid"])
+    monkeypatch.setattr(service.artist_access, "live_org_ids", lambda _db, _uid: ["team-uuid"])
     assert service.feed_name(db, USER, "all") == "Msanii platform - All Tasks Calendar"
     assert service.feed_name(db, USER, "personal") == "Msanii platform - Personal Calendar"
     assert service.feed_name(db, USER, "team-uuid") == "Msanii platform - Team test Calendar"
@@ -60,7 +60,7 @@ def test_feed_name_is_generic_for_an_offboarded_subscriber(monkeypatch):
     db.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
         {"name": "Renamed Since They Left"}
     ]
-    monkeypatch.setattr(service, "_live_org_ids", lambda _db, _uid: [])  # no live seat
+    monkeypatch.setattr(service.artist_access, "live_org_ids", lambda _db, _uid: [])  # no live seat
     assert service.feed_name(db, USER, "team-uuid") == service.GENERIC_FEED_NAME
 
 
@@ -70,7 +70,7 @@ async def test_list_calendar_feeds_labels_every_scope():
         {"id": "t2", "name": "test2"},
         {"id": "t1", "name": "test"},
     ]
-    with patch.object(service, "_live_org_ids", return_value=["t1", "t2"]):
+    with patch.object(service.artist_access, "live_org_ids", return_value=["t1", "t2"]):
         feeds = await service.list_calendar_feeds(db, USER)
 
     assert [f["scope"] for f in feeds] == ["all", "personal", "t1", "t2"]  # teams sorted by name
@@ -87,7 +87,7 @@ async def test_list_calendar_feeds_labels_every_scope():
 async def test_solo_user_gets_one_feed():
     """With no teams, "everything" and "personal" cover the same boards — offering both
     would just be two identical links."""
-    with patch.object(service, "_live_org_ids", return_value=[]):
+    with patch.object(service.artist_access, "live_org_ids", return_value=[]):
         feeds = await service.list_calendar_feeds(MagicMock(), USER)
     assert feeds == [{"scope": "all", "name": "Msanii platform - All Tasks Calendar", "team_name": None}]
 
@@ -100,7 +100,7 @@ def test_calendar_name_lands_in_the_feed():
 async def test_team_scope_only_resolves_for_a_member():
     """A team feed for a team the caller isn't in must resolve to no boards, not that team's."""
     with (
-        patch.object(service, "_live_org_ids", return_value=["team-a"]),
+        patch.object(service.artist_access, "live_org_ids", return_value=["team-a"]),
         patch.object(service, "_team_board_ids", return_value=["board-1"]) as team_boards,
         patch.object(service, "_tasks_in_range", return_value=[]) as in_range,
     ):

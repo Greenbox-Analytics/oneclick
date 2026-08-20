@@ -8,7 +8,6 @@
 // or the admin-only /ledger endpoint, so this must stay behind the
 // AdminConsole's self_serve branch — same stance as OrgPoolCard beside it.
 import { useState } from "react";
-import { toast } from "sonner";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowDownToLine,
@@ -37,7 +36,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ApiError } from "@/lib/apiFetch";
 import { fmtDate, formatBytes } from "@/lib/utils";
-import { useCreatePortalSession } from "@/hooks/useBilling";
+import { useOpenBillingPortal } from "@/hooks/useBilling";
 import { useCreditPacks } from "@/hooks/useCreditPacks";
 import {
   useOrgLedger,
@@ -313,19 +312,8 @@ function StorageSection({ org }: { org: OrgDetail }) {
 }
 
 export function OrgBillingPanel({ org }: { org: OrgDetail }) {
-  const { mutateAsync: createPortal, isPending: isOpeningPortal } = useCreatePortalSession();
+  const { openPortal, isPending: isOpeningPortal } = useOpenBillingPortal();
   const [transferOpen, setTransferOpen] = useState(false);
-
-  const openPortal = async () => {
-    try {
-      const url = await createPortal();
-      window.location.href = url;
-    } catch {
-      // No Stripe customer on file for this admin (create-portal-session 404s
-      // without a stripe_customer_id) — same fallback copy as PlanCard.tsx.
-      toast.error("No billing portal on file. For billing, contact support.");
-    }
-  };
 
   return (
     <Card className="p-6">

@@ -21,6 +21,18 @@ import {
 } from "@/hooks/useOrgs";
 import { fmtDate } from "@/lib/utils";
 
+/** Badge classes for a credit request's status — shared with the member view
+ * in pages/Organization.tsx so the two lists colour a status identically. */
+export function requestStatusClass(status: string): string {
+  if (status === "approved") {
+    return "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 capitalize";
+  }
+  if (status === "pending") {
+    return "border-amber-500/30 text-amber-700 dark:text-amber-400 bg-amber-500/10 capitalize";
+  }
+  return "border-border text-muted-foreground bg-muted capitalize";
+}
+
 export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSeatUsage[] }) {
   const { data: requests, isLoading } = useOrgCreditRequests(orgId);
   const approve = useApproveCreditRequest();
@@ -131,14 +143,7 @@ export function OrgRequestsPanel({ orgId, seats }: { orgId: string; seats: OrgSe
                       {(r.resolved_cap ?? 0).toLocaleString()} / mo
                     </span>
                   )}
-                  <Badge
-                    variant="outline"
-                    className={
-                      r.status === "approved"
-                        ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 capitalize"
-                        : "border-border text-muted-foreground bg-muted capitalize"
-                    }
-                  >
+                  <Badge variant="outline" className={requestStatusClass(r.status)}>
                     {r.status}
                   </Badge>
                 </div>

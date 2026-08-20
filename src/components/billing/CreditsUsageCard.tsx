@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
+import { creditStanding, orgContext, POOL_ONLY_LABEL, TOOL_META } from "@/lib/credits";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useCreditUsage, type CreditAction } from "@/hooks/useCreditUsage";
 import { useCreditPacks } from "@/hooks/useCreditPacks";
@@ -22,24 +22,8 @@ import { TopUpCreditsDialog } from "@/components/billing/TopUpCreditsDialog";
 import { isPaidTier, tierLabel, ENTERPRISE_LABEL } from "@/lib/tiers";
 import { fmtDate, fmtDay } from "@/lib/utils";
 
-type ToolMeta = { label: string; color: string; note?: string };
-const TOOL_META: Record<CreditAction, ToolMeta> = {
-  oneclick_run: { label: "OneClick run", color: "var(--t-oneclick)" },
-  registry_parse: { label: "Registry parse", color: "var(--t-registry)" },
-  zoe_message: { label: "Zoe message", color: "var(--t-zoe)" },
-  split_sheet: { label: "Split sheet", color: "var(--t-split)" },
-};
 // Ring/list order matches the mockup.
 const ORDER: CreditAction[] = ["oneclick_run", "registry_parse", "zoe_message", "split_sheet"];
-
-interface Row {
-  label: string;
-  color: string;
-  note?: string;
-  spent: number;
-  count: number;
-  price: number | null;
-}
 
 export function CreditsUsageCard() {
   const { data: usage, isLoading } = useCreditUsage();
@@ -55,13 +39,7 @@ export function CreditsUsageCard() {
   if (isLoading || !usage) return null;
   if (!usage.enabled) return null; // flag off → no credit surfaces
 
-  // Key org identity off billingContext (present regardless of CREDITS_ENABLED —
-  // Licensing follow-ups Task 3), falling back to credits.managedByOrg for
-  // safety. In practice credits-off + org context never reaches here — the
-  // `usage.enabled` early-return above already hides this card when credits
-  // are off — but this keeps the two signals consistent going forward.
-  const managedByOrg =
-    ent?.billingContext?.type === "org" ? ent.billingContext : ent?.credits?.managedByOrg;
+  const managedByOrg = orgContext(ent);
 
   // Org billing context (Licensing Phase B, spec §5): what a member has is
   // a monthly LIMIT on the org's shared pool, not a personal grant and not an
@@ -132,31 +110,22 @@ export function CreditsUsageCard() {
     );
   }
 
-  const showAddCredits = usage.enabled && (packsData?.packs?.length ?? 0) > 0;
+  const showAddCredits = (packsData?.packs?.length ?? 0) > 0;
 
   const grant = usage.monthlyGrant ?? 0;
   const bundle = usage.bundleBalance ?? 0;
   const reserve = usage.reserveBalance ?? 0;
   const byAction = new Map((usage.tools ?? []).map((t) => [t.action, t]));
 
-  const rows: Row[] = ORDER.map((action) => {
-    const t = byAction.get(action);
-    const meta = TOOL_META[action];
-    return {
-      label: meta.label,
-      color: meta.color,
-      note: meta.note,
-      spent: t?.spent ?? 0,
-      count: t?.count ?? 0,
-      price: t?.price ?? null,
-    };
-  });
+  const rows = ORDER.map((action) => ({
+    ...TOOL_META[action],
+    spent: byAction.get(action)?.spent ?? 0,
+    count: byAction.get(action)?.count ?? 0,
+    price: byAction.get(action)?.price ?? null,
+  }));
   const used = Math.max(0, grant - bundle);
   const maxSpent = Math.max(0, ...rows.map((r) => r.spent));
-  const segments: RingSegment[] = ORDER.map((action) => ({
-    value: byAction.get(action)?.spent ?? 0,
-    color: TOOL_META[action].color,
-  }));
+  const segments: RingSegment[] = rows.map((r) => ({ value: r.spent, color: r.color }));
 
   const tier = ent?.tier ?? "free";
   const isPaid = isPaidTier(tier);
@@ -262,9 +231,6 @@ export function CreditsUsageCard() {
                         style={{ background: r.color }}
                       />
                       {r.label}
-                      {r.note && (
-                        <span className="text-xs text-muted-foreground/70 font-normal">· {r.note}</span>
-                      )}
                     </div>
                     <div className="text-sm font-semibold text-right tabular-nums">
                       {r.spent > 0 ? `${r.spent} cr` : "—"}

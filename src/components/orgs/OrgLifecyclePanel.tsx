@@ -32,15 +32,8 @@ function coverageCopy(org: OrgDetail, currentUserId?: string): string {
     : "Another admin is currently covering this team.";
 }
 
-export function OrgLifecyclePanel({
-  orgId,
-  org,
-  currentUserId,
-}: {
-  orgId: string;
-  org: OrgDetail;
-  currentUserId?: string;
-}) {
+export function OrgLifecyclePanel({ org, currentUserId }: { org: OrgDetail; currentUserId?: string }) {
+  const orgId = org.id;
   const claim = useClaimCoverage();
   const release = useReleaseCoverage();
   const archive = useArchiveOrg();

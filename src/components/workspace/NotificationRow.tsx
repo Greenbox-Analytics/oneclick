@@ -24,7 +24,6 @@ export function NotificationRow({ n }: { n: RegistryNotification }) {
   // actionable notification. Registry's own 'invitation' rows carry
   // entity_type 'work'/null and stay button-less.
   const isOrgInvite = n.type === "invitation" && n.entity_type === "org";
-  const isInvite = isOrgInvite;
 
   // The org hooks stay silent by design (OrgInviteClaim owns that page's copy),
   // so the feedback for this row belongs here.
@@ -42,7 +41,7 @@ export function NotificationRow({ n }: { n: RegistryNotification }) {
 
   const handleClick = () => {
     // Invites: Accept/Decline are gated on !n.read, so a row click must NOT mark it read.
-    if (!n.read && !isInvite) markRead.mutate(n.id);
+    if (!n.read && !isOrgInvite) markRead.mutate(n.id);
     if (n.work_id) navigate(`/tools/registry/${n.work_id}`);
   };
 
@@ -63,7 +62,7 @@ export function NotificationRow({ n }: { n: RegistryNotification }) {
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground mt-1 ml-4">{n.message}</p>
-          {isInvite && !n.read && (
+          {isOrgInvite && !n.read && (
             <div className="mt-2 ml-4 flex gap-2" onClick={(e) => e.stopPropagation()}>
               <Button
                 size="sm"

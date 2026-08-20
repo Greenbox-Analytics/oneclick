@@ -796,13 +796,6 @@ async def test_invite_member_requires_admin_403(monkeypatch):
     assert exc_info.value.status_code == 403
 
 
-async def test_invite_member_invalid_role_raises(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    monkeypatch.setattr(service, "_find_user_id_by_email", lambda *a: None)
-    with pytest.raises(ValueError):
-        await service.invite_member(MagicMock(), U1, ORG, "x@example.com", "owner")
-
-
 async def test_invite_existing_active_member_raises_duplicate(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
     monkeypatch.setattr(service.authz, "is_org_member", lambda *a: True)
@@ -1466,12 +1459,6 @@ async def test_update_member_role_requires_admin_403(monkeypatch):
     assert exc_info.value.status_code == 403
 
 
-async def test_update_member_role_invalid_role_raises(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    with pytest.raises(ValueError):
-        await service.update_member_role(MagicMock(), U1, ORG, MEMBER, "owner")
-
-
 async def test_update_member_role_maps_last_admin_db_error(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
 
@@ -1748,8 +1735,8 @@ async def test_offboard_transitions_status_and_moves_no_money(monkeypatch):
         {
             "org_members": [
                 MagicMock(data=member),  # initial maybe_single read
-                MagicMock(data=[{**member, "status": "suspended"}]),  # UPDATE echo
-                MagicMock(data={**member, "status": "suspended", "revoked_at": "2026-07-29T00:00:00+00:00"}),  # reread
+                # UPDATE echo — .update().execute() returns the written row
+                MagicMock(data=[{**member, "status": "suspended", "revoked_at": "2026-07-29T00:00:00+00:00"}]),
             ]
         }
     )
@@ -2244,7 +2231,6 @@ def _offboard_db(topup_admin, topup_sub="sub_topup_1", admins=(U1,)):
         "org_members": [
             MagicMock(data=_member_row(role="admin"), count=1),
             MagicMock(data=[_member_row(role="admin", status="removed", revoked_at=revoked)], count=1),
-            MagicMock(data=_member_row(role="admin", status="removed", revoked_at=revoked), count=1),
             MagicMock(data=[{"user_id": a} for a in admins], count=len(admins)),
         ],
         "organizations": [

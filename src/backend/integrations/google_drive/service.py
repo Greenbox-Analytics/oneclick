@@ -91,11 +91,9 @@ async def import_drive_file(token: str, supabase: Client, user_id: str, data: di
     mime = metadata.get("mimeType") or "application/octet-stream"
     file_size = int(metadata["size"]) if metadata.get("size") else None
 
-    # Gate -> Storage write -> project_files insert -> orphan cleanup on
-    # failure, shared with the Dropbox import path. owner_user_id is omitted:
-    # the router only verified project-member role, not that user_id is the
-    # project's storage-counter owner, so the pre-check is skipped and the DB
-    # trigger (-> StorageCapExceededError) is the gate.
+    # Storage write -> project_files insert -> orphan cleanup on failure,
+    # shared with the Dropbox import path. The DB storage trigger
+    # (-> StorageCapExceededError) is the cap gate.
     file_row = store_imported_file(
         supabase,
         user_id,

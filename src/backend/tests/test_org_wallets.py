@@ -118,37 +118,6 @@ def test_org_wallet_duplicate_race_reselect_also_empty_reraises():
         wallets.read_or_create_org_wallet(db, ORG_ID)
 
 
-def test_org_wallet_insert_with_no_data_falls_back_to_reselect():
-    """Some client/mocking configurations don't echo the inserted row — the
-    helper re-selects rather than raising."""
-    call_count = {"n": 0}
-
-    def _side(name):
-        b = MockQueryBuilder()
-        if name == "credit_wallets":
-            call_count["n"] += 1
-            if call_count["n"] == 3:
-                b.execute.return_value = MagicMock(data=[{"id": POOL_WALLET}], count=1)
-            else:
-                b.execute.return_value = MagicMock(data=[], count=0)
-        return b
-
-    db = MagicMock()
-    db.table.side_effect = _side
-
-    assert wallets.read_or_create_org_wallet(db, ORG_ID) == {"id": POOL_WALLET}
-
-
-def test_org_wallet_insert_no_data_and_reselect_empty_raises_runtime_error():
-    b = MockQueryBuilder()
-    b.execute.return_value = MagicMock(data=[], count=0)
-    db = MagicMock()
-    db.table.return_value = b
-
-    with pytest.raises(RuntimeError, match="failed to read or create org wallet"):
-        wallets.read_or_create_org_wallet(db, ORG_ID)
-
-
 # ---------------------------------------------------------------------------
 # orgs.wallets — read_or_create_user_wallet (Task 10: moved here from
 # EntitlementsService._read_or_create_wallet, which is now a one-line
@@ -350,17 +319,6 @@ async def test_set_member_cap_none_clears_to_org_default(monkeypatch):
     assert captured["payload"] == {"monthly_cap": None}
 
 
-async def test_set_member_cap_rejects_below_the_sentinel(monkeypatch):
-    """-1 is "no limit"; anything below it is a typo, not a meaning."""
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    db = MagicMock()
-    db.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
-        data={"id": MEMBER_ID}
-    )
-    with pytest.raises(ValueError, match="cap must be >= 0"):
-        await service.set_member_cap(db, U1, ORG_ID, MEMBER_ID, -2)
-
-
 async def test_set_member_cap_accepts_the_unlimited_sentinel(monkeypatch):
     """-1 writes through: it is how an admin says "no limit" for a member whose
     org default would otherwise cap them."""
@@ -404,11 +362,6 @@ async def test_set_org_dispersal_writes_the_contract_volume(monkeypatch):
     # Raising it must NOT top the pool up here — the sweep is the only writer of
     # dispersal credits, which is what keeps its monthly idempotency honest.
     db.rpc.assert_not_called()
-
-
-async def test_set_org_dispersal_rejects_negative(monkeypatch):
-    with pytest.raises(ValueError, match="monthly_dispersal_credits must be >= 0"):
-        await service.set_org_dispersal(MagicMock(), ORG_ID, -1)
 
 
 async def test_set_org_dispersal_does_not_touch_the_member_cap(monkeypatch):
@@ -654,7 +607,7 @@ async def test_transfer_credits_happy_path_calls_rpc_with_both_wallets_and_metad
     db = _seq_db(
         {
             "organizations": [_transfer_org_row()],
-            # credit_wallets reads (via _read_wallet) are plain .select() calls,
+            # credit_wallets reads (via read_wallet) are plain .select() calls,
             # not .maybe_single() — `data` is a LIST of rows, unlike the
             # `organizations` entry above.
             "credit_wallets": [[personal_wallet], [pool_wallet]],

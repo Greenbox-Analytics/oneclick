@@ -10,10 +10,10 @@ export function IntegrationsCard() {
 
   // Google Drive is a real integration; Spotify + Apple Music are
   // placeholders (not yet available) shown dashed, matching the mockup.
-  const chips: { label: string; connected: boolean; available: boolean }[] = [
-    { label: "Google Drive", connected: isConn("google_drive"), available: true },
-    { label: "Spotify", connected: false, available: false },
-    { label: "Apple Music", connected: false, available: false },
+  const chips: { label: string; connected: boolean }[] = [
+    { label: "Google Drive", connected: isConn("google_drive") },
+    { label: "Spotify", connected: false },
+    { label: "Apple Music", connected: false },
   ];
 
   return (
@@ -27,12 +27,12 @@ export function IntegrationsCard() {
           <div
             key={c.label}
             className={`flex items-center gap-2.5 px-3.5 py-2.5 border rounded-[10px] text-sm bg-background ${
-              c.available && c.connected
+              c.connected
                 ? "border-border"
                 : "border-border border-dashed opacity-55"
             }`}
           >
-            {c.available && c.connected ? (
+            {c.connected ? (
               <Check className="w-[18px] h-[18px] flex-none text-primary" strokeWidth={2.4} />
             ) : (
               <Lock className="w-[18px] h-[18px] flex-none text-muted-foreground" />

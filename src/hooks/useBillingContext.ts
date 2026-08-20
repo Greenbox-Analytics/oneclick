@@ -12,6 +12,7 @@ import { apiFetch, API_URL } from "@/lib/apiFetch";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEntitlements, clearRememberedBillingContext } from "@/hooks/useEntitlements";
 import type { BillingContextOption } from "@/hooks/useEntitlements";
+import { orgContext } from "@/lib/credits";
 
 export interface SetBillingContextArgs {
   /** Org id to switch into, or null to switch back to personal billing. */
@@ -57,10 +58,7 @@ export function useBillingContextSwitcher() {
   // the caller holds a seat somewhere — so this is also the "show it at all" gate.
   const canSwitch = available.length > 1;
 
-  const currentOrgId =
-    (ent?.billingContext?.type === "org" ? ent.billingContext.orgId : undefined) ??
-    ent?.credits?.managedByOrg?.orgId ??
-    null;
+  const currentOrgId = orgContext(ent)?.orgId ?? null;
   const value = currentOrgId ?? "personal";
   const currentLabel = orgContexts.find((o) => o.orgId === currentOrgId)?.orgName ?? "Personal";
 

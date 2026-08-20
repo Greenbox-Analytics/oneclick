@@ -1,16 +1,16 @@
 // src/components/billing/PlanCard.tsx
 import { Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useEntitlements } from "@/hooks/useEntitlements";
-import { useCreatePortalSession } from "@/hooks/useBilling";
+import { useOpenBillingPortal } from "@/hooks/useBilling";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { AdminBadge } from "@/components/admin/AdminBadge";
 import { isPaidTier, tierLabel, usd, ENTERPRISE_LABEL, TIER_PRICES, type TierKey } from "@/lib/tiers";
 import { fmtDate } from "@/lib/utils";
+import { orgContext } from "@/lib/credits";
 
 const priceLabel = (tier: string, period: string | null): { amount: string; unit: string } => {
   const key: TierKey = tier === "basic" || tier === "pro" ? tier : "free";
@@ -23,23 +23,10 @@ export function PlanCard() {
   const navigate = useNavigate();
   const { data: ent } = useEntitlements();
   const { isAdmin } = useIsAdmin();
-  const { mutateAsync: createPortal, isPending: isOpeningPortal } = useCreatePortalSession();
+  const { openPortal, isPending: isOpeningPortal } = useOpenBillingPortal();
 
   const sub = ent?.subscription;
-  // Key org identity off billingContext (present regardless of CREDITS_ENABLED —
-  // Licensing follow-ups Task 3), falling back to credits.managedByOrg for
-  // safety so this keeps working if billingContext is ever missing.
-  const managedByOrg =
-    ent?.billingContext?.type === "org" ? ent.billingContext : ent?.credits?.managedByOrg;
-
-  const openPortal = async () => {
-    try {
-      const url = await createPortal();
-      window.location.href = url;
-    } catch {
-      toast.error("No billing portal on file. For billing, contact support.");
-    }
-  };
+  const managedByOrg = orgContext(ent);
 
   // Org billing context (Licensing Phase B, spec §5): the org's pool pays, so
   // there's no plan to upgrade or price to show — just who's managing it, plus

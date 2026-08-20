@@ -14,7 +14,7 @@ function personal(over: Partial<EntitlementCredits> = {}): EntitlementCredits {
     overageUsdPerCredit: 0.02,
     overageCapCredits: null,
     periodEnd: null,
-    prices: { zoeMessage: 3, oneclickRun: 21, registryParse: 12 },
+    prices: { zoeMessage: 3, oneclickRun: 21, registryParse: 12, splitSheet: 20 },
     ...over,
   };
 }

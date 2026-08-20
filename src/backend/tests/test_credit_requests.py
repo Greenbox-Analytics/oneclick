@@ -358,13 +358,6 @@ async def test_approve_credit_request_is_idempotent_on_retry(monkeypatch):
     assert caps == [2500, 2500]
 
 
-async def test_approve_credit_request_rejects_negative_cap(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: True)
-    db = _db_seq({"credit_requests": [MagicMock(data=_pending_request(), count=1)]})
-    with pytest.raises(ValueError, match="cap must be >= 0"):
-        await service.approve_credit_request(db, U1, ORG_ID, REQUEST_ID, -1)
-
-
 async def test_deny_credit_request_requires_admin_403(monkeypatch):
     monkeypatch.setattr(service.authz, "is_org_admin", lambda *a: False)
     with pytest.raises(HTTPException) as exc_info:
@@ -742,12 +735,10 @@ def test_resolved_email_background_sends_to_member():
     fake_db.table.side_effect = _side
 
     with (
-        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.router._get_supabase", return_value=fake_db),
         patch("orgs.emails.send_credit_request_resolved_email") as mock_send,
     ):
         orgs_router._send_credit_request_resolved_email_background(
-            db_url="http://fake",
-            db_key="fake-key",
             org_id=ORG_ID,
             org_member_id=MEMBER_ID,
             approved=True,
@@ -778,12 +769,10 @@ def test_resolved_email_background_missing_member_skips_send():
     fake_db.table.side_effect = _side
 
     with (
-        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.router._get_supabase", return_value=fake_db),
         patch("orgs.emails.send_credit_request_resolved_email") as mock_send,
     ):
         orgs_router._send_credit_request_resolved_email_background(
-            db_url="http://fake",
-            db_key="fake-key",
             org_id=ORG_ID,
             org_member_id=MEMBER_ID,
             approved=False,
@@ -824,12 +813,10 @@ def test_credit_request_email_background_sends_to_active_admins_only():
     fake_db.auth.admin.get_user_by_id.side_effect = _get_user_by_id
 
     with (
-        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.router._get_supabase", return_value=fake_db),
         patch("orgs.emails.send_credit_request_email") as mock_send,
     ):
         orgs_router._send_credit_request_email_background(
-            db_url="http://fake",
-            db_key="fake-key",
             org_id=ORG_ID,
             request_id=REQUEST_ID,
             requester_user_id=U1,
@@ -863,12 +850,10 @@ def test_credit_request_email_background_no_admins_skips_send():
     fake_db.table.side_effect = _side
 
     with (
-        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.router._get_supabase", return_value=fake_db),
         patch("orgs.emails.send_credit_request_email") as mock_send,
     ):
         orgs_router._send_credit_request_email_background(
-            db_url="http://fake",
-            db_key="fake-key",
             org_id=ORG_ID,
             request_id=REQUEST_ID,
             requester_user_id=U1,

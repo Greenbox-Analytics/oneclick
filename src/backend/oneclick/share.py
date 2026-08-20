@@ -4,6 +4,7 @@ import io
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
@@ -38,7 +39,7 @@ def _get_supabase():
 
 
 class ShareRequest(BaseModel):
-    target: str  # "drive"
+    target: Literal["drive"]
     artist_name: str
     payments: list[dict]
     total_payments: float
@@ -277,9 +278,6 @@ async def export_pdf(body: ExportPdfRequest, user_id: str = Depends(get_current_
 async def share_results(body: ShareRequest, user_id: str = Depends(get_current_user_id)):
     """Share OneClick results as PDF to Google Drive."""
     supabase = _get_supabase()
-
-    if body.target != "drive":
-        raise HTTPException(status_code=400, detail="Invalid target. Use 'drive'.")
 
     token = await get_valid_token(supabase, user_id, "google_drive")
     if not token:

@@ -32,7 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/AuthContext";
-import { useMyOrgs } from "@/hooks/useOrgs";
+import { useMyOrgs, liveOrgs } from "@/hooks/useOrgs";
 import {
   useArchiveBoard,
   useArchivedBoards,
@@ -60,14 +60,10 @@ interface BoardSwitcherProps {
  */
 export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherProps) {
   const { user } = useAuth();
-  // Contexts = the live orgs the caller actually holds a seat in. An archived /
-  // lapsed org (or a suspended seat) can't own a board you may act on, so it never
-  // appears — the stale-team guard below then bounces a dangling selection.
+  // Contexts = live orgs only, so a dangling selection is bounced by the
+  // stale-team guard below.
   const { data: orgs, isLoading: teamsLoading } = useMyOrgs();
-  const teams = useMemo(
-    () => (orgs ?? []).filter((o) => o.my_status === "active" && !o.archived_at && o.status !== "lapsed"),
-    [orgs],
-  );
+  const teams = useMemo(() => liveOrgs(orgs), [orgs]);
   const {
     data: boards,
     isLoading: boardsLoading,
@@ -344,9 +340,9 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
         </DialogContent>
       </Dialog>
 
-      {/* Board settings (name + who can see it). Mounted only with a board selected —
-          the dialog reads board.name/restricted/member_user_ids as its seed. */}
-      {selectedBoard && (
+      {/* Board settings (name + who can see it). Mounted only while open with a
+          board selected — the dialog seeds its form from the board on mount. */}
+      {selectedBoard && settingsOpen && (
         <BoardSettingsDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}

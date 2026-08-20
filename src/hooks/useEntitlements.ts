@@ -302,17 +302,6 @@ export function useStorageStatus(): {
   return { used, cap, pct, nearLimit: pct >= 0.8, loading: false, error: null };
 }
 
-export type IntegrationName = "google_drive";
-
-export function useIntegrationAllowed(
-  name: IntegrationName,
-): { allowed: boolean; loading: boolean; error: Error | null } {
-  const { data, isLoading, error } = useEntitlements();
-  if (error) return { allowed: false, loading: false, error: error as Error };
-  if (isLoading || !data) return { allowed: false, loading: true, error: null };
-  return { allowed: data.features.integrationsAllowed.includes(name), loading: false, error: null };
-}
-
 /** Raw tier_overrides row shape (returned by GET /admin/users/{id}). */
 export interface RawOverride {
   user_id: string;

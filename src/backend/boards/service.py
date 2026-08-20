@@ -262,12 +262,6 @@ def _personal_board_ids(db: Client, user_id: str) -> list[str]:
     return [r["id"] for r in rows]
 
 
-def _live_org_ids(db: Client, user_id: str) -> list[str]:
-    """Orgs whose boards the caller may reach — active seat in a live (not archived,
-    not lapsed) org. Same helper artists use, so the two can't drift."""
-    return artist_access.live_org_ids(db, user_id)
-
-
 def _visible_org_boards(db: Client, user_id: str, org_ids: list[str], *, archived: bool = False) -> list[dict]:
     """Boards of `org_ids` (already known to be live orgs the caller belongs to)
     the caller may SEE, each with `member_user_ids` attached. Restricted boards
@@ -329,7 +323,7 @@ def _calendar_board_ids(db: Client, user_id: str) -> list[str]:
     Unlike _resolve_read_board_ids' personal-only default, the calendar is cross-board by
     design. Access is still the gate — no board the caller can't already read is added.
     """
-    return _personal_board_ids(db, user_id) + _team_board_ids(db, user_id, _live_org_ids(db, user_id))
+    return _personal_board_ids(db, user_id) + _team_board_ids(db, user_id, artist_access.live_org_ids(db, user_id))
 
 
 def _stamp_team_context(db: Client, tasks: list) -> list:
@@ -784,7 +778,7 @@ GENERIC_FEED_NAME = "Msanii platform - Calendar"
 def feed_name(db: Client, user_id: str, scope: str) -> str:
     """Display name for a feed scope — this becomes the calendar's name in Google/Apple.
 
-    Gated on the SAME membership as the tasks (`_live_org_ids`), not just on the
+    Gated on the SAME membership as the tasks (`artist_access.live_org_ids`), not just on the
     HMAC. The feed token has no membership component and no expiry, so an
     offboarded member's subscribed URL keeps resolving: `get_feed_tasks` already
     serves them zero tasks, but without this the calendar would still be titled
@@ -794,7 +788,7 @@ def feed_name(db: Client, user_id: str, scope: str) -> str:
         return ALL_FEED_NAME
     if scope == "personal":
         return PERSONAL_FEED_NAME
-    if scope not in _live_org_ids(db, user_id):
+    if scope not in artist_access.live_org_ids(db, user_id):
         return GENERIC_FEED_NAME
     row = db.table("organizations").select("name").eq("id", scope).limit(1).execute().data or []
     return _team_feed_name(row[0]["name"]) if row else GENERIC_FEED_NAME
@@ -806,7 +800,7 @@ async def list_calendar_feeds(db: Client, user_id: str) -> list[dict]:
     With no teams, "everything" and "personal" are the same set of boards — offering both
     would just be two identical links, so a solo user gets one calendar.
     """
-    org_ids = _live_org_ids(db, user_id)
+    org_ids = artist_access.live_org_ids(db, user_id)
     if not org_ids:
         return [{"scope": "all", "name": ALL_FEED_NAME, "team_name": None}]
 
@@ -831,7 +825,7 @@ async def get_feed_tasks(db: Client, user_id: str, scope: str, start: str, end: 
         board_ids = _personal_board_ids(db, user_id)
     elif scope == "all":
         board_ids = _calendar_board_ids(db, user_id)
-    elif scope in _live_org_ids(db, user_id):
+    elif scope in artist_access.live_org_ids(db, user_id):
         board_ids = _team_board_ids(db, user_id, [scope])
     else:
         board_ids = []
@@ -1186,9 +1180,9 @@ async def create_board(
 
 async def list_boards(db: Client, user_id: str, team_id: str | None = None) -> list[dict]:
     if team_id is not None:
-        # A lapsed/archived org drops out of _live_org_ids, so its boards are hidden
+        # A lapsed/archived org drops out of artist_access.live_org_ids, so its boards are hidden
         # from everyone — same posture as team artists.
-        if team_id not in _live_org_ids(db, user_id):
+        if team_id not in artist_access.live_org_ids(db, user_id):
             raise PermissionError("Not a member of this team")
         return _visible_org_boards(db, user_id, [team_id])
     q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
@@ -1251,9 +1245,7 @@ async def update_board(db: Client, user_id: str, board_id: str, fields: dict) ->
                     raise InvalidBoardMembersError("Some of those people aren't on this team")
             db.table("board_members").delete().eq("board_id", board_id).execute()
             if member_ids:
-                db.table("board_members").insert(
-                    [{"board_id": board_id, "user_id": u, "added_by": user_id} for u in member_ids]
-                ).execute()
+                db.table("board_members").insert([{"board_id": board_id, "user_id": u} for u in member_ids]).execute()
         if restricted is not None:
             fields["restricted"] = restricted
     clean = {k: v for k, v in fields.items() if v is not None}
@@ -1420,14 +1412,13 @@ def _calendar_name_from_ics(text: str) -> str | None:
 
 
 async def delete_subscription(db: Client, user_id: str, subscription_id: str) -> bool:
-    existing = (
-        db.table("calendar_subscriptions").select("url").eq("id", subscription_id).eq("user_id", user_id).execute().data
+    rows = (
+        db.table("calendar_subscriptions").delete().eq("id", subscription_id).eq("user_id", user_id).execute().data
         or []
     )
-    if not existing:
+    if not rows:
         return False
-    db.table("calendar_subscriptions").delete().eq("id", subscription_id).eq("user_id", user_id).execute()
-    calendar_import.forget(existing[0]["url"])
+    calendar_import.forget(rows[0]["url"])
     return True
 
 

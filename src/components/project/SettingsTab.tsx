@@ -19,7 +19,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Loader2, Trash2, LogOut, Settings, UserMinus, AlertTriangle, BarChart2, Building2 } from "lucide-react";
+import { Loader2, Trash2, LogOut, Settings, UserMinus, AlertTriangle, BarChart2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";

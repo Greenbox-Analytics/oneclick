@@ -14,7 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
+import { cn, formatBytes } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
@@ -31,7 +31,7 @@ import {
 } from "@/hooks/useTesterGrants";
 import { isPaidTier, tierLabel } from "@/lib/tiers";
 import { UserCreditsCard } from "@/components/admin/UserCreditsCard";
-import { shortDate, Tag } from "@/components/admin/ui";
+import { KeyValue, SectionLabel, shortDate, Tag } from "@/components/admin/ui";
 
 export type UserFilter = "all" | "paid" | "free" | "testers" | "admins" | "override";
 
@@ -43,12 +43,6 @@ const FILTER_LABELS: { id: UserFilter; label: string }[] = [
   { id: "admins", label: "Admins" },
   { id: "override", label: "Overrides" },
 ];
-
-export const formatBytes = (bytes: number): string => {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-};
 
 interface UsersPanelProps {
   search: string;
@@ -596,23 +590,6 @@ function UserDetailSheet({ userId, onClose, onOpenOrg }: SheetProps) {
         )}
       </SheetContent>
     </Sheet>
-  );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
-      {children}
-    </div>
-  );
-}
-
-function KeyValue({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-dashed border-border py-1.5 text-[13px] last:border-b-0">
-      <span>{k}</span>
-      <b className="font-mono tabular-nums">{v}</b>
-    </div>
   );
 }
 

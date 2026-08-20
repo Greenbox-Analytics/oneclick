@@ -1207,11 +1207,7 @@ def _pool_wallet_for(member_id, wallet_id, *, reserve=500, bundle=0):
     }
 
 
-def _owner_pm_row(role="owner", project_id=DERIV_PROJECT):
-    return {"project_id": project_id, "user_id": CTX_USER, "role": role}
-
-
-def _derived_single_org_data(seat_wallets, *, project_members=None, org_status="active", member_status="active"):
+def _derived_single_org_data(seat_wallets, *, org_status="active", member_status="active"):
     """A resource (DERIV_PROJECT) whose ARTIST is owned by ORG, where CTX_USER
     holds a seat. Deliberately OMITS personal subscription/tier/user-wallet rows
     — the derived seat path must never read them."""
@@ -1223,7 +1219,6 @@ def _derived_single_org_data(seat_wallets, *, project_members=None, org_status="
         "org_members": [_member(status=member_status)],
         "credit_prices": list(PRICES),
         "credit_wallets": list(seat_wallets),
-        "project_members": project_members or [],
     }
 
 
@@ -1307,7 +1302,6 @@ class TestCheckCreditsResourceDerivation:
         assert r.allowed is False
         assert r.managed_by_org is False  # personal wall — no org data leaks
         assert r.upgrade_required is True
-        assert r.owner_can_unlink is False and r.project_id is None
         assert r.wallet_id is None
 
     def test_mixed_project_contract_list_falls_to_ambient(self, monkeypatch):
@@ -1335,28 +1329,6 @@ class TestCheckCreditsResourceDerivation:
         assert r.managed_by_org is False
         assert r.wallet_id == "wallet-personal"
 
-    def test_resolver_exception_falls_to_ambient(self, monkeypatch):
-        """If the resource resolver raises, check_credits swallows it and runs
-        the ambient/personal path — the request is unaffected (rule 4)."""
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-
-        def _boom(*a, **k):
-            raise RuntimeError("derivation exploded")
-
-        monkeypatch.setattr(EntitlementsService, "resolve_billing_org_for_resource", _boom)
-        data = {
-            "profiles": [_profile(context_org=None)],
-            "credit_prices": list(PRICES),
-            **_personal_fallback_tables(bundle=100),
-        }
-        sb = _ctx_supabase(data)
-
-        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
-
-        assert r.allowed is True and r.managed_by_org is False
-        assert r.wallet_id == "wallet-personal"
-
     def test_no_resource_kwargs_is_byte_identical_personal(self, monkeypatch):
         """The default (no resource kwargs) call takes the personal path with no
         derivation queries at all — the byte-identical regression guarantee."""
@@ -1374,31 +1346,6 @@ class TestCheckCreditsResourceDerivation:
         assert r.allowed is True and r.wallet_id == "wallet-personal"
         # No resource → the resolver short-circuits before any derivation read.
         assert "org_project_links" not in sb._log
-
-
-class TestNoUnlinkCtaOnTheDryPoolWall:
-    """The owner-aware dry-pool wall used to offer "unlink this project to fall
-    back to your personal plan". org_project_links was retired in
-    20260804000001 and moving an artist OUT of a team is deliberately not
-    self-serve, so that CTA would point at an endpoint that 404s. It must never
-    be set again."""
-
-    def test_project_owner_gets_no_unlink_affordance(self, monkeypatch):
-        monkeypatch.setenv("LICENSING_ENABLED", "true")
-        monkeypatch.setenv("CREDITS_ENABLED", "true")
-        sb = _ctx_supabase(
-            _derived_single_org_data(
-                [_pool_wallet(reserve=0, bundle=0)],
-                project_members=[_owner_pm_row()],
-            )
-        )
-
-        r = EntitlementsService(sb).check_credits(CTX_USER, "zoe_message", resource_project_id=DERIV_PROJECT)
-
-        assert not r.allowed and r.managed_by_org
-        assert r.owner_can_unlink is False
-        assert r.project_id is None
-        assert "unlink" not in (r.reason or "").lower()
 
 
 class TestFreeTierToolsOpenUnderCredits:

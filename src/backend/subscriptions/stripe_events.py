@@ -86,6 +86,37 @@ def _capped_topup(supabase, wallet: dict, grant: int) -> int:
     )
 
 
+def _topup_bundle(supabase, user_id: str, grant: int, metadata: dict, request_id: str) -> dict | None:
+    """Top the user's bundle UP TO *grant* (capped by `_capped_topup`, never
+    additive) as an idempotent `monthly_grant` keyed on *request_id*. Returns
+    the wallet row (so a caller can re-anchor its period), or None when the
+    user has no wallet. No try/except: failures must 500 so Stripe retries."""
+    wallet_res = (
+        supabase.table("credit_wallets")
+        .select("id, bundle_balance, period_start")
+        .eq("owner_type", "user")
+        .eq("owner_id", user_id)
+        .execute()
+    )
+    if not wallet_res.data:
+        return None
+    wallet = wallet_res.data[0]
+    top_up = _capped_topup(supabase, wallet, grant)
+    if top_up > 0:
+        supabase.rpc(
+            "grant_credits",
+            {
+                "p_wallet_id": wallet["id"],
+                "p_amount": top_up,
+                "p_kind": "monthly_grant",
+                "p_bucket": "bundle",
+                "p_metadata": metadata,
+                "p_request_id": request_id,
+            },
+        ).execute()
+    return wallet
+
+
 def _align_wallet_to_checkout(supabase, user_id: str, tier: str, event_id: str, grant: int) -> None:
     """Checkout: top the bundle up to *grant* + re-anchor the period.
 
@@ -105,29 +136,9 @@ def _align_wallet_to_checkout(supabase, user_id: str, tier: str, event_id: str, 
     No try/except: failures must 500 so Stripe retries; the grant is
     request-id idempotent, so retries are safe.
     """
-    wallet_res = (
-        supabase.table("credit_wallets")
-        .select("id, bundle_balance, period_start")
-        .eq("owner_type", "user")
-        .eq("owner_id", user_id)
-        .execute()
-    )
-    if not wallet_res.data:
+    wallet = _topup_bundle(supabase, user_id, grant, {"reason": "checkout", "tier": tier}, f"checkout:{event_id}")
+    if wallet is None:
         return
-    wallet = wallet_res.data[0]
-    top_up = _capped_topup(supabase, wallet, grant)
-    if top_up > 0:
-        supabase.rpc(
-            "grant_credits",
-            {
-                "p_wallet_id": wallet["id"],
-                "p_amount": top_up,
-                "p_kind": "monthly_grant",
-                "p_bucket": "bundle",
-                "p_metadata": {"reason": "checkout", "tier": tier},
-                "p_request_id": f"checkout:{event_id}",
-            },
-        ).execute()
     now = datetime.now(UTC)
     supabase.table("credit_wallets").update(
         {
@@ -330,7 +341,16 @@ def _handle_topup_completed(event, supabase) -> None:
 
     target = meta.get("target")
     if target and target != "user":
-        _handle_org_topup_grant(supabase, user_id, target, session, pack_key, credits, price_cents)
+        _handle_org_topup_grant(
+            supabase,
+            user_id,
+            target,
+            pack_key,
+            credits,
+            price_cents,
+            request_id=f"topup:{session.id}",
+            event_name="topup_purchased",
+        )
         return
 
     wallet_res = (
@@ -385,18 +405,27 @@ def _handle_topup_completed(event, supabase) -> None:
 
 
 def _handle_org_topup_grant(
-    supabase, user_id: str, org_id: str, session, pack_key: str, credits: int, price_cents: int
+    supabase,
+    user_id: str,
+    org_id: str,
+    pack_key: str,
+    credits: int,
+    price_cents: int,
+    *,
+    request_id: str,
+    event_name: str,
 ) -> None:
-    """Org-pool branch of `_handle_topup_completed` (Licensing Phase B, spec
-    §4 + rule 3). Called only when the checkout session's metadata["target"]
-    is an org id (billing_router.create_topup_session sets this after
-    admin-gating the purchase).
+    """Grant one pack into an org's POOL wallet (Licensing Phase B, spec §4 +
+    rule 3). Two callers: the pack-checkout branch of `_handle_topup_completed`
+    (`topup:{session.id}`, `topup_purchased`) and the recurring top-up renewal
+    in `handle_invoice_paid` (`orgtopup:{invoice.id}`, `org_topup_renewed`) —
+    a renewal is ledger-indistinguishable from a pack purchase apart from its
+    request id.
 
-    Grants into the org's POOL wallet — via `orgs.wallets.
-    read_or_create_org_wallet`, NEVER the user-wallet seeding helper above,
-    since pool wallets are NULL-period/reserve-only by construction (rule 1)
-    — under the SAME `topup:{session.id}` idempotency key as the personal
-    path, so an async-payment redelivery converges identically.
+    Grants via `orgs.wallets.read_or_create_org_wallet`, NEVER the user-wallet
+    seeding helper above, since pool wallets are NULL-period/reserve-only by
+    construction (rule 1) — under the caller's idempotency key, so a
+    redelivery converges identically.
 
     After the grant call (fresh OR duplicate — re-running this is harmless,
     the sum is unchanged either way), re-evaluates cumulative activation via
@@ -423,13 +452,15 @@ def _handle_org_topup_grant(
             "p_kind": "purchase",
             "p_bucket": "reserve",
             "p_metadata": {"pack_key": pack_key, "price_cents": price_cents, "org_id": org_id},
-            "p_request_id": f"topup:{session.id}",
+            "p_request_id": request_id,
         },
     ).execute()
+    # Gate analytics on the RPC's duplicate flag: a redelivery must not report
+    # the revenue twice.
     if not (isinstance(res.data, dict) and res.data.get("duplicate")):
         analytics_capture(
             user_id,
-            "topup_purchased",
+            event_name,
             {"pack": pack_key, "credits": credits, "usd": price_cents / 100, "target": "org", "org_id": org_id},
         )
 
@@ -509,30 +540,15 @@ def handle_subscription_updated(event, supabase) -> None:
                 user_id,
             )
         new_grant = tiers.data[0]["monthly_credits"] if tiers.data else 0
-        wallet_res = (
-            supabase.table("credit_wallets")
-            .select("id, bundle_balance, period_start")
-            .eq("owner_type", "user")
-            .eq("owner_id", user_id)
-            .execute()
+        # Stripe redelivers events; a handler that failed AFTER granting would
+        # re-grant on retry without the request-id key.
+        _topup_bundle(
+            supabase,
+            user_id,
+            new_grant,
+            {"reason": "tier_upgrade_topup", "from": prev_tier, "to": new_tier},
+            f"tier-upgrade:{event.id}",
         )
-        if wallet_res.data:
-            wallet = wallet_res.data[0]
-            top_up = _capped_topup(supabase, wallet, new_grant)
-            if top_up > 0:
-                supabase.rpc(
-                    "grant_credits",
-                    {
-                        "p_wallet_id": wallet["id"],
-                        "p_amount": top_up,
-                        "p_kind": "monthly_grant",
-                        "p_bucket": "bundle",
-                        "p_metadata": {"reason": "tier_upgrade_topup", "from": prev_tier, "to": new_tier},
-                        # Stripe redelivers events; a handler that failed AFTER
-                        # granting would re-grant on retry without this key.
-                        "p_request_id": f"tier-upgrade:{event.id}",
-                    },
-                ).execute()
 
 
 def handle_subscription_deleted(event, supabase) -> None:
@@ -677,11 +693,8 @@ def handle_invoice_paid(event, supabase) -> None:
     Any other invoice is somebody's personal subscription: no-op, the
     customer.subscription.* events already carry everything we need from it.
 
-    The grant mirrors the PACK fulfilment (`_handle_org_topup_grant`) exactly —
-    same pool wallet helper, kind='purchase', bucket='reserve', same metadata
-    shape and the same shared activation re-check — so a renewal is
-    ledger-indistinguishable from a pack purchase apart from its request id
-    (`orgtopup:{invoice.id}`, which makes Stripe's redeliveries no-ops).
+    The grant IS the pack fulfilment (`_handle_org_topup_grant`) under the
+    request id `orgtopup:{invoice.id}`, which makes Stripe's redeliveries no-ops.
 
     No try/except: anything unresolvable on a kind-tagged invoice RAISES so the
     webhook 500s and Stripe retries. Money has already changed hands here — an
@@ -715,35 +728,16 @@ def handle_invoice_paid(event, supabase) -> None:
     if not pack_res.data:
         raise RuntimeError(f"org top-up invoice {invoice.id}: no credit_packs row for recurring price {price_ids!r}")
     pack = pack_res.data[0]
-
-    from orgs.wallets import maybe_activate_org, read_or_create_org_wallet
-
-    wallet = read_or_create_org_wallet(supabase, org_id)
-    res = supabase.rpc(
-        "grant_credits",
-        {
-            "p_wallet_id": wallet["id"],
-            "p_amount": pack["credits"],
-            "p_kind": "purchase",
-            "p_bucket": "reserve",
-            "p_metadata": {"pack_key": pack["key"], "price_cents": pack["price_cents"], "org_id": org_id},
-            "p_request_id": f"orgtopup:{invoice.id}",
-        },
-    ).execute()
-    # Gate analytics on the RPC's duplicate flag, same discipline as the pack
-    # path: a redelivered invoice must not report the revenue twice.
-    if not (isinstance(res.data, dict) and res.data.get("duplicate")):
-        analytics_capture(
-            meta.get("purchased_by") or org_id,
-            "org_topup_renewed",
-            {
-                "org_id": org_id,
-                "pack": pack["key"],
-                "credits": pack["credits"],
-                "usd": pack["price_cents"] / 100,
-            },
-        )
-    maybe_activate_org(supabase, org_id, wallet["id"])
+    _handle_org_topup_grant(
+        supabase,
+        meta.get("purchased_by") or org_id,
+        org_id,
+        pack["key"],
+        pack["credits"],
+        pack["price_cents"],
+        request_id=f"orgtopup:{invoice.id}",
+        event_name="org_topup_renewed",
+    )
 
 
 # Dispatcher: maps Stripe event types to handler functions.

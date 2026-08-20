@@ -65,18 +65,12 @@ function PageTimer() {
   return null;
 }
 
-// /subscription merged into /profile (Account & Billing). The redirect keeps
-// the query string so Stripe success URLs minted before the merge
-// (?stripe_session_id=...&welcome=true) still reach the post-checkout handler.
-function SubscriptionRedirect() {
+// Query-preserving redirect: /subscription → /profile (Stripe success URLs
+// minted before the merge carry ?stripe_session_id=...&welcome=true) and
+// /organization → /teams (2026-08-16 rebrand; old invite emails).
+function RedirectKeepSearch({ to }: { to: string }) {
   const { search } = useLocation();
-  return <Navigate to={`/profile${search}`} replace />;
-}
-
-// /organization renamed to /teams (2026-08-16 teams rebrand); same shape.
-function TeamsRedirect() {
-  const { search } = useLocation();
-  return <Navigate to={`/teams${search}`} replace />;
+  return <Navigate to={to + search} replace />;
 }
 
 /**
@@ -201,7 +195,7 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route path="/subscription" element={<SubscriptionRedirect />} />
+            <Route path="/subscription" element={<RedirectKeepSearch to="/profile" />} />
             <Route
               path="/teams"
               element={
@@ -213,7 +207,7 @@ const App = () => (
             {/* Legacy path: invite emails, Stripe return URLs and bookmarks from
                 before the teams rename. Redirect keeps the query string
                 (?new=1, ?topup=success). */}
-            <Route path="/organization" element={<TeamsRedirect />} />
+            <Route path="/organization" element={<RedirectKeepSearch to="/teams" />} />
             {/* Public: invited members may not be signed in yet — the page
                 shows a sign-in gate and only calls the (auth-required) accept/
                 decline endpoints once a user session exists. */}

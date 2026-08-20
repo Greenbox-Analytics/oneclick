@@ -5,6 +5,7 @@ Per-field override merge with integrations_allowed replace-semantics.
 Lazy period rollover and the can() chokepoint are added in Tasks 4 and 5.
 """
 
+import logging
 import os
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -13,7 +14,11 @@ from dateutil.relativedelta import relativedelta
 from supabase import Client
 
 from subscriptions.models import (
+    Action,
     Caps,
+    CheckResult,
+    CreditCheckResult,
+    CreditsInfo,
     Entitlements,
     Features,
     ManagedByOrg,
@@ -237,7 +242,6 @@ class EntitlementsService:
             # not in the UI — a number never sent cannot leak.
             if credits_enabled():
                 from orgs.wallets import read_or_create_org_wallet
-                from subscriptions.models import CreditsInfo
 
                 pool = read_or_create_org_wallet(self.supabase, ctx["org_id"])
                 cap, cap_used = self._member_cap(ctx["org_id"], ctx["org_member_id"])
@@ -267,20 +271,12 @@ class EntitlementsService:
             override = self._read_override(user_id)
             caps, features, has_overrides = self._merge(tier_row, override)
 
-            # Code-level flag retirement (spec §9): under CREDITS_ENABLED the credit
-            # balance IS the AI gate; stored flags are preserved untouched as the
-            # rollback path.
-            if credits_enabled():
-                features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
-
             # captured BEFORE any admin/bypass caps patch — the wallet grant must
             # always be the tier's real grant, never a patched sentinel. Precedence
             # (Task 1, spec §1): explicit override > grandfathered > tier value.
             merged_monthly_grant = self._resolve_monthly_grant(sub, override, caps.monthly_credits)
 
             if credits_enabled():
-                from subscriptions.models import CreditsInfo
-
                 wallet = self._read_or_create_wallet(user_id)
                 wallet = self._maybe_rollover_wallet(wallet, merged_monthly_grant)
                 credits_info = CreditsInfo(
@@ -313,8 +309,6 @@ class EntitlementsService:
             try:
                 pro_tier_row = self._read_tier_entitlements("pro") or {}
             except Exception:
-                import logging
-
                 logging.exception("admin implicit-Pro: failed to read pro tier_entitlements row")
                 pro_tier_row = {}
             caps = Caps(
@@ -466,8 +460,6 @@ class EntitlementsService:
         try:
             self.supabase.table("profiles").update({"billing_context_org_id": None}).eq("id", user_id).execute()
         except Exception:
-            import logging
-
             logging.warning("failed to lazy-clear billing_context_org_id for %s", user_id)
 
     def _list_available_contexts(self, user_id: str) -> list[dict]:
@@ -515,8 +507,6 @@ class EntitlementsService:
                     }
                 )
         except Exception:
-            import logging
-
             logging.warning("failed to build availableContexts for %s", user_id)
             return [{"type": "personal"}]
         return contexts
@@ -634,8 +624,6 @@ class EntitlementsService:
                 return None
             return {**ctx, "project_id": project_id}
         except Exception:
-            import logging
-
             logging.exception("resolve_billing_org_for_project failed user_id=%s project_id=%s", user_id, project_id)
             return None
 
@@ -698,8 +686,6 @@ class EntitlementsService:
 
             return self.resolve_billing_org_for_project(user_id, resolved_project_ids.pop())
         except Exception:
-            import logging
-
             logging.exception(
                 "resolve_billing_org_for_resource failed user_id=%s contract_file_ids=%s",
                 user_id,
@@ -762,8 +748,6 @@ class EntitlementsService:
         try:
             self.supabase.rpc("recalc_user_storage", {"p_user_id": user_id}).execute()
         except Exception as e:
-            import logging
-
             logging.warning("recalc_user_storage backfill failed for %s: %s", user_id, e)
         res = self.supabase.table("usage_counters").select("*").eq("user_id", user_id).execute()
         return (
@@ -823,8 +807,6 @@ class EntitlementsService:
                 },
             ).execute()
         except Exception:
-            import logging
-
             logging.exception("rollover_wallet failed wallet=%s", wallet.get("id"))
         res = self.supabase.table("credit_wallets").select("*").eq("id", wallet["id"]).execute()
         return res.data[0] if res.data else wallet
@@ -997,8 +979,6 @@ class EntitlementsService:
         UPLOAD_BYTES derives ONLY when the caller IS the storage-counter owner
         (rule 9 — the collision fix, documented in that branch).
         """
-        from subscriptions.models import Action, CheckResult
-
         ent = self.get_for_user(user_id)
 
         def deny(reason: str) -> CheckResult:
@@ -1031,7 +1011,7 @@ class EntitlementsService:
             # when resource_project_id is None or licensing is off (the resolver
             # short-circuits) → byte-identical to today.
             if resource_project_id is not None and self.resolve_billing_org_for_project(user_id, resource_project_id):
-                cap = self._more_permissive_cap(cap, _enterprise_caps().max_works)
+                cap = -1  # enterprise counts are unlimited
             return self._check_count_cap(ctx.get("current_count", 0), cap, "registered works")
 
         if action == Action.GENERATE_SPLIT_SHEET:
@@ -1166,8 +1146,6 @@ class EntitlementsService:
 
     @staticmethod
     def _check_count_cap(current: int, cap: int, label: str):
-        from subscriptions.models import CheckResult
-
         if cap == -1 or current < cap:
             return CheckResult(allowed=True, reason=None, upgrade_required=False)
         return CheckResult(
@@ -1225,17 +1203,6 @@ class EntitlementsService:
             "Your team's storage is full. Contact support to discuss more space.",
         )
 
-    @staticmethod
-    def _more_permissive_cap(personal: int, derived: int) -> int:
-        """Return the MORE PERMISSIVE of two caps (Licensing Phase C, rule 4:
-        derivation only ever UPGRADES, never restricts). -1 means unlimited and
-        beats any finite cap; between two finite caps the larger wins. Used by
-        can()'s CREATE_WORK / UPLOAD_BYTES derivation so a link can never shrink a
-        user's existing personal headroom."""
-        if personal == -1 or derived == -1:
-            return -1
-        return max(personal, derived)
-
     # -----------------------------------------------------------------------
     # Atomic counter increments (called by Zoe / OneClick endpoints)
     # -----------------------------------------------------------------------
@@ -1249,8 +1216,6 @@ class EntitlementsService:
         counter_name must be one of: 'zoe_queries_this_period',
         'oneclick_runs_this_period', 'split_sheets_this_period'.
         """
-        import logging
-
         ALLOWED = {
             "zoe_queries_this_period",
             "oneclick_runs_this_period",
@@ -1303,10 +1268,6 @@ class EntitlementsService:
         winning over ambient context (rule 5). Both default None → no resource →
         the pre-Phase-C ambient/personal path, byte-identical.
         """
-        import logging
-
-        from subscriptions.models import CreditCheckResult
-
         if not credits_enabled():
             return CreditCheckResult(allowed=True, price=0)
         if _bypass_paywalls_enabled():
@@ -1331,18 +1292,13 @@ class EntitlementsService:
         # needs for the owner-aware dry-seat wall (rule 11). Any miss (no resource,
         # unlinked project, no seat, pending/suspended/archived org, licensing off,
         # or a mixed-project contract list) falls through to the ambient/personal
-        # flow below, byte-identical (rule 4). The resolver already swallows its
-        # own errors and returns None; this extra guard is defense-in-depth so a
-        # money chokepoint can NEVER break a request on a derivation fault.
-        try:
-            derived_ctx = self.resolve_billing_org_for_resource(
-                user_id,
-                project_id=resource_project_id,
-                contract_file_ids=resource_contract_ids,
-            )
-        except Exception:
-            logging.exception("check_credits: resource derivation failed user=%s action=%s", user_id, action)
-            derived_ctx = None
+        # flow below, byte-identical (rule 4). The resolver swallows its own
+        # errors and returns None, so a derivation fault can never break a request.
+        derived_ctx = self.resolve_billing_org_for_resource(
+            user_id,
+            project_id=resource_project_id,
+            contract_file_ids=resource_contract_ids,
+        )
         if derived_ctx is not None:
             return self._check_credits_org(user_id, action, derived_ctx)
 
@@ -1374,27 +1330,9 @@ class EntitlementsService:
         tier = sub.get("tier", "free")
 
         try:
-            prices = self._get_credit_prices()
-        except Exception:
-            logging.exception("check_credits: price read failed user=%s", user_id)
-            prices = None
-        if prices is not None and action not in prices:
-            # Config error (unseeded action), NOT an outage: deny every tier
-            # with honest copy so the gap surfaces in the first QA run instead
-            # of silently leaking COGS (paid) or lying about a retry (free).
-            logging.error("check_credits: no credit price seeded for action %r", action)
-            return CreditCheckResult(
-                allowed=False,
-                price=0,
-                reason="This action isn't set up for credits yet. Please contact support.",
-            )
-
-        try:
-            if prices is None:
-                # A price READ failure (unlike the missing-key config error
-                # above) is an outage — route into the degraded policy below.
-                raise RuntimeError("credit price read failed")
-            price = prices[action]
+            price = self._price_or_wall(action, managed_by_org=False)
+            if isinstance(price, CreditCheckResult):
+                return price
             if price <= 0:
                 # Retuned-to-0 actions (or negative drift in seeded data) are
                 # free — never wall a zero-price action behind the balance check.
@@ -1483,6 +1421,24 @@ class EntitlementsService:
                 reason="Credits are temporarily unavailable — please try again in a moment.",
             )
 
+    def _price_or_wall(self, action: str, *, managed_by_org: bool) -> int | CreditCheckResult:
+        """The seeded base price for `action`, or the config-error WALL when it
+        isn't seeded — a missing key is a config error, not an outage, so every
+        tier is denied with honest copy and the gap surfaces in the first QA run
+        instead of leaking COGS. A price READ failure propagates: callers run
+        this inside their degraded try, so an outage takes the degraded policy
+        (paid open, free/org per spec §12), never a wall."""
+        prices = self._get_credit_prices()
+        if action not in prices:
+            logging.error("check_credits: no credit price seeded for action %r", action)
+            return CreditCheckResult(
+                allowed=False,
+                price=0,
+                managed_by_org=managed_by_org,
+                reason="This action isn't set up for credits yet. Please contact support.",
+            )
+        return prices[action]
+
     def _check_credits_org(self, user_id: str, action: str, ctx: dict):
         """check_credits for an ACTIVE org billing context (Licensing Phase B, rule 8).
 
@@ -1501,32 +1457,12 @@ class EntitlementsService:
         exception: the helper lazy-creates it at zero, which correctly walls (402)
         rather than failing open (rule 8's carve-out).
         """
-        import logging
-
         from orgs.wallets import read_or_create_org_wallet
-        from subscriptions.models import CreditCheckResult
-
-        # Price lookup — IDENTICAL to the personal path (incl. the missing-action
-        # config error). A price READ failure (not a missing key) is an outage,
-        # routed into the degraded handler below.
-        try:
-            prices = self._get_credit_prices()
-        except Exception:
-            logging.exception("check_credits(org): price read failed user=%s", user_id)
-            prices = None
-        if prices is not None and action not in prices:
-            logging.error("check_credits(org): no credit price seeded for action %r", action)
-            return CreditCheckResult(
-                allowed=False,
-                price=0,
-                managed_by_org=True,
-                reason="This action isn't set up for credits yet. Please contact support.",
-            )
 
         try:
-            if prices is None:
-                raise RuntimeError("credit price read failed")
-            price = prices[action]
+            price = self._price_or_wall(action, managed_by_org=True)
+            if isinstance(price, CreditCheckResult):
+                return price
             if price <= 0:
                 # Retuned-to-0 (or drifted-negative) prices are free — never wall.
                 return CreditCheckResult(allowed=True, price=0, managed_by_org=True, reset_date=None)
@@ -1559,67 +1495,20 @@ class EntitlementsService:
                 )
             else:
                 reason = "Your organization is out of credits. Ask your admin to top up."
-            result = CreditCheckResult(
+            # No "unlink this project" CTA: a project belongs to the org because
+            # its ARTIST does, and moving an artist back out is not self-serve.
+            return CreditCheckResult(
                 allowed=False,
                 price=price,
                 managed_by_org=True,
                 cap_reached=cap_reached,
                 reason=reason,
             )
-            # The owner-aware dry-seat wall (Licensing Phase C, spec §11, rule 11)
-            # used to add a second CTA here: "unlink this project to fall back to
-            # your personal plan". That escape hatch died with org_project_links
-            # in 20260804000001 — a project now belongs to the org because its
-            # ARTIST does, and moving an artist back out is deliberately not
-            # self-serve (one-way transfer, v1: an artist whose files the team's
-            # credits paid for is a support decision with a refund question
-            # attached). Offering the CTA would point at an endpoint that 404s.
-            #
-            # `owner_can_unlink` / `project_id` are therefore never set any more;
-            # the field, the enforcement branch and the paywall components stay
-            # inert rather than being ripped out of six frontend files for a flag
-            # that is now always False.
-            # ponytail: dead plumbing, kept because a "move an artist out of a
-            # team" flow would light it straight back up. Delete both, plus
-            # enforcement.py's `if result.owner_can_unlink` branch and the
-            # ownerCanUnlink props in PaywallCard/creditWall/AddWorkWizard/
-            # OneClickDocuments/ZoeChatMessages, if that flow never ships.
-            return result
         except Exception:
             # Org-path READ ERROR → fail open uncharged, like the paid personal
             # tier (spec §12). price=0 → the grant is disabled, so the debit no-ops.
             logging.exception("check_credits(org) degraded user=%s action=%s", user_id, action)
             return CreditCheckResult(allowed=True, price=0, managed_by_org=True, degraded=True)
-
-    def _is_project_owner(self, user_id: str, project_id: str) -> bool:
-        """Lazy, DENY-PATH-ONLY project-ownership check for the owner-aware
-        dry-seat wall (Licensing Phase C, spec §11, rule 11).
-
-        Mirrors the projects service's owner predicate — the SAME one Task 2's
-        `orgs.projects._require_project_owner` reuses (`projects.service.
-        get_user_role`) — but SYNCHRONOUSLY: `check_credits`/`_check_credits_org`
-        are sync chokepoints while `get_user_role` is `async def`. That async
-        wrapper does only a synchronous Supabase read internally, so this is a
-        faithful mirror of the SAME `project_members` (project_id, user_id) →
-        role read, not a divergent reimplementation of the authorization logic.
-
-        One indexed read; NEVER raises (a failed read logs and returns False, so
-        the wall simply omits the owner CTA rather than breaking the 402).
-        """
-        try:
-            row = self._first_row(
-                self.supabase.table("project_members")
-                .select("role")
-                .eq("project_id", project_id)
-                .eq("user_id", user_id)
-                .execute()
-            )
-            return bool(row) and row.get("role") == "owner"
-        except Exception:
-            import logging
-
-            logging.exception("owner-check failed user_id=%s project_id=%s", user_id, project_id)
-            return False
 
     def debit_for_action(self, user_id: str, grant) -> None:
         """Debit a CreditGrant after the action succeeded. Best-effort, never raises.
@@ -1642,8 +1531,6 @@ class EntitlementsService:
         sweep creates pending InvoiceItems; invoice.created attaches
         stragglers to the draft renewal invoice. Never call Stripe here.
         """
-        import logging
-
         from utils.llm.tracking import credits_for_llm_usage, llm_usage_snapshot
 
         if grant is None or not grant.enabled or grant.price <= 0:
@@ -1858,9 +1745,6 @@ class EntitlementsService:
         Never raises: an unreadable membership row degrades to uncapped, matching
         the fail-open posture of every other read on this path.
         """
-        import logging
-        from datetime import UTC, datetime
-
         try:
             member = self._first_row(
                 self.supabase.table("org_members")
@@ -1938,8 +1822,6 @@ class EntitlementsService:
 
     def get_credit_usage_safe(self, user_id: str) -> dict:
         """Never-raises wrapper for the endpoint."""
-        import logging
-
         try:
             return self.get_credit_usage(user_id)
         except Exception:
@@ -2006,10 +1888,6 @@ class EntitlementsService:
                     ovr = None
             usage_row = usage_by_uid.get(uid, {})
             caps, features, has_overrides = self._merge(tier_row, ovr)
-            # Code-level flag retirement (spec §9) — keep in lockstep with
-            # get_for_user so bulk resolution can never disagree with it.
-            if credits_enabled():
-                features = replace(features, zoe_enabled=True, oneclick_enabled=True, registry_enabled=True)
             usage = Usage(
                 total_storage_bytes=usage_row.get("total_storage_bytes", 0),
                 split_sheets_this_period=usage_row.get("split_sheets_this_period", 0),
@@ -2058,8 +1936,6 @@ class EntitlementsService:
         try:
             return self.get_for_user(user_id, is_admin=is_admin)
         except Exception:
-            import logging
-
             logging.exception("entitlements_degraded user_id=%s", user_id)
             now = datetime.now(UTC)
             return Entitlements(

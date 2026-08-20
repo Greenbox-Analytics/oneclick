@@ -145,11 +145,9 @@ async def import_dropbox_file(token: str, supabase: Client, user_id: str, data: 
     file_name = metadata["name"]
     mime = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
 
-    # Gate -> Storage write -> project_files insert -> orphan cleanup on
-    # failure, shared with the Google Drive import path. owner_user_id is
-    # omitted: the router only verified project-member role, not that
-    # user_id is the project's storage-counter owner, so the pre-check is
-    # skipped and the DB trigger (-> StorageCapExceededError) is the gate.
+    # Storage write -> project_files insert -> orphan cleanup on failure,
+    # shared with the Google Drive import path. The DB storage trigger
+    # (-> StorageCapExceededError) is the cap gate.
     file_row = store_imported_file(
         supabase,
         user_id,
@@ -198,6 +196,20 @@ async def create_share_link(token: str, path: str) -> str:
         return response.json()["url"]
 
 
+def _find_export(supabase: Client, user_id: str, project_file_id: str) -> dict | None:
+    """The caller's own to-Dropbox export row for this file, if any."""
+    res = (
+        supabase.table("drive_sync_mappings")
+        .select("id, share_url, drive_file_id")
+        .eq("user_id", user_id)
+        .eq("project_file_id", project_file_id)
+        .eq("provider", "dropbox")
+        .eq("sync_direction", "to_drive")
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
 async def _resolve_existing_export(token: str, supabase: Client, row: dict) -> dict:
     """Return the caller's existing Dropbox export, minting the share link if
     the row's upload succeeded but the link was never created (either the
@@ -228,17 +240,9 @@ async def export_to_dropbox(token: str, supabase: Client, user_id: str, data: di
     """
     from projects.service import get_user_role
 
-    existing = (
-        supabase.table("drive_sync_mappings")
-        .select("id, share_url, drive_file_id")
-        .eq("user_id", user_id)
-        .eq("project_file_id", data["project_file_id"])
-        .eq("provider", "dropbox")
-        .eq("sync_direction", "to_drive")
-        .execute()
-    )
-    if existing.data:
-        return await _resolve_existing_export(token, supabase, existing.data[0])
+    existing = _find_export(supabase, user_id, data["project_file_id"])
+    if existing:
+        return await _resolve_existing_export(token, supabase, existing)
 
     pf = supabase.table("project_files").select("*").eq("id", data["project_file_id"]).maybe_single().execute()
     if not pf or not pf.data:
@@ -301,17 +305,9 @@ async def export_to_dropbox(token: str, supabase: Client, user_id: str, data: di
             # (user, project_file). Hand back its link instead of erroring —
             # the file this racer just uploaded becomes an untracked duplicate
             # in Dropbox (autorenamed), which is an acceptable cost of the race.
-            after_race = (
-                supabase.table("drive_sync_mappings")
-                .select("id, share_url, drive_file_id")
-                .eq("user_id", user_id)
-                .eq("project_file_id", data["project_file_id"])
-                .eq("provider", "dropbox")
-                .eq("sync_direction", "to_drive")
-                .execute()
-            )
-            if after_race.data:
-                return await _resolve_existing_export(token, supabase, after_race.data[0])
+            after_race = _find_export(supabase, user_id, data["project_file_id"])
+            if after_race:
+                return await _resolve_existing_export(token, supabase, after_race)
         raise
 
     share_url = await create_share_link(token, dropbox_file["id"])

@@ -1,10 +1,6 @@
-import { useState } from "react";
-import { toast } from "sonner";
 import { IntegrationCard } from "./IntegrationCard";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import type { IntegrationProvider, ConnectionStatus } from "@/types/integrations";
-import { useIntegrationAllowed } from "@/hooks/useEntitlements";
-import { PaywallModal } from "@/components/paywall/PaywallModal";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
 // Map backend provider key to the analytics tool id used in the registry.
@@ -19,7 +15,6 @@ type IntegrationItem = {
   description: string;
   icon: React.ReactNode;
   color: string;
-  comingSoon?: boolean;
 };
 
 const INTEGRATIONS: IntegrationItem[] = [
@@ -46,37 +41,13 @@ const INTEGRATIONS: IntegrationItem[] = [
 export function IntegrationHub() {
   const { connections, connect, disconnect, isConnecting } = useIntegrations();
   const { captureIntegrationConnectStarted } = useAnalytics();
-  const [paywallOpen, setPaywallOpen] = useState(false);
-  const [paywallReason, setPaywallReason] = useState<string | undefined>(undefined);
-
-  const integrationAllowed: Record<string, boolean> = {
-    google_drive: true, // Drive is always allowed; no paywall
-    dropbox: true, // Same — free on every tier
-  };
-
-  const integrationLabel: Record<string, string> = {};
 
   const getStatus = (provider: IntegrationProvider): ConnectionStatus => {
     const conn = connections.find((c) => c.provider === provider);
     return conn?.status || "disconnected";
   };
 
-  const isConnected = (provider: IntegrationProvider) => getStatus(provider) === "active";
-
-  const handleConnect = (integration: IntegrationItem) => {
-    if (integration.comingSoon) {
-      toast.info(`${integration.name} integration is coming soon!`, {
-        description: "We're working on it — stay tuned.",
-      });
-      return;
-    }
-    const provider = integration.provider;
-    if (!integrationAllowed[provider]) {
-      const label = integrationLabel[provider] ?? provider;
-      setPaywallReason(`${label} integration is a Pro feature. Upgrade to Pro to connect it.`);
-      setPaywallOpen(true);
-      return;
-    }
+  const handleConnect = (provider: IntegrationProvider) => {
     captureIntegrationConnectStarted(PROVIDER_TO_TOOL[provider]);
     connect(provider);
   };
@@ -99,18 +70,12 @@ export function IntegrationHub() {
             icon={integration.icon}
             color={integration.color}
             status={getStatus(integration.provider)}
-            onConnect={() => handleConnect(integration)}
+            onConnect={() => handleConnect(integration.provider)}
             onDisconnect={() => disconnect(integration.provider)}
             isConnecting={isConnecting}
           />
         ))}
       </div>
-
-      <PaywallModal
-        open={paywallOpen}
-        onClose={() => setPaywallOpen(false)}
-        reason={paywallReason}
-      />
     </div>
   );
 }

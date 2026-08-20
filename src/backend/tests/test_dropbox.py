@@ -38,7 +38,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from integrations import storage_import
 from integrations.dropbox import service as dbx
 from integrations.dropbox.service import FileTooLargeError
 from integrations.google_drive import service as gdrive
@@ -337,36 +336,6 @@ class TestImportDedup:
         mapping_insert_payload = mappings.insert.call_args_list[0][0][0]
         assert mapping_insert_payload["provider"] == "dropbox"
         assert mapping_insert_payload["sync_direction"] == "from_drive"
-
-    def test_dropbox_import_does_not_precheck_gate_relies_on_trigger(self):
-        """The router only verifies project-member role, not that user_id is
-        the project's storage-counter owner (that's an ARTIST-ownership
-        question a role check can't answer) — so import_dropbox_file must NOT
-        call gated_upload at all. Gating the acting user's own wallet here
-        would false-402 an editor importing into someone else's project.
-        The DB trigger (-> StorageCapExceededError) is the real enforcement;
-        see TestStorageImportGate in test_storage_import.py for the gate's
-        own owner_user_id contract."""
-        mappings = RecordingBuilder()
-        mappings.execute.return_value = MagicMock(data=[])
-        pf = MockQueryBuilder()
-        pf.execute.return_value = MagicMock(data=[{"id": "pf-new"}])
-        sb = MagicMock()
-        sb.table.side_effect = lambda name: {"drive_sync_mappings": mappings, "project_files": pf}.get(
-            name, MockQueryBuilder()
-        )
-        sb.storage.from_.return_value.get_public_url = MagicMock(return_value="https://example.com/public")
-
-        with (
-            patch.object(dbx, "get_dropbox_metadata", new=AsyncMock(return_value={"name": "deal.pdf", "size": 100})),
-            patch.object(dbx, "download_dropbox_file", new=AsyncMock(return_value=b"content")),
-            patch.object(storage_import, "gated_upload") as mock_gate,
-        ):
-            asyncio.run(
-                dbx.import_dropbox_file("tok", sb, TEST_USER_ID, {"project_id": "p1", "dropbox_file_id": "id:a1"})
-            )
-
-        mock_gate.assert_not_called()
 
     def test_dropbox_import_oversized_metadata_raises_before_download(self, monkeypatch):
         """No ceiling previously existed on import at all — Dropbox metadata

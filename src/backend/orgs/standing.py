@@ -219,7 +219,7 @@ def _notify_standing(db, org: dict, kind: str) -> None:
 
                 recipients = [e for e in (_member_email(db, a) for a in admins) if e]
                 if recipients:
-                    send_standing_email(recipients, org_name, kind)
+                    send_standing_email(recipients, org_name, title, message)
             except Exception:
                 logger.exception("_notify_standing: email send failed org=%s kind=%s", org["id"], kind)
 

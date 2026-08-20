@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { apiFetch, API_URL } from "@/lib/apiFetch";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -6,7 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
  * Create a Stripe Checkout Session and return the URL to redirect the user to.
  * Pattern:
  *   const { mutateAsync: createCheckout } = useCreateCheckoutSession();
- *   const url = await createCheckout({ plan: "monthly" });
+ *   const url = await createCheckout({ plan: "basic_monthly" });
  *   window.location.href = url;
  *
  * Optional `cancel_path` / `success_path` let callers route returns to a
@@ -14,8 +15,6 @@ import { useAuth } from "@/contexts/AuthContext";
  *
  * `plan` values map to Stripe prices server-side (billing_router.py
  * PLAN_TO_ENV): <tier>_<period>, i.e. basic = the $30 plan, pro = the $50 one.
- * The backend still accepts the pre-rename aliases ("monthly"/"annual" and
- * "pro_max_*") so older checkout links keep working.
  */
 export type CheckoutPlan = "basic_monthly" | "basic_annual" | "pro_monthly" | "pro_annual";
 
@@ -52,6 +51,24 @@ export function useCreatePortalSession() {
       return (res as { url: string }).url;
     },
   });
+}
+
+/**
+ * "Manage subscription" click handler: opens the Stripe Customer Portal, or
+ * toasts when the user has no Stripe customer on file (the endpoint 404s
+ * without a stripe_customer_id).
+ */
+export function useOpenBillingPortal() {
+  const { mutateAsync: createPortal, isPending } = useCreatePortalSession();
+  const openPortal = async () => {
+    try {
+      const url = await createPortal();
+      window.location.href = url;
+    } catch {
+      toast.error("No billing portal on file. For billing, contact support.");
+    }
+  };
+  return { openPortal, isPending };
 }
 
 /**

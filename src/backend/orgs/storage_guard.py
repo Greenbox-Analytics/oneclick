@@ -71,27 +71,23 @@ def artist_subtree_bytes(db, artist_id: str) -> int:
     (20260803000003_team_storage.sql) but scoped to ONE artist instead of a
     whole team, and read-only — sizing a transfer before it happens, not
     repairing a cached total."""
-    project_ids = [
-        p["id"]
-        for p in (db.table("projects").select("id").eq("artist_id", artist_id).execute().data or [])
-        if p.get("id")
-    ]
-    pf_total = 0
-    if project_ids:
-        rows = db.table("project_files").select("file_size").in_("project_id", project_ids).execute().data or []
-        pf_total = sum(r.get("file_size") or 0 for r in rows)
-
-    folder_ids = [
-        f["id"]
-        for f in (db.table("audio_folders").select("id").eq("artist_id", artist_id).execute().data or [])
-        if f.get("id")
-    ]
-    af_total = 0
-    if folder_ids:
-        rows = db.table("audio_files").select("file_size").in_("folder_id", folder_ids).execute().data or []
-        af_total = sum(r.get("file_size") or 0 for r in rows)
-
-    return pf_total + af_total
+    pf_rows = (
+        db.table("project_files")
+        .select("file_size, projects!inner(artist_id)")
+        .eq("projects.artist_id", artist_id)
+        .execute()
+        .data
+        or []
+    )
+    af_rows = (
+        db.table("audio_files")
+        .select("file_size, audio_folders!inner(artist_id)")
+        .eq("audio_folders.artist_id", artist_id)
+        .execute()
+        .data
+        or []
+    )
+    return sum(r.get("file_size") or 0 for r in pf_rows + af_rows)
 
 
 def bill_team_storage_overage(sb) -> int:
@@ -131,6 +127,14 @@ def bill_team_storage_overage(sb) -> int:
     return billed
 
 
+def _stamp(sb, owner_id: str, period_start: str) -> None:
+    """Mark this owner-period handled — stamping IS the once-per-period
+    idempotency for _bill_one_owner."""
+    sb.table("subscriptions").update({"last_team_storage_invoiced_period": period_start}).eq(
+        "user_id", owner_id
+    ).execute()
+
+
 def _bill_one_owner(sb, owner_id: str) -> bool:
     """Bill (or stamp-skip) one owner's period. Returns True iff an
     InvoiceItem was actually created for them this call."""
@@ -166,12 +170,9 @@ def _bill_one_owner(sb, owner_id: str) -> bool:
 
     overage_gb = math.ceil(max(0, used - pool) / 2**30)
     if overage_gb <= 0:
-        # Zero overage still stamps the period — stamping IS the idempotency
-        # (spec AC); without it a fully-covered owner gets re-evaluated by
-        # every single sweep, forever.
-        sb.table("subscriptions").update({"last_team_storage_invoiced_period": period_start}).eq(
-            "user_id", owner_id
-        ).execute()
+        # Zero overage still stamps the period — without it a fully-covered
+        # owner gets re-evaluated by every single sweep, forever.
+        _stamp(sb, owner_id, period_start)
         return False
 
     customer = sub_row.get("stripe_customer_id")
@@ -184,9 +185,7 @@ def _bill_one_owner(sb, owner_id: str) -> bool:
             "(admin?) — stamping without billing",
             owner_id,
         )
-        sb.table("subscriptions").update({"last_team_storage_invoiced_period": period_start}).eq(
-            "user_id", owner_id
-        ).execute()
+        _stamp(sb, owner_id, period_start)
         return False
 
     amount_cents = round(overage_gb * float(os.getenv("TEAM_STORAGE_OVERAGE_USD_PER_GB", "0.025")) * 100)
@@ -217,9 +216,7 @@ def _bill_one_owner(sb, owner_id: str) -> bool:
         )
         return False
 
-    sb.table("subscriptions").update({"last_team_storage_invoiced_period": period_start}).eq(
-        "user_id", owner_id
-    ).execute()
+    _stamp(sb, owner_id, period_start)
 
     try:
         from analytics import capture as analytics_capture

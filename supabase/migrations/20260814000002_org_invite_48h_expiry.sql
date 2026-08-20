@@ -21,24 +21,9 @@ BEGIN;
 ALTER TABLE pending_org_invites
   ALTER COLUMN expires_at SET DEFAULT (now() + interval '48 hours');
 
--- The original CHECK is inline and unnamed, so Postgres auto-named it — and a
--- restored or hand-edited DB may carry a different generated name. Guessing
--- the name would silently no-op and leave a CHECK that rejects 'expired',
--- surfacing only at the first sweep. Drop every status CHECK via the catalog,
--- then re-add one with a name we control (same approach as
--- 20260713000002's tier CHECK).
-DO $$
-DECLARE c RECORD;
-BEGIN
-  FOR c IN
-    SELECT conname FROM pg_constraint
-    WHERE conrelid = 'public.pending_org_invites'::regclass
-      AND contype = 'c'
-      AND pg_get_constraintdef(oid) ILIKE '%status%'
-  LOOP
-    EXECUTE format('ALTER TABLE public.pending_org_invites DROP CONSTRAINT %I', c.conname);
-  END LOOP;
-END $$;
+-- The original CHECK (20260721000001) is inline on the status column, so it
+-- carries Postgres's auto-generated name. Re-add it under the same name.
+ALTER TABLE pending_org_invites DROP CONSTRAINT IF EXISTS pending_org_invites_status_check;
 
 ALTER TABLE pending_org_invites ADD CONSTRAINT pending_org_invites_status_check
   CHECK (status IN ('pending', 'accepted', 'declined', 'expired'));
@@ -49,15 +34,3 @@ CREATE INDEX IF NOT EXISTS idx_pending_org_invites_expiring
   ON pending_org_invites (expires_at) WHERE status = 'pending';
 
 COMMIT;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'pending_org_invites_status_check'
-      AND pg_get_constraintdef(oid) ILIKE '%expired%'
-  ) THEN
-    RAISE EXCEPTION 'pending_org_invites status CHECK does not allow expired';
-  END IF;
-  RAISE NOTICE 'org invite 48h expiry applied';
-END $$;

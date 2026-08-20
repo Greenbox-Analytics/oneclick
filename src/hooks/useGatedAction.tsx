@@ -3,7 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/apiFetch";
 import { PaywallModal } from "@/components/paywall/PaywallModal";
-import { parseCreditWallDetail } from "@/components/paywall/creditWall";
+import { parseCreditWallDetail, type CreditWallInfo } from "@/components/paywall/creditWall";
 import type { GatedFeature, CountableResource } from "@/hooks/useEntitlements";
 
 interface UseGatedActionOptions<TData, TVars, TContext> {
@@ -46,12 +46,7 @@ export function useGatedAction<TData, TVars, TContext = unknown>(
   // gated_credits) — threaded through to the modal so it can swap the
   // upgrade CTA for a "Request credits" one instead of losing that signal
   // down to just `reason`'s plain text.
-  const [paywallDetail, setPaywallDetail] = useState<{
-    isCreditWall?: boolean;
-    managedByOrg?: boolean;
-    capReached?: boolean;
-    requestUrl?: string;
-  }>({});
+  const [paywallDetail, setPaywallDetail] = useState<Partial<CreditWallInfo>>({});
 
   const mutation = useMutation<TData, Error, TVars, TContext>({
     mutationFn: opts.mutationFn,

@@ -12,7 +12,7 @@ import { cn, fmtDay } from "@/lib/utils";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useCreditUsage, type CreditAction } from "@/hooks/useCreditUsage";
 import { TopUpCreditsDialog } from "@/components/billing/TopUpCreditsDialog";
-import { creditStanding, POOL_ONLY_LABEL } from "@/lib/credits";
+import { creditStanding, orgContext, POOL_ONLY_LABEL } from "@/lib/credits";
 
 // Popover labels are activity phrasing ("runs"), unlike CreditsUsageCard's
 // per-tool rows, which quote the base rate — hence not shared.
@@ -34,8 +34,7 @@ export function HeaderCreditsTicker() {
   const credits = ent?.credits;
   if (!credits) return null; // credits off / still loading
 
-  const managedByOrg =
-    ent?.billingContext?.type === "org" ? ent.billingContext : credits.managedByOrg;
+  const managedByOrg = orgContext(ent);
   const isOrgAdmin = managedByOrg?.role === "admin";
 
   // null = an uncapped org member: no cap of their own, and the pool balance is

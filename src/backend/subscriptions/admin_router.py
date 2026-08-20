@@ -55,15 +55,6 @@ class CreditAdjustPayload(BaseModel):
     idempotency_key: str = Field(min_length=1)
 
 
-class OrgPoolGrantPayload(BaseModel):
-    amount: int = Field(gt=0, le=1_000_000)
-    reason: str
-    # REQUIRED, mirroring CreditAdjustPayload: an org grant is big enough that
-    # "each call is distinct" (the user-grant default) is the wrong failure
-    # mode for a double-submit. The dialog mints a UUID per open.
-    idempotency_key: str = Field(min_length=1)
-
-
 class CreateEnterpriseOrgRequest(BaseModel):
     """POST /admin/orgs body — creates an ENTERPRISE org for an EXISTING
     customer account. See admin_service.create_enterprise_org for why
@@ -330,7 +321,7 @@ async def admin_grant_credits(
 @router.post("/orgs/{org_id}/pool/grant")
 async def admin_grant_org_credits(
     org_id: str,
-    body: OrgPoolGrantPayload,
+    body: CreditAdjustPayload,
     admin_email: str = Depends(require_admin),
 ):
     """Comped-pack grant into an org pool — reserve bucket, counts toward

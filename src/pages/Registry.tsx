@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { Button } from "@/components/ui/button";
-import { BookOpen } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";

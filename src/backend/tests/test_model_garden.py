@@ -1,13 +1,10 @@
-"""Model garden: YAML contents, env precedence, mtime reload, priced models."""
-
-import os
+"""Model garden: YAML contents, env precedence, priced models."""
 
 import pytest
 import yaml
 
 from subscriptions.ai_pricing import MODEL_RATES
-from utils.llm import model_garden as mg
-from utils.llm.model_garden import GARDEN_PATH, model_for, resolved_slots
+from utils.llm.model_garden import GARDEN_PATH, model_for
 
 
 @pytest.fixture
@@ -22,7 +19,7 @@ def no_model_env(monkeypatch):
 
 def test_yaml_values_preserve_todays_models(no_model_env):
     """Regression guard: the garden must not silently move a tool to a new model."""
-    assert resolved_slots() == {
+    assert {slot: model_for(slot) for slot in yaml.safe_load(GARDEN_PATH.read_text())} == {
         "zoe": "gpt-5-mini",
         "zoe_routing": "gpt-5-mini",
         "zoe_citations": "gpt-5-mini",
@@ -50,19 +47,6 @@ def test_legacy_env_still_honored(no_model_env, monkeypatch):
     assert model_for("zoe") == "gpt-5.4-mini"
     assert model_for("zoe_routing") == "gpt-5.4-mini"
     assert model_for("oneclick_columns") == "gpt-5.4-mini"  # no legacy_env — its own YAML value
-
-
-def test_edited_yaml_is_picked_up_without_restart(no_model_env, monkeypatch, tmp_path):
-    """The whole point of the YAML: swap a model, next call uses it."""
-    garden = tmp_path / "model_garden.yaml"
-    garden.write_text("zoe:\n  model: gpt-5-mini\n")
-    monkeypatch.setattr(mg, "GARDEN_PATH", garden)
-    monkeypatch.setattr(mg, "_cached", None)
-    assert model_for("zoe") == "gpt-5-mini"
-
-    garden.write_text("zoe:\n  model: gpt-5.4-mini\n")
-    os.utime(garden, (0, 0))  # force a distinct mtime — don't rely on filesystem clock resolution
-    assert model_for("zoe") == "gpt-5.4-mini"
 
 
 def test_unpriced_model_is_used_not_rejected(no_model_env, monkeypatch):

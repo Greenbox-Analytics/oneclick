@@ -71,6 +71,25 @@ export function StatTile({
   );
 }
 
+/** Uppercase section heading inside a drawer tab. */
+export function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
+/** One "label — value" row in a drawer section. */
+export function KeyValue({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-dashed border-border py-1.5 text-[13px] last:border-b-0">
+      <span>{k}</span>
+      <b className="font-mono tabular-nums">{v}</b>
+    </div>
+  );
+}
+
 /** Card header used across the console's panels: title + optional subtitle + slot. */
 export function PanelHeader({
   title,

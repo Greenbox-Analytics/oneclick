@@ -40,20 +40,14 @@ async def create_checkout_session(
     email: str = Depends(get_current_user_email),
 ):
     """Create a Stripe Checkout session for the requested plan; return redirect URL."""
-    # Canonical plan params are <tier>_<period>; the bare "monthly"/"annual" and
-    # the "pro_max_*" pair are kept as aliases so checkout links minted before the
-    # tier-key rename still resolve. Env var names are unchanged on purpose (they
-    # are deploy secrets): STRIPE_PRICE_* is the basic plan, PRO_MAX is the pro one.
+    # Plan params are <tier>_<period> (the FE's CheckoutPlan type). Env var
+    # names are unchanged on purpose (they are deploy secrets): STRIPE_PRICE_*
+    # is the basic plan, PRO_MAX is the pro one.
     PLAN_TO_ENV = {
         "basic_monthly": "STRIPE_PRICE_MONTHLY",
         "basic_annual": "STRIPE_PRICE_ANNUAL",
         "pro_monthly": "STRIPE_PRICE_PRO_MAX_MONTHLY",
         "pro_annual": "STRIPE_PRICE_PRO_MAX_ANNUAL",
-        # legacy aliases
-        "monthly": "STRIPE_PRICE_MONTHLY",
-        "annual": "STRIPE_PRICE_ANNUAL",
-        "pro_max_monthly": "STRIPE_PRICE_PRO_MAX_MONTHLY",
-        "pro_max_annual": "STRIPE_PRICE_PRO_MAX_ANNUAL",
     }
     env_key = PLAN_TO_ENV.get(body.plan)
     if env_key is None:

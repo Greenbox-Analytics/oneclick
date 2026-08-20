@@ -42,29 +42,27 @@ export function PageHeader({
   const isMobile = useIsMobile();
   const { user } = useAuth();
 
-  // House icon next to the bell — one-click route to the landing page
-  // (replaces the avatar-dropdown "View landing page" hop).
-  const homeButton = user ? (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={() => navigate("/")}
-      aria-label="Home page"
-      title="Landing page"
-      className="text-muted-foreground hover:text-foreground"
-    >
-      <Home className="w-4 h-4" />
-    </Button>
+  // Signed-in globals, in order: context → credits → home → docs → bell.
+  // (Home is a one-click route to the landing page; the context switcher
+  // renders nothing unless the user has more than one context.)
+  const globalActions = user ? (
+    <>
+      <HeaderContextSwitcher />
+      <HeaderCreditsTicker />
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => navigate("/")}
+        aria-label="Home page"
+        title="Landing page"
+        className="text-muted-foreground hover:text-foreground"
+      >
+        <Home className="w-4 h-4" />
+      </Button>
+      <HeaderDocsButton />
+      <NotificationBell />
+    </>
   ) : null;
-
-  const creditsTicker = user ? <HeaderCreditsTicker /> : null;
-
-  // Renders nothing unless the user actually has more than one context.
-  const contextSwitcher = user ? <HeaderContextSwitcher /> : null;
-
-  const docsButton = user ? <HeaderDocsButton /> : null;
-
-  const notificationBell = user ? <NotificationBell /> : null;
 
   // A string `backTo` is treated as a *fallback* route, not a forced
   // destination: Back returns the user to the page they actually came from,
@@ -100,14 +98,10 @@ export function PageHeader({
               </div>
             ) : null}
           </div>
-          {(actions || homeButton || notificationBell || userMenu) && (
+          {(actions || user || userMenu) && (
             <div className="flex items-center gap-1 shrink-0">
               {actions}
-              {contextSwitcher}
-              {creditsTicker}
-              {homeButton}
-              {docsButton}
-              {notificationBell}
+              {globalActions}
               {userMenu}
             </div>
           )}
@@ -151,14 +145,10 @@ export function PageHeader({
             </div>
           )}
         </div>
-        {(actions || homeButton || notificationBell || userMenu) && (
+        {(actions || user || userMenu) && (
           <div className="flex items-center gap-2 shrink-0">
             {actions}
-            {contextSwitcher}
-            {creditsTicker}
-            {homeButton}
-            {docsButton}
-            {notificationBell}
+            {globalActions}
             {userMenu}
           </div>
         )}

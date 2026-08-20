@@ -162,28 +162,6 @@ class TestSeatCreditWall:
         assert "organization" in detail["reason"].lower()
 
 
-@pytest.fixture()
-def owner_seat_dry_service(monkeypatch):
-    """Org (seat) billing context on a project the caller OWNS: dry seat →
-    owner-aware wall (ownerCanUnlink + projectId co-occurring with managedByOrg)."""
-    svc = MagicMock()
-    svc.check_credits.return_value = CreditCheckResult(
-        allowed=False,
-        price=3,
-        managed_by_org=True,
-        owner_can_unlink=True,
-        project_id=PROJECT_ID,
-        reason=(
-            "You've used the credits your organization allocated. Ask your admin for more. "
-            "Or unlink this project in its settings to use your own plan here."
-        ),
-    )
-    svc.can.return_value = CheckResult(allowed=True, reason=None, upgrade_required=False)
-    monkeypatch.setattr(enforcement, "_service", lambda: svc)
-    monkeypatch.setenv("CREDITS_ENABLED", "true")
-    return svc
-
-
 class TestResourceDerivationWiring:
     """Each metered endpoint threads the resource ctx it already holds into
     check_credits (Phase C, rule 5) — NO new queries at the call site."""
@@ -201,17 +179,6 @@ class TestResourceDerivationWiring:
             resource_project_id=None,
             resource_contract_ids=["c1", "c2"],
         )
-
-    def test_owner_dry_seat_wall_surfaces_unlink_through_zoe(self, client, owner_seat_dry_service):
-        with patch("main.user_can_access_file", new=AsyncMock(return_value=True)):
-            resp = client.post("/zoe/ask-stream", json={"query": "what is my split?", "contract_ids": ["c1"]})
-        assert resp.status_code == 402
-        detail = resp.json()["detail"]
-        assert detail["ownerCanUnlink"] is True
-        assert detail["projectId"] == PROJECT_ID
-        # Co-occurs with the managed-by-org buy/request affordance.
-        assert detail["managedByOrg"] is True
-        assert detail["requestUrl"] == "/teams"
 
 
 class TestCreditWalls:
@@ -873,69 +840,6 @@ class TestRegistryParseCharge:
         _, grant = ent.debit_for_action.call_args.args
         assert grant.enabled is True
         assert grant.price > 0
-
-
-# ---------------------------------------------------------------------------
-# get_or_parse on_miss semantics (unit)
-# ---------------------------------------------------------------------------
-
-
-class TestGetOrParseOnMiss:
-    @staticmethod
-    def _parser(result=None):
-        parser = MagicMock()
-        parser.parse_contract.return_value = result or MagicMock()
-        return parser
-
-    def test_fires_on_live_parse_without_db(self):
-        from utils.contract_parsing.cache import get_or_parse
-
-        fired = []
-        parser = self._parser()
-        get_or_parse(None, lambda: "contract text", parser=parser, on_miss=lambda: fired.append(1))
-        assert fired == [1]
-        parser.parse_contract.assert_called_once()
-
-    def test_fires_on_bypass_even_with_cached_entry(self):
-        from utils.contract_parsing.cache import get_or_parse
-
-        fired = []
-        db = MagicMock()
-        get_or_parse(db, lambda: "contract text", parser=self._parser(), bypass=True, on_miss=lambda: fired.append(1))
-        assert fired == [1]
-
-    def test_not_fired_on_cache_hit(self):
-        from utils.contract_parsing.cache import get_or_parse
-
-        cached_payload = {
-            "parties": [],
-            "works": [],
-            "royalty_shares": [],
-            "contract_summary": None,
-            "default_basis": None,
-        }
-        b = MockQueryBuilder()
-        b.execute.return_value = MagicMock(data={"parsed": cached_payload})
-        db = MagicMock()
-        db.table.side_effect = lambda name: b
-
-        fired = []
-        parser = self._parser()
-        get_or_parse(db, lambda: "contract text", parser=parser, on_miss=lambda: fired.append(1))
-        assert fired == []
-        parser.parse_contract.assert_not_called()
-
-    def test_observer_exception_never_breaks_the_parse(self):
-        from utils.contract_parsing.cache import get_or_parse
-
-        sentinel = MagicMock()
-        parser = self._parser(result=sentinel)
-
-        def _explodes():
-            raise RuntimeError("observer bug")
-
-        out = get_or_parse(None, lambda: "contract text", parser=parser, on_miss=_explodes)
-        assert out is sentinel
 
 
 # ---------------------------------------------------------------------------

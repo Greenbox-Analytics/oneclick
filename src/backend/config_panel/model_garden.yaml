@@ -5,8 +5,7 @@
 # Swap without a deploy:   set MODEL_<SLOT>, e.g. MODEL_ZOE=gpt-5.4-mini
 # Precedence:              MODEL_<SLOT>  >  legacy_env  >  model
 #
-# Re-read on every call (by file mtime), so editing this file locally takes effect
-# on the next request — no restart.
+# Loaded once per process — editing this file locally needs a backend restart.
 #
 # Every model needs a rate in subscriptions/ai_pricing.py, or ai_usage_log.cost_usd
 # goes NULL for its calls. tests/test_model_garden.py enforces that for the values here.

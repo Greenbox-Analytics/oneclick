@@ -56,7 +56,7 @@ import {
   type ExternalEvent,
 } from "@/hooks/useCalendarTasks";
 import { useBoards } from "@/hooks/useBoards";
-import { useMyOrgs } from "@/hooks/useOrgs";
+import { useMyOrgs, liveOrgs } from "@/hooks/useOrgs";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 import { TaskDetailPanel } from "./TaskDetailPanel";
 import { TEAM_COLORS, PERSONAL_COLOR } from "./labelColors";
@@ -134,12 +134,9 @@ export function CalendarView() {
   const { columns, createTask } = useBoards();
   const { data: allOrgs } = useMyOrgs();
   // Same filter BoardSwitcher uses. Colours are keyed on this list's ORDER, so
-  // including orgs whose boards can never appear (pending / archived / lapsed)
-  // would shift a live team's swatch whenever an unrelated org changed state.
-  const teams = useMemo(
-    () => (allOrgs ?? []).filter((o) => o.my_status === "active" && !o.archived_at && o.status !== "lapsed"),
-    [allOrgs],
-  );
+  // including orgs whose boards can never appear would shift a live team's
+  // swatch whenever an unrelated org changed state.
+  const teams = useMemo(() => liveOrgs(allOrgs), [allOrgs]);
 
   // Colour by team, keyed on the team list (not a hash of the task) so two teams can never
   // land on the same swatch and a team keeps its colour as you page through months.

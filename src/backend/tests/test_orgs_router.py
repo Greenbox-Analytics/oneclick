@@ -271,17 +271,15 @@ def _preview_invite(**overrides):
 
 
 def test_get_org_invite_preview_ok(client, mock_supabase):
-    """The claim page can name what the user is joining. Frontend field names:
-    orgName / inviterName. The body is DELIBERATELY minimal — a bare token
-    holder learns the org name and inviter (both already in the invite email)
-    and nothing else: no invitee email, role, or expiry."""
+    """The claim page can name what the user is joining. The body is
+    DELIBERATELY minimal — a bare token holder learns the org name and kind
+    (both already in the invite email) and nothing else: no invitee email,
+    inviter, role, or expiry."""
 
     def _side(name):
         b = MockQueryBuilder()
         if name == "organizations":
             b.execute.return_value = MagicMock(data={"name": "Acme Records", "kind": "self_serve"}, count=1)
-        elif name == "profiles":
-            b.execute.return_value = MagicMock(data={"full_name": "Ada Admin"}, count=1)
         return b
 
     mock_supabase.table.side_effect = _side
@@ -290,7 +288,7 @@ def test_get_org_invite_preview_ok(client, mock_supabase):
         resp = client.get(f"/orgs/invites/{TOKEN}/preview")
 
     assert resp.status_code == 200
-    assert resp.json() == {"orgName": "Acme Records", "kind": "self_serve", "inviterName": "Ada Admin"}
+    assert resp.json() == {"orgName": "Acme Records", "kind": "self_serve"}
 
 
 def test_get_org_invite_preview_unknown_token_404(client):
@@ -316,13 +314,11 @@ def test_get_org_invite_preview_resolved_token_404(client, status):
     assert resp.status_code == 404
 
 
-def test_get_org_invite_preview_missing_inviter_profile_still_returns(client, mock_supabase):
+def test_get_org_invite_preview_enterprise_kind(client, mock_supabase):
     def _side(name):
         b = MockQueryBuilder()
         if name == "organizations":
             b.execute.return_value = MagicMock(data={"name": "Acme Records", "kind": "enterprise"}, count=1)
-        elif name == "profiles":
-            b.execute.return_value = MagicMock(data=None, count=0)
         return b
 
     mock_supabase.table.side_effect = _side
@@ -333,7 +329,7 @@ def test_get_org_invite_preview_missing_inviter_profile_still_returns(client, mo
         resp = client.get(f"/orgs/invites/{TOKEN}/preview")
 
     assert resp.status_code == 200
-    assert resp.json() == {"orgName": "Acme Records", "kind": "enterprise", "inviterName": None}
+    assert resp.json() == {"orgName": "Acme Records", "kind": "enterprise"}
 
 
 def test_get_org_invite_preview_requires_no_auth():
@@ -433,10 +429,9 @@ def test_decline_org_invite_email_mismatch_403(client):
 
 
 def test_invite_member_ok_schedules_email_and_fires_analytics(client):
-    """The background email task is patched out (it opens its own
-    create_client to the REAL Supabase URL/key from env, which isn't set in
-    tests) — this asserts scheduling happened with the right shape, not the
-    email content itself (that's emails.py's own concern)."""
+    """The background email task is patched out — this asserts scheduling
+    happened with the right shape, not the email content itself (that's
+    emails.py's own concern)."""
     with (
         patch(
             "orgs.router.service.invite_member",
@@ -509,10 +504,11 @@ def test_invite_member_team_full_402_fires_seat_wall_analytics(client):
     assert mock_capture.call_args.args[2] == {"org_id": ORG_ID, "limit": 5, "next_step": "contact"}
 
 
-def test_invite_member_invalid_role_400(client):
-    with patch("orgs.router.service.invite_member", new=AsyncMock(side_effect=ValueError("Invalid role"))):
-        resp = client.post(f"/orgs/{ORG_ID}/invites", json={"email": "a@b.com", "role": "owner"})
-    assert resp.status_code == 400
+def test_invite_member_invalid_role_422(client):
+    """role is Literal["admin","member"] on InviteCreate — Pydantic rejects
+    anything else before the service is reached."""
+    resp = client.post(f"/orgs/{ORG_ID}/invites", json={"email": "a@b.com", "role": "owner"})
+    assert resp.status_code == 422
 
 
 def test_invite_member_rejects_malformed_email_422(client):
@@ -574,10 +570,11 @@ def test_update_member_role_last_admin_409(client):
     assert resp.status_code == 409
 
 
-def test_update_member_role_invalid_role_400(client):
-    with patch("orgs.router.service.update_member_role", new=AsyncMock(side_effect=ValueError("Invalid role"))):
-        resp = client.put(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/role", json={"role": "owner"})
-    assert resp.status_code == 400
+def test_update_member_role_invalid_role_422(client):
+    """role is Literal["admin","member"] on MemberRoleUpdate — Pydantic
+    rejects anything else before the service is reached."""
+    resp = client.put(f"/orgs/{ORG_ID}/members/{MEMBER_ID}/role", json={"role": "owner"})
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -698,12 +695,10 @@ def test_notify_billing_reverted_background_sends_email_and_notification():
     fake_db.table.side_effect = _side
 
     with (
-        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.router._get_supabase", return_value=fake_db),
         patch("orgs.emails.send_billing_reverted_email") as mock_send,
     ):
         orgs_router._notify_billing_reverted_background(
-            db_url="http://fake",
-            db_key="fake-key",
             org_id=ORG_ID,
             member_user_ids=["u-member"],
         )
@@ -734,12 +729,10 @@ def test_notify_billing_reverted_background_null_email_falls_back_to_auth_lookup
     fake_db.auth.admin.get_user_by_id.return_value = MagicMock(user=MagicMock(email="legacy@example.com"))
 
     with (
-        patch("supabase.create_client", return_value=fake_db),
+        patch("orgs.router._get_supabase", return_value=fake_db),
         patch("orgs.emails.send_billing_reverted_email") as mock_send,
     ):
         orgs_router._notify_billing_reverted_background(
-            db_url="http://fake",
-            db_key="fake-key",
             org_id=ORG_ID,
             member_user_ids=["u-legacy"],
         )

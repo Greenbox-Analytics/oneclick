@@ -46,6 +46,8 @@ nothing is reimplemented, only referenced. The DELETE path reuses
 the correct provenance-scoped delete.
 """
 
+from collections import Counter
+
 from fastapi import HTTPException
 from supabase import Client
 
@@ -139,11 +141,7 @@ async def list_org_projects(db: Client, user_id: str, org_id: str) -> list[dict]
     )
     members = members_res.data or []
     owner_user_id_by_project = {m["project_id"]: m["user_id"] for m in members if m.get("role") == "owner"}
-    granted_count_by_project: dict[str, int] = {}
-    for m in members:
-        if m.get("org_id") == org_id:
-            pid = m["project_id"]
-            granted_count_by_project[pid] = granted_count_by_project.get(pid, 0) + 1
+    granted_count_by_project = Counter(m["project_id"] for m in members if m.get("org_id") == org_id)
 
     owner_user_ids = list({uid for uid in owner_user_id_by_project.values() if uid})
     seat_email_by_user_id: dict[str, str] = {}

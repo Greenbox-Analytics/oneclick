@@ -47,11 +47,10 @@ export const TIER_PRICES: Record<TierKey, { monthly: number; annual: number }> =
  */
 export const TEAM_STORAGE_OVERAGE_USD_PER_GB = 0.025;
 
-/** "US$30" / "US$41.67" / "US$0.025" — no decimals for whole dollars, otherwise as many as the amount needs (min 2). */
+/** "US$30" / "US$41.67" / "US$0.025" — no decimals for whole dollars, otherwise as many as the amount needs (min 2, max 3). */
 export function usd(amount: number): string {
   if (Number.isInteger(amount)) return `US$${amount}`;
-  const two = amount.toFixed(2);
-  return `US$${Number(two) === amount ? two : amount}`;
+  return `US$${amount.toLocaleString("en-US", { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 3 })}`;
 }
 
 /** An annual price restated per month, e.g. "US$41.67" for pro. */

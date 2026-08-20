@@ -1,6 +1,6 @@
 // src/components/orgs/OrgSettingsPanel.tsx
 // Admin console: org name, default member limit, and archive.
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,8 @@ import { orgNoun, orgNounCap } from "@/lib/tiers";
 // a UI pre-fill when the admin flips the toggle on).
 const SUGGESTED_DEFAULT_CAP = 2000;
 
+/** Drafts seed from `org` once — the render site keys this panel on the seeded
+ * fields (see Organization.tsx) so a new org / saved value remounts it fresh. */
 export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
   const updateOrg = useUpdateOrg();
   const archiveOrg = useArchiveOrg();
@@ -35,18 +37,6 @@ export function OrgSettingsPanel({ org }: { org: OrgDetail }) {
   const [cap, setCap] = useState(
     org.default_member_cap && org.default_member_cap > 0 ? String(org.default_member_cap) : String(SUGGESTED_DEFAULT_CAP),
   );
-
-  // Re-sync local drafts when the selected org changes (or a save/refetch lands
-  // new server values) — same pattern as TeamCardSettings' startEdit.
-  useEffect(() => {
-    setName(org.name);
-    setCapEnabled((org.default_member_cap ?? 0) > 0);
-    setCap(
-      org.default_member_cap && org.default_member_cap > 0
-        ? String(org.default_member_cap)
-        : String(SUGGESTED_DEFAULT_CAP),
-    );
-  }, [org.id, org.name, org.default_member_cap, org.monthly_dispersal_credits]);
 
   const nameDirty = name.trim() !== org.name && !!name.trim();
   const capValue = Number(cap);

@@ -1,5 +1,4 @@
 import { useNavigate } from "react-router-dom";
-import { BookOpen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";

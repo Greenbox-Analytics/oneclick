@@ -81,8 +81,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   });
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const [driveImportOpen, setDriveImportOpen] = useState(false);
-  const [importProvider, setImportProvider] = useState<IntegrationProvider>("google_drive");
+  const [importProvider, setImportProvider] = useState<IntegrationProvider | null>(null);
   const [dropboxFile, setDropboxFile] = useState<{ id: string; name: string } | null>(null);
   const [shareFileIds, setShareFileIds] = useState<string[] | null>(null);
   const [shareSubject, setShareSubject] = useState<string>("");
@@ -471,7 +470,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => { setImportProvider("google_drive"); setDriveImportOpen(true); }}
+            onClick={() => setImportProvider("google_drive")}
           >
             <HardDrive className="w-4 h-4 mr-2" />
             Import from Drive
@@ -481,7 +480,7 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => { setImportProvider("dropbox"); setDriveImportOpen(true); }}
+            onClick={() => setImportProvider("dropbox")}
           >
             <Cloud className="w-4 h-4 mr-2" />
             Import from Dropbox
@@ -700,12 +699,15 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
         })}
       </div>
 
-      <DriveImportDialog
-        open={driveImportOpen}
-        onOpenChange={setDriveImportOpen}
-        projectId={projectId}
-        provider={importProvider}
-      />
+      {importProvider && (
+        <DriveImportDialog
+          key={importProvider}
+          open
+          onOpenChange={(o) => !o && setImportProvider(null)}
+          projectId={projectId}
+          provider={importProvider}
+        />
+      )}
 
       <DropboxFileModal
         open={!!dropboxFile}

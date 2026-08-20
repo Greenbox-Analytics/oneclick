@@ -168,7 +168,7 @@ Storage is a **hard cap on every tier**, with no pay-per-use.
 | GET | `/orgs/{org_id}/members` | member — roster for board pickers: `user_id`/`full_name`/`avatar_url`/`role`, **no emails** |
 | POST / GET / DELETE | `/orgs/{org_id}/invites`, `/invites/{invite_id}` | admin |
 | POST | `/orgs/invites/{token}/accept` · `/decline` | invitee |
-| GET | `/orgs/invites/{token}/preview` | anyone holding the token (unauthenticated) — returns only `orgName` / `inviterName` for the claim page |
+| GET | `/orgs/invites/{token}/preview` | anyone holding the token (unauthenticated) — returns only `orgName` / `kind` for the claim page |
 | PUT | `/orgs/{org_id}/members/{member_id}/role` · `/cap` | admin |
 | POST | `/orgs/{org_id}/members/{member_id}/suspend` · `/reactivate` | admin |
 | DELETE | `/orgs/{org_id}/members/{member_id}` | admin |

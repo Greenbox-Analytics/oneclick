@@ -55,7 +55,8 @@ from supabase import Client
 PAID_IN_KINDS = ("purchase", "dispersal", "monthly_grant", "admin_grant")
 
 
-def _read_wallet(sb: Client, owner_type: str, owner_id: str) -> dict | None:
+def read_wallet(sb: Client, owner_type: str, owner_id: str) -> dict | None:
+    """The (owner_type, owner_id) wallet row, or None. Plain read, never creates."""
     res = sb.table("credit_wallets").select("*").eq("owner_type", owner_type).eq("owner_id", owner_id).execute()
     rows = res.data or []
     return rows[0] if rows else None
@@ -77,7 +78,7 @@ def read_or_create_org_wallet(sb: Client, org_id: str) -> dict:
     `EntitlementsService._read_or_create_wallet`, which arms a rollover-triggering
     tier grant the pool must never receive (see module docstring).
     """
-    existing = _read_wallet(sb, "org", org_id)
+    existing = read_wallet(sb, "org", org_id)
     if existing:
         return existing
 
@@ -90,20 +91,12 @@ def read_or_create_org_wallet(sb: Client, org_id: str) -> dict:
         # Duplicate-race: another create-on-miss caller's INSERT won the
         # UNIQUE (owner_type, owner_id) constraint between our SELECT and our
         # INSERT. The wallet exists now — re-select rather than raise.
-        row = _read_wallet(sb, "org", org_id)
+        row = read_wallet(sb, "org", org_id)
         if row:
             return row
         raise
     else:
-        rows = inserted.data or []
-        if rows:
-            return rows[0]
-        # Some client/mocking configurations don't echo the inserted row even
-        # though it landed — fall back to a re-select before giving up.
-        row = _read_wallet(sb, "org", org_id)
-        if row:
-            return row
-        raise RuntimeError(f"failed to read or create org wallet for org_id={org_id}")
+        return inserted.data[0]
 
 
 def read_or_create_user_wallet(db: Client, user_id: str) -> dict:
@@ -124,7 +117,7 @@ def read_or_create_user_wallet(db: Client, user_id: str) -> dict:
     use `read_or_create_org_wallet` instead: this seeds a rollover-triggering
     tier grant an org pool must never receive.
     """
-    existing = _read_wallet(db, "user", user_id)
+    existing = read_wallet(db, "user", user_id)
     if existing:
         return existing
     now = datetime.now(UTC)
@@ -137,7 +130,7 @@ def read_or_create_user_wallet(db: Client, user_id: str) -> dict:
         },
         on_conflict="owner_type,owner_id",
     ).execute()
-    existing = _read_wallet(db, "user", user_id)
+    existing = read_wallet(db, "user", user_id)
     return existing or {
         "id": None,
         "owner_type": "user",

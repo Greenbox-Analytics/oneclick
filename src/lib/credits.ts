@@ -1,4 +1,22 @@
-import type { EntitlementCredits } from "@/hooks/useEntitlements";
+import type { Entitlements, EntitlementCredits, OrgBillingContext } from "@/hooks/useEntitlements";
+import type { CreditAction } from "@/hooks/useCreditUsage";
+
+/**
+ * The org whose pool is paying for the caller, or nullish in personal context.
+ * `billingContext` is the canonical signal (present whenever LICENSING_ENABLED
+ * is on, even with credits off); `credits.managedByOrg` is the back-compat
+ * fallback for payloads that predate it.
+ */
+export const orgContext = (ent: Entitlements | null | undefined): OrgBillingContext | null | undefined =>
+  ent?.billingContext?.type === "org" ? ent.billingContext : ent?.credits?.managedByOrg;
+
+/** Per-action display label + ring/bar colour (usage card + /teams member view). */
+export const TOOL_META: Record<CreditAction, { label: string; color: string }> = {
+  oneclick_run: { label: "OneClick run", color: "var(--t-oneclick)" },
+  registry_parse: { label: "Registry parse", color: "var(--t-registry)" },
+  zoe_message: { label: "Zoe message", color: "var(--t-zoe)" },
+  split_sheet: { label: "Split sheet", color: "var(--t-split)" },
+};
 
 /**
  * What a user has left, and out of what.

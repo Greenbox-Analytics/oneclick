@@ -35,7 +35,7 @@ vi.mock("@/hooks/useCreditPacks", () => ({
 }));
 
 vi.mock("@/hooks/useBilling", () => ({
-  useCreatePortalSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useOpenBillingPortal: () => ({ openPortal: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@/hooks/useEntitlements", () => ({

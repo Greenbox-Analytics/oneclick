@@ -4,7 +4,6 @@ as HTTPException raised directly from within orgs/service.py (via
 orgs/authz.py's require_member/require_admin), so this router only needs to
 map the business-logic exceptions that aren't plain authz checks."""
 
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -68,15 +67,13 @@ def _get_supabase():
 
 
 def _send_org_invite_email_background(
-    db_url: str, db_key: str, org_id: str, user_id: str, email: str, role: str, token: str, existing_user: bool = False
+    org_id: str, user_id: str, email: str, role: str, token: str, existing_user: bool = False
 ):
-    """Runs on a FastAPI BackgroundTask — its own service-role client, not
-    the request's — a BackgroundTask outlives the request scope."""
-    from supabase import create_client
-
+    """Runs on a FastAPI BackgroundTask (the module-global service-role client
+    outlives the request scope)."""
     from orgs.emails import send_org_invite_email
 
-    db = create_client(db_url, db_key)
+    db = _get_supabase()
     try:
         org = db.table("organizations").select("name").eq("id", org_id).single().execute()
         inviter = db.table("profiles").select("full_name").eq("id", user_id).maybe_single().execute()
@@ -93,25 +90,20 @@ def _send_org_invite_email_background(
 
 
 def _send_credit_request_email_background(
-    db_url: str,
-    db_key: str,
     org_id: str,
     request_id: str,
     requester_user_id: str,
     requested_cap: int | None,
     note: str | None,
 ):
-    """Runs on a FastAPI BackgroundTask — its own service-role client, not
-    the request's (mirrors _send_org_invite_email_background above).
-    Recipients are every ACTIVE admin member's email, resolved via the auth
+    """Runs on a FastAPI BackgroundTask (mirrors _send_org_invite_email_background
+    above). Recipients are every ACTIVE admin member's email, resolved via the auth
     admin API (org_members only carries user_id — mirrors
     orgs.service._resolve_user_email / registry.service._resolve_auth_email,
     the same idiom teams uses for email-by-user_id lookups elsewhere)."""
-    from supabase import create_client
-
     from orgs.emails import send_credit_request_email
 
-    db = create_client(db_url, db_key)
+    db = _get_supabase()
     try:
         org = db.table("organizations").select("name").eq("id", org_id).single().execute()
         requester_profile = (
@@ -150,8 +142,6 @@ def _send_credit_request_email_background(
 
 
 def _send_credit_request_resolved_email_background(
-    db_url: str,
-    db_key: str,
     org_id: str,
     org_member_id: str,
     approved: bool,
@@ -159,15 +149,13 @@ def _send_credit_request_resolved_email_background(
     note: str | None,
 ):
     """Notify the requesting member that an admin resolved their cap-raise
-    request. Runs on a FastAPI BackgroundTask with its own service-role client
-    (mirrors _send_credit_request_email_background). The member's email comes
+    request. Runs on a FastAPI BackgroundTask (mirrors
+    _send_credit_request_email_background). The member's email comes
     off their org_members row (denormalized at invite-accept), falling back to
     the auth admin API for legacy/creator rows."""
-    from supabase import create_client
-
     from orgs.emails import send_credit_request_resolved_email
 
-    db = create_client(db_url, db_key)
+    db = _get_supabase()
     try:
         org = db.table("organizations").select("name").eq("id", org_id).single().execute()
         member = (
@@ -198,24 +186,20 @@ def _send_credit_request_resolved_email_background(
 
 
 def _notify_billing_reverted_background(
-    db_url: str,
-    db_key: str,
     org_id: str,
     member_user_ids: list[str] | None = None,
 ):
     """Tell offboarded member(s) their Msanii usage now bills to their personal
     plan (audit FIX: suspend/remove/archive used to be silent). Runs on a
-    FastAPI BackgroundTask with its own service-role client. `member_user_ids`
+    FastAPI BackgroundTask. `member_user_ids`
     None means "every ACTIVE member" (the org-archive case — archiving doesn't
     transition seat statuses, so active seats are exactly who just lost
     coverage). Each member gets an email (orgs/emails.py) plus an in-app
     notification on the unified `notifications` table — type 'status_change'
     (an existing CHECK-allowed type) with entity_type='org'."""
-    from supabase import create_client
-
     from orgs.emails import send_billing_reverted_email
 
-    db = create_client(db_url, db_key)
+    db = _get_supabase()
     try:
         org_name = service._org_name(db, org_id, "your organization")
 
@@ -266,9 +250,9 @@ async def get_org_invite_preview(token: str):
 
     DELIBERATELY UNAUTHENTICATED (stated decision): the claim page renders
     before sign-in, and the unguessable token — delivered only to the invited
-    email — is the capability. The body is minimal on purpose: org name plus
-    the inviter's display name, both of which the invite email already told
-    the recipient. Nothing else (no invitee email, role, or expiry) is
+    email — is the capability. The body is minimal on purpose: org name and
+    kind, both of which the invite email already told the recipient. Nothing
+    else (no invitee email, inviter, role, or expiry) is
     exposed to a bare token holder. 404 for an unknown, expired, or
     already-resolved token — email-match and acceptance stay with the
     authed accept endpoint."""
@@ -281,18 +265,12 @@ async def get_org_invite_preview(token: str):
         raise HTTPException(status_code=404, detail="Invite not found")
 
     org = db.table("organizations").select("name, kind").eq("id", invite["org_id"]).maybe_single().execute()
-    inviter_name = None
-    if invite.get("invited_by"):
-        prof = db.table("profiles").select("full_name").eq("id", invite["invited_by"]).maybe_single().execute()
-        inviter_name = (prof.data or {}).get("full_name") if prof else None
-
     return {
         "orgName": (org.data or {}).get("name") if org else None,
         # "self_serve" | "enterprise" | None (pre-migration row) — still minimal
         # and still unauthenticated: the invite email already says team vs
         # organization, so this reveals nothing the recipient doesn't have.
         "kind": (org.data or {}).get("kind") if org else None,
-        "inviterName": inviter_name,
     }
 
 
@@ -382,8 +360,6 @@ async def archive_org(org_id: str, background_tasks: BackgroundTasks, user_id: s
     result = await service.archive_org(_get_supabase(), user_id, org_id)
     background_tasks.add_task(
         _notify_billing_reverted_background,
-        db_url=os.getenv("VITE_SUPABASE_URL"),
-        db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
         org_id=org_id,
         member_user_ids=None,  # archive: notify every ACTIVE member
     )
@@ -541,8 +517,6 @@ def _schedule_billing_reverted_notice(background_tasks: BackgroundTasks, org_id:
         return
     background_tasks.add_task(
         _notify_billing_reverted_background,
-        db_url=os.getenv("VITE_SUPABASE_URL"),
-        db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
         org_id=org_id,
         member_user_ids=[member_user_id],
     )
@@ -620,8 +594,6 @@ async def invite_member(
     except TeamFullError as e:
         analytics_capture(user_id, "team_seat_wall_hit", {"org_id": org_id, "limit": e.limit, "next_step": e.next_step})
         raise HTTPException(status_code=402, detail={"reason": str(e), "limit": e.limit, "nextStep": e.next_step})
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     analytics_capture(user_id, "org_license_invited", {"org_id": org_id, "role": body.role})
     invite = result.get("invite") or {}
@@ -639,8 +611,6 @@ async def invite_member(
 
     background_tasks.add_task(
         _send_org_invite_email_background,
-        db_url=os.getenv("VITE_SUPABASE_URL"),
-        db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
         org_id=org_id,
         user_id=user_id,
         email=body.email,
@@ -681,8 +651,6 @@ async def submit_credit_request(
     analytics_capture(user_id, "credit_request_submitted", {"org_id": org_id, "requested_cap": body.requested_cap})
     background_tasks.add_task(
         _send_credit_request_email_background,
-        db_url=os.getenv("VITE_SUPABASE_URL"),
-        db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
         org_id=org_id,
         request_id=request["id"],
         requester_user_id=user_id,
@@ -711,8 +679,6 @@ async def approve_credit_request(
         raise HTTPException(status_code=404, detail=str(e))
     except CreditRequestAlreadyResolvedError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     analytics_capture(
         user_id,
@@ -722,8 +688,6 @@ async def approve_credit_request(
     if result.get("org_member_id"):
         background_tasks.add_task(
             _send_credit_request_resolved_email_background,
-            db_url=os.getenv("VITE_SUPABASE_URL"),
-            db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
             org_id=org_id,
             org_member_id=result["org_member_id"],
             approved=True,
@@ -756,8 +720,6 @@ async def deny_credit_request(
     if result.get("org_member_id"):
         background_tasks.add_task(
             _send_credit_request_resolved_email_background,
-            db_url=os.getenv("VITE_SUPABASE_URL"),
-            db_key=os.getenv("VITE_SUPABASE_SECRET_KEY"),
             org_id=org_id,
             org_member_id=result["org_member_id"],
             approved=False,

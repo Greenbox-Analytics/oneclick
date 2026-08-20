@@ -16,7 +16,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
-import { supabase } from "@/integrations/supabase/client";
 
 export type OrgStatus = "pending" | "active" | "suspended" | "lapsed";
 export type OrgRole = "admin" | "member";
@@ -235,6 +234,13 @@ export function useMyOrgs() {
   });
 }
 
+/** The live orgs the caller actually holds a seat in — an archived / lapsed
+ * org (or a suspended seat) can't own a board you may act on. Order is stable
+ * per input, so callers keying colours on index stay consistent. */
+export function liveOrgs(orgs: OrgSummary[] | undefined): OrgSummary[] {
+  return (orgs ?? []).filter((o) => o.my_status === "active" && !o.archived_at && o.status !== "lapsed");
+}
+
 export function useOrg(orgId?: string) {
   const { user } = useAuth();
   return useQuery<OrgDetail>({
@@ -281,17 +287,38 @@ export function useUpdateOrg() {
   });
 }
 
-export function useArchiveOrg() {
+type Qc = ReturnType<typeof useQueryClient>;
+
+function invalidateOrgSummary(qc: Qc, orgId: string) {
+  qc.invalidateQueries({ queryKey: ["orgs", "list"] });
+  qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
+}
+
+/** Body-less org mutation: hit `path(args)`, invalidate, toast. */
+function useOrgPost<TArgs extends { orgId: string }, TData = unknown>(
+  path: (args: TArgs) => string,
+  okMsg: string,
+  failMsg: string,
+  invalidate: (qc: Qc, orgId: string) => void = invalidateOrgSummary,
+  method: "POST" | "DELETE" = "POST",
+) {
   const qc = useQueryClient();
-  return useMutation<unknown, Error, { orgId: string }>({
-    mutationFn: ({ orgId }) => apiFetch(`${API_URL}/orgs/${orgId}/archive`, { method: "POST" }),
+  return useMutation<TData, Error, TArgs>({
+    mutationFn: (args) => apiFetch<TData>(path(args), { method }),
     onSuccess: (_d, { orgId }) => {
-      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
-      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
-      toast.success("Organization archived");
+      invalidate(qc, orgId);
+      toast.success(okMsg);
     },
-    onError: (e) => toast.error(errMessage(e, "Couldn't archive organization.")),
+    onError: (e) => toast.error(errMessage(e, failMsg)),
   });
+}
+
+export function useArchiveOrg() {
+  return useOrgPost<{ orgId: string }>(
+    ({ orgId }) => `${API_URL}/orgs/${orgId}/archive`,
+    "Organization archived",
+    "Couldn't archive organization.",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -304,29 +331,19 @@ export function useArchiveOrg() {
 // ---------------------------------------------------------------------------
 
 export function useClaimCoverage() {
-  const qc = useQueryClient();
-  return useMutation<OrgSummary, Error, { orgId: string }>({
-    mutationFn: ({ orgId }) => apiFetch<OrgSummary>(`${API_URL}/orgs/${orgId}/coverage/claim`, { method: "POST" }),
-    onSuccess: (_d, { orgId }) => {
-      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
-      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
-      toast.success("Coverage claimed");
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't claim coverage.")),
-  });
+  return useOrgPost<{ orgId: string }, OrgSummary>(
+    ({ orgId }) => `${API_URL}/orgs/${orgId}/coverage/claim`,
+    "Coverage claimed",
+    "Couldn't claim coverage.",
+  );
 }
 
 export function useReleaseCoverage() {
-  const qc = useQueryClient();
-  return useMutation<OrgSummary, Error, { orgId: string }>({
-    mutationFn: ({ orgId }) => apiFetch<OrgSummary>(`${API_URL}/orgs/${orgId}/coverage/release`, { method: "POST" }),
-    onSuccess: (_d, { orgId }) => {
-      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
-      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
-      toast.success("Coverage released");
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't release coverage.")),
-  });
+  return useOrgPost<{ orgId: string }, OrgSummary>(
+    ({ orgId }) => `${API_URL}/orgs/${orgId}/coverage/release`,
+    "Coverage released",
+    "Couldn't release coverage.",
+  );
 }
 
 /** POST /orgs/{id}/unarchive — self-serve reactivation. 402 on no free slot
@@ -335,16 +352,11 @@ export function useReleaseCoverage() {
  * orgs/router.py); either shape is handled by `apiErrorFromBody`'s fallback,
  * so `e.message` is the human copy to show either way. */
 export function useUnarchiveOrg() {
-  const qc = useQueryClient();
-  return useMutation<OrgSummary, Error, { orgId: string }>({
-    mutationFn: ({ orgId }) => apiFetch<OrgSummary>(`${API_URL}/orgs/${orgId}/unarchive`, { method: "POST" }),
-    onSuccess: (_d, { orgId }) => {
-      qc.invalidateQueries({ queryKey: ["orgs", "list"] });
-      qc.invalidateQueries({ queryKey: ["orgs", orgId, "detail"] });
-      toast.success("Organization unarchived");
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't unarchive organization.")),
-  });
+  return useOrgPost<{ orgId: string }, OrgSummary>(
+    ({ orgId }) => `${API_URL}/orgs/${orgId}/unarchive`,
+    "Organization unarchived",
+    "Couldn't unarchive organization.",
+  );
 }
 
 /** One row of GET /orgs/{id}/dissolve-preview's `recipients` array. */
@@ -540,43 +552,34 @@ export function useUpdateOrgMemberRole() {
   });
 }
 
+type MemberArgs = { orgId: string; memberId: string };
+
 export function useSuspendOrgMember() {
-  const qc = useQueryClient();
-  return useMutation<unknown, Error, { orgId: string; memberId: string }>({
-    mutationFn: ({ orgId, memberId }) =>
-      apiFetch(`${API_URL}/orgs/${orgId}/members/${memberId}/suspend`, { method: "POST" }),
-    onSuccess: (_d, { orgId }) => {
-      invalidateOrgUsage(qc, orgId);
-      toast.success("Member suspended");
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't suspend member.")),
-  });
+  return useOrgPost<MemberArgs>(
+    ({ orgId, memberId }) => `${API_URL}/orgs/${orgId}/members/${memberId}/suspend`,
+    "Member suspended",
+    "Couldn't suspend member.",
+    invalidateOrgUsage,
+  );
 }
 
 export function useReactivateOrgMember() {
-  const qc = useQueryClient();
-  return useMutation<unknown, Error, { orgId: string; memberId: string }>({
-    mutationFn: ({ orgId, memberId }) =>
-      apiFetch(`${API_URL}/orgs/${orgId}/members/${memberId}/reactivate`, { method: "POST" }),
-    onSuccess: (_d, { orgId }) => {
-      invalidateOrgUsage(qc, orgId);
-      toast.success("Member reactivated");
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't reactivate member.")),
-  });
+  return useOrgPost<MemberArgs>(
+    ({ orgId, memberId }) => `${API_URL}/orgs/${orgId}/members/${memberId}/reactivate`,
+    "Member reactivated",
+    "Couldn't reactivate member.",
+    invalidateOrgUsage,
+  );
 }
 
 export function useRemoveOrgMember() {
-  const qc = useQueryClient();
-  return useMutation<unknown, Error, { orgId: string; memberId: string }>({
-    mutationFn: ({ orgId, memberId }) =>
-      apiFetch(`${API_URL}/orgs/${orgId}/members/${memberId}`, { method: "DELETE" }),
-    onSuccess: (_d, { orgId }) => {
-      invalidateOrgUsage(qc, orgId);
-      toast.success("Member removed");
-    },
-    onError: (e) => toast.error(errMessage(e, "Couldn't remove member.")),
-  });
+  return useOrgPost<MemberArgs>(
+    ({ orgId, memberId }) => `${API_URL}/orgs/${orgId}/members/${memberId}`,
+    "Member removed",
+    "Couldn't remove member.",
+    invalidateOrgUsage,
+    "DELETE",
+  );
 }
 
 // ---------------------------------------------------------------------------

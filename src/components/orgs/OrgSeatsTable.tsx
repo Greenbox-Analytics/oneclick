@@ -74,28 +74,23 @@ function CapDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [value, setValue] = useState("");
-  // Three genuinely different settings, which is why this is a radio and not a
-  // checkbox: "inherit" (null) stopped meaning "no limit" once every org
-  // gained a default, so "none" needs its own choice — the -1 sentinel.
-  const [mode, setMode] = useState<CapMode>("custom");
-  const setCap = useSetMemberCap();
-
   // "Use the organization default" is only offered when there IS one. Every org
   // has one out of the box (2,000), so this is normally shown; it disappears
   // only if an admin cleared it, where inheriting would mean nothing at all.
   const canUseDefault = defaultCap != null;
 
-  // Re-seed whenever a different member's dialog opens.
-  const seatKey = seat?.orgMemberId ?? "";
-  const [seededFor, setSeededFor] = useState("");
-  if (open && seatKey && seededFor !== seatKey) {
-    setSeededFor(seatKey);
-    const stored = seat?.monthlyCap;
-    setMode(stored === UNLIMITED_CAP ? "none" : stored == null && canUseDefault ? "default" : "custom");
-    // Never seed the sentinel into the number box — it is a marker, not an amount.
-    setValue(stored != null && stored !== UNLIMITED_CAP ? String(stored) : "");
-  }
+  // Seeded once from the member's stored cap — the render site keys this
+  // dialog on seat.orgMemberId, so a different member's dialog mounts fresh.
+  // Never seed the sentinel into the number box — it is a marker, not an amount.
+  const stored = seat?.monthlyCap;
+  const [value, setValue] = useState(stored != null && stored !== UNLIMITED_CAP ? String(stored) : "");
+  // Three genuinely different settings, which is why this is a radio and not a
+  // checkbox: "inherit" (null) stopped meaning "no limit" once every org
+  // gained a default, so "none" needs its own choice — the -1 sentinel.
+  const [mode, setMode] = useState<CapMode>(
+    stored === UNLIMITED_CAP ? "none" : stored == null && canUseDefault ? "default" : "custom",
+  );
+  const setCap = useSetMemberCap();
 
   const parsed = Number(value);
   const valid = mode !== "custom" || (value !== "" && Number.isFinite(parsed) && parsed >= 0);
@@ -347,6 +342,7 @@ export function OrgSeatsTable({
       </div>
 
       <CapDialog
+        key={capSeat?.orgMemberId ?? "none"}
         seat={capSeat}
         orgId={orgId}
         orgKind={orgKind}
