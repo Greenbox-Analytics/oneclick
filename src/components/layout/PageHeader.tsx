@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { ArrowLeft, Home, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
@@ -38,31 +38,41 @@ export function PageHeader({
   showBack = true,
   className,
 }: PageHeaderProps) {
-  const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { user } = useAuth();
 
   // Signed-in globals, in order: context → credits → home → docs → bell.
-  // (Home is a one-click route to the landing page; the context switcher
-  // renders nothing unless the user has more than one context.)
-  const globalActions = user ? (
-    <>
-      <HeaderContextSwitcher />
-      <HeaderCreditsTicker />
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => navigate("/")}
-        aria-label="Home page"
-        title="Landing page"
-        className="text-muted-foreground hover:text-foreground"
-      >
-        <Home className="w-4 h-4" />
-      </Button>
-      <HeaderDocsButton />
-      <NotificationBell />
-    </>
-  ) : null;
+  // (The context switcher renders nothing unless the user has more than one
+  // context.)
+  //
+  // "Home" means ONE thing for a signed-in user: the dashboard. It used to
+  // point at the marketing landing page while the logo two inches away went
+  // to /dashboard — two home affordances, two destinations. Now they agree,
+  // and the button only renders where the logo isn't already doing the job,
+  // so a header never shows both.
+  const renderGlobalActions = (showHome: boolean) =>
+    user ? (
+      <>
+        <HeaderContextSwitcher />
+        <HeaderCreditsTicker />
+        {showHome && (
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            aria-label="Dashboard"
+            title="Dashboard"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Link to="/dashboard">
+              <Home className="w-4 h-4" />
+            </Link>
+          </Button>
+        )}
+        <HeaderDocsButton />
+        <NotificationBell />
+      </>
+    ) : null;
 
   // A string `backTo` is treated as a *fallback* route, not a forced
   // destination: Back returns the user to the page they actually came from,
@@ -74,10 +84,25 @@ export function PageHeader({
   };
 
   if (isMobile) {
+    const logoShown = !title && showLogo;
     return (
       <header className={cn("border-b border-border bg-card sticky top-0 z-40", className)}>
         <div className="px-3 py-2 flex items-center gap-2">
           <MobileNavSheet />
+          {/* Mobile got no Back button at all, so phone users were left with
+              only the browser/hardware back — the one path that hit every
+              history bug. Icon-only to keep the cramped header readable. */}
+          {showBack && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Back"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={handleBack}
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+          )}
           <div className="flex-1 min-w-0">
             {title ? (
               <>
@@ -86,22 +111,21 @@ export function PageHeader({
                   <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
                 )}
               </>
-            ) : showLogo ? (
-              <div
-                className="flex items-center gap-2 cursor-pointer"
-                onClick={() => navigate("/dashboard")}
-              >
+            ) : logoShown ? (
+              <Link to="/dashboard" className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center">
                   <Music className="w-4 h-4 text-primary-foreground" />
                 </div>
                 <span className="text-base font-bold">Msanii</span>
-              </div>
+              </Link>
             ) : null}
           </div>
           {(actions || user || userMenu) && (
             <div className="flex items-center gap-1 shrink-0">
               {actions}
-              {globalActions}
+              {/* The nav sheet already has a Dashboard item, so on mobile the
+                  Home icon is always redundant. */}
+              {renderGlobalActions(false)}
               {userMenu}
             </div>
           )}
@@ -128,15 +152,15 @@ export function PageHeader({
             </>
           )}
           {showLogo && (
-            <div
-              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => navigate("/dashboard")}
+            <Link
+              to="/dashboard"
+              className="flex items-center gap-3 hover:opacity-80 transition-opacity"
             >
               <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
                 <Music className="w-6 h-6 text-primary-foreground" />
               </div>
               <h1 className="text-2xl font-bold text-foreground">Msanii</h1>
-            </div>
+            </Link>
           )}
           {title && !showLogo && (
             <div className="min-w-0">
@@ -148,7 +172,7 @@ export function PageHeader({
         {(actions || user || userMenu) && (
           <div className="flex items-center gap-2 shrink-0">
             {actions}
-            {globalActions}
+            {renderGlobalActions(!showLogo)}
             {userMenu}
           </div>
         )}

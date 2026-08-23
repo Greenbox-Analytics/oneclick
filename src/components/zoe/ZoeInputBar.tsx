@@ -238,10 +238,6 @@ export function ZoeInputBar({
           </div>
 
           <p className="composer-note">{noteText}</p>
-          <p className="composer-note">
-            <CreditsChip className="mr-1.5 align-middle" action="zoe_message" />
-            Greetings are free — a real answer costs credits.
-          </p>
         </div>
       </div>
 

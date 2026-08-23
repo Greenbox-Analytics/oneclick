@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
   Sheet,
   SheetContent,
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBackToClose } from "@/hooks/useBackToClose";
 import { cn } from "@/lib/utils";
 import {
   Menu,
@@ -86,17 +87,15 @@ export function MobileNavSheet({ children }: MobileNavSheetProps) {
   const { signOut } = useAuth();
   const [open, setOpen] = useState(false);
 
+  // Hardware/browser Back closes the drawer instead of leaving the page.
+  useBackToClose(open, () => setOpen(false));
+
   const isActive = (path: string) => {
     if (path === "/dashboard") return location.pathname === "/dashboard";
     return location.pathname === path || location.pathname.startsWith(path + "/");
   };
 
   const isToolsActive = TOOLS.some((t) => isActive(t.path));
-
-  const go = (path: string) => {
-    setOpen(false);
-    navigate(path);
-  };
 
   const handleSignOut = async () => {
     setOpen(false);
@@ -121,10 +120,15 @@ export function MobileNavSheet({ children }: MobileNavSheetProps) {
         </button>
       );
     }
+    // Real <Link>, not a button: these are the app's primary nav, so
+    // cmd/middle-click and "open in new tab" have to work. `go` survives only
+    // for the non-item entries below.
     return (
-      <button
+      <Link
         key={item.path}
-        onClick={() => go(item.path)}
+        to={item.path}
+        onClick={() => setOpen(false)}
+        aria-current={active ? "page" : undefined}
         className={cn(
           "w-full flex items-center gap-3 px-3 py-3 rounded-md text-left text-sm transition-colors",
           active
@@ -134,7 +138,7 @@ export function MobileNavSheet({ children }: MobileNavSheetProps) {
       >
         <Icon className="w-4 h-4 shrink-0" />
         <span>{item.label}</span>
-      </button>
+      </Link>
     );
   };
 
@@ -184,13 +188,14 @@ export function MobileNavSheet({ children }: MobileNavSheetProps) {
 
           <div className="mt-4 pt-3 border-t border-border space-y-1">
             {FOOTER.map(renderItem)}
-            <button
-              onClick={() => go("/workspace?tab=settings")}
+            <Link
+              to="/workspace?tab=settings"
+              onClick={() => setOpen(false)}
               className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-left text-sm text-foreground hover:bg-accent/50 transition-colors"
             >
               <Settings className="w-4 h-4 shrink-0" />
               <span>Settings</span>
-            </button>
+            </Link>
             <button
               onClick={handleSignOut}
               className="w-full flex items-center gap-3 px-3 py-3 rounded-md text-left text-sm text-destructive hover:bg-destructive/10 transition-colors"

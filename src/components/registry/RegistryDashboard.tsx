@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Search,
@@ -89,7 +88,6 @@ function enrichWorks(
 }
 
 export function RegistryDashboard() {
-  const navigate = useNavigate();
   const { user } = useAuth();
 
   // Data
@@ -398,8 +396,6 @@ export function RegistryDashboard() {
               setClosedProjects((c) => ({ ...c, [pid]: pid in c ? !c[pid] : count <= 2 }))
             }
             sortWorks={sortWorks}
-            onOpenWork={(workId) => navigate(`/tools/registry/${workId}`)}
-            onOpenProject={(projectId) => navigate(`/projects/${projectId}`)}
             onAddWork={() => setAddWorkOpen(true)}
             searchActive={!!q || !!statFilter}
           />
@@ -407,8 +403,6 @@ export function RegistryDashboard() {
           <SharedList
             works={sharedFiltered}
             isLoading={isLoading}
-            onOpenWork={(workId) => navigate(`/tools/registry/${workId}`)}
-            onOpenProject={(projectId) => navigate(`/projects/${projectId}`)}
             searchActive={!!q || !!statFilter}
           />
         )}
@@ -438,8 +432,6 @@ interface MyWorksListProps {
   toggleArtist: (aid: string) => void;
   toggleProject: (pid: string, count: number) => void;
   sortWorks: (list: DashboardWork[]) => DashboardWork[];
-  onOpenWork: (workId: string) => void;
-  onOpenProject: (projectId: string) => void;
   onAddWork: () => void;
   searchActive: boolean;
 }
@@ -455,8 +447,6 @@ function MyWorksList({
   toggleArtist,
   toggleProject,
   sortWorks,
-  onOpenWork,
-  onOpenProject,
   onAddWork,
   searchActive,
 }: MyWorksListProps) {
@@ -573,12 +563,7 @@ function MyWorksList({
                           {pOpen && (
                             <div className="flex flex-col gap-2 pl-7 pr-1 pb-2">
                               {list.map((w) => (
-                                <WorkRow
-                                  key={w.id}
-                                  work={w}
-                                  onOpen={onOpenWork}
-                                  onOpenProject={onOpenProject}
-                                />
+                                <WorkRow key={w.id} work={w} />
                               ))}
                             </div>
                           )}
@@ -599,12 +584,10 @@ function MyWorksList({
 interface SharedListProps {
   works: DashboardWork[];
   isLoading: boolean;
-  onOpenWork: (workId: string) => void;
-  onOpenProject: (projectId: string) => void;
   searchActive: boolean;
 }
 
-function SharedList({ works, isLoading, onOpenWork, onOpenProject, searchActive }: SharedListProps) {
+function SharedList({ works, isLoading, searchActive }: SharedListProps) {
   if (isLoading) {
     return (
       <div className="py-16 text-center text-muted-foreground text-sm">Loading…</div>
@@ -625,7 +608,7 @@ function SharedList({ works, isLoading, onOpenWork, onOpenProject, searchActive 
   return (
     <div className="flex flex-col gap-2">
       {works.map((w) => (
-        <WorkRow key={w.id} work={w} onOpen={onOpenWork} onOpenProject={onOpenProject} />
+        <WorkRow key={w.id} work={w} />
       ))}
     </div>
   );

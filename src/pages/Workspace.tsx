@@ -1,7 +1,7 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEffect, useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, HardDrive, CalendarDays, Settings } from "lucide-react";
+import { LayoutGrid, HardDrive, CalendarDays, Settings, Loader2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -22,6 +22,17 @@ import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
+import { useTabParam } from "@/hooks/useTabParam";
+import { useBoardsList } from "@/hooks/useBoardsList";
+
+const WORKSPACE_TABS = ["integrations", "boards", "calendar", "settings"] as const;
+
+/** Matches KanbanBoard's own loading state so the two read as one screen. */
+const BoardsLoading = () => (
+  <div className="flex h-64 items-center justify-center">
+    <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+  </div>
+);
 
 const Workspace = () => {
   const navigate = useNavigate();
@@ -83,17 +94,29 @@ const Workspace = () => {
       };
       toast.success(`${providerNames[connected] || connected} connected successfully!`);
       queryClient.invalidateQueries({ queryKey: ["integrations"] });
-      setSearchParams({});
+      // Drop only `connected` (keep `tab`/`taskId`), and `replace` so Back
+      // doesn't land on the callback URL and replay the toast — which pushed
+      // another entry, making Back look broken.
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("connected");
+          return next;
+        },
+        { replace: true },
+      );
     }
   }, [searchParams, setSearchParams]);
 
-  const defaultTab = searchParams.get("tab") || "integrations";
-  const [activeTab, setActiveTab] = useState(defaultTab);
+  const [activeTab, setActiveTab] = useTabParam(WORKSPACE_TABS, "integrations");
   const initialTaskId = searchParams.get("taskId") || undefined;
 
   // Board switcher selection (Personal vs. a team + a board within it).
   const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>(undefined);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+
+  // Same query key BoardSwitcher uses, so this is deduped, not a second fetch.
+  const { isLoading: boardsLoading } = useBoardsList(selectedTeamId);
 
   // When workspace scoping is live, the header "Working as" pill IS the
   // context switcher: boards follow it, and the per-page context dropdown in
@@ -213,23 +236,36 @@ const Workspace = () => {
           </TabsContent>
 
           <TabsContent value="boards" data-walkthrough="workspace-boards">
-            <BoardSwitcher
-              teamId={selectedTeamId}
-              boardId={selectedBoardId}
-              onBoardChange={(b, t) => {
-                setSelectedBoardId(b);
-                setSelectedTeamId(t);
-              }}
-            />
-            {/* Under a team context with no board selected, don't fall through to the
-                personal-boards union — the switcher shows its "No boards yet" state instead. */}
-            {selectedTeamId && !selectedBoardId ? null : (
-              <KanbanBoard
-                key={selectedBoardId ?? "personal"}
-                boardId={selectedBoardId}
-                teamId={selectedTeamId}
-                initialSelectedTaskId={initialTaskId}
-              />
+            {/* One loading screen for the whole tab. The switcher, the board and
+                the task overview each used to resolve on their own clock, so a
+                slow load rendered as a stack of spinners popping in and out in
+                three different places. Hold the switcher back until its board
+                list is in; from there KanbanBoard's spinner (which now also
+                waits on the task overview's data) carries the same shape in the
+                same place, so it reads as one continuous load. */}
+            {boardsLoading ? (
+              <BoardsLoading />
+            ) : (
+              <>
+                <BoardSwitcher
+                  teamId={selectedTeamId}
+                  boardId={selectedBoardId}
+                  onBoardChange={(b, t) => {
+                    setSelectedBoardId(b);
+                    setSelectedTeamId(t);
+                  }}
+                />
+                {/* Under a team context with no board selected, don't fall through to the
+                    personal-boards union — the switcher shows its "No boards yet" state instead. */}
+                {selectedTeamId && !selectedBoardId ? null : (
+                  <KanbanBoard
+                    key={selectedBoardId ?? "personal"}
+                    boardId={selectedBoardId}
+                    teamId={selectedTeamId}
+                    initialSelectedTaskId={initialTaskId}
+                  />
+                )}
+              </>
             )}
           </TabsContent>
 

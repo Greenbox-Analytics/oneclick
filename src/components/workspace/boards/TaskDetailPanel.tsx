@@ -9,6 +9,7 @@ import { format } from "date-fns";
 import { parseDateString, getTodayString } from "@/lib/dateUtils";
 import { toast } from "sonner";
 import { useTaskDetail } from "@/hooks/useTaskDetail";
+import { useBackToClose } from "@/hooks/useBackToClose";
 import { downloadTaskIcs, googleCalendarUrl } from "@/hooks/useCalendarTasks";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useBoards, type OptimisticTaskContext } from "@/hooks/useBoards";
@@ -257,6 +258,10 @@ export function TaskDetailPanel({
   };
 
   const isOpen = isCreateMode ? !!createColumnId : !!taskId;
+
+  // The panel is component state, not a route, so Back would otherwise leave
+  // the board entirely with the panel still "open".
+  useBackToClose(isOpen, onClose);
 
   const taskForFields = isCreateMode
     ? ({

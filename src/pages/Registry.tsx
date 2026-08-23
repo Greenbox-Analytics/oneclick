@@ -1,8 +1,6 @@
 import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { RequireFeature } from "@/components/paywall/RequireFeature";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
@@ -13,8 +11,6 @@ import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { RegistryDashboard } from "@/components/registry/RegistryDashboard";
 
 const Registry = () => {
-  const navigate = useNavigate();
-
   const { captureToolOpened } = useAnalytics();
   useEffect(() => {
     captureToolOpened("registry");
@@ -37,15 +33,12 @@ const Registry = () => {
   return (
     <RequireFeature feature="registry">
       <div className="min-h-screen bg-background">
+        {/* One Back, one destination: the header's Back returns to wherever
+            the user came from and falls back to /tools. A second "Back to
+            Tools" button beside it disagreed with it half the time. */}
         <PageHeader
-          actions={
-            <>
-              <ToolHelpButton onClick={() => walkthrough.replay()} />
-              <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
-                Back to Tools
-              </Button>
-            </>
-          }
+          backTo="/tools"
+          actions={<ToolHelpButton onClick={() => walkthrough.replay()} />}
         />
 
         <main className="container mx-auto px-4 py-8 max-w-6xl">

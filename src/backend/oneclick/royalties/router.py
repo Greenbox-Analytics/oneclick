@@ -33,6 +33,7 @@ from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from oneclick.royalties import emails, paypal_client, pdf, service
 from oneclick.royalties.models import (
+    ChangePayoutCurrencyRequest,
     CreatePayoutRequest,
     PatchPayeeRequest,
     SaveReceiptRequest,
@@ -234,6 +235,25 @@ def cancel_payout(
     try:
         service.cancel_payout(_get_supabase(), user_id, payout_id)
         return {"status": "canceled"}
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/payouts/{payout_id}/currency")
+def change_payout_currency(
+    payout_id: str,
+    body: ChangePayoutCurrencyRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Re-issue a DRAFT payout in a different pay currency (re-cuts it at the
+    current FX rate and updates the payee's default).  409 if the payout is not
+    a draft or the currency is unsupported — a paid payout's currency is a
+    record of money that moved, not an editable field."""
+    gated_feature(user_id, Action.USE_ONECLICK)
+    try:
+        return service.change_payout_currency(_get_supabase(), user_id, payout_id, body.currency)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:

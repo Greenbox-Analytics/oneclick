@@ -393,17 +393,8 @@ const SplitSheet = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <PageHeader
-        actions={
-          <>
-            <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Tools
-            </Button>
-          </>
-        }
-      />
+      {/* One Back, one destination — see Registry.tsx. */}
+      <PageHeader backTo="/tools" actions={<ToolHelpButton onClick={walkthrough.replay} />} />
 
       <main
         className="container mx-auto px-4 py-8 max-w-3xl"

@@ -19,6 +19,10 @@ class PatchPayeeRequest(BaseModel):
     email: str | None = None
 
 
+class ChangePayoutCurrencyRequest(BaseModel):
+    currency: str
+
+
 class SplitPayeeRequest(BaseModel):
     line_ids: list[str]
     new_display_name: str

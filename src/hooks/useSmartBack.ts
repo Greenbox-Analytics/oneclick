@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 /**
  * Returns a handler that takes the user back to the last page they visited,
@@ -10,22 +10,29 @@ import { useLocation, useNavigate } from "react-router-dom";
  * `navigate(-1)` would either do nothing or bounce them out of the app, so we
  * fall back to a sensible route instead.
  *
- * React Router assigns every navigation a unique `location.key`; only the very
- * first entry in the history stack gets the literal key `"default"`. That makes
- * it a reliable signal for "is there anywhere to go back to within the app?".
+ * The signal is React Router's own history-stack index, which it stores in
+ * `window.history.state.idx` (0 for the entry the app was opened on, +1 per
+ * push). `location.key` is NOT a substitute: it only reads `"default"` on an
+ * untouched first entry, so any `replace` landing on that entry — a deep link
+ * bounced through `ProtectedRoute` to `/auth`, a post-login redirect, a
+ * legacy-route redirect — mints a fresh key and made Back walk the user out of
+ * the app. `idx` survives `replace` and survives a refresh, because it lives
+ * in the history entry itself.
  *
  * @param fallback Route to use when there's no in-app history. Defaults to
  *   the dashboard.
  */
 export function useSmartBack(fallback: string = "/dashboard") {
   const navigate = useNavigate();
-  const location = useLocation();
 
   return useCallback(() => {
-    if (location.key !== "default") {
+    // `idx` is null on the very first render before React Router stamps it,
+    // and absent entirely if some other code replaced history state.
+    const idx = (window.history.state as { idx?: number } | null)?.idx;
+    if (typeof idx === "number" && idx > 0) {
       navigate(-1);
     } else {
       navigate(fallback);
     }
-  }, [navigate, location.key, fallback]);
+  }, [navigate, fallback]);
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -29,6 +29,7 @@ import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { useSmartBack } from "@/hooks/useSmartBack";
+import { useTabParam } from "@/hooks/useTabParam";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useIsMobile } from "@/hooks/use-mobile";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
@@ -42,6 +43,8 @@ const ROLE_COLORS: Record<string, string> = {
 
 const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
 
+const VALID_TABS = ["works", "files", "expenses", "audio", "members", "notes", "settings"] as const;
+
 const ProjectDetail = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -50,12 +53,7 @@ const ProjectDetail = () => {
   const queryClient = useQueryClient();
   const userRole = useMyRole(projectId);
 
-  const [searchParams] = useSearchParams();
-  const VALID_TABS = ["works", "files", "expenses", "audio", "members", "notes", "settings"];
-  const initialTab = VALID_TABS.includes(searchParams.get("tab") ?? "")
-    ? (searchParams.get("tab") as string)
-    : "files";
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activeTab, setActiveTab] = useTabParam(VALID_TABS, "files");
   const isMobile = useIsMobile();
 
   // Tour

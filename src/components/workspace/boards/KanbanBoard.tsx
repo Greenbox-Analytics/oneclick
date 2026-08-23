@@ -69,7 +69,14 @@ export function KanbanBoard({ artistId, boardId, teamId, initialSelectedTaskId }
     isCurrentPeriod,
   });
 
-  const { parents, createParent } = useParentTasks(undefined, undefined, boardId);
+  // Same query key TasksOverview uses (deduped). Waiting on it here means the
+  // overview renders WITH the board instead of flashing its own spinner
+  // underneath one that just finished.
+  const { parents, createParent, isLoading: parentsLoading } = useParentTasks(
+    undefined,
+    undefined,
+    boardId,
+  );
 
   // --- Filter bar (Created by + By artist), persisted in the URL ---
   const [searchParams, setSearchParams] = useSearchParams();
@@ -304,7 +311,7 @@ export function KanbanBoard({ artistId, boardId, teamId, initialSelectedTaskId }
     setIsAddingColumn(false);
   };
 
-  if (isLoading) {
+  if (isLoading || parentsLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />

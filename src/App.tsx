@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -92,6 +92,88 @@ function ScrollToTop() {
   return null;
 }
 
+/**
+ * Top up the browser's own scroll restoration on back/forward.
+ *
+ * The native restore fires before React Query has data, so a long list
+ * (Portfolio, Registry) is still one screen tall at that moment and the
+ * browser can only scroll to the top. This remembers the offset per history
+ * entry and re-applies it for up to a second, as the list grows into place.
+ *
+ * Deliberately additive — `history.scrollRestoration` is left on `auto`, so
+ * this only fixes the late-content case and never replaces native behavior
+ * (which still handles a plain refresh, where the entry key is new to us).
+ * Any real scroll input from the user aborts it immediately: fighting someone
+ * who has already started scrolling is worse than landing at the top.
+ */
+function ScrollRestoration() {
+  const { key } = useLocation();
+  const navigationType = useNavigationType();
+
+  // Track the offset live in a ref, but only persist it once, on the way out:
+  // one storage write per navigation instead of one per scroll event. Reading
+  // `window.scrollY` in the cleanup instead would be too late — by the time
+  // passive effects run, the next page is already committed and the browser
+  // may have clamped the offset to the new (shorter) document.
+  const offset = useRef(0);
+  useEffect(() => {
+    offset.current = 0;
+    const onScroll = () => {
+      offset.current = window.scrollY;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      try {
+        sessionStorage.setItem(`scroll:${key}`, String(offset.current));
+      } catch {
+        /* private mode / storage disabled — restoration is a nicety */
+      }
+    };
+  }, [key]);
+
+  useEffect(() => {
+    if (navigationType !== "POP") return;
+    let target: number;
+    try {
+      target = Number(sessionStorage.getItem(`scroll:${key}`) ?? 0);
+    } catch {
+      return;
+    }
+    if (!target) return;
+
+    let raf = 0;
+    let cancelled = false;
+    const deadline = performance.now() + 1000;
+    const stop = () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+    const tick = () => {
+      if (cancelled) return;
+      window.scrollTo(0, target);
+      // Short page = content still loading; keep trying until it fits or we
+      // run out of patience.
+      if (window.scrollY < target && performance.now() < deadline) {
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+
+    window.addEventListener("wheel", stop, { passive: true });
+    window.addEventListener("touchstart", stop, { passive: true });
+    window.addEventListener("keydown", stop);
+    return () => {
+      stop();
+      window.removeEventListener("wheel", stop);
+      window.removeEventListener("touchstart", stop);
+      window.removeEventListener("keydown", stop);
+    };
+  }, [key, navigationType]);
+
+  return null;
+}
+
 function AdminPosthogTagger() {
   useAdminPosthogTag();
   return null;
@@ -106,6 +188,7 @@ const App = () => (
         <ThemeToggle />
         <BrowserRouter>
           <ScrollToTop />
+          <ScrollRestoration />
           <PageTimer />
           <AuthProvider>
             <TesterBanner />

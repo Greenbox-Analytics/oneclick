@@ -7,7 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Search, FileText, Trash2, CheckCircle, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   AlertDialog,
@@ -212,10 +212,18 @@ const Artists = () => {
                 return (
                 <Card
                   key={artist.id}
-                  className="group cursor-pointer border border-border hover:border-primary/30 hover:shadow-md transition-all overflow-hidden"
-                  onClick={() => navigate(`/artists/${artist.id}`)}
+                  className="group relative cursor-pointer border border-border hover:border-primary/30 hover:shadow-md transition-all overflow-hidden"
                   data-walkthrough={index === 0 ? "artists-card" : undefined}
                 >
+                  {/* Stretched link: the whole card navigates, but as a real
+                      <a> (cmd/middle-click, open-in-new-tab, hover preview).
+                      Overlaid rather than wrapped so the delete button below
+                      isn't a <button> nested inside an <a>. */}
+                  <Link
+                    to={`/artists/${artist.id}`}
+                    className="absolute inset-0"
+                    aria-label={cardDisplayName}
+                  />
                   <div className="h-0.5 bg-primary/40 group-hover:bg-primary transition-colors" />
                   <CardContent className="p-5">
                     <div className="flex items-start gap-4">
@@ -251,11 +259,9 @@ const Artists = () => {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setArtistToDelete(artist);
-                        }}
+                        // `relative z-10` lifts it above the stretched link.
+                        className="relative z-10 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={() => setArtistToDelete(artist)}
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>

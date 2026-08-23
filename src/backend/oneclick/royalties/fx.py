@@ -15,6 +15,9 @@ Cache table: fx_rate_snapshots (base text, rate_date date, rates jsonb,
 fetched_at timestamptz) — PK (base, rate_date).
 
   - BoC CAD-per-unit map caches under base = 'cadboc'; rates = {code_lower: cad_per_unit}.
+  - A snapshot is reused only on its own calendar day, so the table refreshes
+    once daily per currency on first use. A snapshot from any earlier day is
+    ignored for reuse but still serves as the fallback when the network fails.
 
 On a total network failure _boc_cad_rates returns the newest cached snapshot, or
 {} if there is no cached data at all. It NEVER raises.
@@ -88,7 +91,9 @@ def _boc_cad_rates(db, codes) -> dict[str, float]:
             return result
 
     # newest cached BoC map (Supabase)
+    today = date.today().isoformat()
     cached: dict = {}
+    cached_date: str | None = None
     try:
         res = (
             db.table("fx_rate_snapshots")
@@ -100,11 +105,27 @@ def _boc_cad_rates(db, codes) -> dict[str, float]:
         )
         if res.data:
             cached = res.data[0].get("rates") or {}
+            cached_date = res.data[0].get("rate_date")
     except Exception:
         cached = {}
+        cached_date = None
 
-    missing = {c for c in wanted if c not in cached}
-    fetched = dict(cached)
+    # Rates are only reusable on the day they were captured. Without this the
+    # cache was permanent, not daily: `missing` was computed purely on which
+    # CODES were present, so once a currency had been fetched once its rate was
+    # served forever and the row never refreshed. A payout converted at a
+    # months-old rate is a wrong number, not a stale nicety.
+    #
+    # A snapshot is kept for exactly one calendar day. BoC doesn't publish on
+    # weekends or holidays, but `recent=1` returns the last published
+    # observation, so a Saturday refresh simply re-stores Friday's rate under
+    # today's date — still one fetch per day, never a silently ageing number.
+    is_fresh = cached_date == today
+    missing = wanted if not is_fresh else {c for c in wanted if c not in cached}
+    # A stale snapshot seeds nothing: carrying its untouched codes into today's
+    # row would re-date old rates as current and they'd never be refetched.
+    # Dropping them means the next caller that wants one fetches it.
+    fetched = dict(cached) if is_fresh else {}
     if missing:
         series_csv = ",".join(f"FX{c.upper()}CAD" for c in sorted(missing))
         try:
@@ -125,7 +146,7 @@ def _boc_cad_rates(db, codes) -> dict[str, float]:
                     fetched[c] = val
             try:
                 db.table("fx_rate_snapshots").upsert(
-                    {"base": _BOC_CACHE_BASE, "rate_date": date.today().isoformat(), "rates": fetched},
+                    {"base": _BOC_CACHE_BASE, "rate_date": today, "rates": fetched},
                     on_conflict="base,rate_date",
                 ).execute()
             except Exception:

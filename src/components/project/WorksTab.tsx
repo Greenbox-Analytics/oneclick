@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +30,6 @@ const STATUS_LABELS: Record<string, string> = {
 const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
 
 export default function WorksTab({ projectId, userRole, artistId }: WorksTabProps) {
-  const navigate = useNavigate();
   const { data: works, isLoading, isError } = useWorksByProject(projectId);
   const updateWork = useUpdateWork();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -84,21 +83,32 @@ export default function WorksTab({ projectId, userRole, artistId }: WorksTabProp
             {works.map((work: Work) => (
               <Card
                 key={work.id}
-                className="p-4 hover:bg-muted/50 transition-colors cursor-pointer"
-                onClick={() => navigate(`/tools/registry/${work.id}`)}
+                className="relative p-4 hover:bg-muted/50 transition-colors cursor-pointer"
               >
+                {/* Stretched link rather than an onClick on the Card: the row
+                    is navigation (so cmd-click must work), and the inline
+                    rename below has to be able to win the click. Previously
+                    clicking the title both opened the editor AND navigated
+                    away, so renaming from here was impossible. */}
+                <Link
+                  to={`/tools/registry/${work.id}`}
+                  className="absolute inset-0"
+                  aria-label={work.title}
+                />
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       {canEdit(userRole) ? (
-                        <InlineEdit
-                          value={work.title}
-                          onSave={async (newTitle) => {
-                            await updateWork.mutateAsync({ workId: work.id, title: newTitle });
-                          }}
-                          className="text-sm font-medium text-foreground"
-                          inputClassName="text-sm h-7"
-                        />
+                        <span className="relative z-10">
+                          <InlineEdit
+                            value={work.title}
+                            onSave={async (newTitle) => {
+                              await updateWork.mutateAsync({ workId: work.id, title: newTitle });
+                            }}
+                            className="text-sm font-medium text-foreground"
+                            inputClassName="text-sm h-7"
+                          />
+                        </span>
                       ) : (
                         <span className="text-sm font-medium text-foreground">{work.title}</span>
                       )}

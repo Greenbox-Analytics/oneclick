@@ -52,6 +52,8 @@ interface PartyDrawerProps {
   base: string;
   onClose: () => void;
   onPayout: (ids: string[]) => void;
+  /** Open the full breakdown for an existing payout (draft or paid). */
+  onViewPayout: (payoutId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +306,7 @@ export function PartyDrawer({
   base,
   onClose,
   onPayout,
+  onViewPayout,
 }: PartyDrawerProps) {
   const { data, isLoading, isError, refetch } = useRoyaltyPayee(payeeId, base);
   const setCurrency = useSetPayeeCurrency();
@@ -315,6 +318,10 @@ export function PartyDrawer({
   const summary = data?.summary;
   const projects = data?.projects ?? [];
   const payouts = data?.payouts ?? [];
+  // Newest draft — what the footer offers when there is nothing left to draft.
+  const draftPayout = payouts
+    .filter((p) => p.status === "draft" && p.id)
+    .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))[0];
 
   return (
     <>
@@ -662,9 +669,12 @@ export function PartyDrawer({
                         : "bg-muted text-muted-foreground";
                     const dateStr = payout.paid_at || payout.created_at;
                     return (
-                      <div
+                      <button
                         key={payout.id ?? i}
-                        className="relative grid grid-cols-[26px_1fr_auto] gap-2.5 py-2.5 [&:not(:last-child)]:before:absolute [&:not(:last-child)]:before:left-3 [&:not(:last-child)]:before:top-[30px] [&:not(:last-child)]:before:bottom-[-10px] [&:not(:last-child)]:before:w-0.5 [&:not(:last-child)]:before:bg-border"
+                        type="button"
+                        disabled={!payout.id}
+                        onClick={() => payout.id && onViewPayout(payout.id)}
+                        className="relative grid w-full grid-cols-[26px_1fr_auto] items-start gap-2.5 rounded-md py-2.5 text-left transition-colors enabled:hover:bg-muted/50 [&:not(:last-child)]:before:absolute [&:not(:last-child)]:before:left-3 [&:not(:last-child)]:before:top-[30px] [&:not(:last-child)]:before:bottom-[-10px] [&:not(:last-child)]:before:w-0.5 [&:not(:last-child)]:before:bg-border"
                       >
                         <span
                           className={cn(
@@ -693,7 +703,7 @@ export function PartyDrawer({
                         >
                           {fmtMoney(payout.total_amount, payout.pay_currency)}
                         </span>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -713,16 +723,27 @@ export function PartyDrawer({
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
-          <Button
-            className="flex-1"
-            disabled={!summary || summary.owed <= 0}
-            onClick={() => onPayout([payeeId])}
-          >
-            <FileText className="mr-1.5 h-4 w-4" />
-            {summary && summary.owed > 0
-              ? `Draft ${fmtMoney(summary.owed_native, summary.payout_currency)} payout`
-              : "Nothing owed"}
-          </Button>
+          {/* `owed` is earned − paid − DRAFTED, so a payee whose whole balance
+              is already sitting in a draft invoice reads owed = 0. Calling that
+              "Nothing owed" is wrong twice over: they ARE owed, and the thing
+              the user wants next — the draft — is one tap away. Only a payee
+              with neither an owed balance nor a draft is genuinely settled. */}
+          {summary && summary.owed > 0 ? (
+            <Button className="flex-1" onClick={() => onPayout([payeeId])}>
+              <FileText className="mr-1.5 h-4 w-4" />
+              {`Draft ${fmtMoney(summary.owed_native, summary.payout_currency)} payout`}
+            </Button>
+          ) : draftPayout ? (
+            <Button className="flex-1" onClick={() => onViewPayout(draftPayout.id!)}>
+              <FileText className="mr-1.5 h-4 w-4" />
+              {`View draft · ${fmtMoney(draftPayout.total_amount, draftPayout.pay_currency)}`}
+            </Button>
+          ) : (
+            <Button className="flex-1" disabled>
+              <FileText className="mr-1.5 h-4 w-4" />
+              Nothing owed
+            </Button>
+          )}
         </div>
       </aside>
     </>

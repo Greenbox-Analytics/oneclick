@@ -209,7 +209,17 @@ const Profile = () => {
       if (user?.id) {
         void refreshAnalyticsContext(user.id, user.email);
       }
-      setSearchParams({});
+      // Drop only the Stripe return params, and `replace` so Back doesn't
+      // land on the checkout-return URL and replay the welcome toast.
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("welcome");
+          next.delete("stripe_session_id");
+          return next;
+        },
+        { replace: true },
+      );
       toast({ title: `Welcome to ${tierLabel(ent?.tier)}!`, description: "Your subscription is active." });
       return;
     }

@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Calculator, User, Users, Plus, LogOut, LayoutGrid, Folder, Clock, Bot, BookOpen, Shield, Receipt, Building2, type LucideIcon } from "lucide-react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   DropdownMenu,
@@ -197,11 +197,13 @@ const Dashboard = () => {
     setRecentTools(getRecentTools(user?.id));
   }, [user?.id]);
 
-  const handleNavigate = useCallback((route: string, label: string) => {
+  // Tracking rides the link's onClick rather than standing in for the
+  // navigation, so the tiles stay real <a>s (cmd/middle-click, open in new
+  // tab) while the recent-tools list still updates.
+  const track = useCallback((route: string, label: string) => {
     trackToolUsage(label, route, user?.id);
     setRecentTools(getRecentTools(user?.id));
-    navigate(route);
-  }, [navigate, user?.id]);
+  }, [user?.id]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -265,9 +267,14 @@ const Dashboard = () => {
             <Card
               key={card.route}
               data-walkthrough={card.walkthrough}
-              className="flex flex-col hover:shadow-lg transition-shadow cursor-pointer group border border-border hover:border-primary/30"
-              onClick={() => handleNavigate(card.route, card.label)}
+              className="relative flex flex-col hover:shadow-lg transition-shadow cursor-pointer group border border-border hover:border-primary/30"
             >
+              <Link
+                to={card.route}
+                onClick={() => track(card.route, card.label)}
+                className="absolute inset-0"
+                aria-label={card.label}
+              />
               <CardHeader>
                 <div className={`w-12 h-12 rounded-xl ${card.iconBg} flex items-center justify-center mb-3 group-hover:scale-105 transition-transform`}>
                   <card.icon className={`w-6 h-6 ${card.iconColor}`} />
@@ -307,12 +314,14 @@ const Dashboard = () => {
                   return (
                     <Button
                       key={tool.route}
+                      asChild
                       variant="outline"
                       className="gap-2 border-border hover:border-primary hover:bg-primary/5 hover:text-foreground transition-colors"
-                      onClick={() => handleNavigate(tool.route, tool.name)}
                     >
-                      <IconComponent className="w-4 h-4 text-primary" />
-                      {registry?.label || tool.name}
+                      <Link to={tool.route} onClick={() => track(tool.route, tool.name)}>
+                        <IconComponent className="w-4 h-4 text-primary" />
+                        {registry?.label || tool.name}
+                      </Link>
                     </Button>
                   );
                 })}
