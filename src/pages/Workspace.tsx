@@ -243,30 +243,37 @@ const Workspace = () => {
                 list is in; from there KanbanBoard's spinner (which now also
                 waits on the task overview's data) carries the same shape in the
                 same place, so it reads as one continuous load. */}
-            {boardsLoading ? (
-              <BoardsLoading />
-            ) : (
-              <>
-                <BoardSwitcher
-                  teamId={selectedTeamId}
+            {boardsLoading && <BoardsLoading />}
+            {/* HIDDEN, never unmounted, while the board list loads. Gating this
+                subtree on `boardsLoading` turned a parallel fetch into a
+                waterfall: KanbanBoard's columns/tasks/parents queries only
+                started once /boards/boards had come back, adding a whole round
+                trip to the critical path. Kept mounted, all four requests leave
+                together and the single spinner just covers the slowest.
+
+                No wasted fetch in a team context: KanbanBoard renders null
+                there until a board is picked, which is the one case where the
+                board id genuinely depends on the list. */}
+            <div className={boardsLoading ? "hidden" : undefined}>
+              <BoardSwitcher
+                teamId={selectedTeamId}
+                boardId={selectedBoardId}
+                onBoardChange={(b, t) => {
+                  setSelectedBoardId(b);
+                  setSelectedTeamId(t);
+                }}
+              />
+              {/* Under a team context with no board selected, don't fall through to the
+                  personal-boards union — the switcher shows its "No boards yet" state instead. */}
+              {selectedTeamId && !selectedBoardId ? null : (
+                <KanbanBoard
+                  key={selectedBoardId ?? "personal"}
                   boardId={selectedBoardId}
-                  onBoardChange={(b, t) => {
-                    setSelectedBoardId(b);
-                    setSelectedTeamId(t);
-                  }}
+                  teamId={selectedTeamId}
+                  initialSelectedTaskId={initialTaskId}
                 />
-                {/* Under a team context with no board selected, don't fall through to the
-                    personal-boards union — the switcher shows its "No boards yet" state instead. */}
-                {selectedTeamId && !selectedBoardId ? null : (
-                  <KanbanBoard
-                    key={selectedBoardId ?? "personal"}
-                    boardId={selectedBoardId}
-                    teamId={selectedTeamId}
-                    initialSelectedTaskId={initialTaskId}
-                  />
-                )}
-              </>
-            )}
+              )}
+            </div>
           </TabsContent>
 
           <TabsContent value="calendar" data-walkthrough="workspace-calendar">

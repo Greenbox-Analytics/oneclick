@@ -39,10 +39,53 @@ and the org console.
 """
 
 import os
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from fastapi import HTTPException
 from supabase import Client
+
+# ---------------------------------------------------------------------------
+# Per-request memo
+# ---------------------------------------------------------------------------
+#
+# `live_org_ids` is 2 sequential Supabase round trips and sits under EVERY
+# artist-visibility question, so one page load re-ran it 5-6 times with an
+# identical answer: `resolve_scope` once, the board-id resolver twice, then
+# once per link kind (artists / projects / contracts) inside _enrich_tasks —
+# doubled again because /tasks/period and /parents both enrich. ~12 round trips
+# where 2 would do.
+#
+# The memo is scoped to ONE REQUEST, not a TTL, and that distinction is the
+# whole safety argument: this module IS the authorization for every
+# artist-scoped read (the service-role client bypasses RLS). A TTL cache would
+# keep an offboarded member's seat alive for the length of the window. Per
+# request, an access change takes effect on the very next request — exactly
+# today's guarantee, unchanged.
+#
+# Unset outside a request (scripts, tests, the sweep) means no caching at all,
+# so nothing silently retains authorization state across a process's lifetime.
+_request_memo: ContextVar[dict | None] = ContextVar("artist_access_memo", default=None)
+
+
+def begin_request_scope() -> object:
+    """Start a fresh memo for one request. Returns a token for `end_request_scope`."""
+    return _request_memo.set({})
+
+
+def end_request_scope(token) -> None:
+    """Drop this request's memo. Always call it, even on an error path."""
+    _request_memo.reset(token)
+
+
+def _memoized(key: tuple, compute):
+    """Run `compute()` once per request per key. Uncached when no scope is active."""
+    memo = _request_memo.get()
+    if memo is None:
+        return compute()
+    if key not in memo:
+        memo[key] = compute()
+    return memo[key]
 
 
 def live_org_ids(db: Client, user_id: str) -> list[str]:
@@ -54,20 +97,26 @@ def live_org_ids(db: Client, user_id: str) -> list[str]:
     the same denial for a self-serve org whose grace period ran out:
     `'lapsed'` goes inert for EVERY member, admins included.
     `'pending'`/`'suspended'` are deliberately still unchecked here
-    (pre-existing, documented in 20260803000001)."""
-    seats = db.table("org_members").select("org_id").eq("user_id", user_id).eq("status", "active").execute()
-    org_ids = [s["org_id"] for s in (seats.data or []) if s.get("org_id")]
-    if not org_ids:
-        return []
-    live = (
-        db.table("organizations")
-        .select("id")
-        .in_("id", org_ids)
-        .is_("archived_at", "null")
-        .neq("status", "lapsed")  # mirror of the SQL clause added in 20260816000002_self_serve_orgs.sql
-        .execute()
-    )
-    return [o["id"] for o in (live.data or []) if o.get("id")]
+    (pre-existing, documented in 20260803000001).
+
+    Memoized per request — see the _request_memo note above."""
+
+    def _compute() -> list[str]:
+        seats = db.table("org_members").select("org_id").eq("user_id", user_id).eq("status", "active").execute()
+        org_ids = [s["org_id"] for s in (seats.data or []) if s.get("org_id")]
+        if not org_ids:
+            return []
+        live = (
+            db.table("organizations")
+            .select("id")
+            .in_("id", org_ids)
+            .is_("archived_at", "null")
+            .neq("status", "lapsed")  # mirror of the SQL clause added in 20260816000002_self_serve_orgs.sql
+            .execute()
+        )
+        return [o["id"] for o in (live.data or []) if o.get("id")]
+
+    return _memoized(("live_org_ids", user_id), _compute)
 
 
 def visible_artists(db: Client, user_id: str, query):
@@ -91,9 +140,17 @@ def can_access_artist(db: Client, user_id: str, artist_id: str) -> bool:
 
 
 def accessible_artist_ids(db: Client, user_id: str) -> list[str]:
-    """Every artist id the user may reach, personal and team-owned alike."""
-    res = visible_artists(db, user_id, db.table("artists").select("id")).execute()
-    return [a["id"] for a in (res.data or []) if a.get("id")]
+    """Every artist id the user may reach, personal and team-owned alike.
+
+    Memoized per request: _enrich_tasks asks for this once per link kind, and
+    /tasks/period and /parents both enrich, so the same full-table scan ran
+    four times a page load."""
+
+    def _compute() -> list[str]:
+        res = visible_artists(db, user_id, db.table("artists").select("id")).execute()
+        return [a["id"] for a in (res.data or []) if a.get("id")]
+
+    return _memoized(("accessible_artist_ids", user_id), _compute)
 
 
 # ---------------------------------------------------------------------------

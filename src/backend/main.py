@@ -27,6 +27,7 @@ from analytics import capture as analytics_capture
 from analytics import init_analytics
 from auth import get_current_user_email, get_current_user_id
 from middleware.analytics_middleware import AnalyticsMiddleware
+from middleware.request_scope_middleware import RequestScopeMiddleware
 from pagination import PaginatedResponse, paginate_query
 from subscriptions.admin_auth import is_active_tester_row, is_user_admin
 from utils.llm.tracking import iter_with_llm_context, set_llm_context, submit_with_context
@@ -142,6 +143,11 @@ ALLOWED_ORIGINS = [
 # the chain, so the LAST add_middleware call becomes the OUTERMOST. CORS must be
 # outermost among user middleware so that 4xx/known-exception responses get
 # Access-Control-Allow-Origin headers attached.
+#
+# RequestScopeMiddleware is added FIRST, making it the INNERMOST wrapper around
+# the route: the artist_access memo must open after auth-ish layers and, more
+# importantly, close before the request context is released.
+app.add_middleware(RequestScopeMiddleware)
 app.add_middleware(AnalyticsMiddleware)
 app.add_middleware(
     CORSMiddleware,
