@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import type { ParentTaskWithChildren, BoardTask } from "@/types/integrations";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
+import { BOARD_STALE_TIME } from "@/hooks/useBoards";
 
 interface ParentsResponse {
   parents: ParentTaskWithChildren[];
@@ -26,6 +27,9 @@ export function useParentTasks(search?: string, artistId?: string, boardId?: str
       return apiFetch<ParentsResponse>(withScope(`${API_URL}/boards/parents${qs ? `?${qs}` : ""}`));
     },
     enabled: !!user?.id && ready,
+    // KanbanBoard and TasksOverview mount this same key seconds apart; without
+    // a staleTime the second mount refetched /boards/parents immediately.
+    staleTime: BOARD_STALE_TIME,
   });
 
   const createParentMutation = useMutation({

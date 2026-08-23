@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
+import { BOARD_STALE_TIME } from "@/hooks/useBoards";
 import type { Board } from "@/types/boards";
 
 export function useBoardsList(teamId?: string | null) {
@@ -16,6 +17,9 @@ export function useBoardsList(teamId?: string | null) {
       return (await apiFetch<{ boards: Board[] }>(withScope(`${API_URL}/boards/boards${qs}`))).boards;
     },
     enabled: !!user?.id && ready,
+    // Workspace and BoardSwitcher both observe this key; every mutation that
+    // changes it invalidates explicitly, so staleness never hides our writes.
+    staleTime: BOARD_STALE_TIME,
   });
 }
 

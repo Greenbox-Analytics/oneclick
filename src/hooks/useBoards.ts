@@ -10,7 +10,26 @@ interface UseBoardsOptions {
   periodStart?: string;
   periodEnd?: string;
   isCurrentPeriod?: boolean;
+  /** Skip the tasks query. Several callers (the calendar, the task overview)
+   *  only want `columns` and the mutations, but every one of them was pulling
+   *  a full unfiltered task list down with it. */
+  withTasks?: boolean;
+  /** Gate BOTH queries. For a component that is always mounted but usually
+   *  inert — a closed detail panel — so it stops fetching a board's whole task
+   *  list on page load just to be ready in case someone opens it. Mutations are
+   *  unaffected and stay callable. */
+  enabled?: boolean;
 }
+
+/**
+ * Board data is collaborative but not live-critical, and React Query's default
+ * `staleTime: 0` marks it stale the instant it lands — so a SECOND component
+ * mounting an observer on the same key fires an immediate background refetch.
+ * That is why one board load asked for /boards/columns and /boards/parents
+ * twice each. Our own writes still land instantly: mutations invalidate these
+ * keys explicitly, which overrides staleness.
+ */
+export const BOARD_STALE_TIME = 30_000;
 
 type ParentTaskQueryData = { parents: ParentTaskWithChildren[]; ungrouped: BoardTask[] };
 
@@ -48,7 +67,15 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const options: UseBoardsOptions = typeof artistIdOrOptions === "string"
     ? { artistId: artistIdOrOptions }
     : artistIdOrOptions || {};
-  const { artistId, boardId, periodStart, periodEnd, isCurrentPeriod } = options;
+  const {
+    artistId,
+    boardId,
+    periodStart,
+    periodEnd,
+    isCurrentPeriod,
+    withTasks = true,
+    enabled: callerEnabled = true,
+  } = options;
 
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -67,7 +94,8 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       );
       return data.columns;
     },
-    enabled: !!user?.id && ready,
+    enabled: !!user?.id && ready && callerEnabled,
+    staleTime: BOARD_STALE_TIME,
   });
 
   const hasPeriod = !!(periodStart && periodEnd);
@@ -95,8 +123,9 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       );
       return data.tasks;
     },
-    enabled: !!user?.id && ready,
+    enabled: !!user?.id && ready && callerEnabled && withTasks,
     placeholderData: keepPreviousData,
+    staleTime: BOARD_STALE_TIME,
   });
 
   const createColumnMutation = useMutation({

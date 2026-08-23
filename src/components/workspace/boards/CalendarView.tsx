@@ -131,7 +131,9 @@ export function CalendarView() {
 
   const { tasks, isLoading } = useCalendarTasks(rangeStart, rangeEnd);
   const { events: externalEvents } = useExternalEvents(rangeStart, rangeEnd);
-  const { columns, createTask } = useBoards();
+  // Tasks here come from useCalendarTasks (date-ranged); the unfiltered list
+  // useBoards would fetch was never read.
+  const { columns, createTask } = useBoards({ withTasks: false });
   const { data: allOrgs } = useMyOrgs();
   // Same filter BoardSwitcher uses. Colours are keyed on this list's ORDER, so
   // including orgs whose boards can never appear would shift a live team's

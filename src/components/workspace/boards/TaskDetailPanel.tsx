@@ -49,6 +49,11 @@ export function TaskDetailPanel({
   teamId,
 }: TaskDetailPanelProps) {
   const isCreateMode = mode === "create";
+  // Derived from props alone, so it can gate the queries below. Two panels
+  // (edit + create) are mounted on every board, almost always closed — and
+  // each was fetching the board's full task list on page load just to be ready
+  // in case someone opened it.
+  const panelOpen = isCreateMode ? !!createColumnId : !!taskId;
   const { task, isLoading, addComment, deleteComment } = useTaskDetail(
     isCreateMode ? null : taskId
   );
@@ -61,7 +66,7 @@ export function TaskDetailPanel({
     applyOptimisticTaskCreate,
     rollbackTaskCaches,
     reconcileTaskCaches,
-  } = useBoards({ boardId });
+  } = useBoards({ boardId, enabled: panelOpen });
   const { parents } = useParentTasks(undefined, undefined, boardId);
 
   const { data: ent } = useEntitlements();
@@ -257,7 +262,7 @@ export function TaskDetailPanel({
     onClose();
   };
 
-  const isOpen = isCreateMode ? !!createColumnId : !!taskId;
+  const isOpen = panelOpen;
 
   // The panel is component state, not a route, so Back would otherwise leave
   // the board entirely with the panel still "open".
