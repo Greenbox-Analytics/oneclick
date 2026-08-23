@@ -3,7 +3,7 @@
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 import subscriptions.stripe_client as stripe_client_module
 import subscriptions.stripe_events as stripe_events_module
@@ -77,41 +77,72 @@ async def create_checkout_session(
 
 
 class CreateTopupRequest(BaseModel):
-    pack_key: str
-    # Licensing Phase B: when set, the pack purchase targets that org's
-    # credit pool instead of the caller's personal wallet. Caller must be an
-    # ACTIVE ADMIN of a NON-ARCHIVED org (checked below via orgs.authz);
-    # None (default) preserves the Phase A personal-wallet flow byte-for-byte.
+    """Buy credits: EITHER a preset bundle OR a custom credit count.
+
+    Note what is absent: a price. The client sends a credit COUNT and the
+    server derives the amount (subscriptions.credit_purchase), so a tampered
+    request can only ask for a different quantity, never a different price.
+    """
+
+    pack_key: str | None = None
+    # Custom amount, in credits. Bounded and priced server-side by
+    # credit_purchase.validate_custom_credits / price_cents_for_credits.
+    credits: int | None = None
+    # Licensing Phase B: when set, the purchase (bundle OR custom) targets
+    # that org's credit pool instead of the caller's personal wallet. Caller
+    # must be an ACTIVE ADMIN of a NON-ARCHIVED org (checked below via
+    # orgs.authz); None (default) preserves the personal-wallet flow.
     org_id: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_item(self):
+        if (self.pack_key is None) == (self.credits is None):
+            raise ValueError("Provide either pack_key or credits, not both.")
+        return self
 
 
 @router.get("/credit-packs")
 async def list_credit_packs():
-    """Active, Stripe-configured packs for the pack picker + pricing page.
+    """Bundles, custom-amount bounds, and tool prices for the pack picker.
 
     DELIBERATELY unauthenticated (stated decision, not an omission): this is
     public pricing data — no user state — and the pricing page must render it
     logged-out. Every sibling route stays user-authed.
 
+    A pack is listed on `active` ALONE. It used to also require a configured
+    stripe_price_id, which left the whole ladder unsellable until an operator
+    hand-created Prices in the Stripe dashboard; create_topup_session now
+    builds the line item ad-hoc from price_cents when that column is NULL, so
+    the extra filter would only hide sellable packs.
+
     Doubles as the RECURRING top-up catalog (spec 2026-08-15 §4.3): a pack is
     also buyable monthly exactly when the operator has set a recurring Stripe
     price on it, surfaced as `recurringPriceId` (null on the rest). No second
     endpoint and no second table — a top-up is the same pack, billed monthly.
+    Recurring genuinely DOES still need a real Price (Stripe cannot bill an
+    ad-hoc one-time amount on a subscription), which is why that column stays.
+
+    `prices` is the live per-action credit table, shipped so the picker can say
+    what a bundle typically buys ("about 40 OneClick runs") without hardcoding
+    numbers that would drift from the DB the next time base rates move. It is
+    OMITTED entirely when credit_prices reads empty, so the UI drops the
+    subtitle rather than quoting "0 runs".
     """
     from main import get_supabase_client
+    from subscriptions.credit_purchase import custom_config
 
     sb = get_supabase_client()
     res = (
         sb.table("credit_packs")
-        .select("key, credits, price_cents, sort_order, recurring_stripe_price_id")
+        .select("key, label, credits, price_cents, sort_order, recurring_stripe_price_id")
         .eq("active", True)
-        .not_.is_("stripe_price_id", "null")
         .order("sort_order")
         .execute()
     )
     packs = [
         {
             "key": p["key"],
+            "label": p.get("label"),
             "credits": p["credits"],
             "price_cents": p["price_cents"],
             "sort_order": p["sort_order"],
@@ -119,7 +150,23 @@ async def list_credit_packs():
         }
         for p in (res.data or [])
     ]
-    return {"packs": packs}
+
+    payload: dict = {"packs": packs, "custom": custom_config()}
+
+    # Same public-read table EntitlementsService._get_credit_prices() reads;
+    # queried directly here because this route is unauthenticated and holds no
+    # service instance. Keys mirror Entitlements.to_dict()'s `prices` block
+    # exactly, so one frontend type serves both payloads.
+    price_res = sb.table("credit_prices").select("action, credits").execute()
+    prices = {row["action"]: row["credits"] for row in (price_res.data or [])}
+    if prices:
+        payload["prices"] = {
+            "zoeMessage": prices.get("zoe_message"),
+            "oneclickRun": prices.get("oneclick_run"),
+            "registryParse": prices.get("registry_parse"),
+            "splitSheet": prices.get("split_sheet"),
+        }
+    return payload
 
 
 @router.post("/create-topup-session")
@@ -128,9 +175,19 @@ async def create_topup_session(
     user_id: str = Depends(get_current_user_id),
     email: str = Depends(get_current_user_email),
 ):
-    """One-time credit pack purchase (spec 2026-07-19 §3). Personal wallet
-    target by default (Phase A, byte-identical); `org_id` routes the same
-    pack purchase into that org's pool instead (Phase B, admin-gated)."""
+    """One-time credit purchase — a preset bundle, or a custom credit amount.
+
+    Both target the personal wallet by default (bundles: spec 2026-07-19 §3,
+    Phase A byte-identical); `org_id` routes the SAME purchase — bundle or
+    custom — into that org's pool instead (Phase B, admin-gated). The org
+    gates (licensing flag, require_admin, archived check) run BEFORE the
+    bundle/custom fork below, so both products sit behind identical authz.
+    """
+    from subscriptions.credit_purchase import (
+        credits_line_item,
+        price_cents_for_credits,
+        validate_custom_credits,
+    )
     from subscriptions.service import credits_enabled
 
     if not credits_enabled():
@@ -161,15 +218,49 @@ async def create_topup_session(
             raise HTTPException(status_code=409, detail="This organization is archived.")
         target = body.org_id
 
-    res = (
-        sb.table("credit_packs")
-        .select("key, credits, price_cents, stripe_price_id, active")
-        .eq("key", body.pack_key)
-        .execute()
-    )
-    pack = res.data[0] if res.data else None
-    if not pack or not pack.get("active") or not pack.get("stripe_price_id"):
-        raise HTTPException(status_code=400, detail="That credit pack isn't available.")
+    # Resolve the line item + metadata for whichever of the two products this
+    # is. The metadata written here is the ONLY thing the webhook trusts to
+    # decide what to grant, and this endpoint is its only writer.
+    if body.pack_key is not None:
+        res = (
+            sb.table("credit_packs")
+            .select("key, credits, price_cents, stripe_price_id, active")
+            .eq("key", body.pack_key)
+            .execute()
+        )
+        pack = res.data[0] if res.data else None
+        if not pack or not pack.get("active"):
+            raise HTTPException(status_code=400, detail="That credit pack isn't available.")
+        # An operator-set Price wins when present (keeps Stripe-native
+        # per-price reporting for anyone who wants it); otherwise bill the
+        # catalog's price_cents ad-hoc, which is what makes the ladder
+        # sellable with no Stripe dashboard setup at all.
+        if pack.get("stripe_price_id"):
+            line_item = {"price": pack["stripe_price_id"], "quantity": 1}
+        else:
+            line_item = credits_line_item(
+                price_cents=pack["price_cents"],
+                name=f"{pack['credits']:,} Msanii credits",
+            )
+        metadata = {"user_id": user_id, "pack_key": pack["key"], "target": target}
+        analytics_plan = pack["key"]
+        analytics_credits = pack["credits"]
+    else:
+        try:
+            credits = validate_custom_credits(body.credits)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        line_item = credits_line_item(
+            price_cents=price_cents_for_credits(credits),
+            name=f"{credits:,} Msanii credits",
+        )
+        # No `pack_key` (there is no catalog row), and deliberately NO `kind`
+        # key: `kind` is the org_topup discriminator that
+        # handle_checkout_session_completed branches on FIRST, and overloading
+        # it would route a credit purchase into the org top-up handler.
+        metadata = {"user_id": user_id, "credits": str(credits), "target": target}
+        analytics_plan = "custom"
+        analytics_credits = credits
 
     frontend_url = os.environ["FRONTEND_URL"]
     stripe = stripe_client_module.get_stripe()
@@ -187,14 +278,18 @@ async def create_topup_session(
     return_base = "/teams" if target != "user" else "/profile"
     session = stripe.checkout.Session.create(
         mode="payment",
-        line_items=[{"price": pack["stripe_price_id"], "quantity": 1}],
-        # target='user' (personal wallet) or an org id (Phase B pool target).
-        metadata={"user_id": user_id, "pack_key": pack["key"], "target": target},
+        line_items=[line_item],
+        # metadata.target is 'user' (personal wallet) or an org id (Phase B).
+        metadata=metadata,
         success_url=f"{frontend_url}{return_base}?topup=success",
         cancel_url=f"{frontend_url}{return_base}?topup=canceled",
         **customer_kwargs,
     )
-    analytics_capture(user_id, "checkout_started", {"plan": body.pack_key, "kind": "topup"})
+    analytics_capture(
+        user_id,
+        "checkout_started",
+        {"plan": analytics_plan, "kind": "topup", "credits": analytics_credits},
+    )
     return {"url": session.url}
 
 

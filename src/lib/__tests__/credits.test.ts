@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { creditStanding } from "@/lib/credits";
+import { creditStanding, usageSummary } from "@/lib/credits";
 import type { EntitlementCredits } from "@/hooks/useEntitlements";
 
 /** A personal wallet — nothing redacted. */
@@ -76,5 +76,54 @@ describe("creditStanding", () => {
   it("returns null while entitlements are still loading", () => {
     expect(creditStanding(undefined)).toBeNull();
     expect(creditStanding(null)).toBeNull();
+  });
+});
+
+describe("usageSummary", () => {
+  // Base rates as of 20260819000001_credit_base_rates.sql.
+  const PRICES = { zoeMessage: 5, oneclickRun: 30, registryParse: 30, splitSheet: 20 };
+
+  it("quotes what a bundle typically buys, headline tool first", () => {
+    // pack_1200 — the ladder was sized so these land on round numbers.
+    expect(usageSummary(1200, PRICES)).toBe(
+      "≈40 OneClick runs · ≈240 Zoe messages · ≈60 split sheets · ≈40 Registry parses"
+    );
+  });
+
+  it("floors — never promises a run the credits can't cover", () => {
+    // pack_4000: 4000 / 30 = 133.33 runs. Quoting 134 would oversell.
+    expect(usageSummary(4000, PRICES)).toContain("≈133 OneClick runs");
+  });
+
+  it("drops a tool the amount can't afford even once", () => {
+    // 25 credits buys Zoe messages and one split sheet, but no 30-credit run.
+    const summary = usageSummary(25, PRICES);
+    expect(summary).not.toContain("OneClick");
+    expect(summary).not.toContain("Registry");
+    expect(summary).toContain("≈5 Zoe messages");
+    expect(summary).toContain("≈1 Split sheet");
+  });
+
+  it("singularises using the same label the usage card shows", () => {
+    expect(usageSummary(30, { oneclickRun: 30 })).toBe("≈1 OneClick run");
+  });
+
+  it("returns null rather than quoting zeros", () => {
+    // Nothing to render beats "≈0 OneClick runs" on a purchase card.
+    expect(usageSummary(4, PRICES)).toBeNull();
+    expect(usageSummary(0, PRICES)).toBeNull();
+    expect(usageSummary(-100, PRICES)).toBeNull();
+  });
+
+  it("returns null when prices are missing or unusable", () => {
+    // The endpoint omits `prices` entirely when credit_prices reads empty.
+    expect(usageSummary(1200, undefined)).toBeNull();
+    expect(usageSummary(1200, null)).toBeNull();
+    expect(usageSummary(1200, {})).toBeNull();
+    expect(usageSummary(1200, { oneclickRun: 0, zoeMessage: null })).toBeNull();
+  });
+
+  it("skips only the tool whose price is unusable", () => {
+    expect(usageSummary(1200, { oneclickRun: 30, zoeMessage: null })).toBe("≈40 OneClick runs");
   });
 });

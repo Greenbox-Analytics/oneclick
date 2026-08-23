@@ -39,6 +39,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 
 import { API_URL, apiFetch, getAuthHeaders, apiErrorFromBody } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useGatedAction } from "@/hooks/useGatedAction";
 
@@ -169,15 +170,21 @@ const SplitSheet = () => {
     }
   }, [onboardingLoading, statuses.splitsheet]);
 
-  // Fetch artists
+  // Fetch artists — scoped to the active workspace, re-fetched on switch
+  const { scopeParam, withScope, ready: scopeReady } = useWorkspaceScope();
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || !scopeReady) return;
     setLoadingArtists(true);
-    apiFetch<Artist[]>(`${API_URL}/artists`)
-      .then((data) => setArtists(data || []))
+    apiFetch<Artist[]>(withScope(`${API_URL}/artists`))
+      .then((data) => {
+        setArtists(data || []);
+        // A workspace switch can drop the selected artist out of the roster.
+        setSelectedArtistId((prev) => (prev && !(data || []).some((a) => a.id === prev) ? "" : prev));
+      })
       .catch(() => setArtists([]))
       .finally(() => setLoadingArtists(false));
-  }, [user?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, scopeReady, scopeParam]);
 
   // Fetch projects when artist changes
   useEffect(() => {

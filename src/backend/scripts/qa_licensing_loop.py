@@ -33,7 +33,6 @@ import os
 import secrets
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 from dotenv import load_dotenv
 
@@ -133,10 +132,11 @@ try:
         sb,
         admin["id"],
         org_id,
-        SimpleNamespace(id=f"qa_{SUFFIX}"),
-        "pack_500",
+        "pack_300",
         500,
         1000,
+        request_id=f"topup:qa_{SUFFIX}",
+        event_name="topup_purchased",
     )
     org_row = sb.table("organizations").select("status").eq("id", org_id).execute().data[0]
     check("2. purchase of 500 >= min 500 activates org", org_row["status"] == "active", str(org_row))

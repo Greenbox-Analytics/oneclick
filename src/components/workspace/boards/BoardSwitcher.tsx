@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/AuthContext";
 import { useMyOrgs, liveOrgs } from "@/hooks/useOrgs";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 import {
   useArchiveBoard,
   useArchivedBoards,
@@ -60,6 +61,9 @@ interface BoardSwitcherProps {
  */
 export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherProps) {
   const { user } = useAuth();
+  // With workspace scoping live, the header "Working as" pill owns the context
+  // (Workspace syncs teamId from it) — this switcher then only picks a board.
+  const { enabled: scopingEnabled } = useWorkspaceScope();
   // Contexts = live orgs only, so a dangling selection is bounced by the
   // stale-team guard below.
   const { data: orgs, isLoading: teamsLoading } = useMyOrgs();
@@ -105,9 +109,11 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
     Array.isArray(teams) &&
     !teams.some((t) => t.id === teamId);
   useEffect(() => {
-    if (teamIsStale) onBoardChange(undefined, null);
+    // With scoping live the server-validated pill owns the context — resetting
+    // here would fight Workspace's sync effect in a loop.
+    if (teamIsStale && !scopingEnabled) onBoardChange(undefined, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teamIsStale]);
+  }, [teamIsStale, scopingEnabled]);
 
   // In a TEAM context, auto-select the first board once the list resolves, and drop a
   // stale selection (e.g. after archiving the active board) that is no longer present.
@@ -173,20 +179,23 @@ export function BoardSwitcher({ teamId, boardId, onBoardChange }: BoardSwitcherP
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
-      {/* Context: Personal + teams */}
-      <Select value={teamId ?? PERSONAL} onValueChange={handleContextChange}>
-        <SelectTrigger className="w-[180px]" aria-label="Board context">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={PERSONAL}>Personal</SelectItem>
-          {(teams ?? []).map((team) => (
-            <SelectItem key={team.id} value={team.id}>
-              {team.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {/* Context: Personal + teams. Hidden when workspace scoping is live —
+          the header "Working as" pill is the one context switcher then. */}
+      {!scopingEnabled && (
+        <Select value={teamId ?? PERSONAL} onValueChange={handleContextChange}>
+          <SelectTrigger className="w-[180px]" aria-label="Board context">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={PERSONAL}>Personal</SelectItem>
+            {(teams ?? []).map((team) => (
+              <SelectItem key={team.id} value={team.id}>
+                {team.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       {/* Board within the selected context */}
       {boardsLoading ? (

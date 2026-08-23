@@ -33,6 +33,21 @@ import { Segmented } from "./Segmented";
 import { WorkRow, type DashboardWork } from "./WorkRow";
 import { RegistryAvatar } from "./RegistryAvatar";
 import AddWorkDialog from "@/components/project/AddWorkDialog";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
+
+/** Empty-state copy that names the active workspace when scoping is live. */
+function EmptyWorksMessage({ searchActive }: { searchActive: boolean }) {
+  const { enabled, scopeLabel } = useWorkspaceScope();
+  return (
+    <p className="text-muted-foreground mb-4">
+      {searchActive
+        ? "No works match your filters."
+        : enabled
+          ? `No works in ${scopeLabel} yet.`
+          : "You don't own any works yet."}
+    </p>
+  );
+}
 
 interface ProjectInfo {
   id: string;
@@ -454,9 +469,9 @@ function MyWorksList({
     return (
       <div className="rounded-lg border border-dashed bg-card p-12 text-center">
         <Music className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
-        <p className="text-muted-foreground mb-4">
-          {searchActive ? "No works match your filters." : "You don't own any works yet."}
-        </p>
+        {/* Name the workspace so a scoped-empty list reads as "this workspace
+            is empty", never as "my works are gone". */}
+        <EmptyWorksMessage searchActive={searchActive} />
         {!searchActive && (
           <Button onClick={onAddWork}>
             <Plus className="w-4 h-4 mr-2" /> Add your first work

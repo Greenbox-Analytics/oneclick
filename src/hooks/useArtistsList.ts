@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 export interface ArtistOption {
   id: string;
@@ -10,12 +11,13 @@ export interface ArtistOption {
 
 export function useArtistsList() {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
 
   const query = useQuery<ArtistOption[]>({
-    queryKey: ["artists-list", user?.id],
+    queryKey: ["artists-list", user?.id, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
-      const data = await apiFetch<unknown>(`${API_URL}/artists`);
+      const data = await apiFetch<unknown>(withScope(`${API_URL}/artists`));
       // Backend returns array of artist objects
       const rows = Array.isArray(data)
         ? data
@@ -28,7 +30,7 @@ export function useArtistsList() {
         })
       );
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 
   return {

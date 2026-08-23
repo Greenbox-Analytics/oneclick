@@ -351,6 +351,126 @@ class TestTopupCompleted:
 
 
 # ---------------------------------------------------------------------------
+# _handle_topup_completed — CUSTOM amount branch (no pack_key in metadata)
+# ---------------------------------------------------------------------------
+
+
+def _custom_topup_event(
+    session_id="cs_custom_1",
+    user_id=TEST_USER_ID,
+    credits="1300",
+    amount_total=2600,
+    payment_status="paid",
+    event_id="evt_custom_1",
+):
+    """Same shape as _topup_event, but metadata carries `credits` instead of
+    `pack_key` — billing_router writes one or the other, never both."""
+    session = MagicMock()
+    session.mode = "payment"
+    session.id = session_id
+    session.metadata = {"user_id": user_id, "credits": credits, "target": "user"}
+    session.payment_status = payment_status
+    session.amount_total = amount_total
+    event = MagicMock()
+    event.id = event_id
+    event.data.object = session
+    return event
+
+
+class TestCustomTopupCompleted:
+    def _sb(self):
+        # No credit_packs row on purpose: a custom amount must never need one.
+        return _mock_supabase(
+            {
+                "credit_packs": [],
+                "credit_wallets": [{"id": "w-top", "owner_type": "user", "owner_id": TEST_USER_ID}],
+            }
+        )
+
+    def test_grants_the_metadata_amount(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_custom_topup_event(), sb)
+        name, params = sb.rpc.call_args[0]
+        assert name == "grant_credits"
+        assert params["p_amount"] == 1300
+        assert params["p_kind"] == "purchase"
+        assert params["p_bucket"] == "reserve"
+        # Same idempotency namespace as a bundle purchase, so an
+        # async_payment_succeeded redelivery converges identically.
+        assert params["p_request_id"] == "topup:cs_custom_1"
+        assert params["p_metadata"] == {"custom": True, "credits": 1300, "price_cents": 2600}
+
+    def test_async_redelivery_same_session_same_key(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_custom_topup_event(event_id="evt_DIFFERENT"), sb)
+        assert sb.rpc.call_args[0][1]["p_request_id"] == "topup:cs_custom_1"
+
+    def test_unpaid_session_skips_grant(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_custom_topup_event(payment_status="unpaid"), sb)
+        sb.rpc.assert_not_called()
+
+    def test_duplicate_grant_skips_analytics(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        sb.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True, "balance_after": 1300})
+        with patch("subscriptions.stripe_events.analytics_capture") as mock_capture:
+            stripe_events.handle_checkout_session_completed(_custom_topup_event(event_id="evt_DIFFERENT"), sb)
+        assert not any(c.args[1] == "topup_purchased" for c in mock_capture.call_args_list)
+
+    def test_analytics_labels_the_purchase_custom(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        with patch("subscriptions.stripe_events.analytics_capture") as mock_capture:
+            stripe_events.handle_checkout_session_completed(_custom_topup_event(), sb)
+        call = next(c for c in mock_capture.call_args_list if c.args[1] == "topup_purchased")
+        assert call.args[2] == {"pack": "custom", "credits": 1300, "usd": 26.0, "target": "user"}
+
+    @pytest.mark.parametrize("credits", ["not-a-number", "0", "-5"])
+    def test_unusable_amount_grants_nothing(self, credits):
+        """A malformed amount must not be guessed at on a money path."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_custom_topup_event(credits=credits), sb)
+        sb.rpc.assert_not_called()
+
+    def test_amount_above_the_ceiling_is_clamped(self):
+        import subscriptions.stripe_events as stripe_events
+        from subscriptions.credit_purchase import MAX_CUSTOM_CREDITS
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_custom_topup_event(credits="999999999"), sb)
+        assert sb.rpc.call_args[0][1]["p_amount"] == MAX_CUSTOM_CREDITS
+
+    def test_price_mismatch_still_grants(self):
+        """The customer has already been charged — refusing to grant would be
+        taking money for nothing. The mismatch is logged, not enforced."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(_custom_topup_event(amount_total=1), sb)
+        assert sb.rpc.call_args[0][1]["p_amount"] == 1300
+
+    def test_missing_both_pack_and_credits_grants_nothing(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        event = _custom_topup_event()
+        event.data.object.metadata = {"user_id": TEST_USER_ID, "target": "user"}
+        stripe_events.handle_checkout_session_completed(event, sb)
+        sb.rpc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _handle_topup_completed — org-pool branch (Licensing Phase B, Task 8)
 # ---------------------------------------------------------------------------
 
@@ -536,6 +656,130 @@ class TestOrgTopupCompleted:
         assert len(grant_calls) == 1
         assert grant_calls[0].args[1]["p_wallet_id"] == "w-personal"
         assert "organizations" not in builders  # activation check never runs for the personal path
+
+
+def _custom_org_topup_event(
+    session_id="cs_custom_org_1",
+    user_id=TEST_USER_ID,
+    org_id="org-1",
+    credits="1300",
+    amount_total=2600,
+    payment_status="paid",
+    event_id="evt_custom_org_1",
+):
+    """Custom amount INTO an org pool: metadata carries `credits` (no
+    pack_key) AND an org-id target — billing_router writes exactly this shape
+    for an admin's custom pool purchase."""
+    session = MagicMock()
+    session.mode = "payment"
+    session.id = session_id
+    session.metadata = {"user_id": user_id, "credits": credits, "target": org_id}
+    session.payment_status = payment_status
+    session.amount_total = amount_total
+    event = MagicMock()
+    event.id = event_id
+    event.data.object = session
+    return event
+
+
+class TestCustomOrgTopupCompleted:
+    """A custom amount with an org target lands in the POOL wallet — same
+    dispatch, idempotency key, and activation re-check as a bundle."""
+
+    ORG_ID = "org-1"
+    WALLET_ID = "w-org-pool"
+
+    def _sb(self, org_status="active"):
+        # No credit_packs row on purpose: a custom amount must never need one.
+        return _mock_supabase(
+            {
+                "credit_packs": [],
+                "credit_wallets": [{"id": self.WALLET_ID, "owner_type": "org", "owner_id": self.ORG_ID}],
+                "organizations": [{"id": self.ORG_ID, "status": org_status, "min_initial_purchase_credits": None}],
+                "credit_ledger": [],
+            }
+        )
+
+    def test_grants_the_pool_wallet_with_custom_metadata(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, builders = self._sb()
+        stripe_events.handle_checkout_session_completed(_custom_org_topup_event(org_id=self.ORG_ID), sb)
+
+        grant_calls = [c for c in sb.rpc.call_args_list if c.args[0] == "grant_credits"]
+        assert len(grant_calls) == 1
+        params = grant_calls[0].args[1]
+        assert params["p_wallet_id"] == self.WALLET_ID
+        assert params["p_amount"] == 1300
+        assert params["p_kind"] == "purchase"
+        assert params["p_bucket"] == "reserve"
+        assert params["p_request_id"] == "topup:cs_custom_org_1"
+        assert params["p_metadata"] == {
+            "custom": True,
+            "credits": 1300,
+            "price_cents": 2600,
+            "org_id": self.ORG_ID,
+        }
+        # Never the user-wallet seeding path.
+        builders["credit_wallets"].insert.assert_not_called()
+
+    def test_activation_recheck_runs_for_custom_purchases(self):
+        """A custom purchase is kind='purchase' paid-in, so it must count
+        toward a pending org's activation floor exactly like a pack."""
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb(org_status="pending")
+        with patch("orgs.wallets.maybe_activate_org") as mock_activate:
+            stripe_events.handle_checkout_session_completed(_custom_org_topup_event(org_id=self.ORG_ID), sb)
+        mock_activate.assert_called_once_with(sb, self.ORG_ID, self.WALLET_ID)
+
+    def test_analytics_custom_pack_label_and_org_target(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        with patch("subscriptions.stripe_events.analytics_capture") as mock_capture:
+            stripe_events.handle_checkout_session_completed(_custom_org_topup_event(org_id=self.ORG_ID), sb)
+
+        capture_calls = [c for c in mock_capture.call_args_list if c.args[1] == "topup_purchased"]
+        assert len(capture_calls) == 1
+        actor, _, props = capture_calls[0].args
+        assert actor == TEST_USER_ID
+        assert props == {
+            "pack": "custom",
+            "credits": 1300,
+            "usd": 26.0,
+            "target": "org",
+            "org_id": self.ORG_ID,
+        }
+
+    def test_duplicate_grant_skips_analytics(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        sb.rpc.return_value.execute.return_value = MagicMock(data={"duplicate": True, "balance_after": 1300})
+        with patch("subscriptions.stripe_events.analytics_capture") as mock_capture:
+            stripe_events.handle_checkout_session_completed(
+                _custom_org_topup_event(org_id=self.ORG_ID, event_id="evt_DIFFERENT"), sb
+            )
+        assert not any(c.args[1] == "topup_purchased" for c in mock_capture.call_args_list)
+
+    def test_unpaid_session_skips_grant(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(
+            _custom_org_topup_event(org_id=self.ORG_ID, payment_status="unpaid"), sb
+        )
+        sb.rpc.assert_not_called()
+
+    def test_unusable_amount_grants_nothing(self):
+        import subscriptions.stripe_events as stripe_events
+
+        sb, _ = self._sb()
+        stripe_events.handle_checkout_session_completed(
+            _custom_org_topup_event(org_id=self.ORG_ID, credits="not-a-number"), sb
+        )
+        sb.rpc.assert_not_called()
 
 
 class TestMaybeActivateOrg:

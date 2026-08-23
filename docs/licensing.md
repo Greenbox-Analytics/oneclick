@@ -73,7 +73,9 @@ Artists are created **client-side, straight against PostgREST** — there is no 
 - `src/pages/NewArtist.tsx`
 - `src/components/NewArtistDialog.tsx`
 
-Both default `team_id` to the active billing-context org and show `TeamOwnershipField` with a "Keep this artist private to me" escape hatch. Because there is no backend endpoint, **RLS is the only enforcement**: `artists_insert_team` requires an ACTIVE membership in the target org, a **non-archived** org (`20260805000004` — inserting into an archived org would create an artist nobody can access), *and* pins `user_id` to the caller, so neither the team nor the creator stamp can be forged.
+Both default `team_id` to the active billing-context org and show `TeamOwnershipField` with a "Keep this artist private to me" escape hatch. Because there is no backend endpoint, **RLS is the only enforcement**: `artists_insert_team` requires a live seat in the target org — ACTIVE membership, org neither archived nor lapsed — *and* pins `user_id` to the caller, so neither the team nor the creator stamp can be forged.
+
+**A policy on `artists` must never re-read `artists`.** The four `artists_*_team` policies are written against the row's own `team_id` via `is_live_org_member(auth.uid(), team_id)`, **not** via `can_access_artist` (`20260822000001`). Both creation paths end in `.insert({...}).select().single()` — an `INSERT … RETURNING`, which makes Postgres apply the **SELECT** policy to the new row. `can_access_artist` re-reads `artists`, and being `STABLE` it runs under the inserting statement's snapshot, where that row does not yet exist: it returned false and the whole INSERT failed with `42501`. `artists_select_personal` never had the bug because it tests the row's own columns. `is_live_org_member` (`20260818000001`) is verbatim `can_access_artist`'s team branch but keyed on the org id, so it is the same predicate with no self-read — `can_access_artist` now calls it too, rather than keeping a second inlined copy. Child-table policies keep calling `can_access_artist`: they ask about a *different* table's row, which is already committed and therefore visible. `boards` has the same self-read shape (`can_access_board` reads `boards`) and is safe only because boards are created server-side on the service-role client; a client-side board create would need this same treatment.
 
 Team artists are excluded from the personal `maxArtists` cap count (`.is("team_id", null)` in `NewArtist.tsx`) — the team pays for them.
 
@@ -208,6 +210,13 @@ Storage is a **hard cap on every tier**, with no pay-per-use.
 | `useTransferArtistToTeam()` | `src/hooks/useArtistTeam.ts` | the transfer mutation |
 | `TeamOwnershipField` | `src/components/artists/TeamOwnershipField.tsx` | the shared "shared with {team} / keep private" control on both creation paths |
 | `useEntitlements().billingContext` | `src/hooks/useEntitlements.ts` | `{type: "personal"} | {type: "org", orgId, orgName, role}` |
+| `useWorkspaceScope()` | `src/hooks/useWorkspaceScope.ts` | workspace scoping (below): `scopeKey` for every scoped React Query key, `withScope(url)` to append `?scope=`, `ready` to gate fetches |
+
+---
+
+## Workspace scoping (behind `WORKSPACE_SCOPING_ENABLED`)
+
+With both flags on, the "Working as" context also decides **what every listing shows**: an item's workspace is the owner of its artist (`artists.team_id`; NULL = Personal), and membership-grant-only access (`project_members`, `registry_collaborators`) belongs to Personal. Two function families in `src/backend/artist_access.py`, never to be merged: `visible_artists`/`can_access_artist` stay AUTHORIZATION (always the union — transfer, invite-accept, deep links and detail-by-id routes keep resolving on it), while `scoped_artists`/`scoped_artist_ids` are PRESENTATION — the union narrowed to one workspace, applied ON TOP of the union so a forged `?scope=` can only return less. `resolve_scope` turns the request param (`personal` | org id | absent → stored `billing_context_org_id`) into a `Scope`; an explicit foreign org 404s uniformly, a stale stored context degrades to personal. Under an org scope the Registry lists **every member's works on the org's artists** (ownership-keyed, matching the `works_team_artist` RLS policy and `20260822000003`'s sub-table policies), and `get_work_access` grants an org colleague elevated access via the artist layer (gated on `LICENSING_ENABLED` alone — it mirrors what RLS already grants). Boards file under a workspace via `boards.org_id` (`20260822000004`) — a **filing label, not a sharing grant**: an artist-keyed board derives it from `artists.team_id`, never from the ambient scope; only the artistless "Personal" board is one-per-workspace. Tests: `test_workspace_scope.py`, `test_registry_works_scope.py`, `test_registry_access_org.py`, `test_boards_workspace.py`, `useWorkspaceScope.test.ts`.
 
 ---
 
@@ -217,6 +226,7 @@ Storage is a **hard cap on every tier**, with no pay-per-use.
 |---|---|---|
 | `LICENSING_ENABLED` | unset (off) | Master switch. Off = every `/orgs/*` route 404s and no derivation runs |
 | `CREDITS_ENABLED` | unset (off) | The credits model. Off = legacy tier gating |
+| `WORKSPACE_SCOPING_ENABLED` | unset (off) | Workspace scoping (needs `LICENSING_ENABLED` too). Off = entitlements omit `workspaceScope`, the frontend sends no `?scope=`, and every list is the pre-scoping union — true rollback |
 | `ENTERPRISE_SEAT_STORAGE_BYTES` | `500 GiB` | **Per seat.** A team's cap is this × active seats (enterprise only — self-serve uses `tier_entitlements.team_storage_bytes`, see below) |
 | `ORG_GRACE_DAYS` | `14` | Self-serve only. Days an uncovered team sits in grace before `evaluate_standing` flips it to `status='lapsed'` |
 | `TEAM_STORAGE_OVERAGE_USD_PER_GB` | `0.025` | Self-serve Pro only. PAYG rate for team-storage pool overage, billed monthly as a Stripe InvoiceItem on the covering owner's personal customer |
@@ -236,7 +246,9 @@ pytest mocks the Supabase client and never reaches Postgres, so **the SQL layer'
 | The money RPCs | paste `supabase/qa/launch_gates_credit_rpcs.sql` |
 | Full HTTP lifecycle | `poetry run python -m scripts.qa_licensing_loop --port 8000` (needs both flags on) |
 
-`gates_team_artists.sql` builds a throwaway org, members, artists, projects and files, asserts, then **RAISEs on purpose** — the error message *is* the report, and the raise is what rolls the test data back. It needs at least 3 rows in `auth.users`. Expected totals: **6** after `20260803000001`, **14** after `…0002`, **16** after `…0003`, **19** after `20260805000001` (parent-pointer move gates), **21** after `…0002` (notes gates).
+`gates_team_artists.sql` builds a throwaway org, members, artists, projects and files, asserts, then **RAISEs on purpose** — the error message *is* the report, and the raise is what rolls the test data back. It needs at least 3 rows in `auth.users`. Expected totals: **6** after `20260803000001`, **14** after `…0002`, **16** after `…0003`, **19** after `20260805000001` (parent-pointer move gates), **21** after `…0002` (notes gates), **24** after `20260816000002` (`lapsed`), **26** after `20260822000001` (`INSERT … RETURNING` read-back, lapsed-org insert refusal). Not yet covered: the six registry sub-table team policies from `20260822000003` and the `boards.org_id` guard from `20260822000004` (workspace scoping) — gates for those are a pending follow-up.
+
+**Write the gate as the statement the client actually issues.** Gate 8's team-artist insert is a plain `INSERT … VALUES`, so for two migrations nothing here ever evaluated the SELECT policy against a row being inserted — which is the only shape the app uses (`.select()`), and exactly where the self-read bug lived. A gate that exercises a *different statement* than production is coverage on paper.
 
 Every PL/pgSQL variable in those scripts is `v_`-prefixed. PL/pgSQL's `variable_conflict` defaults to `error`, so a variable named `org_id` in `WHERE org_id = org_id` aborts the whole block with "column reference org_id is ambiguous".
 

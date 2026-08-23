@@ -14,13 +14,22 @@
 -- Gates 1-6 cover 20260803000001, 7-14 cover 20260803000002, 15-16 cover
 -- 20260803000003, 17-19 cover 20260805000001 (parent-pointer walk-out locks),
 -- 20-21 cover 20260805000002 (notes team scope), 22-24 cover 20260816000002
--- (self-serve orgs' 'lapsed' status wired into can_access_artist).
+-- (self-serve orgs' 'lapsed' status wired into can_access_artist), 25-26 cover
+-- 20260822000001 (INSERT ... RETURNING readable back; lapsed org refuses).
 --
 -- Run the whole file after each of those migrations, and read the count in
 -- context: after 20260803000001 alone, gates 1-6 pass and 7-11 fail because the
 -- policies they exercise do not exist yet. Expected totals are 6 after
 -- 20260803000001, 14 after 20260803000002, 16 after 20260803000003, 19 after
--- 20260805000001, 21 after 20260805000002, and 24 after 20260816000002.
+-- 20260805000001, 21 after 20260805000002, 24 after 20260816000002, and 26
+-- after 20260822000001.
+--
+-- NOT YET COVERED: 20260822000003 (six registry sub-table team policies:
+-- ownership_stakes, licensing_rights, registry_agreements,
+-- registry_access_grants, work_files, work_audio_links) and 20260822000004
+-- (boards.org_id filing label + live-membership guard). Gates for those are a
+-- pending follow-up — until then their only executable check is applying the
+-- migrations themselves.
 -- ============================================================================
 DO $$
 DECLARE
@@ -400,6 +409,59 @@ BEGIN
     v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 24. pending org now blocks access (behavior regression)';
   END IF;
   UPDATE organizations SET status = 'active' WHERE id = v_org;
+
+  -- -------------------------------------------------------------- 25..26 --
+  -- 20260822000001. Gate 8's re-insert is a plain INSERT ... VALUES, so no
+  -- gate here ever evaluated the SELECT policy against a row being inserted --
+  -- which is exactly the statement PostgREST issues for
+  -- `.insert({...}).select().single()`, the ONLY way the app creates artists.
+  -- Under the old artists_select_team (can_access_artist(id, ...), a re-read of
+  -- `artists` from a STABLE function) the new row was invisible to its own
+  -- INSERT and the whole statement failed with 42501.
+  DECLARE
+    v_returned UUID;
+  BEGIN
+    PERFORM set_config('request.jwt.claims',
+      json_build_object('sub', v_member, 'role', 'authenticated')::text, true);
+    SET LOCAL ROLE authenticated;
+
+    -- 25: the real client statement. Must return the new id, not raise.
+    BEGIN
+      INSERT INTO artists (name, email, user_id, team_id)
+        VALUES ('GATE returning', 'gr@x.test', v_member, v_org)
+        RETURNING id INTO v_returned;
+      IF v_returned IS NOT NULL THEN
+        v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 25. team artist INSERT ... RETURNING is readable back by its creator';
+      ELSE
+        v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 25. INSERT ... RETURNING produced no row';
+      END IF;
+    EXCEPTION WHEN insufficient_privilege THEN
+      v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 25. artists_select_team denied the row its own INSERT ... RETURNING just wrote';
+    END;
+
+    RESET ROLE;
+    PERFORM set_config('request.jwt.claims', NULL, true);
+    DELETE FROM artists WHERE id = v_returned;
+
+    -- 26: a lapsed org must refuse the insert outright. Before 20260822000001
+    -- artists_insert_team checked archived_at but not status, so a member of a
+    -- lapsed org could create an artist can_access_artist then hid from
+    -- everyone, admins included.
+    UPDATE organizations SET status = 'lapsed' WHERE id = v_org;
+    PERFORM set_config('request.jwt.claims',
+      json_build_object('sub', v_member, 'role', 'authenticated')::text, true);
+    SET LOCAL ROLE authenticated;
+    BEGIN
+      INSERT INTO artists (name, email, user_id, team_id)
+        VALUES ('GATE lapsed insert', 'gl@x.test', v_member, v_org);
+      v_fail := v_fail + 1; v_report := v_report || E'\n[FAIL] 26. member of a LAPSED org created an unreadable team artist';
+    EXCEPTION WHEN insufficient_privilege THEN
+      v_pass := v_pass + 1; v_report := v_report || E'\n[PASS] 26. lapsed org refuses new team artists';
+    END;
+    RESET ROLE;
+    PERFORM set_config('request.jwt.claims', NULL, true);
+    UPDATE organizations SET status = 'active' WHERE id = v_org;
+  END;
 
   RAISE EXCEPTION E'\n=== TEAM ARTIST GATES: % passed, % failed. ALL TEST DATA ROLLED BACK. ===%\n',
     v_pass, v_fail, v_report;

@@ -21,6 +21,7 @@ import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 const Workspace = () => {
   const navigate = useNavigate();
@@ -93,6 +94,20 @@ const Workspace = () => {
   // Board switcher selection (Personal vs. a team + a board within it).
   const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>(undefined);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+
+  // When workspace scoping is live, the header "Working as" pill IS the
+  // context switcher: boards follow it, and the per-page context dropdown in
+  // BoardSwitcher goes away. Reset the board selection on a switch so a board
+  // from the previous workspace is never rendered under the new one.
+  const { scopeId, enabled: scopingEnabled } = useWorkspaceScope();
+  useEffect(() => {
+    if (!scopingEnabled) return;
+    if (selectedTeamId !== scopeId) {
+      setSelectedBoardId(undefined);
+      setSelectedTeamId(scopeId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopingEnabled, scopeId]);
 
   // Fire tool_opened when the active tab corresponds to a tool surface.
   // integrations / settings are NOT tools — skip them.

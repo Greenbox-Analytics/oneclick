@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 // --- Types ---
 
@@ -59,31 +60,33 @@ export interface WorkFull extends Work {
 
 export function useWorks(artistId?: string) {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
   return useQuery<Work[]>({
-    queryKey: ["registry-works", user?.id, artistId],
+    queryKey: ["registry-works", user?.id, artistId, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
       let url = `${API_URL}/registry/works`;
       if (artistId) url += `?artist_id=${artistId}`;
-      const data = await apiFetch<{ works: Work[] }>(url);
+      const data = await apiFetch<{ works: Work[] }>(withScope(url));
       return data.works;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 }
 
 export function useMyCollaborations() {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
   return useQuery<Work[]>({
-    queryKey: ["registry-my-collaborations", user?.id],
+    queryKey: ["registry-my-collaborations", user?.id, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
       const data = await apiFetch<{ works: Work[] }>(
-        `${API_URL}/registry/works/my-collaborations`
+        withScope(`${API_URL}/registry/works/my-collaborations`)
       );
       return data.works;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 }
 

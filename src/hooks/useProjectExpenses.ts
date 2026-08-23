@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 import { formatCurrency } from "@/lib/currency";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 export type ExpenseCategory =
   | "studio"
@@ -93,14 +94,15 @@ export function useProjectExpenses(projectId?: string) {
 
 export function useExpenseSummary() {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
   return useQuery<ExpenseSummaryRow[]>({
-    queryKey: ["expense-summary"],
+    queryKey: ["expense-summary", scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
-      const data = await apiFetch<{ expenses: ExpenseSummaryRow[] }>(`${API_URL}/expenses/summary`);
+      const data = await apiFetch<{ expenses: ExpenseSummaryRow[] }>(withScope(`${API_URL}/expenses/summary`));
       return data.expenses;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 }
 
@@ -119,6 +121,7 @@ export interface ExportExpensesVars {
 // Streaming download can't use apiFetch (JSON-only). Mirror useExportProof:
 // raw fetch with auth headers → blob → anchor download, filename from header.
 export function useExportExpenses() {
+  const { withScope } = useWorkspaceScope();
   return useMutation({
     mutationFn: async ({ format, projectId, category, artistId }: ExportExpensesVars) => {
       const params = new URLSearchParams({ format });
@@ -127,7 +130,8 @@ export function useExportExpenses() {
       if (artistId && artistId !== "all") params.set("artist_id", artistId);
 
       const authHeaders = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/expenses/export?${params.toString()}`, {
+      // Same workspace scope as the on-screen list, so the report matches it.
+      const res = await fetch(withScope(`${API_URL}/expenses/export?${params.toString()}`), {
         headers: authHeaders,
       });
       if (!res.ok) throw new Error("Failed to generate expense report");

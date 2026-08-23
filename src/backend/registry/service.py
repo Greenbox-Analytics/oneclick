@@ -42,16 +42,59 @@ def _resolve_auth_email(db: Client, user_id: str) -> str | None:
 # ============================================================
 
 
-async def get_works(db: Client, user_id: str, artist_id: str = None, page: int = None, page_size: int = 50):
-    query = db.table("works_registry").select("*", count="exact").eq("user_id", user_id)
-    if artist_id:
-        query = query.eq("artist_id", artist_id)
+def _empty_page(page: int | None, page_size: int):
+    if page is not None:
+        return PaginatedResponse(data=[], total=0, page=page, page_size=page_size)
+    return []
+
+
+async def get_works(
+    db: Client,
+    user_id: str,
+    artist_id: str = None,
+    page: int = None,
+    page_size: int = 50,
+    *,
+    scope: artist_access.Scope | None = None,
+):
+    """List works. Unscoped: the caller's own works (creator-keyed, the
+    pre-scoping behaviour). With an ACTIVE scope: every work on the workspace's
+    artists — ownership-keyed, so colleagues see each other's works on their
+    org's artists, and an offboarded creator stops seeing works on an artist
+    they no longer reach."""
+    if scope is not None and scope.active:
+        ids = artist_access.scoped_artist_ids(db, user_id, scope)
+        if artist_id:
+            # Intersect, never trust: taking ?artist_id= at face value would be
+            # a one-parameter bypass of the entire scope.
+            ids = [artist_id] if artist_id in ids else []
+        if not ids:
+            return _empty_page(page, page_size)
+        query = db.table("works_registry").select("*", count="exact").in_("artist_id", ids)
+    else:
+        query = db.table("works_registry").select("*", count="exact").eq("user_id", user_id)
+        if artist_id:
+            query = query.eq("artist_id", artist_id)
     query = query.order("created_at", desc=True)
     return paginate_query(query, page, page_size)
 
 
-async def get_works_as_collaborator(db: Client, user_id: str, page: int = None, page_size: int = 50):
-    """Get ALL works where user is a collaborator (not the creator) — any status."""
+async def get_works_as_collaborator(
+    db: Client,
+    user_id: str,
+    page: int = None,
+    page_size: int = 50,
+    *,
+    scope: artist_access.Scope | None = None,
+):
+    """Get ALL works where user is a collaborator (not the creator) — any status.
+
+    "Shared with me" is a Personal-workspace surface: in an org workspace a
+    collaboration on that org's artist already appears in the main list, so
+    listing it here too would show one row twice on one page.
+    """
+    if scope is not None and scope.active and scope.org_id is not None:
+        return _empty_page(page, page_size)
     collab_rows = (
         db.table("registry_collaborators")
         .select("work_id")
@@ -61,16 +104,20 @@ async def get_works_as_collaborator(db: Client, user_id: str, page: int = None, 
     )
     work_ids = [r["work_id"] for r in (collab_rows.data or [])]
     if not work_ids:
-        if page is not None:
-            return PaginatedResponse(data=[], total=0, page=page, page_size=page_size)
-        return []
-    query = (
-        db.table("works_registry")
-        .select("*", count="exact")
-        .in_("id", work_ids)
-        .neq("user_id", user_id)
-        .order("updated_at", desc=True)
-    )
+        return _empty_page(page, page_size)
+    query = db.table("works_registry").select("*", count="exact").in_("id", work_ids).neq("user_id", user_id)
+    if scope is not None and scope.active:
+        # Personal workspace: works on artists a live org owns are listed by
+        # ownership in THAT workspace — exclude them here. Applied to the QUERY,
+        # never the returned page: count="exact" is computed on the query, so
+        # post-filtering would make `total` lie and hand back short pages.
+        org_ids = artist_access.live_org_ids(db, user_id)
+        if org_ids:
+            org_artists = db.table("artists").select("id").in_("team_id", org_ids).execute()
+            excluded = [a["id"] for a in (org_artists.data or []) if a.get("id")]
+            if excluded:
+                query = query.not_.in_("artist_id", excluded)
+    query = query.order("updated_at", desc=True)
     return paginate_query(query, page, page_size)
 
 
@@ -1125,13 +1172,15 @@ async def auto_verify_artist(db: Client, manager_user_id: str, email: str, colla
             )
 
 
-async def get_artists_with_teamcards(db: Client, user_id: str):
+async def get_artists_with_teamcards(db: Client, user_id: str, *, scope: artist_access.Scope | None = None):
     """Batch fetch: all artists for a user with TeamCard overlays in 2 queries (not N+1)."""
     # Team artists belong in this roster too — .eq("user_id") alone is the
     # CREATOR column, which both hides a transferred artist from the colleagues
     # who should see it and keeps showing it to an offboarded creator.
+    # scoped_artists = visible_artists + the workspace narrowing (inert when
+    # the scope is None/unscoped).
     artists_result = (
-        artist_access.visible_artists(db, user_id, db.table("artists").select("*"))
+        artist_access.scoped_artists(db, user_id, db.table("artists").select("*"), scope)
         .order("created_at", desc=True)
         .execute()
     )

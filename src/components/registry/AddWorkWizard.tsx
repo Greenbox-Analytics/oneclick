@@ -41,6 +41,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 import { parseCreditWallDetail, type CreditWallInfo } from "@/components/paywall/creditWall";
 import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useStorageStatus } from "@/hooks/useEntitlements";
@@ -153,17 +154,19 @@ export function AddWorkWizard({
     toast.success("Project created");
   };
 
+  // Backend /artists (not raw supabase) so the picker only offers the active
+  // workspace's artists — a raw select would list every workspace's roster.
+  const { scopeKey, withScope, ready: scopeReady } = useWorkspaceScope();
   const artistsQuery = useQuery<ArtistOption[]>({
-    queryKey: ["registry-wizard-artists", user?.id],
+    queryKey: ["registry-wizard-artists", user?.id, scopeKey],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("artists")
-        .select("id, name")
-        .order("name");
-      if (error) throw error;
-      return (data || []) as ArtistOption[];
+      const data = await apiFetch<unknown>(withScope(`${API_URL}/artists`));
+      const rows = Array.isArray(data) ? data : ((data as { data?: unknown[] })?.data ?? []);
+      return (rows as ArtistOption[])
+        .map((a) => ({ id: a.id, name: a.name }))
+        .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
     },
-    enabled: open && !!user?.id && needsDestination,
+    enabled: open && !!user?.id && needsDestination && scopeReady,
   });
 
   const projectsQuery = useQuery<ProjectOption[]>({

@@ -33,8 +33,10 @@ export function useSetBillingContext() {
       // so the payer-switch notice (useEntitlements) doesn't treat the
       // refetched context as a surprise.
       clearRememberedBillingContext(user?.id);
-      qc.invalidateQueries({ queryKey: ["entitlements", user?.id] });
-      qc.invalidateQueries({ queryKey: ["credit-usage", user?.id] });
+      // The context now decides what every list SHOWS (workspace scoping), not
+      // just who pays — invalidate everything rather than maintaining a list
+      // of scoped keys that would silently rot as surfaces are added.
+      qc.invalidateQueries();
     },
   });
 }

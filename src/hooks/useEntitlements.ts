@@ -144,6 +144,14 @@ export interface EntitlementSubscription {
   planPeriod: "monthly" | "annual" | null;
 }
 
+/**
+ * The active workspace — which artists (and therefore projects, works, files,
+ * boards and tool inputs) every list should show. Emitted only when
+ * `WORKSPACE_SCOPING_ENABLED` + `LICENSING_ENABLED` are both on; its absence
+ * is useWorkspaceScope's rollback signal (no `?scope=` param is sent).
+ */
+export type WorkspaceScope = { type: "personal" } | { type: "org"; orgId: string; orgName: string };
+
 export interface Entitlements {
   tier: Tier;
   status: SubscriptionStatus;
@@ -169,6 +177,12 @@ export interface Entitlements {
    * `CREDITS_ENABLED` — `undefined`/`null` when licensing is off.
    */
   billingContext?: BillingContext | null;
+  /**
+   * The active workspace for LISTINGS (see useWorkspaceScope). Rides the
+   * stored billing context server-side; absent unless workspace scoping is
+   * live.
+   */
+  workspaceScope?: WorkspaceScope | null;
 }
 
 // ---------------------------------------------------------------------------

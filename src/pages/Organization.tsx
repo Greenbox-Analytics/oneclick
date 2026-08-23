@@ -25,6 +25,7 @@ import { ApiError } from "@/lib/apiFetch";
 import { fmtDate } from "@/lib/utils";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { useCreditUsage } from "@/hooks/useCreditUsage";
+import { useTopupReturn } from "@/hooks/useTopupReturn";
 import {
   useMyOrgs,
   useOrg,
@@ -531,6 +532,9 @@ const Organization = () => {
   const { data: orgs, isLoading, error } = useMyOrgs();
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  // A pool credit purchase returns here (?topup=success|canceled). Called
+  // ABOVE the early returns below so hook order stays stable across renders.
+  useTopupReturn();
 
   if (isLoading) {
     return (

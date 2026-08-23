@@ -13,6 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from postgrest.exceptions import APIError
 
+import artist_access
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from registry import contract_splits, derive_service, grants_service, service, work_links_service
@@ -63,8 +64,12 @@ async def list_works(
     artist_id: str | None = Query(None),
     page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    scope: str | None = Query(None),
 ):
-    result = await service.get_works(_get_supabase(), user_id, artist_id, page, page_size)
+    db = _get_supabase()
+    result = await service.get_works(
+        db, user_id, artist_id, page, page_size, scope=artist_access.resolve_scope(db, user_id, scope)
+    )
     if isinstance(result, list):
         return {"works": result}
     return result
@@ -75,8 +80,12 @@ async def list_my_collaborations(
     user_id: str = Depends(get_current_user_id),
     page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    scope: str | None = Query(None),
 ):
-    result = await service.get_works_as_collaborator(_get_supabase(), user_id, page, page_size)
+    db = _get_supabase()
+    result = await service.get_works_as_collaborator(
+        db, user_id, page, page_size, scope=artist_access.resolve_scope(db, user_id, scope)
+    )
     if isinstance(result, list):
         return {"works": result}
     return result
@@ -959,9 +968,15 @@ async def get_artist_with_teamcard(artist_id: str, user_id: str = Depends(get_cu
 
 
 @router.get("/artists/with-teamcards")
-async def list_artists_with_teamcards(user_id: str = Depends(get_current_user_id)):
+async def list_artists_with_teamcards(
+    user_id: str = Depends(get_current_user_id),
+    scope: str | None = Query(None),
+):
     """Batch endpoint: returns all of a user's artists with TeamCard overlays applied."""
-    artists = await service.get_artists_with_teamcards(_get_supabase(), user_id)
+    db = _get_supabase()
+    artists = await service.get_artists_with_teamcards(
+        db, user_id, scope=artist_access.resolve_scope(db, user_id, scope)
+    )
     return {"artists": artists}
 
 

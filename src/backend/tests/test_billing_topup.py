@@ -37,6 +37,64 @@ class TestListCreditPacks:
         assert resp.status_code == 200
         assert resp.json()["packs"][0]["key"] == "pack_500"
 
+    def test_lists_a_pack_with_no_stripe_price(self, client, mock_supabase):
+        """Listed on `active` ALONE. The old stripe_price_id filter left the
+        whole ladder unsellable until an operator hand-created Prices in
+        Stripe; the line item is now built ad-hoc from price_cents."""
+
+        def _side_effect(name):
+            if name == "credit_packs":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(
+                    data=[
+                        {
+                            **{k: PACK_ROW[k] for k in ("key", "credits", "price_cents", "sort_order")},
+                            "label": "Starter",
+                        }
+                    ]
+                )
+                return b
+            return _default_table_side_effect(name)
+
+        mock_supabase.table.side_effect = _side_effect
+
+        body = client.get("/billing/credit-packs").json()
+        assert body["packs"][0]["label"] == "Starter"
+
+    def test_ships_custom_bounds_and_tool_prices(self, client, mock_supabase, monkeypatch):
+        """The picker quotes "what this typically buys" off `prices` and sizes
+        its custom-amount input off `custom` — one fetch, no hardcoded numbers."""
+        monkeypatch.delenv("CREDIT_OVERAGE_USD", raising=False)
+
+        def _side_effect(name):
+            if name == "credit_packs":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[])
+                return b
+            return _default_table_side_effect(name)
+
+        mock_supabase.table.side_effect = _side_effect
+
+        body = client.get("/billing/credit-packs").json()
+        assert body["custom"] == {"minCredits": 250, "maxCredits": 100000, "perCreditCents": 2}
+        # Keys must mirror Entitlements.to_dict()'s `prices` block exactly, so
+        # one frontend type serves both payloads.
+        assert set(body["prices"]) == {"zoeMessage", "oneclickRun", "registryParse", "splitSheet"}
+
+    def test_omits_prices_when_the_table_is_empty(self, client, mock_supabase):
+        """Degrade to no subtitle rather than quoting "0 OneClick runs"."""
+
+        def _side_effect(name):
+            b = MockQueryBuilder()
+            if name in ("credit_packs", "credit_prices"):
+                b.execute.return_value = MagicMock(data=[])
+                return b
+            return _default_table_side_effect(name)
+
+        mock_supabase.table.side_effect = _side_effect
+
+        assert "prices" not in client.get("/billing/credit-packs").json()
+
 
 class TestCreateTopupSession:
     def test_409_when_credits_disabled(self, client, monkeypatch):
@@ -127,6 +185,164 @@ class TestCreateTopupSession:
         kwargs = fake_stripe.checkout.Session.create.call_args.kwargs
         assert kwargs.get("customer_email")
         assert "customer" not in kwargs
+
+
+class TestCreateTopupSessionCustomAmount:
+    """Custom credit amounts: the client sends a COUNT, the server prices it."""
+
+    def _side_effect(self, name):
+        if name == "credit_packs":
+            b = MockQueryBuilder()
+            b.execute.return_value = MagicMock(data=[PACK_ROW])
+            return b
+        if name == "subscriptions":
+            b = MockQueryBuilder()
+            b.execute.return_value = MagicMock(data=[{"user_id": TEST_USER_ID, "stripe_customer_id": "cus_existing"}])
+            return b
+        return _default_table_side_effect(name)
+
+    def _checkout(self, client, monkeypatch, body):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("FRONTEND_URL", "https://app.test")
+        monkeypatch.delenv("CREDIT_OVERAGE_USD", raising=False)
+        monkeypatch.delenv("STRIPE_CREDITS_PRODUCT_ID", raising=False)
+        fake_stripe = MagicMock()
+        fake_stripe.checkout.Session.create.return_value = MagicMock(url="https://checkout.stripe/custom")
+        with patch("subscriptions.billing_router.stripe_client_module.get_stripe", return_value=fake_stripe):
+            resp = client.post("/billing/create-topup-session", json=body)
+        return resp, fake_stripe
+
+    def test_prices_the_amount_server_side(self, client, mock_supabase, monkeypatch):
+        mock_supabase.table.side_effect = self._side_effect
+        resp, fake_stripe = self._checkout(client, monkeypatch, {"credits": 1300})
+
+        assert resp.status_code == 200
+        kwargs = fake_stripe.checkout.Session.create.call_args.kwargs
+        assert kwargs["mode"] == "payment"
+        # 1,300 credits at the $0.02 list rate = $26.00.
+        assert kwargs["line_items"] == [
+            {
+                "price_data": {
+                    "currency": "usd",
+                    "unit_amount": 2600,
+                    "product_data": {"name": "1,300 Msanii credits"},
+                },
+                "quantity": 1,
+            }
+        ]
+        # No pack_key (there is no catalog row) and no `kind` — `kind` is the
+        # org_topup discriminator the subscription handlers branch on first.
+        assert kwargs["metadata"] == {"user_id": TEST_USER_ID, "credits": "1300", "target": "user"}
+        assert "kind" not in kwargs["metadata"]
+        assert kwargs["success_url"] == "https://app.test/profile?topup=success"
+
+    def test_rejects_an_amount_below_the_minimum(self, client, mock_supabase, monkeypatch):
+        mock_supabase.table.side_effect = self._side_effect
+        resp, _ = self._checkout(client, monkeypatch, {"credits": 10})
+        assert resp.status_code == 400
+        assert "250" in resp.json()["detail"]
+
+    def test_rejects_an_amount_above_the_ceiling(self, client, mock_supabase, monkeypatch):
+        mock_supabase.table.side_effect = self._side_effect
+        resp, _ = self._checkout(client, monkeypatch, {"credits": 100_001})
+        assert resp.status_code == 400
+
+    def test_rejects_both_pack_and_amount(self, client, mock_supabase, monkeypatch):
+        mock_supabase.table.side_effect = self._side_effect
+        resp, _ = self._checkout(client, monkeypatch, {"credits": 500, "pack_key": PACK_ROW["key"]})
+        assert resp.status_code == 422
+
+    def test_rejects_neither(self, client, mock_supabase, monkeypatch):
+        mock_supabase.table.side_effect = self._side_effect
+        resp, _ = self._checkout(client, monkeypatch, {})
+        assert resp.status_code == 422
+
+    def _org_side_effect(self, name):
+        if name == "organizations":
+            b = MockQueryBuilder()
+            b.execute.return_value = MagicMock(data=[{"archived_at": None}])
+            return b
+        return self._side_effect(name)
+
+    def test_custom_into_an_org_pool_targets_the_pool(self, client, mock_supabase, monkeypatch):
+        """An org admin can buy a custom amount into the pool, same as a
+        bundle — metadata.target carries the org id so fulfilment grants the
+        POOL wallet, and the return path is the /teams console."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: True)
+        mock_supabase.table.side_effect = self._org_side_effect
+
+        resp, fake_stripe = self._checkout(client, monkeypatch, {"credits": 500, "org_id": ORG_ID})
+        assert resp.status_code == 200
+        kwargs = fake_stripe.checkout.Session.create.call_args.kwargs
+        assert kwargs["metadata"] == {"user_id": TEST_USER_ID, "credits": "500", "target": ORG_ID}
+        assert kwargs["line_items"][0]["price_data"]["unit_amount"] == 1000  # $10.00, server-priced
+        assert kwargs["success_url"] == "https://app.test/teams?topup=success"
+
+    def test_custom_org_purchase_still_requires_admin(self, client, mock_supabase, monkeypatch):
+        """The org gates run before the bundle/custom fork, so the custom
+        product sits behind the same require_admin wall as bundles."""
+        monkeypatch.setenv("LICENSING_ENABLED", "true")
+        monkeypatch.setattr(orgs_authz, "is_org_admin", lambda *a: False)
+        mock_supabase.table.side_effect = self._org_side_effect
+
+        resp, _ = self._checkout(client, monkeypatch, {"credits": 500, "org_id": ORG_ID})
+        assert resp.status_code == 403
+
+
+class TestCreateTopupSessionAdHocPack:
+    """A bundle with no operator-configured Stripe Price is still sellable —
+    the line item is built from `price_cents` instead."""
+
+    def test_builds_price_data_from_the_catalog_row(self, client, mock_supabase, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("FRONTEND_URL", "https://app.test")
+        monkeypatch.delenv("STRIPE_CREDITS_PRODUCT_ID", raising=False)
+
+        def _side_effect(name):
+            if name == "credit_packs":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[{**PACK_ROW, "stripe_price_id": None}])
+                return b
+            return _default_table_side_effect(name)
+
+        mock_supabase.table.side_effect = _side_effect
+
+        fake_stripe = MagicMock()
+        fake_stripe.checkout.Session.create.return_value = MagicMock(url="https://checkout.stripe/adhoc")
+        with patch("subscriptions.billing_router.stripe_client_module.get_stripe", return_value=fake_stripe):
+            resp = client.post("/billing/create-topup-session", json={"pack_key": PACK_ROW["key"]})
+
+        assert resp.status_code == 200
+        kwargs = fake_stripe.checkout.Session.create.call_args.kwargs
+        assert kwargs["line_items"] == [
+            {
+                "price_data": {
+                    "currency": "usd",
+                    "unit_amount": PACK_ROW["price_cents"],
+                    "product_data": {"name": f"{PACK_ROW['credits']:,} Msanii credits"},
+                },
+                "quantity": 1,
+            }
+        ]
+        # Metadata is unchanged from the configured-Price path, so fulfilment
+        # (which reads pack_key and re-reads credits from the catalog) is too.
+        assert kwargs["metadata"] == {"user_id": TEST_USER_ID, "pack_key": PACK_ROW["key"], "target": "user"}
+
+    def test_inactive_pack_is_still_unsellable(self, client, mock_supabase, monkeypatch):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+
+        def _side_effect(name):
+            if name == "credit_packs":
+                b = MockQueryBuilder()
+                b.execute.return_value = MagicMock(data=[{**PACK_ROW, "active": False}])
+                return b
+            return _default_table_side_effect(name)
+
+        mock_supabase.table.side_effect = _side_effect
+
+        resp = client.post("/billing/create-topup-session", json={"pack_key": PACK_ROW["key"]})
+        assert resp.status_code == 400
 
 
 class TestCreateTopupSessionOrgTarget:

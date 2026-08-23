@@ -25,6 +25,7 @@ import { CreditsUsageCard } from "@/components/billing/CreditsUsageCard";
 import { ResourceLimitsCard } from "@/components/billing/ResourceLimitsCard";
 import { IntegrationsCard } from "@/components/billing/IntegrationsCard";
 import { useEntitlements } from "@/hooks/useEntitlements";
+import { useTopupReturn } from "@/hooks/useTopupReturn";
 import { useAnalytics, type Plan } from "@/hooks/useAnalytics";
 import { peekCachedAnalyticsContext, refreshAnalyticsContext } from "@/hooks/useAnalyticsContext";
 import { useArtistsList } from "@/hooks/useArtistsList";
@@ -157,6 +158,10 @@ const Profile = () => {
   const queryClient = useQueryClient();
   const { captureCheckoutCompleted } = useAnalytics();
   const checkoutCompletedFiredRef = useRef(false);
+
+  // A credit purchase returns to ?topup=success|canceled — a separate Stripe
+  // round trip from the subscription one handled below.
+  useTopupReturn();
 
   const isPaid = isPaidTier(ent?.tier);
   const analyticsCtx = user?.id ? peekCachedAnalyticsContext(user.id) : null;

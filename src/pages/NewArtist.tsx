@@ -93,10 +93,13 @@ const NewArtist = () => {
       });
       navigate(`/artists/${data.id}`);
     },
-    onError: () => {
+    // Surface the real reason, matching NewArtistDialog. Swallowing it here is
+    // what made an RLS refusal on team-owned creation look like a generic
+    // failure with nothing to act on.
+    onError: (err: Error) => {
       toast({
         title: "Error",
-        description: "Failed to create artist",
+        description: err?.message || "Failed to create artist",
         variant: "destructive",
       });
     },
