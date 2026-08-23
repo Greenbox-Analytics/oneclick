@@ -3,25 +3,28 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 import type { Board } from "@/types/boards";
 
 export function useBoardsList(teamId?: string | null) {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
   return useQuery({
-    queryKey: ["boards-list", user?.id, teamId ?? "personal"],
+    queryKey: ["boards-list", user?.id, teamId ?? "personal", scopeKey],
     queryFn: async () => {
       const qs = teamId ? `?team_id=${teamId}` : "";
-      return (await apiFetch<{ boards: Board[] }>(`${API_URL}/boards/boards${qs}`)).boards;
+      return (await apiFetch<{ boards: Board[] }>(withScope(`${API_URL}/boards/boards${qs}`))).boards;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 }
 
 export function useCreateBoard() {
   const qc = useQueryClient();
+  const { withScope } = useWorkspaceScope();
   return useMutation({
     mutationFn: (body: { name: string; team_id?: string | null; description?: string }) =>
-      apiFetch<Board>(`${API_URL}/boards/boards`, {
+      apiFetch<Board>(withScope(`${API_URL}/boards/boards`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -103,12 +106,13 @@ export function useRestoreBoard() {
 
 export function useArchivedBoards(teamId?: string | null) {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
   return useQuery({
-    queryKey: ["archived-boards", user?.id, teamId ?? "personal"],
+    queryKey: ["archived-boards", user?.id, teamId ?? "personal", scopeKey],
     queryFn: async () => {
       const qs = teamId ? `?team_id=${teamId}` : "";
-      return (await apiFetch<{ boards: Board[] }>(`${API_URL}/boards/archived${qs}`)).boards;
+      return (await apiFetch<{ boards: Board[] }>(withScope(`${API_URL}/boards/archived${qs}`))).boards;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 }

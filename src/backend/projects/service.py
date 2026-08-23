@@ -1,5 +1,6 @@
 from supabase import Client
 
+import artist_access
 from oneclick.royalties import fx
 
 
@@ -315,15 +316,49 @@ async def delete_expense(db: Client, user_id: str, project_id: str, expense_id: 
     return {"deleted": expense_id}
 
 
-async def get_expenses_summary(db: Client, user_id: str):
+async def get_expenses_summary(db: Client, user_id: str, *, scope: artist_access.Scope | None = None):
     """Cross-project expense rollup for the standalone Expense Tracker tool.
 
-    Returns every expense across the projects the caller is a member of (any
-    role — read parity with the per-project Expenses tab), enriched with
-    project and artist names and an ``is_tagged`` flag (linked to >=1 track).
+    Unscoped (rollback path): every expense across the projects the caller is a
+    member of (any role — read parity with the per-project Expenses tab).
+
+    With an ACTIVE workspace scope the project set follows the One Rule — a
+    project's workspace is the owner of its artist:
+
+    - any scope: projects of the workspace's artists, by OWNERSHIP (so an org
+      member sees org-project expenses without needing a project_members row);
+    - Personal only: plus membership-grant projects, EXCLUDING those whose
+      artist one of the caller's own live orgs owns (those list in that org's
+      workspace — same rule as the registry's "Shared with me").
+
+    Rows are enriched with project and artist names and an ``is_tagged`` flag
+    (linked to >=1 track).
     """
     memberships = db.table("project_members").select("project_id").eq("user_id", user_id).execute()
-    project_ids = list({m["project_id"] for m in (memberships.data or [])})
+    member_ids = list({m["project_id"] for m in (memberships.data or [])})
+    if scope is not None and scope.active:
+        owned_artist_ids = artist_access.scoped_artist_ids(db, user_id, scope)
+        owned_ids: set[str] = set()
+        if owned_artist_ids:
+            owned = db.table("projects").select("id").in_("artist_id", owned_artist_ids).execute()
+            owned_ids = {p["id"] for p in (owned.data or []) if p.get("id")}
+        if scope.org_id is None:
+            grant_ids = [i for i in member_ids if i not in owned_ids]
+            kept_grants: set[str] = set()
+            if grant_ids:
+                rows = db.table("projects").select("id, artist_id").in_("id", grant_ids).execute().data or []
+                a_ids = list({r["artist_id"] for r in rows if r.get("artist_id")})
+                team_by_artist: dict[str, str | None] = {}
+                if a_ids:
+                    arts = db.table("artists").select("id, team_id").in_("id", a_ids).execute().data or []
+                    team_by_artist = {a["id"]: a.get("team_id") for a in arts}
+                my_orgs = set(artist_access.live_org_ids(db, user_id))
+                kept_grants = {r["id"] for r in rows if team_by_artist.get(r.get("artist_id")) not in my_orgs}
+            project_ids = list(owned_ids | kept_grants)
+        else:
+            project_ids = list(owned_ids)
+    else:
+        project_ids = member_ids
     if not project_ids:
         return []
 

@@ -260,6 +260,9 @@ def _disable_credits_by_default(monkeypatch):
     """
     monkeypatch.delenv("CREDITS_ENABLED", raising=False)
     monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+    # Same leak path: a dev running with workspace scoping on locally would
+    # otherwise see entitlements payloads grow a workspaceScope key mid-suite.
+    monkeypatch.delenv("WORKSPACE_SCOPING_ENABLED", raising=False)
 
 
 @pytest.fixture(autouse=True)

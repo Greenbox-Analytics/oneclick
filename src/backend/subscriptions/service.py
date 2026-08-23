@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from dateutil.relativedelta import relativedelta
 from supabase import Client
 
+import artist_access
 from subscriptions.models import (
     Action,
     Caps,
@@ -339,6 +340,26 @@ class EntitlementsService:
         # to_dict key is omitted entirely so the pre-licensing payload is identical.
         available_contexts = self._list_available_contexts(user_id) if licensing_enabled() else None
 
+        # Workspace scoping: the active workspace, resolved from the stored
+        # context with the ACCESS predicate — NOT _resolve_context, whose answer
+        # deliberately differs (a pending/suspended org bills personal but is
+        # still the caller's workspace; hiding its roster would make every
+        # transferred artist vanish). None (key omitted) when the flag is off.
+        workspace_scope = None
+        if artist_access.scoping_enabled():
+            s = artist_access.resolve_scope(self.supabase, user_id, None)
+            if s.org_id:
+                org_row = (
+                    self.supabase.table("organizations").select("name").eq("id", s.org_id).limit(1).execute().data or []
+                )
+                workspace_scope = {
+                    "type": "org",
+                    "orgId": s.org_id,
+                    "orgName": (org_row[0].get("name") if org_row else None) or "Organization",
+                }
+            else:
+                workspace_scope = {"type": "personal"}
+
         ent = Entitlements(
             user_id=user_id,
             tier=sub["tier"],
@@ -354,6 +375,7 @@ class EntitlementsService:
             cancel_at_period_end=bool(sub.get("cancel_at_period_end", False)),
             managed_by_org=managed_by_org,
             available_contexts=available_contexts,
+            workspace_scope=workspace_scope,
         )
 
         if _bypass_paywalls_enabled() or is_admin:

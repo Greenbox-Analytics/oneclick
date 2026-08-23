@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryKey 
 import { useAuth } from "@/contexts/AuthContext";
 import type { BoardColumn, BoardTask, ParentTaskWithChildren } from "@/types/integrations";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 interface UseBoardsOptions {
   artistId?: string;
@@ -51,26 +52,29 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
 
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
 
   const columnsQuery = useQuery<BoardColumn[]>({
-    queryKey: ["board-columns", user?.id, artistId, boardId],
+    queryKey: ["board-columns", user?.id, artistId, boardId, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
       const params = new URLSearchParams();
       if (artistId) params.set("artist_id", artistId);
       if (boardId) params.set("board_id", boardId);
       const qs = params.toString();
-      const data = await apiFetch<{ columns: BoardColumn[] }>(`${API_URL}/boards/columns${qs ? `?${qs}` : ""}`);
+      const data = await apiFetch<{ columns: BoardColumn[] }>(
+        withScope(`${API_URL}/boards/columns${qs ? `?${qs}` : ""}`),
+      );
       return data.columns;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 
   const hasPeriod = !!(periodStart && periodEnd);
 
   const tasksQueryKey = hasPeriod
-    ? ["board-tasks", user?.id, periodStart, periodEnd, isCurrentPeriod, boardId]
-    : ["board-tasks", user?.id, boardId];
+    ? ["board-tasks", user?.id, periodStart, periodEnd, isCurrentPeriod, boardId, scopeKey]
+    : ["board-tasks", user?.id, boardId, scopeKey];
 
   const tasksQuery = useQuery<BoardTask[]>({
     queryKey: tasksQueryKey,
@@ -83,22 +87,22 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
           is_current: String(isCurrentPeriod ?? true),
         });
         if (boardId) params.set("board_id", boardId);
-        const data = await apiFetch<{ tasks: BoardTask[] }>(`${API_URL}/boards/tasks/period?${params}`);
+        const data = await apiFetch<{ tasks: BoardTask[] }>(withScope(`${API_URL}/boards/tasks/period?${params}`));
         return data.tasks;
       }
       const data = await apiFetch<{ tasks: BoardTask[] }>(
-        `${API_URL}/boards/tasks${boardId ? `?board_id=${boardId}` : ""}`,
+        withScope(`${API_URL}/boards/tasks${boardId ? `?board_id=${boardId}` : ""}`),
       );
       return data.tasks;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
     placeholderData: keepPreviousData,
   });
 
   const createColumnMutation = useMutation({
     mutationFn: async (data: { title: string; color?: string; artist_id?: string; board_id?: string; position?: number }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      return apiFetch(`${API_URL}/boards/columns`, {
+      return apiFetch(withScope(`${API_URL}/boards/columns`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...data, board_id: data.board_id ?? boardId }),
@@ -248,7 +252,9 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       labels?: string[];
     }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      return apiFetch(`${API_URL}/boards/tasks`, {
+      // scope decides which workspace's default board catches a task created
+      // with no explicit board.
+      return apiFetch(withScope(`${API_URL}/boards/tasks`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...data, board_id: data.board_id ?? boardId }),
@@ -422,7 +428,7 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       if (artistId) params.set("artist_id", artistId);
       if (boardId) params.set("board_id", boardId);
       const qs = params.toString();
-      return apiFetch(`${API_URL}/boards/columns/defaults${qs ? `?${qs}` : ""}`, {
+      return apiFetch(withScope(`${API_URL}/boards/columns/defaults${qs ? `?${qs}` : ""}`), {
         method: "POST",
       });
     },

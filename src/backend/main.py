@@ -768,15 +768,19 @@ async def get_artists(
     user_id: str = Depends(get_current_user_id),
     page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    scope: str | None = Query(None),
 ):
     """
     Fetch artists the authenticated user can reach — their own, plus every
     artist owned by an org they hold an active seat in (this is what renders
-    Portfolio, so a team artist invisible here is invisible to the member).
+    Portfolio, so a team artist invisible here is invisible to the member) —
+    narrowed to the active workspace when scoping is live (?scope=, falling
+    back to the stored context).
     """
+    sb = get_supabase_client()
+    s = artist_access.resolve_scope(sb, user_id, scope)  # may 404 — must not be swallowed into a 500
     try:
-        sb = get_supabase_client()
-        query = artist_access.visible_artists(sb, user_id, sb.table("artists").select("*", count="exact"))
+        query = artist_access.scoped_artists(sb, user_id, sb.table("artists").select("*", count="exact"), s)
         return paginate_query(query, page, page_size)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1144,17 +1148,24 @@ async def get_all_projects(
     user_id: str = Depends(get_current_user_id),
     page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    scope: str | None = Query(None),
 ):
     """
-    Fetch projects belonging to the authenticated user's artists.
+    Fetch projects belonging to the authenticated user's artists — narrowed to
+    the active workspace when scoping is live.
     """
+    sb = get_supabase_client()
+    s = artist_access.resolve_scope(sb, user_id, scope)
     try:
-        artist_ids = get_user_artist_ids(user_id)
+        if s.active:
+            artist_ids = artist_access.scoped_artist_ids(sb, user_id, s)
+        else:
+            artist_ids = get_user_artist_ids(user_id)
         if not artist_ids:
             if page is not None:
                 return PaginatedResponse(data=[], total=0, page=page, page_size=page_size)
             return []
-        query = get_supabase_client().table("projects").select("*", count="exact").in_("artist_id", artist_ids)
+        query = sb.table("projects").select("*", count="exact").in_("artist_id", artist_ids)
         return paginate_query(query, page, page_size)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1229,13 +1240,17 @@ async def get_project_documents(project_id: str, user_id: str = Depends(get_curr
 
 
 @app.get("/zoe/context-tree")
-async def get_zoe_context_tree(user_id: str = Depends(get_current_user_id)):
+async def get_zoe_context_tree(
+    user_id: str = Depends(get_current_user_id),
+    scope: str | None = Query(None),
+):
     """Aggregated artists → projects (with project/document counts) for Zoe's comparison-context
     selector. Lightweight — counts only; documents (with page counts) are fetched per checked project."""
+    db = get_supabase_client()
+    s = artist_access.resolve_scope(db, user_id, scope)
     try:
-        db = get_supabase_client()
         artists = (
-            artist_access.visible_artists(db, user_id, db.table("artists").select("id, name")).execute().data or []
+            artist_access.scoped_artists(db, user_id, db.table("artists").select("id, name"), s).execute().data or []
         )
         artist_ids = [a["id"] for a in artists]
         projects = []
@@ -2381,11 +2396,16 @@ def _load_oneclick_expenses(db, project_id: str):
 
 
 @app.get("/expenses/summary")
-async def expenses_summary(user_id: str = Depends(get_current_user_id)):
+async def expenses_summary(
+    user_id: str = Depends(get_current_user_id),
+    scope: str | None = Query(None),
+):
     """Cross-project expense rollup for the standalone Expense Tracker tool."""
     from projects.service import get_expenses_summary
 
-    expenses = await get_expenses_summary(get_supabase_client(), user_id)
+    sb = get_supabase_client()
+    s = artist_access.resolve_scope(sb, user_id, scope)
+    expenses = await get_expenses_summary(sb, user_id, scope=s)
     return {"expenses": expenses}
 
 

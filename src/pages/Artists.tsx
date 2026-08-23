@@ -48,6 +48,7 @@ interface Artist {
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useCanCreate } from "@/hooks/useEntitlements";
 import { useContextScopedArtists } from "@/hooks/useArtistTeam";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 const Artists = () => {
   const navigate = useNavigate();
@@ -55,15 +56,16 @@ const Artists = () => {
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [artistToDelete, setArtistToDelete] = useState<Artist | null>(null);
+  const { scopeKey, scopeLabel, withScope, ready, enabled: scopeEnabled } = useWorkspaceScope();
 
   // Fetch artists with TeamCard overlay for verified artists
   const { data: artists = [], isLoading, refetch } = useQuery<Artist[]>({
-    queryKey: ["artists-with-teamcards", user?.id],
+    queryKey: ["artists-with-teamcards", user?.id, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
       // Try batch overlay endpoint first, fall back to direct Supabase query
       try {
-        const data = await apiFetch<{ artists: Artist[] }>(`${API_URL}/registry/artists/with-teamcards`);
+        const data = await apiFetch<{ artists: Artist[] }>(withScope(`${API_URL}/registry/artists/with-teamcards`));
         return data.artists || [];
       } catch {
         // Fall back to direct Supabase query
@@ -78,10 +80,27 @@ const Artists = () => {
       }
       return data || [];
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 
-  const { allowed: canCreateArtist } = useCanCreate("artist", artists.length);
+  // Quota check against the PERSONAL cap: team artists consume their org's
+  // allowance, and the scoped list length would compare an org roster to the
+  // personal cap — same count/key as NewArtist.tsx.
+  const { data: personalArtists } = useQuery({
+    queryKey: ["artists-count", user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase
+        .from("artists")
+        .select("id")
+        .eq("user_id", user.id)
+        .is("team_id", null);
+      if (error) return [];
+      return data || [];
+    },
+    enabled: !!user?.id,
+  });
+  const { allowed: canCreateArtist } = useCanCreate("artist", personalArtists?.length ?? 0);
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
@@ -250,9 +269,17 @@ const Artists = () => {
             {filteredArtists.length === 0 && !isLoading && (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Users className="w-12 h-12 text-muted-foreground/30 mb-3" />
-                <p className="text-muted-foreground font-medium">No artists found</p>
+                {/* Name the workspace so a scoped-empty list reads as "this
+                    workspace is empty", never as "my artists are gone". */}
+                <p className="text-muted-foreground font-medium">
+                  {scopeEnabled ? `No artists in ${scopeLabel} yet` : 'No artists found'}
+                </p>
                 <p className="text-sm text-muted-foreground/60 mt-1">
-                  {searchQuery ? 'Try a different search term' : 'Add your first artist to get started'}
+                  {searchQuery
+                    ? 'Try a different search term'
+                    : scopeEnabled
+                      ? 'Add an artist here, or switch workspace with the "Working as" menu above'
+                      : 'Add your first artist to get started'}
                 </p>
               </div>
             )}

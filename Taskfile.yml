@@ -101,6 +101,70 @@ tasks:
           FRONTEND_URL: "https://www.msanii-beta.com"
           VITE_BACKEND_API_URL: "https://msanii-backend-529844341368.northamerica-northeast2.run.app"
 
+  secrets:push:stripe:dev:
+    desc: |
+      Push the Stripe TEST-mode values from your local .env into GSM so a
+      teammate gets them via `task setup:secrets:dev`. Additive + idempotent:
+      a secret already in GSM is left untouched (rotate those deliberately via
+      `gcloud secrets versions add`), and a key with no live value in .env is
+      skipped. Values are piped .env -> gcloud and never printed.
+      Deliberately NOT pushed: STRIPE_WEBHOOK_SECRET — for local testing that
+      is per-developer (each `stripe listen` login has its own whsec_...), and
+      the GSM copy belongs to the deployed endpoint.
+    prompt: Push Stripe TEST values from .env into GSM (msanii-484501)? Continue?
+    preconditions:
+      - sh: gcloud auth print-identity-token > /dev/null 2>&1
+        msg: |
+          Not authenticated with gcloud. Run:
+            gcloud auth login --update-adc
+            gcloud config set project {{.GCP_PROJECT}}
+      - sh: "[[ -f .env ]]"
+        msg: No .env found — nothing to push.
+    cmds:
+      - |
+        echo "Legend:  ✓ created   ◌ already in GSM (untouched)   ✗ skipped/failed"
+
+        env_value_pipe() {  # extract KEY's value; stays inside the pipe, never echoed
+          grep -E "^[[:space:]]*$1[[:space:]]*=" .env | head -1 \
+            | sed -E "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//" | tr -d '\n'
+        }
+
+        push_key() {
+          local env_key="$1" gsm_name="$2"
+          if ! grep -qE "^[[:space:]]*${env_key}[[:space:]]*=[[:space:]]*[^[:space:]#]" .env; then
+            echo "  ✗ ${env_key} — no live value in .env, skipped"
+            return
+          fi
+          if gcloud secrets describe "$gsm_name" --project="{{.GCP_PROJECT}}" >/dev/null 2>&1; then
+            echo "  ◌ ${gsm_name} — already in GSM, untouched"
+            return
+          fi
+          if env_value_pipe "$env_key" \
+               | gcloud secrets create "$gsm_name" --data-file=- \
+                   --replication-policy=automatic --project="{{.GCP_PROJECT}}" >/dev/null 2>&1; then
+            echo "  ✓ ${gsm_name} — created from local ${env_key}"
+          else
+            echo "  ✗ ${gsm_name} — create FAILED (check gcloud output/permissions)"
+          fi
+        }
+
+        # Refuse to file a LIVE key under a _DEV name. Checked in the shell —
+        # the value itself is never printed.
+        if grep -qE "^[[:space:]]*STRIPE_SECRET_KEY[[:space:]]*=[[:space:]]*sk_live_" .env; then
+          echo "REFUSING: local STRIPE_SECRET_KEY is a LIVE key (sk_live_...) — not pushing it as _DEV."
+          exit 1
+        fi
+
+        push_key STRIPE_SECRET_KEY            STRIPE_SECRET_KEY_DEV
+        push_key STRIPE_CREDITS_PRODUCT_ID    STRIPE_CREDITS_PRODUCT_ID_DEV
+        push_key STRIPE_PRICE_MONTHLY         STRIPE_PRICE_MONTHLY
+        push_key STRIPE_PRICE_ANNUAL          STRIPE_PRICE_ANNUAL
+        push_key STRIPE_PRICE_PRO_MAX_MONTHLY STRIPE_PRICE_PRO_MAX_MONTHLY
+        push_key STRIPE_PRICE_PRO_MAX_ANNUAL  STRIPE_PRICE_PRO_MAX_ANNUAL
+
+        echo
+        echo "Done. Teammates now get these via: task setup:secrets:dev"
+
   _setup:secrets:reset-env-file:
     desc: Internal — back up and delete .env. Used by setup:secrets:reset:* tasks.
     internal: true
@@ -270,9 +334,18 @@ tasks:
 
         start_section "STRIPE INTEGRATION"
         try_gsm_scoped "STRIPE_SECRET_KEY"
+        # NOTE for LOCAL testing: the GSM value is the deployed endpoint's
+        # signing secret. Webhooks forwarded through `stripe listen` are signed
+        # with YOUR CLI's own whsec_... (printed at listen startup) — overwrite
+        # this in your .env with that value or every local delivery 400s.
         try_gsm_scoped "STRIPE_WEBHOOK_SECRET"
         try_gsm "STRIPE_PRICE_MONTHLY"
         try_gsm "STRIPE_PRICE_ANNUAL"
+        try_gsm "STRIPE_PRICE_PRO_MAX_MONTHLY"
+        try_gsm "STRIPE_PRICE_PRO_MAX_ANNUAL"
+        # Optional: single Stripe Product that ad-hoc credit purchases file
+        # under (see .env.example). Credit checkout works without it.
+        try_gsm_scoped "STRIPE_CREDITS_PRODUCT_ID"
         end_section
 
         start_section "PAYPAL (royalty payouts)"

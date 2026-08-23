@@ -3,20 +3,22 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import type { BoardTask } from "@/types/integrations";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 export function useCalendarTasks(start: string, end: string, boardId?: string) {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
 
   const query = useQuery<BoardTask[]>({
-    queryKey: ["board-tasks-calendar", start, end, boardId],
+    queryKey: ["board-tasks-calendar", start, end, boardId, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
       const params = new URLSearchParams({ start, end });
       if (boardId) params.set("board_id", boardId);
-      const data = await apiFetch<{ tasks: BoardTask[] }>(`${API_URL}/boards/calendar?${params}`);
+      const data = await apiFetch<{ tasks: BoardTask[] }>(withScope(`${API_URL}/boards/calendar?${params}`));
       return data.tasks;
     },
-    enabled: !!user?.id && !!start && !!end,
+    enabled: !!user?.id && !!start && !!end && ready,
     placeholderData: keepPreviousData,
   });
 

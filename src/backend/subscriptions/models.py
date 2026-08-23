@@ -100,6 +100,12 @@ class Entitlements:
     # None otherwise so both keys are omitted entirely.
     managed_by_org: "ManagedByOrg | None" = None
     available_contexts: list[dict] | None = None
+    # Workspace scoping — the active workspace every LISTING should show
+    # ({"type": "personal"} or {"type": "org", "orgId": ..., "orgName": ...}).
+    # None (key omitted) unless WORKSPACE_SCOPING_ENABLED + LICENSING_ENABLED
+    # are both on — the omission IS the frontend's rollback signal
+    # (useWorkspaceScope goes inert and sends no ?scope= param).
+    workspace_scope: dict | None = None
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-friendly dict using camelCase keys for the frontend."""
@@ -209,6 +215,8 @@ class Entitlements:
                 }
             else:
                 result["billingContext"] = {"type": "personal"}
+        if self.workspace_scope is not None:
+            result["workspaceScope"] = self.workspace_scope
         return result
 
 

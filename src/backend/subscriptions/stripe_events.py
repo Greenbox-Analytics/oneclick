@@ -302,7 +302,11 @@ def handle_checkout_session_completed(event, supabase) -> None:
 
 
 def _handle_topup_completed(event, supabase) -> None:
-    """One-time credit pack purchase (spec 2026-07-19 §3).
+    """One-time credit purchase — a preset bundle, or a custom credit amount.
+
+    Which one is decided by metadata written by
+    billing_router.create_topup_session, its only writer: `pack_key` means a
+    catalog bundle (spec 2026-07-19 §3), `credits` means a custom amount.
 
     Idempotent on topup:{session.id} — NOT the event id: delayed payment
     methods redeliver the same session as checkout.session.async_payment_succeeded
@@ -311,19 +315,22 @@ def _handle_topup_completed(event, supabase) -> None:
 
     Deliberately NOT gated on credits_enabled() (unlike the purchase endpoint):
     a session someone already PAID for must always grant — gating here would
-    turn a flag flip into silent money-taken-no-credits.
+    turn a flag flip into silent money-taken-no-credits. Same reason
+    _resolve_custom_topup logs a price mismatch instead of refusing.
 
     Licensing Phase B: metadata["target"] is either "user" (Phase A, default —
     legacy sessions with no "target" key at all fall through here too) or an
-    org id. A non-"user" target hands off to `_handle_org_topup_grant`, which
-    grants into the org's POOL wallet and re-checks cumulative activation
-    (spec rule 3) instead of the personal-wallet path below.
+    org id. A non-"user" target — on EITHER product, bundle or custom — hands
+    off to `_handle_org_topup_grant`, which grants into the org's POOL wallet
+    and re-checks cumulative activation (spec rule 3) instead of the
+    personal-wallet path below.
     """
     session = event.data.object
     meta = _plain(session.metadata) or {}
     user_id = meta.get("user_id")
     pack_key = meta.get("pack_key")
-    if not user_id or not pack_key:
+    custom_credits = meta.get("credits")
+    if not user_id or (not pack_key and not custom_credits):
         logger.error("topup: session %s missing metadata", getattr(session, "id", "?"))
         return
     # FAIL-CLOSED: grant only on exactly "paid". A MISSING field (malformed
@@ -332,13 +339,22 @@ def _handle_topup_completed(event, supabase) -> None:
     if getattr(session, "payment_status", None) != "paid":
         return
 
-    pack_res = supabase.table("credit_packs").select("credits, price_cents").eq("key", pack_key).execute()
-    if not pack_res.data:
-        logger.error("topup: unknown pack %r (session %s)", pack_key, session.id)
-        return
-    credits = pack_res.data[0]["credits"]
-    price_cents = pack_res.data[0]["price_cents"]
+    if pack_key:
+        pack_res = supabase.table("credit_packs").select("credits, price_cents").eq("key", pack_key).execute()
+        if not pack_res.data:
+            logger.error("topup: unknown pack %r (session %s)", pack_key, session.id)
+            return
+        credits = pack_res.data[0]["credits"]
+        price_cents = pack_res.data[0]["price_cents"]
+        grant_metadata = {"pack_key": pack_key, "price_cents": price_cents}
+    else:
+        credits, price_cents = _resolve_custom_topup(session, custom_credits)
+        if credits is None:
+            return
+        grant_metadata = {"custom": True, "credits": credits, "price_cents": price_cents}
 
+    # ONE org check for both products — the endpoint admin-gates the target
+    # before creating the session, so by here it is already authorized.
     target = meta.get("target")
     if target and target != "user":
         _handle_org_topup_grant(
@@ -388,7 +404,7 @@ def _handle_topup_completed(event, supabase) -> None:
             "p_amount": credits,
             "p_kind": "purchase",
             "p_bucket": "reserve",
-            "p_metadata": {"pack_key": pack_key, "price_cents": price_cents},
+            "p_metadata": grant_metadata,
             "p_request_id": f"topup:{session.id}",
         },
     ).execute()
@@ -400,27 +416,83 @@ def _handle_topup_completed(event, supabase) -> None:
         analytics_capture(
             user_id,
             "topup_purchased",
-            {"pack": pack_key, "credits": credits, "usd": price_cents / 100, "target": "user"},
+            {
+                "pack": pack_key or "custom",
+                "credits": credits,
+                "usd": (price_cents or 0) / 100,
+                "target": "user",
+            },
         )
+
+
+def _resolve_custom_topup(session, raw_credits) -> tuple[int | None, int | None]:
+    """Credits + cents for a CUSTOM (non-bundle) purchase, from session metadata.
+
+    Returns (None, None) when the metadata is unusable, which the caller turns
+    into a no-op — a malformed amount must not be guessed at on a money path.
+
+    The charge is cross-checked against what credit_purchase would price that
+    many credits at, but a mismatch only LOGS. The customer has already been
+    charged, so refusing to grant would be taking money for nothing; the log is
+    the alarm. A rate change landing mid-checkout is the benign cause, tampered
+    metadata the one worth paging on — though only this server writes that
+    metadata, which is why the clamp below is defence in depth and not a live
+    threat.
+    """
+    from subscriptions.credit_purchase import MAX_CUSTOM_CREDITS, price_cents_for_credits
+
+    session_id = getattr(session, "id", "?")
+    try:
+        credits = int(raw_credits)
+    except (TypeError, ValueError):
+        logger.error("topup: session %s has non-numeric credits %r", session_id, raw_credits)
+        return None, None
+    if credits <= 0:
+        logger.error("topup: session %s has non-positive credits %r", session_id, raw_credits)
+        return None, None
+    if credits > MAX_CUSTOM_CREDITS:
+        logger.error(
+            "topup: session %s asked for %d credits, above the %d ceiling — clamping",
+            session_id,
+            credits,
+            MAX_CUSTOM_CREDITS,
+        )
+        credits = MAX_CUSTOM_CREDITS
+
+    price_cents = getattr(session, "amount_total", None)
+    try:
+        expected = price_cents_for_credits(credits)
+    except ValueError:
+        expected = None
+    if price_cents is not None and expected is not None and price_cents != expected:
+        logger.error(
+            "topup: session %s charged %s cents for %d credits, expected %s — granting anyway",
+            session_id,
+            price_cents,
+            credits,
+            expected,
+        )
+    return credits, price_cents
 
 
 def _handle_org_topup_grant(
     supabase,
     user_id: str,
     org_id: str,
-    pack_key: str,
+    pack_key: str | None,
     credits: int,
-    price_cents: int,
+    price_cents: int | None,
     *,
     request_id: str,
     event_name: str,
 ) -> None:
-    """Grant one pack into an org's POOL wallet (Licensing Phase B, spec §4 +
-    rule 3). Two callers: the pack-checkout branch of `_handle_topup_completed`
-    (`topup:{session.id}`, `topup_purchased`) and the recurring top-up renewal
-    in `handle_invoice_paid` (`orgtopup:{invoice.id}`, `org_topup_renewed`) —
-    a renewal is ledger-indistinguishable from a pack purchase apart from its
-    request id.
+    """Grant one purchase into an org's POOL wallet (Licensing Phase B, spec
+    §4 + rule 3). Two callers: the org-target branch of
+    `_handle_topup_completed` (`topup:{session.id}`, `topup_purchased` — pack
+    OR custom amount, `pack_key=None` meaning custom) and the recurring top-up
+    renewal in `handle_invoice_paid` (`orgtopup:{invoice.id}`,
+    `org_topup_renewed`, always pack-keyed) — a renewal is
+    ledger-indistinguishable from a pack purchase apart from its request id.
 
     Grants via `orgs.wallets.read_or_create_org_wallet`, NEVER the user-wallet
     seeding helper above, since pool wallets are NULL-period/reserve-only by
@@ -444,6 +516,14 @@ def _handle_org_topup_grant(
     wallet = read_or_create_org_wallet(supabase, org_id)
     wallet_id = wallet["id"]
 
+    # Ledger metadata mirrors the personal path's two shapes, plus org_id:
+    # a pack row keys on pack_key, a custom amount is flagged `custom` so
+    # "why does the ledger say 1,300?" is answerable without the session.
+    if pack_key:
+        grant_metadata = {"pack_key": pack_key, "price_cents": price_cents, "org_id": org_id}
+    else:
+        grant_metadata = {"custom": True, "credits": credits, "price_cents": price_cents, "org_id": org_id}
+
     res = supabase.rpc(
         "grant_credits",
         {
@@ -451,7 +531,7 @@ def _handle_org_topup_grant(
             "p_amount": credits,
             "p_kind": "purchase",
             "p_bucket": "reserve",
-            "p_metadata": {"pack_key": pack_key, "price_cents": price_cents, "org_id": org_id},
+            "p_metadata": grant_metadata,
             "p_request_id": request_id,
         },
     ).execute()
@@ -461,7 +541,13 @@ def _handle_org_topup_grant(
         analytics_capture(
             user_id,
             event_name,
-            {"pack": pack_key, "credits": credits, "usd": price_cents / 100, "target": "org", "org_id": org_id},
+            {
+                "pack": pack_key or "custom",
+                "credits": credits,
+                "usd": (price_cents or 0) / 100,
+                "target": "org",
+                "org_id": org_id,
+            },
         )
 
     maybe_activate_org(supabase, org_id, wallet_id)

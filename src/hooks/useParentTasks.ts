@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import type { ParentTaskWithChildren, BoardTask } from "@/types/integrations";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 interface ParentsResponse {
   parents: ParentTaskWithChildren[];
@@ -11,9 +12,10 @@ interface ParentsResponse {
 export function useParentTasks(search?: string, artistId?: string, boardId?: string) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
 
   const query = useQuery<ParentsResponse>({
-    queryKey: ["parent-tasks", user?.id, search, artistId, boardId],
+    queryKey: ["parent-tasks", user?.id, search, artistId, boardId, scopeKey],
     queryFn: async () => {
       if (!user?.id) return { parents: [], ungrouped: [] };
       const params = new URLSearchParams();
@@ -21,9 +23,9 @@ export function useParentTasks(search?: string, artistId?: string, boardId?: str
       if (artistId) params.set("artist_id", artistId);
       if (boardId) params.set("board_id", boardId);
       const qs = params.toString();
-      return apiFetch<ParentsResponse>(`${API_URL}/boards/parents${qs ? `?${qs}` : ""}`);
+      return apiFetch<ParentsResponse>(withScope(`${API_URL}/boards/parents${qs ? `?${qs}` : ""}`));
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 
   const createParentMutation = useMutation({
@@ -40,7 +42,7 @@ export function useParentTasks(search?: string, artistId?: string, boardId?: str
       labels?: string[];
     }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      return apiFetch(`${API_URL}/boards/parents`, {
+      return apiFetch(withScope(`${API_URL}/boards/parents`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...data, board_id: data.board_id ?? boardId }),

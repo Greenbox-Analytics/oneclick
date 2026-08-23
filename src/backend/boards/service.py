@@ -225,21 +225,46 @@ def _enrich_tasks(supabase: Client, tasks: list, user_id: str) -> list:
 # --- Board resolution ---
 
 
-def ensure_personal_board(db: Client, user_id: str, artist_id: str | None = None) -> str:
+def ensure_personal_board(
+    db: Client,
+    user_id: str,
+    artist_id: str | None = None,
+    scope: artist_access.Scope | None = None,
+) -> str:
     """Find (or create) the caller's PERSONAL board for artist_id (NULL = unscoped 'Personal').
     Personal boards have team_id NULL and a persisted boards.artist_id (Phase 1). on_conflict
-    tolerates the create race guarded by the Task-2 partial unique index (artist boards)."""
+    tolerates the create race guarded by the Task-2 partial unique index (artist boards).
+
+    Workspace filing (boards.org_id): an artist-keyed board DERIVES its org_id
+    from artists.team_id and both its find and insert IGNORE the scope — the
+    board is keyed (owner_id, artist_id), so scope-stamping would create a
+    second board for the same artist and split its tasks in two. Only the
+    artistless "Personal" board takes the scope: one per workspace.
+    """
     q = db.table("boards").select("id").eq("owner_id", user_id).is_("team_id", "null")
-    q = q.eq("artist_id", artist_id) if artist_id else q.is_("artist_id", "null")
+    if artist_id:
+        q = q.eq("artist_id", artist_id)
+    else:
+        q = q.is_("artist_id", "null")
+        if scope is not None and scope.active:
+            q = q.eq("org_id", scope.org_id) if scope.org_id else q.is_("org_id", "null")
     existing = q.limit(1).execute()
     if existing.data:
         return existing.data[0]["id"]
     name = "Personal"
+    org_id = None
     if artist_id:
-        a = db.table("artists").select("name").eq("id", artist_id).limit(1).execute()
+        a = db.table("artists").select("name, team_id").eq("id", artist_id).limit(1).execute()
         if a.data:
-            name = a.data[0]["name"]
-    ins = db.table("boards").insert({"owner_id": user_id, "artist_id": artist_id, "name": name}).execute()
+            name = a.data[0].get("name") or name
+            org_id = a.data[0].get("team_id")
+    elif scope is not None and scope.active:
+        org_id = scope.org_id
+    ins = (
+        db.table("boards")
+        .insert({"owner_id": user_id, "artist_id": artist_id, "name": name, "org_id": org_id})
+        .execute()
+    )
     if ins.data:
         return ins.data[0]["id"]
     # lost the race → re-read
@@ -257,8 +282,14 @@ def _task_board_id(db: Client, task_id: str) -> str | None:
     return r.data[0]["board_id"] if r.data else None
 
 
-def _personal_board_ids(db: Client, user_id: str) -> list[str]:
-    rows = db.table("boards").select("id").eq("owner_id", user_id).is_("team_id", "null").execute().data or []
+def _personal_board_ids(db: Client, user_id: str, scope: artist_access.Scope | None = None) -> list[str]:
+    """The caller's own (non-org-shared) boards, narrowed to the active
+    workspace's filing label when a scope is live. Unscoped/None → every
+    personal board, exactly as before org_id existed."""
+    q = db.table("boards").select("id").eq("owner_id", user_id).is_("team_id", "null")
+    if scope is not None and scope.active:
+        q = q.eq("org_id", scope.org_id) if scope.org_id else q.is_("org_id", "null")
+    rows = q.execute().data or []
     return [r["id"] for r in rows]
 
 
@@ -317,12 +348,22 @@ def _team_board_ids(db: Client, user_id: str, org_ids: list[str]) -> list[str]:
     return [b["id"] for b in _visible_org_boards(db, user_id, org_ids)]
 
 
-def _calendar_board_ids(db: Client, user_id: str) -> list[str]:
+def _calendar_board_ids(db: Client, user_id: str, scope: artist_access.Scope | None = None) -> list[str]:
     """Personal boards PLUS every visible board of every live org the caller belongs to.
 
     Unlike _resolve_read_board_ids' personal-only default, the calendar is cross-board by
     design. Access is still the gate — no board the caller can't already read is added.
+
+    With an active scope the calendar shows one workspace: Personal → the
+    caller's personally-filed boards only; an org → boards filed under that org
+    plus THAT org's shared boards (still visibility-checked).
     """
+    if scope is not None and scope.active:
+        own = _personal_board_ids(db, user_id, scope)
+        if scope.org_id is None:
+            return own
+        org_ids = [o for o in artist_access.live_org_ids(db, user_id) if o == scope.org_id]
+        return own + _team_board_ids(db, user_id, org_ids)
     return _personal_board_ids(db, user_id) + _team_board_ids(db, user_id, artist_access.live_org_ids(db, user_id))
 
 
@@ -349,33 +390,45 @@ def _stamp_team_context(db: Client, tasks: list) -> list:
     return tasks
 
 
-def _resolve_read_board_ids(db: Client, user_id: str, artist_id: str | None, board_id: str | None) -> list[str]:
+def _resolve_read_board_ids(
+    db: Client,
+    user_id: str,
+    artist_id: str | None,
+    board_id: str | None,
+    scope: artist_access.Scope | None = None,
+) -> list[str]:
     """Reads: explicit board_id (gated) → [board_id]; artist_id → [personal board];
-    neither → the caller's personal boards (backward-compat default)."""
+    neither → the caller's personal boards (backward-compat default). The two
+    EXPLICIT forms deliberately ignore the scope — they are authorization-gated
+    requests for one known board; only the default listing narrows."""
     if board_id:
         authz.require_board_access(db, user_id, board_id)
         return [board_id]
     if artist_id:
-        return [ensure_personal_board(db, user_id, artist_id)]
-    return _personal_board_ids(db, user_id)
+        return [ensure_personal_board(db, user_id, artist_id, scope)]
+    return _personal_board_ids(db, user_id, scope)
 
 
 # --- Columns ---
 
 
 async def get_columns(
-    supabase: Client, user_id: str, artist_id: str | None = None, board_id: str | None = None
+    supabase: Client,
+    user_id: str,
+    artist_id: str | None = None,
+    board_id: str | None = None,
+    scope: artist_access.Scope | None = None,
 ) -> list:
     """Get board columns for a user, scoped by board_id (explicit, artist alias, or personal boards)."""
-    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id, scope)
     if not board_ids:
         return []
     return supabase.table("board_columns").select("*").in_("board_id", board_ids).order("position").execute().data or []
 
 
-async def create_column(supabase: Client, user_id: str, data: dict) -> dict:
+async def create_column(supabase: Client, user_id: str, data: dict, scope: artist_access.Scope | None = None) -> dict:
     """Create a new board column."""
-    board_id = data.get("board_id") or ensure_personal_board(supabase, user_id, data.get("artist_id"))
+    board_id = data.get("board_id") or ensure_personal_board(supabase, user_id, data.get("artist_id"), scope)
     authz.require_board_edit(supabase, user_id, board_id)  # personal owner passes; foreign board → 404
     data["board_id"] = board_id
     data["user_id"] = user_id
@@ -415,9 +468,10 @@ async def get_tasks(
     page_size: int = 50,
     board_id: str | None = None,
     artist_id: str | None = None,
+    scope: artist_access.Scope | None = None,
 ):
     """Get board tasks (non-parent) with junction data, scoped by board_id, optionally filtered by column."""
-    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id, scope)
     if not board_ids:
         return PaginatedResponse(data=[], total=0, page=page, page_size=page_size) if page else []
     query = (
@@ -440,7 +494,7 @@ async def get_tasks(
         return result
 
 
-async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
+async def create_task(supabase: Client, user_id: str, data: dict, scope: artist_access.Scope | None = None) -> dict:
     """Create a new task with junction relations."""
     artist_ids = data.pop("artist_ids", [])
     project_ids = data.pop("project_ids", [])
@@ -474,7 +528,7 @@ async def create_task(supabase: Client, user_id: str, data: dict) -> dict:
         if not board_id:
             raise ValueError("Column not found")
     else:
-        board_id = ensure_personal_board(supabase, user_id, owned_first_artist)
+        board_id = ensure_personal_board(supabase, user_id, owned_first_artist, scope)
     authz.require_board_edit(supabase, user_id, board_id)
     data["board_id"] = board_id
     data["user_id"] = user_id
@@ -727,6 +781,7 @@ async def get_tasks_by_date_range(
     end: str,
     board_id: str | None = None,
     artist_id: str | None = None,
+    scope: artist_access.Scope | None = None,
 ) -> list:
     """Get non-parent tasks whose due_date falls within a date range.
 
@@ -739,9 +794,9 @@ async def get_tasks_by_date_range(
     and group by team.
     """
     if board_id or artist_id:
-        board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+        board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id, scope)
     else:
-        board_ids = _calendar_board_ids(supabase, user_id)
+        board_ids = _calendar_board_ids(supabase, user_id, scope)
     return _tasks_in_range(supabase, user_id, board_ids, start, end)
 
 
@@ -843,9 +898,10 @@ async def get_tasks_by_period(
     is_current: bool = True,
     board_id: str | None = None,
     artist_id: str | None = None,
+    scope: artist_access.Scope | None = None,
 ) -> list:
     """Get tasks filtered by period for date-based board views."""
-    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id, scope)
     if not board_ids:
         return []
     try:
@@ -890,7 +946,7 @@ async def get_tasks_by_period(
                     tasks.append(task)
     except Exception:
         # Fallback: if completed_at column missing or other error, return all tasks
-        return await get_tasks(supabase, user_id, board_id=board_id, artist_id=artist_id)
+        return await get_tasks(supabase, user_id, board_id=board_id, artist_id=artist_id, scope=scope)
 
     return _enrich_tasks(supabase, tasks, user_id)
 
@@ -898,7 +954,9 @@ async def get_tasks_by_period(
 # --- Parent Tasks ---
 
 
-async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict:
+async def create_parent_task(
+    supabase: Client, user_id: str, data: dict, scope: artist_access.Scope | None = None
+) -> dict:
     """Create a parent task (no column_id, is_parent=True)."""
     artist_ids = data.pop("artist_ids", [])
     project_ids = data.pop("project_ids", [])
@@ -909,7 +967,7 @@ async def create_parent_task(supabase: Client, user_id: str, data: dict) -> dict
         data["start_date"] = str(date.today())
 
     owned = _owned_artist_ids(supabase, user_id, artist_ids) if artist_ids else []
-    board_id = data.get("board_id") or ensure_personal_board(supabase, user_id, owned[0] if owned else None)
+    board_id = data.get("board_id") or ensure_personal_board(supabase, user_id, owned[0] if owned else None, scope)
     authz.require_board_edit(supabase, user_id, board_id)
     data["board_id"] = board_id
     data["user_id"] = user_id
@@ -949,9 +1007,10 @@ async def get_all_parents_with_children(
     search: str | None = None,
     artist_id: str | None = None,
     board_id: str | None = None,
+    scope: artist_access.Scope | None = None,
 ) -> dict:
     """Get all parent tasks with nested children for the overview tab."""
-    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id)
+    board_ids = _resolve_read_board_ids(supabase, user_id, artist_id, board_id, scope)
     if not board_ids:
         return {"parents": [], "ungrouped": []}
 
@@ -1163,13 +1222,31 @@ async def create_board(
     team_id: str | None = None,
     artist_id: str | None = None,
     description: str | None = None,
+    *,
+    scope: artist_access.Scope | None = None,
 ) -> dict:
     if team_id is not None and not authz.is_live_org_member(db, user_id, team_id):
         raise PermissionError("Not a member of this team")
+    # Filing label: the artist wins (its owner IS the board's workspace),
+    # otherwise the active workspace; unscoped files nowhere.
+    org_id = None
+    if artist_id:
+        a = db.table("artists").select("team_id").eq("id", artist_id).limit(1).execute()
+        if a.data:
+            org_id = a.data[0].get("team_id")
+    elif scope is not None and scope.active:
+        org_id = scope.org_id
     res = (
         db.table("boards")
         .insert(
-            {"owner_id": user_id, "team_id": team_id, "artist_id": artist_id, "name": name, "description": description}
+            {
+                "owner_id": user_id,
+                "team_id": team_id,
+                "artist_id": artist_id,
+                "name": name,
+                "description": description,
+                "org_id": org_id,
+            }
         )
         .execute()
     )
@@ -1178,14 +1255,22 @@ async def create_board(
     return row
 
 
-async def list_boards(db: Client, user_id: str, team_id: str | None = None) -> list[dict]:
+async def list_boards(
+    db: Client,
+    user_id: str,
+    team_id: str | None = None,
+    scope: artist_access.Scope | None = None,
+) -> list[dict]:
     if team_id is not None:
         # A lapsed/archived org drops out of artist_access.live_org_ids, so its boards are hidden
-        # from everyone — same posture as team artists.
+        # from everyone — same posture as team artists. An explicit team_id is an
+        # authorization-checked request and deliberately ignores the scope.
         if team_id not in artist_access.live_org_ids(db, user_id):
             raise PermissionError("Not a member of this team")
         return _visible_org_boards(db, user_id, [team_id])
     q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
+    if scope is not None and scope.active:
+        q = q.eq("org_id", scope.org_id) if scope.org_id else q.is_("org_id", "null")
     rows = q.eq("archived", False).order("position").order("created_at").execute().data or []
     for r in rows:
         r["member_user_ids"] = []
@@ -1312,24 +1397,22 @@ async def restore_board(db: Client, user_id: str, board_id: str) -> dict:
     return {"restored": board_id}
 
 
-async def list_archived_boards(db: Client, user_id: str, team_id: str | None = None) -> list[dict]:
+async def list_archived_boards(
+    db: Client,
+    user_id: str,
+    team_id: str | None = None,
+    scope: artist_access.Scope | None = None,
+) -> list[dict]:
     """Archived boards with a task_count each. Team context → org admin only; else the
     caller's archived personal boards. Same gate as restore/delete (no view-vs-act split)."""
     if team_id is not None:
         authz.require_org_admin(db, user_id, team_id)
         boards = _visible_org_boards(db, user_id, [team_id], archived=True)
     else:
-        boards = (
-            db.table("boards")
-            .select("*")
-            .eq("owner_id", user_id)
-            .is_("team_id", "null")
-            .eq("archived", True)
-            .order("created_at")
-            .execute()
-            .data
-            or []
-        )
+        q = db.table("boards").select("*").eq("owner_id", user_id).is_("team_id", "null")
+        if scope is not None and scope.active:
+            q = q.eq("org_id", scope.org_id) if scope.org_id else q.is_("org_id", "null")
+        boards = q.eq("archived", True).order("created_at").execute().data or []
         for b in boards:
             b["member_user_ids"] = []
     for b in boards:  # unchanged from the pre-merge version — the UI shows this count
@@ -1339,7 +1422,11 @@ async def list_archived_boards(db: Client, user_id: str, team_id: str | None = N
 
 
 async def create_default_columns(
-    supabase: Client, user_id: str, artist_id: str | None = None, board_id: str | None = None
+    supabase: Client,
+    user_id: str,
+    artist_id: str | None = None,
+    board_id: str | None = None,
+    scope: artist_access.Scope | None = None,
 ) -> list:
     """Create default Kanban columns for a new board. When board_id is given (e.g. a team
     board), target it directly (gated by require_board_edit); otherwise resolve/create the
@@ -1347,7 +1434,7 @@ async def create_default_columns(
     if board_id:
         authz.require_board_edit(supabase, user_id, board_id)
     else:
-        board_id = ensure_personal_board(supabase, user_id, artist_id)
+        board_id = ensure_personal_board(supabase, user_id, artist_id, scope)
         authz.require_board_edit(supabase, user_id, board_id)
     defaults = [
         {"title": "Backlog", "position": 0, "color": "#8b5cf6"},

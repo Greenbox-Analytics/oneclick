@@ -21,11 +21,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useBillingContextSwitcher } from "@/hooks/useBillingContext";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 export function HeaderContextSwitcher() {
   const navigate = useNavigate();
   const { canSwitch, orgContexts, value, currentLabel, switchTo, isPending } =
     useBillingContextSwitcher();
+  // With workspace scoping live, the pill also decides what every list SHOWS.
+  const { enabled: scopingEnabled } = useWorkspaceScope();
 
   if (!canSwitch) return null;
 
@@ -57,7 +60,9 @@ export function HeaderContextSwitcher() {
         <DropdownMenuLabel className="font-normal">
           <div className="text-sm font-medium">Working as</div>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Whose credits pay, and which team new artists join
+            {scopingEnabled
+              ? "Which workspace you see and work in, and whose credits pay"
+              : "Whose credits pay, and which team new artists join"}
           </p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
