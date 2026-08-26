@@ -148,6 +148,7 @@ class TestGatedUpload:
             Action.UPLOAD_BYTES,
             size=100,
             host_user_id=HOST_USER_ID,
+            resource_project_id=None,
         )
 
 

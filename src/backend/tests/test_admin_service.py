@@ -354,6 +354,41 @@ class TestListUsers:
         sb.auth.admin.list_users.assert_called_once_with(page=2, per_page=25)
         sb.rpc.assert_not_called()
 
+    def test_list_users_returns_profile_full_name(self):
+        """`name` comes from profiles.full_name on the SAME select as is_admin
+        (no extra query), and is None when the profile has no name yet —
+        the admin console's Name column reads this."""
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        other_id = "00000000-0000-0000-0000-0000000000ff"
+        sb = MagicMock()
+        sb.auth.admin.list_users.return_value = [
+            MagicMock(id=TEST_USER_ID, email="named@example.com", created_at="2026-05-01T00:00:00+00:00"),
+            MagicMock(id=other_id, email="anon@example.com", created_at="2026-05-02T00:00:00+00:00"),
+        ]
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "profiles":
+                b.execute.return_value = MagicMock(
+                    data=[
+                        {"id": TEST_USER_ID, "is_admin": False, "full_name": "Amara Okonkwo"},
+                        {"id": other_id, "is_admin": False, "full_name": None},
+                    ]
+                )
+            else:
+                b.execute.return_value = MagicMock(data=[], count=0)
+            return b
+
+        sb.table.side_effect = _table
+
+        svc = AdminService(sb, EntitlementsService(sb))
+        rows = {u["id"]: u for u in svc.list_users(search="", page=1)["users"]}
+
+        assert rows[TEST_USER_ID]["name"] == "Amara Okonkwo"
+        assert rows[other_id]["name"] is None
+
 
 class TestTesterGrants:
     def test_list_returns_only_tester_grants_active(self):
@@ -442,8 +477,8 @@ class TestTesterGrants:
 
         captured = {}
         sb = MagicMock()
-        sb.auth.admin.list_users.return_value = [
-            MagicMock(id="uid-10", email="tester@example.com"),
+        sb.rpc.return_value.execute.return_value.data = [
+            {"id": "uid-10", "email": "tester@example.com", "created_at": "2026-01-01"}
         ]
 
         def _table(name):
@@ -474,13 +509,41 @@ class TestTesterGrants:
         assert p["zoe_enabled"] is True
         assert p["oneclick_enabled"] is True
         assert p["registry_enabled"] is True
-        assert p["integrations_allowed"] == ["google_drive", "slack"]
+        assert p["integrations_allowed"] == ["google_drive", "dropbox"]
         assert p["reason"] == "tester"
         assert p["expires_at"] == "2027-01-01T00:00:00+00:00"
         assert captured["on_conflict"] == "user_id"
 
         assert result["user_id"] == "uid-10"
         assert result["email"] == "tester@example.com"
+
+    def test_create_tester_grant_grants_initial_credits(self):
+        """create_tester_grant should delegate initial credit allocation to
+        grant_initial_tester_credits, passing (supabase, user_id, credits)."""
+        from unittest.mock import patch
+
+        from subscriptions.admin_service import AdminService
+        from subscriptions.service import EntitlementsService
+
+        sb = MagicMock()
+        sb.rpc.return_value.execute.return_value.data = [
+            {"id": "uid-10", "email": "tester@example.com", "created_at": "2026-01-01"}
+        ]
+
+        def _table(name):
+            return MockQueryBuilder()
+
+        sb.table.side_effect = _table
+        svc = AdminService(sb, EntitlementsService(sb))
+
+        with patch("subscriptions.admin_service.grant_initial_tester_credits") as gitc:
+            svc.create_tester_grant(email="tester@example.com", credits=750)
+
+        gitc.assert_called_once()
+        args = gitc.call_args[0]
+        assert args[0] is sb
+        assert args[1] == "uid-10"
+        assert args[2] == 750  # (supabase, user_id, credits)
 
     def test_create_tester_grant_normalizes_reason(self):
         """`reason` must always satisfy LIKE 'tester%' so list_tester_grants
@@ -509,8 +572,8 @@ class TestTesterGrants:
 
         captured = {}
         sb = MagicMock()
-        sb.auth.admin.list_users.return_value = [
-            MagicMock(id="uid-11", email="custom@example.com"),
+        sb.rpc.return_value.execute.return_value.data = [
+            {"id": "uid-11", "email": "custom@example.com", "created_at": "2026-01-01"}
         ]
 
         def _table(name):
@@ -533,18 +596,22 @@ class TestTesterGrants:
         assert captured["payload"]["reason"] == "tester (beta access)"
         assert result["reason"] == "tester (beta access)"
 
-    def test_create_user_not_found_raises(self):
-        import pytest
-
+    def test_unknown_email_creates_pending_row(self):
+        """create_tester_grant no longer raises for an unknown email — it
+        parks a pending designation claimed on first verified sign-in.
+        (Deliberate behavior change, admin credits & testers spec 2026-08-08.)"""
         from subscriptions.admin_service import AdminService
         from subscriptions.service import EntitlementsService
 
         sb = MagicMock()
-        sb.auth.admin.list_users.return_value = []
+        sb.rpc.return_value.execute.return_value.data = []
+        # No existing pending row for this email (the claimed-row recovery
+        # check in create_tester_grant's not-matched branch).
+        sb.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
         svc = AdminService(sb, EntitlementsService(sb))
-
-        with pytest.raises(ValueError, match="User not found"):
-            svc.create_tester_grant(email="nobody@example.com")
+        result = svc.create_tester_grant(email="ghost@example.com", created_by="admin@x.com")
+        assert result["pending"] is True
+        sb.table.assert_any_call("pending_tester_grants")
 
     def test_revoke_writes_sticky_marker_not_delete(self):
         """revoke_tester_grant should UPSERT with reason='tester_revoked' and null caps,

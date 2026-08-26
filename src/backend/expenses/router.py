@@ -17,6 +17,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+import artist_access
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from expenses.common import category_label, filter_expense_rows
@@ -45,19 +46,22 @@ async def export_expenses(
     project_id: str | None = Query(None),
     category: str | None = Query(None),
     artist_id: str | None = Query(None),
+    scope: str | None = Query(None),
     user_id: str = Depends(get_current_user_id),
 ):
     """Download the (optionally filtered) expense report as PDF or XLSX.
 
     ``project_id`` / ``category`` / ``artist_id`` mirror the on-screen filters —
-    omit them for an overall report. Rows are scoped to projects the caller is a
-    member of by ``get_expenses_summary`` (RLS parity with the Expense Tracker).
+    omit them for an overall report. Rows come from ``get_expenses_summary``
+    under the same workspace scope the Expense Tracker page renders, so the
+    report matches what's on screen.
     """
     fmt = (format or "pdf").lower()
     if fmt not in ("pdf", "xlsx"):
         raise HTTPException(status_code=400, detail="format must be 'pdf' or 'xlsx'")
 
-    rows = await get_expenses_summary(_get_supabase(), user_id)
+    db = _get_supabase()
+    rows = await get_expenses_summary(db, user_id, scope=artist_access.resolve_scope(db, user_id, scope))
     rows = filter_expense_rows(rows, project_id, category, artist_id)
 
     if project_id:

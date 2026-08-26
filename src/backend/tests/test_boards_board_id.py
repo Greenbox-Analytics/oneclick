@@ -55,7 +55,7 @@ async def test_create_task_gates_on_resolved_column_board(monkeypatch):
 
 
 async def test_create_column_sets_and_gates_board(monkeypatch):
-    monkeypatch.setattr(service, "ensure_personal_board", lambda db, u, a: BOARD)
+    monkeypatch.setattr(service, "ensure_personal_board", lambda db, u, a, s=None: BOARD)
     gated = {}
     monkeypatch.setattr(service.authz, "require_board_edit", lambda db, u, bid: gated.update(board=bid))
     captured = {}

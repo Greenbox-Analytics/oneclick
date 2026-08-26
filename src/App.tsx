@@ -1,9 +1,9 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, useLocation, useNavigationType } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigationType } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -42,8 +42,9 @@ const InviteClaim = lazy(() => import("./pages/InviteClaim"));
 const ProjectDetail = lazy(() => import("./pages/ProjectDetail"));
 const ConfirmEmail = lazy(() => import("./pages/ConfirmEmail"));
 const Pricing = lazy(() => import("./pages/Pricing"));
-const Subscription = lazy(() => import("./pages/Subscription"));
 const AdminUsers = lazy(() => import("./pages/AdminUsers"));
+const Organization = lazy(() => import("./pages/Organization"));
+const OrgInviteClaim = lazy(() => import("./pages/OrgInviteClaim"));
 const Team = lazy(() => import("./pages/Team"));
 const About = lazy(() => import("./pages/About"));
 const Features = lazy(() => import("./pages/Features"));
@@ -62,6 +63,14 @@ const PageLoader = () => (
 function PageTimer() {
   usePageTimer();
   return null;
+}
+
+// Query-preserving redirect: /subscription → /profile (Stripe success URLs
+// minted before the merge carry ?stripe_session_id=...&welcome=true) and
+// /organization → /teams (2026-08-16 rebrand; old invite emails).
+function RedirectKeepSearch({ to }: { to: string }) {
+  const { search } = useLocation();
+  return <Navigate to={to + search} replace />;
 }
 
 /**
@@ -83,6 +92,88 @@ function ScrollToTop() {
   return null;
 }
 
+/**
+ * Top up the browser's own scroll restoration on back/forward.
+ *
+ * The native restore fires before React Query has data, so a long list
+ * (Portfolio, Registry) is still one screen tall at that moment and the
+ * browser can only scroll to the top. This remembers the offset per history
+ * entry and re-applies it for up to a second, as the list grows into place.
+ *
+ * Deliberately additive — `history.scrollRestoration` is left on `auto`, so
+ * this only fixes the late-content case and never replaces native behavior
+ * (which still handles a plain refresh, where the entry key is new to us).
+ * Any real scroll input from the user aborts it immediately: fighting someone
+ * who has already started scrolling is worse than landing at the top.
+ */
+function ScrollRestoration() {
+  const { key } = useLocation();
+  const navigationType = useNavigationType();
+
+  // Track the offset live in a ref, but only persist it once, on the way out:
+  // one storage write per navigation instead of one per scroll event. Reading
+  // `window.scrollY` in the cleanup instead would be too late — by the time
+  // passive effects run, the next page is already committed and the browser
+  // may have clamped the offset to the new (shorter) document.
+  const offset = useRef(0);
+  useEffect(() => {
+    offset.current = 0;
+    const onScroll = () => {
+      offset.current = window.scrollY;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      try {
+        sessionStorage.setItem(`scroll:${key}`, String(offset.current));
+      } catch {
+        /* private mode / storage disabled — restoration is a nicety */
+      }
+    };
+  }, [key]);
+
+  useEffect(() => {
+    if (navigationType !== "POP") return;
+    let target: number;
+    try {
+      target = Number(sessionStorage.getItem(`scroll:${key}`) ?? 0);
+    } catch {
+      return;
+    }
+    if (!target) return;
+
+    let raf = 0;
+    let cancelled = false;
+    const deadline = performance.now() + 1000;
+    const stop = () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+    const tick = () => {
+      if (cancelled) return;
+      window.scrollTo(0, target);
+      // Short page = content still loading; keep trying until it fits or we
+      // run out of patience.
+      if (window.scrollY < target && performance.now() < deadline) {
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+
+    window.addEventListener("wheel", stop, { passive: true });
+    window.addEventListener("touchstart", stop, { passive: true });
+    window.addEventListener("keydown", stop);
+    return () => {
+      stop();
+      window.removeEventListener("wheel", stop);
+      window.removeEventListener("touchstart", stop);
+      window.removeEventListener("keydown", stop);
+    };
+  }, [key, navigationType]);
+
+  return null;
+}
+
 function AdminPosthogTagger() {
   useAdminPosthogTag();
   return null;
@@ -97,6 +188,7 @@ const App = () => (
         <ThemeToggle />
         <BrowserRouter>
           <ScrollToTop />
+          <ScrollRestoration />
           <PageTimer />
           <AuthProvider>
             <TesterBanner />
@@ -186,14 +278,23 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            <Route path="/subscription" element={<RedirectKeepSearch to="/profile" />} />
             <Route
-              path="/subscription"
+              path="/teams"
               element={
                 <ProtectedRoute>
-                  <Subscription />
+                  <Organization />
                 </ProtectedRoute>
               }
             />
+            {/* Legacy path: invite emails, Stripe return URLs and bookmarks from
+                before the teams rename. Redirect keeps the query string
+                (?new=1, ?topup=success). */}
+            <Route path="/organization" element={<RedirectKeepSearch to="/teams" />} />
+            {/* Public: invited members may not be signed in yet — the page
+                shows a sign-in gate and only calls the (auth-required) accept/
+                decline endpoints once a user session exists. */}
+            <Route path="/orgs/invite/:token" element={<OrgInviteClaim />} />
             <Route
               path="/workspace"
               element={

@@ -70,7 +70,7 @@ export function DrivePanel({ onClose }: DrivePanelProps) {
   const handleImport = (file: DriveFile) => {
     if (!selectedProjectId) return;
     importMutation.mutate(
-      { drive_file_id: file.id, project_id: selectedProjectId },
+      { file_id: file.id, project_id: selectedProjectId },
     );
   };
 

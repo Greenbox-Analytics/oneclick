@@ -349,7 +349,7 @@ All hooks live in `src/hooks/`. They wrap TanStack React Query and call the back
 | Hook | Returns | Description |
 |------|---------|-------------|
 | `useRegistryNotifications(unreadOnly?)` | `RegistryNotification[]` | Fetch registry notifications. Polls every 30 seconds. Query key: `["registry-notifications", userId, unreadOnly]`. |
-| `useUnreadCount()` | `number` | Combined unread count: registry notifications + Slack unread badge. |
+| `useUnreadCount()` | `number` | Unread registry notification count. |
 | `useMarkNotificationRead()` | `UseMutationResult` | Mark a single notification as read. |
 | `useMarkAllRead()` | `UseMutationResult` | Mark all notifications as read. |
 
@@ -372,7 +372,7 @@ All hooks live in `src/hooks/`. They wrap TanStack React Query and call the back
 | `AgreementsPanel` | `src/components/registry/AgreementsPanel.tsx` | Display and creation of immutable agreement records. |
 | `CollaborationStatus` | `src/components/registry/CollaborationStatus.tsx` | Collaboration workflow panel: shows collaborator list with `invited`/`accepted`/`confirmed` status, provides submit-for-approval, resend, revoke, and decline actions. |
 | `InviteCollaboratorModal` | `src/components/registry/InviteCollaboratorModal.tsx` | Modal form for inviting a new collaborator (email, name, role, optional stake). |
-| `RegistryNotifications` | `src/components/workspace/RegistryNotifications.tsx` | Notification feed shown in the Workspace panel. Renders registry notifications with type-colored badges (`invitation`, `confirmation`, `dispute`, `status_change`) and a "mark all read" action. Clicking a notification navigates to `/tools/registry/{work_id}`. Also renders `SlackMentions` above the registry list. |
+| `RegistryNotifications` | `src/components/workspace/RegistryNotifications.tsx` | Notification feed shown in the Workspace panel. Renders registry notifications with type-colored badges (`invitation`, `confirmation`, `dispute`, `status_change`) and a "mark all read" action. Clicking a notification navigates to `/tools/registry/{work_id}`. |
 
 ---
 

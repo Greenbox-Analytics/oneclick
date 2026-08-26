@@ -56,7 +56,10 @@ export function TasksOverview({ boardId, teamId }: TasksOverviewProps) {
     artistFilter || undefined,
     boardId
   );
-  const { columns, createTask, updateTask } = useBoards({ boardId });
+  // withTasks:false — this view reads `columns` and the mutations only, but was
+  // pulling the board's whole UNFILTERED task list (/boards/tasks) with it on
+  // every load, alongside KanbanBoard's period-scoped one.
+  const { columns, createTask, updateTask } = useBoards({ boardId, withTasks: false });
   const { artists } = useArtistsList();
 
   const sensors = useSensors(

@@ -2,7 +2,6 @@ import { useRegistryNotifications, useMarkAllRead } from "@/hooks/useRegistryNot
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Bell, CheckCheck, Shield } from "lucide-react";
-import { SlackMentions } from "./SlackMentions";
 import { NotificationRow } from "./NotificationRow";
 
 export function RegistryNotifications() {
@@ -25,19 +24,18 @@ export function RegistryNotifications() {
       <div className="text-center py-12 text-muted-foreground">
         <Bell className="w-12 h-12 mx-auto mb-4 opacity-50" />
         <h3 className="text-lg font-semibold mb-2">No notifications yet</h3>
-        <p>Collaboration updates from the Metadata Registry will appear here</p>
+        <p>Registry collaboration, team, and organization updates will appear here</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <SlackMentions />
       <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <Shield className="w-5 h-5 text-primary" />
-          Metadata Registry Notifications
+          Notifications
           {unreadCount > 0 && (
             <Badge variant="destructive" className="ml-1">{unreadCount}</Badge>
           )}

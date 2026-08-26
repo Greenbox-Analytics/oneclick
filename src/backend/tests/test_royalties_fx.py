@@ -8,6 +8,7 @@ Mock strategy:
   - httpx: unittest.mock.patch on httpx.Client used as a context manager
 """
 
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,12 +34,23 @@ def _clear_fx_memo():
 # ---------------------------------------------------------------------------
 
 
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def _days_ago(n: int) -> str:
+    """Cache dates must be relative — a hard-coded one silently goes stale and
+    starts asserting the opposite of what it was written to assert."""
+    return (date.today() - timedelta(days=n)).isoformat()
+
+
 class _ChainBuilder:
     """Minimal chainable supabase-py mock. execute() is a MagicMock so
     tests can set its return_value to control what the 'query' returns."""
 
     def __init__(self, execute_result=None):
         self.execute = MagicMock(return_value=MagicMock(data=execute_result if execute_result is not None else []))
+        self.upsert_payloads: list = []
 
     def select(self, *a, **kw):
         return self
@@ -53,6 +65,8 @@ class _ChainBuilder:
         return self
 
     def upsert(self, *a, **kw):
+        if a:
+            self.upsert_payloads.append(a[0])
         return self
 
 
@@ -200,18 +214,52 @@ class TestBocCadRates:
         assert result["usd"] == pytest.approx(1.37)
 
     def test_cached_codes_not_refetched(self):
-        """Codes already in cache are not refetched from BoC."""
+        """Codes already in TODAY'S snapshot are not refetched from BoC."""
         cached = {"usd": 1.37}
-        cache_builder = _ChainBuilder(execute_result=[{"rate_date": "2026-06-23", "rates": cached}])
+        cache_builder = _ChainBuilder(execute_result=[{"rate_date": _today(), "rates": cached}])
         db = _make_db({"fx_rate_snapshots": cache_builder})
 
         with patch("httpx.Client") as mock_httpx_client:
             result = _boc_cad_rates(db, ["USD"])
 
-        # No HTTP call because USD was already cached
+        # No HTTP call because USD was already cached today
         mock_httpx_client.assert_not_called()
         assert result["usd"] == pytest.approx(1.37)
         assert result["cad"] == 1.0
+
+    def test_yesterdays_snapshot_is_refetched(self):
+        """A snapshot from an earlier day is stale: reuse would serve an ageing
+        rate forever, because `missing` used to be keyed on which CODES were
+        present and never on how old they were."""
+        cache_builder = _ChainBuilder(execute_result=[{"rate_date": _days_ago(1), "rates": {"usd": 1.30}}])
+        db = _make_db({"fx_rate_snapshots": cache_builder})
+        payload = {"observations": [{"d": "2026-08-23", "FXUSDCAD": {"v": "1.37"}}]}
+        ctx, _client = _mock_client_context(_mock_httpx_response(payload))
+
+        with patch("httpx.Client", return_value=ctx) as mock_httpx_client:
+            result = _boc_cad_rates(db, ["USD"])
+
+        mock_httpx_client.assert_called_once()
+        assert result["usd"] == pytest.approx(1.37)
+
+    def test_stale_snapshot_does_not_seed_todays_row(self):
+        """Codes carried over untouched from a stale snapshot would be re-dated
+        as current and then never refetched. A stale snapshot seeds nothing, so
+        the codes it held drop out and the next caller refetches them."""
+        stale = {"usd": 1.30, "gbp": 1.60}
+        cache_builder = _ChainBuilder(execute_result=[{"rate_date": _days_ago(9), "rates": stale}])
+        db = _make_db({"fx_rate_snapshots": cache_builder})
+        payload = {"observations": [{"d": "2026-08-23", "FXUSDCAD": {"v": "1.37"}}]}
+        ctx, _client = _mock_client_context(_mock_httpx_response(payload))
+
+        with patch("httpx.Client", return_value=ctx):
+            result = _boc_cad_rates(db, ["USD"])
+
+        # GBP wasn't asked for, so the stale 1.60 must not ride along.
+        upserted = cache_builder.upsert_payloads[-1]
+        assert upserted["rate_date"] == _today()
+        assert upserted["rates"] == {"usd": pytest.approx(1.37)}
+        assert result["usd"] == pytest.approx(1.37)
 
 
 # ---------------------------------------------------------------------------

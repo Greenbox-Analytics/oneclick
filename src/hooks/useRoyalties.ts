@@ -290,6 +290,27 @@ export function useCancelPayout() {
   });
 }
 
+/**
+ * POST /oneclick/royalties/payouts/{id}/currency — re-issue a DRAFT payout in
+ * another currency. The backend re-cuts the draft (new id) at the current FX
+ * rate; paid payouts are refused with a 409, since their currency records money
+ * that already moved.
+ */
+export function useChangePayoutCurrency() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, currency }: { id: string; currency: string }) => {
+      if (!user?.id) throw new Error("Not authenticated");
+      return apiFetch<PayoutOut>(`${API_URL}/oneclick/royalties/payouts/${id}/currency`, {
+        method: "POST",
+        body: JSON.stringify({ currency }),
+      });
+    },
+    onSuccess: () => invalidateRoyaltyData(queryClient),
+  });
+}
+
 /** POST /oneclick/royalties/payouts/{id}/revert — undo an accidental mark-paid (manual payouts only). */
 export function useRevertPayout() {
   const { user } = useAuth();

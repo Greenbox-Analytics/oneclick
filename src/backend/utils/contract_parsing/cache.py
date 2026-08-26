@@ -21,19 +21,32 @@ from collections.abc import Callable
 from dataclasses import asdict
 
 from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
-from utils.contract_parsing.parser import LLM_MODEL_LARGE, MusicContractParser
+from utils.contract_parsing.parser import MusicContractParser
 from utils.ingestion.pdf_markdown import strip_page_markers
+from utils.llm.model_garden import model_for
 
 logger = logging.getLogger(__name__)
 
 # Bump when the extraction PROMPT changes. The OpenAI model is appended automatically,
-# so changing OPENAI_LLM_MODEL_LARGE also invalidates cached entries.
+# so repointing the "contract_parser" garden slot also invalidates cached entries.
 PARSER_PROMPT_VERSION = "v1-2026-07-12"
 
 
 def parser_version() -> str:
     """Cache-invalidation key component: prompt version + active extraction model."""
-    return f"{PARSER_PROMPT_VERSION}:{LLM_MODEL_LARGE}"
+    return f"{PARSER_PROMPT_VERSION}:{model_for('contract_parser')}"
+
+
+def content_key(full_text: str) -> str:
+    """SHA-256 of the CANONICAL parse text — the cache key, and the identity of
+    the deliverable a parse produces.
+
+    Marker stripping is idempotent, so callers may pass raw or already-stripped
+    markdown. Shared with the credit layer: enforcement.gated_credits' dedupe_key
+    keys cache-hit debits off this exact value, so a hit dedupes against the
+    ledger row for the same content and no other.
+    """
+    return hashlib.sha256(strip_page_markers(full_text).encode("utf-8")).hexdigest()
 
 
 def serialize_contract_data(cd: ContractData) -> dict:
@@ -64,6 +77,41 @@ def deserialize_contract_data(d: dict) -> ContractData:
         contract_summary=d.get("contract_summary"),
         default_basis=d.get("default_basis"),
     )
+
+
+def peek_cached_parse(db, full_text: str) -> ContractData | None:
+    """Read-only cache probe: the parsed ContractData if this exact canonical text is
+    cached under the current parser_version, else None.
+
+    `full_text` is canonicalized (idempotent [[PAGE n]] marker stripping) before hashing, so
+    callers may pass either raw or already-stripped markdown. Never raises — a read failure
+    or a missing/unreadable entry both resolve to None (logged on failure) — so callers can
+    treat a non-None result as a guaranteed, side-effect-free cache hit.
+
+    NOT a billing decision any more (spec 2026-08-17 §4): a cache hit is a complete
+    deliverable and pays the base rate like a fresh parse. This is now purely
+    get_or_parse's internal read.
+    """
+    if db is None or not full_text:
+        return None
+    text = strip_page_markers(full_text)
+    if not text:
+        return None
+    cache_key = content_key(text)
+    try:
+        hit = (
+            db.table("contract_parse_cache")
+            .select("parsed")
+            .eq("content_hash", cache_key)
+            .eq("parser_version", parser_version())
+            .maybe_single()
+            .execute()
+        )
+        if hit and hit.data:
+            return deserialize_contract_data(hit.data["parsed"])
+    except Exception:
+        logger.exception("parse cache peek failed; treating as miss")
+    return None
 
 
 def get_or_parse(
@@ -101,23 +149,17 @@ def get_or_parse(
     if not full_text:
         raise ValueError("full_text is required. The contract markdown must be provided.")
 
-    cache_key = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+    cache_key = content_key(full_text)
 
-    if db is not None and not bypass:
-        try:
-            hit = (
-                db.table("contract_parse_cache")
-                .select("parsed")
-                .eq("content_hash", cache_key)
-                .eq("parser_version", version)
-                .maybe_single()
-                .execute()
-            )
-            if hit and hit.data:
-                return deserialize_contract_data(hit.data["parsed"])
-        except Exception:
-            logger.exception("parse cache read failed; falling back to live parse")
+    if not bypass:
+        # Single read implementation shared with the pre-gate peek (see peek_cached_parse) —
+        # full_text is already canonical here, and stripping is idempotent, so the redundant
+        # strip inside peek is harmless.
+        cached = peek_cached_parse(db, full_text)
+        if cached is not None:
+            return cached
 
+    # Cache missed (or was bypassed / unreadable): a live LLM parse happens next.
     parser = parser or MusicContractParser()
     contract_data = parser.parse_contract(full_text=full_text)
 

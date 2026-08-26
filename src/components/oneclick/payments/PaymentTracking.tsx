@@ -295,7 +295,12 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
       {detailRunId && (() => {
         const p = payouts.find((x) => x.id === detailRunId);
         return p ? (
-          <PayoutDetailModal payout={p} onClose={() => setDetailRunId(null)} />
+          <PayoutDetailModal
+            payout={p}
+            onClose={() => setDetailRunId(null)}
+            // A currency change re-cuts the draft as a new row, so follow it.
+            onReissued={(id) => setDetailRunId(id)}
+          />
         ) : null;
       })()}
 
@@ -308,6 +313,10 @@ export function PaymentTracking({ initialPayoutNames, onPayoutConsumed }: Paymen
           onPayout={(ids) => {
             setDrawerId(null);
             setPayoutOpen({ initialIds: ids });
+          }}
+          onViewPayout={(id) => {
+            setDrawerId(null);
+            setDetailRunId(id);
           }}
         />
       )}

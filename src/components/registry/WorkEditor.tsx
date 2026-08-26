@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
   ChevronRight,
   ChevronDown,
   AlertTriangle,
@@ -321,31 +320,32 @@ export function WorkEditor({ work }: WorkEditorProps) {
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-6 items-start">
       {/* main column */}
       <div className="flex flex-col gap-4">
-        {/* breadcrumb */}
+        {/* Breadcrumb — a location trail, NOT a back button. The old
+            "← Metadata Registry" was styled as Back but always went to the
+            Registry, which is the wrong destination for a work opened from a
+            project's Works tab. "Where I came from" is the header's Back;
+            this row only says where the work lives, and each crumb is a real
+            link (cmd-click / open-in-new-tab work). */}
         <div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="pl-0 text-muted-foreground"
-            onClick={() => navigate("/tools/registry")}
+          <nav
+            aria-label="Breadcrumb"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap"
           >
-            <ArrowLeft className="w-4 h-4 mr-1" /> Metadata Registry
-          </Button>
-          {artist && project && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
-              <RegistryAvatar name={artist.name} size={20} />
-              {artist.name} ·
-              <button
-                type="button"
-                className="hover:text-foreground"
-                onClick={() => navigate(`/projects/${project.id}`)}
-              >
-                {project.name}
-              </button>
-              <ChevronRight className="w-3 h-3" />
-              <span>Works Registry</span>
-            </div>
-          )}
+            <Link to="/tools/registry" className="hover:text-foreground">
+              Metadata Registry
+            </Link>
+            {artist && project && (
+              <>
+                <ChevronRight className="w-3 h-3 shrink-0" />
+                <RegistryAvatar name={artist.name} size={16} />
+                <span>{artist.name}</span>
+                <ChevronRight className="w-3 h-3 shrink-0" />
+                <Link to={`/projects/${project.id}`} className="hover:text-foreground">
+                  {project.name}
+                </Link>
+              </>
+            )}
+          </nav>
           <div
             data-walkthrough="work-header"
             className="flex items-center gap-3 flex-wrap mt-2"

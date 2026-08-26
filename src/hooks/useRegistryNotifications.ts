@@ -1,13 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
-import { useSlackUnreadCount } from "@/hooks/useSlackNotifications";
 
 export interface RegistryNotification {
   id: string;
   user_id: string;
   work_id: string | null;
   type: string;
+  /** Polymorphic target since 20260629000004 — 'work' | 'team' | 'org' | null.
+   * Pairs with `type` to disambiguate: an org invite is invitation + 'org'. */
+  entity_type?: string | null;
   title: string;
   message: string;
   read: boolean;
@@ -33,8 +35,7 @@ export function useRegistryNotifications(unreadOnly = false) {
 
 export function useUnreadCount() {
   const { data } = useRegistryNotifications(true);
-  const slackUnread = useSlackUnreadCount();
-  return (data?.length || 0) + slackUnread;
+  return data?.length || 0;
 }
 
 export function useMarkNotificationRead() {

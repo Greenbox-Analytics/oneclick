@@ -57,14 +57,16 @@ COHORTS = {
         },
     },
     "pro_users": {
-        "name": "Pro users",
+        "name": "Paid users",
         "filters": {
             "properties": {
                 "type": "AND",
                 "values": [
                     {
                         "key": "plan",
-                        "value": ["pro"],
+                        # Both paid keys: 'basic' ($30, was $25) and 'pro' ($50). Pre-rename
+                        # events used 'pro' for the $25 plan — still matched here.
+                        "value": ["basic", "pro"],
                         "operator": "exact",
                         "type": "person",
                     }

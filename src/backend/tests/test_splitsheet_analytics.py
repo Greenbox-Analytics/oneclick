@@ -17,6 +17,8 @@ def _patches(monkeypatch, captured):
         lambda uid, event, props=None: captured.append((event, dict(props or {}))),
     )
     monkeypatch.setattr("splitsheet.router.gated_split_sheet", lambda *a, **kw: None)
+    # Both gates are stubbed: this file tests analytics, not gating.
+    monkeypatch.setattr("splitsheet.router.gated_credits", lambda *a, **kw: None)
     monkeypatch.setattr(
         "splitsheet.router._get_entitlements_service",
         lambda: MagicMock(increment_usage=lambda *a, **kw: None),

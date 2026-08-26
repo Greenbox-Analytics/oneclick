@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from "react";
 import { ZoeContextPopover } from "@/components/zoe/ZoeContextPopover";
 import { ContractSlideOver } from "@/components/zoe/ContractSlideOver";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 
 // Inline SVGs — exact mockup shapes
 
@@ -46,7 +47,6 @@ const StopIcon = () => (
 interface ZoeInputBarProps {
   inputMessage: string;
   onInputChange: (value: string) => void;
-  error: string;
   isStreaming: boolean;
   isAtLimit: boolean;
   selectedContracts: string[];

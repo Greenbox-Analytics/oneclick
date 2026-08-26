@@ -1,24 +1,31 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { apiFetch, API_URL } from "@/lib/apiFetch";
+import { useAuth } from "@/contexts/AuthContext";
 
 /**
  * Create a Stripe Checkout Session and return the URL to redirect the user to.
  * Pattern:
  *   const { mutateAsync: createCheckout } = useCreateCheckoutSession();
- *   const url = await createCheckout({ plan: "monthly" });
+ *   const url = await createCheckout({ plan: "basic_monthly" });
  *   window.location.href = url;
  *
  * Optional `cancel_path` / `success_path` let callers route returns to a
  * non-default page (e.g., onboarding). Backend whitelists to relative paths.
+ *
+ * `plan` values map to Stripe prices server-side (billing_router.py
+ * PLAN_TO_ENV): <tier>_<period>, i.e. basic = the $30 plan, pro = the $50 one.
  */
+export type CheckoutPlan = "basic_monthly" | "basic_annual" | "pro_monthly" | "pro_annual";
+
 export interface CheckoutArgs {
-  plan: "monthly" | "annual";
+  plan: CheckoutPlan;
   cancel_path?: string;
   success_path?: string;
 }
 
 export function useCreateCheckoutSession() {
-  return useMutation<string, Error, CheckoutArgs | "monthly" | "annual">({
+  return useMutation<string, Error, CheckoutArgs | CheckoutPlan>({
     mutationFn: async (arg) => {
       // Back-compat: callers can still pass just the plan string.
       const body = typeof arg === "string" ? { plan: arg } : arg;
@@ -42,6 +49,49 @@ export function useCreatePortalSession() {
         method: "POST",
       });
       return (res as { url: string }).url;
+    },
+  });
+}
+
+/**
+ * "Manage subscription" click handler: opens the Stripe Customer Portal, or
+ * toasts when the user has no Stripe customer on file (the endpoint 404s
+ * without a stripe_customer_id).
+ */
+export function useOpenBillingPortal() {
+  const { mutateAsync: createPortal, isPending } = useCreatePortalSession();
+  const openPortal = async () => {
+    try {
+      const url = await createPortal();
+      window.location.href = url;
+    } catch {
+      toast.error("No billing portal on file. For billing, contact support.");
+    }
+  };
+  return { openPortal, isPending };
+}
+
+/**
+ * Toggle pay-per-use overage opt-in (credits system). Sparse update — only the
+ * fields you pass are written. Invalidates entitlements so the new state shows.
+ * Backend 400s if a free-tier user tries to ENABLE credit overage.
+ */
+export interface BillingPrefs {
+  overage_enabled?: boolean;
+  overage_cap_credits?: number | null;
+}
+
+export function useSetBillingPrefs() {
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  return useMutation<unknown, Error, BillingPrefs>({
+    mutationFn: async (prefs) =>
+      apiFetch(`${API_URL}/me/billing-prefs`, {
+        method: "POST",
+        body: JSON.stringify(prefs),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["entitlements", user?.id] });
     },
   });
 }

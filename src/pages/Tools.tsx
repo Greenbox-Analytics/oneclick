@@ -1,9 +1,8 @@
 import { useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Calculator, ArrowRight, Bot, FileText, Shield, BookOpen, Receipt } from "lucide-react";
+import { Calculator, ArrowRight, Bot, FileText, Shield, Receipt } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { trackToolUsage } from "@/pages/Dashboard";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { TOOL_REGISTRY, type ToolId } from "@/lib/analytics-tools";
@@ -46,29 +45,20 @@ const TOOL_CARDS = TOOL_REGISTRY.filter((t) => t.category === "tool").map((t) =>
 }));
 
 const Tools = () => {
-  const navigate = useNavigate();
   const { user } = useAuth();
 
-  const handleNavigate = useCallback((route: string, label: string) => {
-    trackToolUsage(label, route, user?.id);
-    navigate(route);
-  }, [navigate, user?.id]);
+  // Tracking rides the link's onClick instead of replacing the navigation:
+  // the tile stays a real <a> (cmd/middle-click, open-in-new-tab) and the
+  // recent-tools counter still moves.
+  const track = useCallback(
+    (route: string, label: string) => trackToolUsage(label, route, user?.id),
+    [user?.id],
+  );
 
   return (
     <div className="min-h-screen bg-background">
       <PageHeader
         backTo="/dashboard"
-        actions={
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate("/docs")}
-            title="Documentation"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <BookOpen className="w-4 h-4" />
-          </Button>
-        }
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">
@@ -85,11 +75,18 @@ const Tools = () => {
               className={
                 tool.comingSoon
                   ? "opacity-60 cursor-not-allowed border border-border"
-                  : "hover:border-primary/40 transition-all cursor-pointer group border border-border"
+                  : "relative hover:border-primary/40 transition-all cursor-pointer group border border-border"
               }
-              onClick={tool.comingSoon ? undefined : () => handleNavigate(tool.route, tool.label)}
               aria-disabled={tool.comingSoon || undefined}
             >
+              {!tool.comingSoon && (
+                <Link
+                  to={tool.route}
+                  onClick={() => track(tool.route, tool.label)}
+                  className="absolute inset-0"
+                  aria-label={tool.label}
+                />
+              )}
               <CardHeader>
                 <div className={
                   tool.comingSoon

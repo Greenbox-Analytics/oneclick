@@ -1,28 +1,47 @@
 import { useNavigate } from "react-router-dom";
 import { ExternalLink } from "lucide-react";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useMarkNotificationRead, type RegistryNotification } from "@/hooks/useRegistryNotifications";
-import { useAcceptTeamInvite, useDeclineTeamInvite } from "@/hooks/useTeams";
+import { useAcceptOrgInvite, useDeclineOrgInvite } from "@/hooks/useOrgs";
 
 export const TYPE_COLORS: Record<string, string> = {
   invitation: "bg-blue-100 text-blue-800",
   confirmation: "bg-green-100 text-green-800",
   dispute: "bg-red-100 text-red-800",
   status_change: "bg-purple-100 text-purple-800",
-  team_invite: "bg-indigo-100 text-indigo-700",
 };
 
 export function NotificationRow({ n }: { n: RegistryNotification }) {
   const navigate = useNavigate();
   const markRead = useMarkNotificationRead();
-  const accept = useAcceptTeamInvite();
-  const decline = useDeclineTeamInvite();
+  const accept = useAcceptOrgInvite();
+  const decline = useDeclineOrgInvite();
+
+  // An org invite is type='invitation' + entity_type='org' — the only
+  // actionable notification. Registry's own 'invitation' rows carry
+  // entity_type 'work'/null and stay button-less.
+  const isOrgInvite = n.type === "invitation" && n.entity_type === "org";
+
+  // The org hooks stay silent by design (OrgInviteClaim owns that page's copy),
+  // so the feedback for this row belongs here.
+  const runInvite = (mutation: typeof accept, successMsg: string) => () => {
+    const token = n.metadata?.token;
+    if (!token) return;
+    mutation.mutate(String(token), {
+      onSuccess: () => {
+        markRead.mutate(n.id);
+        toast.success(successMsg);
+      },
+      onError: (e: Error) => toast.error(e.message),
+    });
+  };
 
   const handleClick = () => {
-    // team_invite: Accept/Decline are gated on !n.read, so a row click must NOT mark it read.
-    if (!n.read && n.type !== "team_invite") markRead.mutate(n.id);
+    // Invites: Accept/Decline are gated on !n.read, so a row click must NOT mark it read.
+    if (!n.read && !isOrgInvite) markRead.mutate(n.id);
     if (n.work_id) navigate(`/tools/registry/${n.work_id}`);
   };
 
@@ -39,20 +58,16 @@ export function NotificationRow({ n }: { n: RegistryNotification }) {
             {!n.read && <div className="w-2 h-2 rounded-full bg-primary shrink-0" />}
             <span className="text-sm font-medium">{n.title}</span>
             <Badge className={TYPE_COLORS[n.type] || "bg-gray-100 text-gray-800"}>
-              {n.type.replace("_", " ")}
+              {isOrgInvite ? "org invite" : n.type.replace("_", " ")}
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground mt-1 ml-4">{n.message}</p>
-          {n.type === "team_invite" && !n.read && (
+          {isOrgInvite && !n.read && (
             <div className="mt-2 ml-4 flex gap-2" onClick={(e) => e.stopPropagation()}>
               <Button
                 size="sm"
                 disabled={accept.isPending || decline.isPending}
-                onClick={() => {
-                  const token = n.metadata?.token;
-                  if (!token) return;
-                  accept.mutate(String(token), { onSuccess: () => markRead.mutate(n.id) });
-                }}
+                onClick={runInvite(accept, "Invite accepted")}
               >
                 Accept
               </Button>
@@ -60,11 +75,7 @@ export function NotificationRow({ n }: { n: RegistryNotification }) {
                 size="sm"
                 variant="outline"
                 disabled={accept.isPending || decline.isPending}
-                onClick={() => {
-                  const token = n.metadata?.token;
-                  if (!token) return;
-                  decline.mutate(String(token), { onSuccess: () => markRead.mutate(n.id) });
-                }}
+                onClick={runInvite(decline, "Invitation declined")}
               >
                 Decline
               </Button>

@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { ChevronRight, FileText, Folder, AlertTriangle, Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -28,20 +29,28 @@ export interface DashboardWork extends Work {
 
 interface WorkRowProps {
   work: DashboardWork;
-  onOpen: (workId: string) => void;
-  onOpenProject?: (projectId: string) => void;
 }
 
-export function WorkRow({ work, onOpen, onOpenProject }: WorkRowProps) {
+/**
+ * The row owns its own destinations. It used to take `onOpen`/`onOpenProject`
+ * callbacks drilled down from the dashboard, which both built the same two
+ * URLs — so the indirection bought nothing and cost the row the ability to be
+ * a real link.
+ */
+export function WorkRow({ work }: WorkRowProps) {
   const issues = work.issues || [];
   const collabs = work.collaboratorNames || [];
   const docCount = work.documentCount ?? 0;
 
   return (
-    <Card
-      className="flex items-center gap-3 p-3 hover:bg-muted/50 hover:border-primary/40 transition-colors cursor-pointer"
-      onClick={() => onOpen(work.id)}
-    >
+    <Card className="relative flex items-center gap-3 p-3 hover:bg-muted/50 hover:border-primary/40 transition-colors cursor-pointer">
+      {/* Stretched link: whole row navigates, but the nested project link
+          stays a sibling rather than an <a> inside an <a>. */}
+      <Link
+        to={`/tools/registry/${work.id}`}
+        className="absolute inset-0"
+        aria-label={work.title}
+      />
       <Artwork seed={work.title} hasArtwork={work.released} size={44} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
@@ -64,18 +73,14 @@ export function WorkRow({ work, onOpen, onOpenProject }: WorkRowProps) {
         <div className="flex items-center gap-3 flex-wrap mt-1.5 text-[12px] text-muted-foreground">
           {work.artist && <span>{work.artist.name}</span>}
           {work.project && (
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 hover:text-foreground"
+            <Link
+              to={`/projects/${work.project.id}`}
+              className="relative z-10 inline-flex items-center gap-1 hover:text-foreground"
               title={`Open ${work.project.name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenProject?.(work.project!.id);
-              }}
             >
               <Folder className="w-3 h-3" />
               {work.project.name}
-            </button>
+            </Link>
           )}
           {work.isrc && <span className="font-mono text-[11px]">ISRC {work.isrc}</span>}
           {docCount > 0 && (

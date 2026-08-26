@@ -1,23 +1,28 @@
 """FastAPI router for the Kanban board feature."""
 
+import re
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 # Ensure backend dir is in path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+import artist_access
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
-from boards import service
+from boards import calendar_import, ics, service
 from boards.models import (
     AssigneeAdd,
     BatchReorder,
     BoardCreate,
     BoardUpdate,
+    CalendarSubscriptionCreate,
     ColumnCreate,
     ColumnUpdate,
     CommentCreate,
@@ -37,20 +42,33 @@ def _get_supabase():
     return get_supabase_client()
 
 
+def _scope(db, user_id: str, scope: str | None) -> artist_access.Scope:
+    """Resolve the `?scope=` param (workspace narrowing — flag-gated, falls
+    back to the stored context, 404s a foreign org). Listing endpoints only;
+    explicit board_id/team_id requests stay authorization-gated."""
+    return artist_access.resolve_scope(db, user_id, scope)
+
+
 # --- Boards (CRUD) ---
 
 
 @router.post("/boards")
-async def create_board(body: BoardCreate, user_id: str = Depends(get_current_user_id)):
+async def create_board(
+    body: BoardCreate,
+    user_id: str = Depends(get_current_user_id),
+    scope: str | None = Query(None),
+):
     """Create a board (personal, or team when team_id is provided)."""
+    db = _get_supabase()
     try:
         board = await service.create_board(
-            _get_supabase(),
+            db,
             user_id,
             name=body.name,
             team_id=body.team_id,
             artist_id=body.artist_id,
             description=body.description,
+            scope=_scope(db, user_id, scope),
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -63,23 +81,30 @@ async def create_board(body: BoardCreate, user_id: str = Depends(get_current_use
 async def list_boards(
     user_id: str = Depends(get_current_user_id),
     team_id: str | None = Query(None),
+    scope: str | None = Query(None),
 ):
     """List active (non-archived) boards — the caller's personal boards, or a team's boards."""
+    db = _get_supabase()
     try:
-        boards = await service.list_boards(_get_supabase(), user_id, team_id)
+        boards = await service.list_boards(db, user_id, team_id, scope=_scope(db, user_id, scope))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     return {"boards": boards}
 
 
 @router.put("/boards/{board_id}")
-async def rename_board(board_id: str, body: BoardUpdate, user_id: str = Depends(get_current_user_id)):
-    """Rename/update a board. Raises 404 (via require_board_edit) if the caller can't edit it."""
-    data = body.model_dump(exclude_none=True)
-    board = await service.rename_board(_get_supabase(), user_id, board_id, data)
-    if not board:
-        raise HTTPException(status_code=404, detail="Board not found")
-    return board
+async def update_board(board_id: str, body: BoardUpdate, user_id: str = Depends(get_current_user_id)):
+    """Rename, describe, or change who can see a board (spec 2026-08-16 §3).
+    404 for boards the caller can't reach; 403 when a plain member tries to
+    change visibility; 422 for member ids outside the team / personal boards."""
+    try:
+        return await service.update_board(_get_supabase(), user_id, board_id, body.model_dump(exclude_none=True))
+    except service.InvalidBoardMembersError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.delete("/boards/{board_id}")
@@ -98,9 +123,11 @@ async def archive_board(board_id: str, user_id: str = Depends(get_current_user_i
 async def list_archived_boards(
     user_id: str = Depends(get_current_user_id),
     team_id: str | None = Query(None),
+    scope: str | None = Query(None),
 ):
+    db = _get_supabase()
     try:
-        boards = await service.list_archived_boards(_get_supabase(), user_id, team_id)
+        boards = await service.list_archived_boards(db, user_id, team_id, scope=_scope(db, user_id, scope))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     return {"boards": boards}
@@ -136,17 +163,24 @@ async def list_columns(
     user_id: str = Depends(get_current_user_id),
     artist_id: str | None = Query(None),
     board_id: str | None = Query(None),
+    scope: str | None = Query(None),
 ):
     """Get all board columns for a user, scoped by board_id (explicit, artist alias, or personal boards)."""
-    columns = await service.get_columns(_get_supabase(), user_id, artist_id, board_id)
+    db = _get_supabase()
+    columns = await service.get_columns(db, user_id, artist_id, board_id, scope=_scope(db, user_id, scope))
     return {"columns": columns}
 
 
 @router.post("/columns")
-async def create_column(body: ColumnCreate, user_id: str = Depends(get_current_user_id)):
+async def create_column(
+    body: ColumnCreate,
+    user_id: str = Depends(get_current_user_id),
+    scope: str | None = Query(None),
+):
     """Create a new board column."""
     data = body.model_dump(exclude_none=True)
-    column = await service.create_column(_get_supabase(), user_id, data)
+    db = _get_supabase()
+    column = await service.create_column(db, user_id, data, scope=_scope(db, user_id, scope))
     if not column:
         raise HTTPException(status_code=500, detail="Failed to create column")
     return column
@@ -176,10 +210,12 @@ async def create_defaults(
     user_id: str = Depends(get_current_user_id),
     artist_id: str | None = Query(None),
     board_id: str | None = Query(None),
+    scope: str | None = Query(None),
 ):
     """Create default columns (To Do, In Progress, Review, Done). board_id targets a specific
     board (e.g. a team board); omit it to seed the caller's personal board (legacy default)."""
-    columns = await service.create_default_columns(_get_supabase(), user_id, artist_id, board_id)
+    db = _get_supabase()
+    columns = await service.create_default_columns(db, user_id, artist_id, board_id, scope=_scope(db, user_id, scope))
     return {"columns": columns}
 
 
@@ -192,21 +228,30 @@ async def list_parents(
     search: str | None = Query(None),
     artist_id: str | None = Query(None),
     board_id: str | None = Query(None),
+    scope: str | None = Query(None),
 ):
     """Get all parent tasks with nested children for the overview tab."""
-    result = await service.get_all_parents_with_children(_get_supabase(), user_id, search, artist_id, board_id)
+    db = _get_supabase()
+    result = await service.get_all_parents_with_children(
+        db, user_id, search, artist_id, board_id, scope=_scope(db, user_id, scope)
+    )
     return result
 
 
 @router.post("/parents")
-async def create_parent(body: ParentTaskCreate, user_id: str = Depends(get_current_user_id)):
+async def create_parent(
+    body: ParentTaskCreate,
+    user_id: str = Depends(get_current_user_id),
+    scope: str | None = Query(None),
+):
     """Create a parent task (no column, is_parent=True)."""
     data = body.model_dump(exclude_none=True)
     if data.get("due_date"):
         data["due_date"] = str(data["due_date"])
     if data.get("start_date"):
         data["start_date"] = str(data["start_date"])
-    task = await service.create_parent_task(_get_supabase(), user_id, data)
+    db = _get_supabase()
+    task = await service.create_parent_task(db, user_id, data, scope=_scope(db, user_id, scope))
     if not task:
         raise HTTPException(status_code=500, detail="Failed to create parent task")
     analytics_capture(user_id, "board_created", {"tool": "boards"})
@@ -223,10 +268,78 @@ async def calendar_tasks(
     end: str = Query(..., description="End date YYYY-MM-DD"),
     board_id: str | None = Query(None),
     artist_id: str | None = Query(None),
+    scope: str | None = Query(None),
 ):
     """Get tasks within a date range for the calendar view."""
-    tasks = await service.get_tasks_by_date_range(_get_supabase(), user_id, start, end, board_id, artist_id)
+    db = _get_supabase()
+    tasks = await service.get_tasks_by_date_range(
+        db, user_id, start, end, board_id, artist_id, scope=_scope(db, user_id, scope)
+    )
     return {"tasks": tasks}
+
+
+@router.get("/calendar/feeds")
+async def calendar_feeds(user_id: str = Depends(get_current_user_id)):
+    """The caller's private .ics subscription URLs — one per calendar they can subscribe to
+    (everything, personal, and each of their teams). Google/Apple/Outlook all read these."""
+    feeds = await service.list_calendar_feeds(_get_supabase(), user_id)
+    for feed in feeds:
+        feed["url"] = ics.feed_url(user_id, feed["scope"])
+        feed["webcal_url"] = re.sub(r"^https?://", "webcal://", feed["url"])
+    return {"feeds": feeds}
+
+
+# --- External calendar subscriptions (import) ---
+
+
+@router.get("/calendar/subscriptions")
+async def list_calendar_subscriptions(user_id: str = Depends(get_current_user_id)):
+    """The caller's imported calendars. URLs are never returned — they're credentials."""
+    return {"subscriptions": await service.list_subscriptions(_get_supabase(), user_id)}
+
+
+@router.post("/calendar/subscriptions")
+async def add_calendar_subscription(body: CalendarSubscriptionCreate, user_id: str = Depends(get_current_user_id)):
+    """Subscribe to an external .ics calendar. Validates the URL by fetching it once."""
+    try:
+        return await service.add_subscription(_get_supabase(), user_id, body.url, body.name)
+    except calendar_import.FeedError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/calendar/subscriptions/{subscription_id}")
+async def remove_calendar_subscription(subscription_id: str, user_id: str = Depends(get_current_user_id)):
+    if not await service.delete_subscription(_get_supabase(), user_id, subscription_id):
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return {"success": True}
+
+
+@router.get("/calendar/external")
+async def external_calendar_events(
+    user_id: str = Depends(get_current_user_id),
+    start: str = Query(..., description="Start date YYYY-MM-DD"),
+    end: str = Query(..., description="End date YYYY-MM-DD"),
+):
+    """Read-only events from the caller's imported calendars, for the calendar overlay.
+
+    Separate from /calendar on purpose: a slow or dead external feed must not delay
+    or break the user's own tasks.
+    """
+    return {"events": await service.get_external_events(_get_supabase(), user_id, start, end)}
+
+
+@router.get("/calendar/{feed_user_id}/{scope}/{token}.ics", include_in_schema=False)
+async def calendar_feed(feed_user_id: str, scope: str, token: str):
+    """Public read-only task feed. The HMAC in the path is the only credential —
+    calendar clients send no auth headers — so a bad token is a plain 404."""
+    if not ics.verify_feed_token(feed_user_id, scope, token):
+        raise HTTPException(status_code=404, detail="Not found")
+    supabase = _get_supabase()
+    today = datetime.now(UTC).date()
+    window = timedelta(days=ics.FEED_WINDOW_DAYS)
+    tasks = await service.get_feed_tasks(supabase, feed_user_id, scope, str(today - window), str(today + window))
+    body = ics.build_ics(tasks, cal_name=service.feed_name(supabase, feed_user_id, scope))
+    return Response(content=body, media_type="text/calendar; charset=utf-8")
 
 
 # --- Period-based Tasks (must come before /tasks/{task_id} routes) ---
@@ -240,10 +353,12 @@ async def period_tasks(
     is_current: bool = Query(True, description="Whether this is the current period"),
     board_id: str | None = Query(None),
     artist_id: str | None = Query(None),
+    scope: str | None = Query(None),
 ):
     """Get tasks within a period for date-based board views."""
+    db = _get_supabase()
     tasks = await service.get_tasks_by_period(
-        _get_supabase(), user_id, period_start, period_end, is_current, board_id, artist_id
+        db, user_id, period_start, period_end, is_current, board_id, artist_id, scope=_scope(db, user_id, scope)
     )
     return {"tasks": tasks}
 
@@ -273,19 +388,28 @@ async def list_tasks(
     page_size: int = Query(50, ge=1, le=100),
     board_id: str | None = Query(None),
     artist_id: str | None = Query(None),
+    scope: str | None = Query(None),
 ):
     """Get all tasks for a user, scoped by board_id, optionally filtered by column."""
-    result = await service.get_tasks(_get_supabase(), user_id, column_id, page, page_size, board_id, artist_id)
+    db = _get_supabase()
+    result = await service.get_tasks(
+        db, user_id, column_id, page, page_size, board_id, artist_id, scope=_scope(db, user_id, scope)
+    )
     if isinstance(result, list):
         return {"tasks": result}
     return result
 
 
 @router.post("/tasks")
-async def create_task(body: TaskCreate, user_id: str = Depends(get_current_user_id)):
+async def create_task(
+    body: TaskCreate,
+    user_id: str = Depends(get_current_user_id),
+    scope: str | None = Query(None),
+):
     """Create a new task."""
+    db = _get_supabase()
     # Gate: count user's existing board tasks
-    count_res = _get_supabase().table("board_tasks").select("id", count="exact").eq("user_id", user_id).execute()
+    count_res = db.table("board_tasks").select("id", count="exact").eq("user_id", user_id).execute()
     task_count = count_res.count or 0
     gated_create(user_id, "task", current_count=task_count)
 
@@ -294,11 +418,32 @@ async def create_task(body: TaskCreate, user_id: str = Depends(get_current_user_
         data["due_date"] = str(data["due_date"])
     if data.get("start_date"):
         data["start_date"] = str(data["start_date"])
-    task = await service.create_task(_get_supabase(), user_id, data)
+    task = await service.create_task(db, user_id, data, scope=_scope(db, user_id, scope))
     if not task:
         raise HTTPException(status_code=500, detail="Failed to create task")
     analytics_capture(user_id, "task_created", {"tool": "boards", "source": "manual"})
     return task
+
+
+@router.get("/tasks/{task_id}/calendar.ics")
+async def task_calendar_file(task_id: str, user_id: str = Depends(get_current_user_id)):
+    """Download ONE task as a .ics file — for adding a single deadline to a calendar
+    without subscribing to the whole feed. Same renderer as the feed, so a task looks
+    identical either way it arrives."""
+    # get_task_detail runs require_board_access, which already raises 404 for a task
+    # the caller can't see — so no access check is needed here.
+    task = await service.get_task_detail(_get_supabase(), user_id, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.get("due_date"):
+        raise HTTPException(status_code=400, detail="Add a due date before sending this task to a calendar")
+
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", task.get("title") or "task")[:60] or "task"
+    return Response(
+        content=ics.build_ics([task]),
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.ics"'},
+    )
 
 
 @router.get("/tasks/{task_id}/detail")

@@ -13,6 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from postgrest.exceptions import APIError
 
+import artist_access
 from analytics import capture as analytics_capture
 from auth import get_current_user_id
 from registry import contract_splits, derive_service, grants_service, service, work_links_service
@@ -38,8 +39,10 @@ from registry.models import (
     WorkRoleUpdate,
     WorkUpdate,
 )
-from subscriptions.enforcement import gated_feature
-from subscriptions.models import Action
+from subscriptions.enforcement import gated_create, gated_credits, gated_feature
+from subscriptions.models import Action, CreditAction
+from subscriptions.service import credits_enabled
+from utils.llm.tracking import set_llm_context
 
 router = APIRouter()
 
@@ -61,8 +64,12 @@ async def list_works(
     artist_id: str | None = Query(None),
     page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    scope: str | None = Query(None),
 ):
-    result = await service.get_works(_get_supabase(), user_id, artist_id, page, page_size)
+    db = _get_supabase()
+    result = await service.get_works(
+        db, user_id, artist_id, page, page_size, scope=artist_access.resolve_scope(db, user_id, scope)
+    )
     if isinstance(result, list):
         return {"works": result}
     return result
@@ -73,8 +80,12 @@ async def list_my_collaborations(
     user_id: str = Depends(get_current_user_id),
     page: int | None = Query(None, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    scope: str | None = Query(None),
 ):
-    result = await service.get_works_as_collaborator(_get_supabase(), user_id, page, page_size)
+    db = _get_supabase()
+    result = await service.get_works_as_collaborator(
+        db, user_id, page, page_size, scope=artist_access.resolve_scope(db, user_id, scope)
+    )
     if isinstance(result, list):
         return {"works": result}
     return result
@@ -120,6 +131,19 @@ def _raise_503_if_schema_stale(e: APIError) -> None:
 @router.post("/works")
 async def create_work(body: WorkCreate, user_id: str = Depends(get_current_user_id)):
     gated_feature(user_id, Action.USE_REGISTRY)
+    # max_works ships with the credits launch (spec: everything behind
+    # CREDITS_ENABLED); the migration seeds the cap but it must not bite
+    # before the flag flips.
+    if credits_enabled():
+        # SP3/credits: per-tier max_works cap — 402 when the user is at the limit.
+        count_res = _get_supabase().table("works_registry").select("id", count="exact").eq("user_id", user_id).execute()
+        # Licensing Phase C (rule 9): pass the target project so a work created in
+        # an org-linked project where the caller holds a seat gets the org's
+        # unlimited count cap. body.project_id is already in scope (required on
+        # WorkCreate); no new query. Ownership is validated downstream in
+        # service.create_work — derivation can only ever UPGRADE the cap, so it is
+        # safe even before that check (a miss falls through to today's behavior).
+        gated_create(user_id, "work", count_res.count or 0, resource_project_id=body.project_id)
     data = body.model_dump(exclude_none=True)
     if "release_date" in data and data["release_date"]:
         data["release_date"] = data["release_date"].isoformat()
@@ -819,9 +843,42 @@ async def derive_from_contracts(body: DeriveFromContractsBody, user_id: str = De
         link = db.table("work_files").select("id").eq("work_id", body.work_id).eq("file_id", cid).execute()
         if not link.data:
             raise HTTPException(status_code=403, detail="Access denied")
-    result = await derive_service.derive_for_collaborator(
-        db, body.work_id, body.name, body.email, body.contract_file_ids
+
+    # This runs a full LLM contract extraction per file (derive_service ->
+    # get_or_parse), so it is a metered AI action like every other parse — it
+    # was previously gated only on the Registry FEATURE flag and charged
+    # nothing, which leaked the entire cost of the Derive dialog.
+    # Access-before-derivation (rule 4): the work_files link check above already
+    # ran, so a derived org can never be billed for a file the caller can't see.
+    # ONE request, ONE deliverable, ONE base charge (spec 2026-08-17 §2): this
+    # answers a single question — one collaborator's split — however many files
+    # it had to read, so it is not priced per file. Cost multiplicity is handled
+    # by the metered tail instead: the crossover is around 18 contracts
+    # (~$0.21 measured ≈ 32 credits > the 30 base), past which max(base, metered)
+    # charges what the batch actually cost. A cache hit pays the base, same as
+    # every other parse.
+    parse_grant = gated_credits(
+        user_id,
+        CreditAction.REGISTRY_PARSE,
+        resource_contract_ids=list(body.contract_file_ids) if body.contract_file_ids else None,
+        # Same deliverable = same charge, once per period. A double-submitted
+        # Derive dialog is a 60-credit event otherwise. Keyed on the collaborator
+        # AND the contract set, so deriving a DIFFERENT collaborator from the same
+        # contracts is correctly a separate, chargeable question.
+        dedupe_key=(
+            f"derive|{body.work_id}|{body.name or ''}|{body.email or ''}|"
+            f"{'|'.join(sorted(body.contract_file_ids or []))}"
+        ),
     )
+    with set_llm_context(user_id, "registry"):
+        result = await derive_service.derive_for_collaborator(
+            db, body.work_id, body.name, body.email, body.contract_file_ids
+        )
+        # Charge on success, metered off the tokens the parses actually burned
+        # (0 when every contract came back from the parse cache).
+        from subscriptions.deps import _get_entitlements_service
+
+        _get_entitlements_service().debit_for_action(user_id, parse_grant)
 
     # Auto-link the source contract to the work — when a split was successfully
     # derived from a file, that file is by definition related to this work and
@@ -911,9 +968,15 @@ async def get_artist_with_teamcard(artist_id: str, user_id: str = Depends(get_cu
 
 
 @router.get("/artists/with-teamcards")
-async def list_artists_with_teamcards(user_id: str = Depends(get_current_user_id)):
+async def list_artists_with_teamcards(
+    user_id: str = Depends(get_current_user_id),
+    scope: str | None = Query(None),
+):
     """Batch endpoint: returns all of a user's artists with TeamCard overlays applied."""
-    artists = await service.get_artists_with_teamcards(_get_supabase(), user_id)
+    db = _get_supabase()
+    artists = await service.get_artists_with_teamcards(
+        db, user_id, scope=artist_access.resolve_scope(db, user_id, scope)
+    )
     return {"artists": artists}
 
 
@@ -1145,7 +1208,7 @@ async def parse_contract_splits(
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=f"Failed to download contract: {exc}") from exc
 
-    from utils.contract_parsing.cache import get_or_parse
+    from utils.contract_parsing.cache import content_key, get_or_parse
     from utils.ingestion.pdf_markdown import pdf_to_markdown
 
     def _load_text() -> str:
@@ -1166,14 +1229,56 @@ async def parse_contract_splits(
                 except OSError:
                     pass
 
+    # Load the text first (pdf→markdown is local compute, no LLM cost). There is
+    # deliberately NO pre-gate cache peek any more: a cache hit is a complete
+    # deliverable and pays the base rate like any other parse (spec 2026-08-17
+    # §4), so a zero-balance user is walled either way and the peek only bought
+    # a round-trip. peek_cached_parse still exists — get_or_parse uses it
+    # internally — it is just no longer a billing decision.
     try:
-        # Route through the shared parse cache so this Add-Work parse is cached and
-        # canonicalized (marker-stripped) like every other contract parse.
-        contract_data = get_or_parse(_get_supabase(), _load_text)
-        result = contract_splits.parse_royalty_splits(
-            contract_data=contract_data,
-            main_artist_name=main_artist_name or "",
-        )
+        text = _load_text()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Contract parsing failed: {e}")
+
+    # SP3/credits: gate the contract parse; 402 without access or credits.
+    # Resource-derived billing (Licensing Phase C, rule 5): a PICKED existing
+    # contract (contract_file_id) derives its project's linked-org billing —
+    # passed as a one-element list; an UPLOAD has no resource → ambient.
+    # Derivation-vs-access ordering (rule 4, Phase A access-first):
+    # verify_user_owns_contract on the picked file ran above BEFORE this gate,
+    # so derivation can never bill an org for a contract the caller can't
+    # access; charge-on-success is the backstop.
+    # The deliverable is a pure function of the canonical contract text and the
+    # artist the pivot is built for, so re-parsing the same contract this period
+    # charges once. content_key is the parse cache's own key function, so the
+    # dedupe can never drift from what the cache considers "the same parse".
+    parse_grant = gated_credits(
+        user_id,
+        CreditAction.REGISTRY_PARSE,
+        resource_contract_ids=[contract_file_id] if has_picked else None,
+        dedupe_key=f"{content_key(text)}|{main_artist_name or ''}",
+    )
+
+    try:
+        with set_llm_context(user_id, "registry"):
+            # Route through the shared parse cache so this Add-Work parse is cached and
+            # canonicalized (marker-stripped) like every other contract parse.
+            contract_data = get_or_parse(_get_supabase(), lambda: text)
+            result = contract_splits.parse_royalty_splits(
+                contract_data=contract_data,
+                main_artist_name=main_artist_name or "",
+            )
+            # INSIDE the scope: the metered TAIL is read off the tokens this
+            # parse burned, which is only readable while the context is live. A
+            # cache hit burns none, measures 0, and so pays exactly the base —
+            # max(base, 0) — which is the intended price of the deliverable.
+            from subscriptions.deps import _get_entitlements_service
+
+            _get_entitlements_service().debit_for_action(user_id, parse_grant)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

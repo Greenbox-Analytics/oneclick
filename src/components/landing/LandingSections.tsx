@@ -1,6 +1,6 @@
 import { CSSProperties, ReactNode, SVGProps } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { CreditCard, LogOut, Menu, Shield, User } from "lucide-react";
+import { LogOut, Menu, Shield, User } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -245,11 +245,7 @@ export function LandingHeader() {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => navigate("/profile")}>
                     <User className="mr-2 h-4 w-4" />
-                    <span>Profile settings</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => navigate("/subscription")}>
-                    <CreditCard className="mr-2 h-4 w-4" />
-                    <span>Subscription</span>
+                    <span>Profile & billing</span>
                   </DropdownMenuItem>
                   {isAdmin ? (
                     <DropdownMenuItem onClick={() => navigate("/admin/users")}>
@@ -415,7 +411,6 @@ const LOGOS: readonly LogoEntry[] = [
   { name: "Apple Music", src: "/apple_music.png" },
   { name: "SoundCloud", src: "/soundcloud.png" },
   { name: "Google Drive", src: "/drive.webp" },
-  { name: "Slack", src: "/slack.png" },
   { name: "PayPal", src: "/paypal.png" },
 ];
 
@@ -488,7 +483,6 @@ export function ToolShowcase() {
         <div style={{ maxWidth: 1080, margin: "0 auto", display: "grid", gap: 28 }}>
           {TOOL_ROWS.map((row, i) => {
             const { topic, tool, isTopicFirst } = row;
-            const flipped = i % 2 === 1;
             const Demo = tool.Demo;
             return (
               <div key={tool.id}>
@@ -532,7 +526,10 @@ export function ToolShowcase() {
                   id={tool.id}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: flipped ? "1.25fr 0.85fr" : "0.85fr 1.25fr",
+                    // minmax(0, …) keeps the demo column from widening when a
+                    // demo phase renders wider min-content (e.g. OneClick's
+                    // results table) — fr alone lets min-content win.
+                    gridTemplateColumns: "minmax(0, 0.85fr) minmax(0, 1.25fr)",
                     gap: 56,
                     alignItems: "center",
                     padding: 36,
@@ -543,7 +540,7 @@ export function ToolShowcase() {
                   }}
                   className="lp-tool-row"
                 >
-                  <div style={{ order: flipped ? 2 : 1 }}>
+                  <div style={{ minWidth: 0 }}>
                     {tool.tagline && (
                       <div
                         style={{
@@ -636,7 +633,7 @@ export function ToolShowcase() {
                       </LinkOrAnchor>
                     </div>
                   </div>
-                  <div style={{ order: flipped ? 1 : 2 }}>
+                  <div style={{ minWidth: 0 }}>
                     <Demo playing={true} height={420} />
                   </div>
                 </article>

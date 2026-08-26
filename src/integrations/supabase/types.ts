@@ -63,6 +63,9 @@ export type Database = {
       }
       artists: {
         Row: {
+          team_id: string | null
+          transferred_at: string | null
+          transferred_by: string | null
           additional_linktree: string | null
           additional_press_kit: string | null
           additional_website: string | null
@@ -90,6 +93,9 @@ export type Database = {
           verified_at: string | null
         }
         Insert: {
+          team_id?: string | null
+          transferred_at?: string | null
+          transferred_by?: string | null
           additional_linktree?: string | null
           additional_press_kit?: string | null
           additional_website?: string | null
@@ -117,6 +123,9 @@ export type Database = {
           verified_at?: string | null
         }
         Update: {
+          team_id?: string | null
+          transferred_at?: string | null
+          transferred_by?: string | null
           additional_linktree?: string | null
           additional_press_kit?: string | null
           additional_website?: string | null
@@ -2301,11 +2310,9 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      _audio_owner_for_af: { Args: { af_folder_id: string }; Returns: string }
-      _project_owner_for_pf: {
-        Args: { pf_project_id: string }
-        Returns: string
-      }
+      _artist_for_af: { Args: { af_folder_id: string }; Returns: string }
+      _artist_for_pf: { Args: { pf_project_id: string }; Returns: string }
+      _bump_storage: { Args: { p_artist_id: string; p_delta: number }; Returns: undefined }
       admin_search_users_by_email: {
         Args: { p_limit?: number; p_search: string }
         Returns: {
@@ -2332,6 +2339,7 @@ export type Database = {
         Returns: undefined
       }
       is_project_member: { Args: { p_id: string }; Returns: boolean }
+      recalc_team_storage: { Args: { p_org_id: string }; Returns: number }
       recalc_user_storage: { Args: { p_user_id: string }; Returns: undefined }
       work_project_id: { Args: { p_work: string }; Returns: string }
       work_role: { Args: { p_work: string }; Returns: string }

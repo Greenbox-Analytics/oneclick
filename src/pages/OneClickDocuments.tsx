@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, AlertCircle, BookOpen } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { toast } from "sonner";
@@ -16,7 +16,10 @@ import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
-import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders, ApiError, apiErrorFromBody } from "@/lib/apiFetch";
+import { parseCreditWallDetail, type CreditWallInfo } from "@/components/paywall/creditWall";
+import { CreditsChip } from "@/components/billing/CreditsChip";
+import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 import ContractSelector from "@/components/oneclick/ContractSelector";
 import RoyaltyStatementSelector from "@/components/oneclick/RoyaltyStatementSelector";
 import CalculationResults from "@/components/oneclick/CalculationResults";
@@ -50,7 +53,9 @@ interface SplitFinding {
 }
 interface SplitReview { overall: "verified" | "needs_review" | "unavailable"; checked: number; flagged: number; findings: SplitFinding[]; }
 interface CalculationResult { status: string; total_payments: number; payments: RoyaltyPayment[]; excel_file_url?: string; message: string; is_cached?: boolean; calculation_id?: string; expense_review_required?: boolean; expenses?: ReviewExpense[]; review?: SplitReview | null; }
-interface CalculationErrorState {
+// Credit-wall fields (CreditWallInfo) are set when the calculation was denied
+// by a credit-402 — see creditWall.tsx for the two org walls' semantics.
+interface CalculationErrorState extends Partial<CreditWallInfo> {
   message: string;
   code?: string;
   suggestion?: string;
@@ -427,7 +432,10 @@ const OneClickDocuments = () => {
 
         if (!response.ok) {
             const body = await response.json().catch(() => ({}));
-            throw new Error(body.detail || `Calculation request failed: ${response.status}`);
+            // Structured 402s carry `detail` (reason + org-seat managedByOrg/
+            // requestUrl/…), preserved on the ApiError so the catch block can
+            // offer the "Request credits" CTA instead of a dead-end message.
+            throw apiErrorFromBody(body, response.status, `Calculation request failed: ${response.status}`);
         }
 
         const reader = response.body?.getReader();
@@ -457,6 +465,8 @@ const OneClickDocuments = () => {
                     streamResult = result;
                     setCalculationResult(result);
                     setShowProgressModal(false);
+                    // Runs are credit-metered (cache hits free — refetch is harmless).
+                    invalidateCreditSurfaces(queryClient);
                     if (needsReview) {
                         setExpenseReview(data.expenses || []);
                         toast.info("Some collaborators are paid on net income — review the expenses to finalize.");
@@ -510,7 +520,8 @@ const OneClickDocuments = () => {
     } catch (error: unknown) {
         console.error("Error:", error);
         const errorMessage = error instanceof Error ? error.message : "An error occurred.";
-        setError({ message: errorMessage });
+        const cw = parseCreditWallDetail(error instanceof ApiError ? error.detail : undefined);
+        setError({ message: errorMessage, ...cw });
         if (!String(errorMessage).toLowerCase().includes("duplicate file")) toast.error(errorMessage || "An error occurred during processing.");
         setShowProgressModal(false); setIsUploading(false);
     }
@@ -667,15 +678,6 @@ const OneClickDocuments = () => {
         backTo="/tools/oneclick"
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }
@@ -738,7 +740,7 @@ const OneClickDocuments = () => {
           />
         </div>
 
-        <div className="flex gap-3 justify-center mb-8">
+        <div className="flex flex-col items-center gap-2 mb-8">
           <Button
             data-walkthrough="oneclick-calculate"
             onClick={() => openReviewDialog(false)}
@@ -757,6 +759,10 @@ const OneClickDocuments = () => {
               "Calculate Royalties"
             )}
           </Button>
+          <CreditsChip action="oneclick_run" />
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            You won&apos;t be charged twice for the same result this month.
+          </p>
         </div>
 
         {/* Error Alert */}
@@ -766,6 +772,30 @@ const OneClickDocuments = () => {
                 <AlertTitle>{error.message}</AlertTitle>
                 <AlertDescription>
                     {error.suggestion && <p className="mt-2">{error.suggestion}</p>}
+                    {/* Cap wall only — a dry pool has no member-side remedy, so
+                        no CTA there (only an admin buying credits helps). */}
+                    {error.managedByOrg && error.capReached && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-3"
+                            onClick={() => navigate(error.requestUrl || "/teams")}
+                        >
+                            Ask for a higher limit
+                        </Button>
+                    )}
+                    {/* Personal credit wall: buying credits or upgrading both fix
+                        it, so offer both rather than a dead-end error message. */}
+                    {error.isCreditWall && !error.managedByOrg && (
+                        <div className="mt-3 flex gap-2">
+                            <Button size="sm" onClick={() => navigate("/profile")}>
+                                Buy credits
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => navigate("/pricing")}>
+                                Upgrade
+                            </Button>
+                        </div>
+                    )}
                     {error.code === 'NO_SONG_MATCHES' && error.details?.contract_works && error.details?.statement_songs && (
                         <SongMismatchComparison
                             contractWorks={error.details.contract_works}

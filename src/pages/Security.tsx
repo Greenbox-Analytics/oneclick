@@ -33,7 +33,6 @@ const PARTNERS: Array<[string, string]> = [
   ["Resend", "Sends account and notification emails"],
   ["Anthropic / OpenAI", "Powers Zoe, our contract assistant"],
   ["Google", "Google Drive connection"],
-  ["Slack", "Slack connection"],
 ];
 
 const Security = () => {

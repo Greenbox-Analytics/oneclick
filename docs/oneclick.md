@@ -16,7 +16,7 @@ All OneClick routes are registered under the `/oneclick` prefix in `src/backend/
 | `GET` | `/oneclick/calculate-royalties-stream` | Stream SSE progress events and final payment results. Checks the cache first; accepts `force_recalculate=true` to bypass it. |
 | `POST` | `/oneclick/calculate-royalties` | Non-streaming version of the same calculation (synchronous). |
 | `POST` | `/oneclick/confirm` | Persist confirmed calculation results to `royalty_calculations` + `royalty_calculation_contracts`. Replaces any existing cached record for the same statement + contract set. |
-| `POST` | `/oneclick/share` | Generate a PDF of the results and upload it to Google Drive or Slack. |
+| `POST` | `/oneclick/share` | Generate a PDF of the results and upload it to Google Drive. |
 
 ### `GET /oneclick/calculate-royalties-stream` — query parameters
 
@@ -64,7 +64,7 @@ On completion the `type: "result"` event carries the full `OneClickRoyaltyRespon
 
 **`POST /oneclick/share`**
 
-Generates a PDF using ReportLab and uploads it to the specified integration. Requires the user to have the relevant OAuth token stored (Google Drive or Slack).
+Generates a PDF using ReportLab and uploads it to Google Drive. Requires a stored Google Drive OAuth token.
 
 ### Request body (`ShareRequest`)
 
@@ -92,11 +92,10 @@ Generates a PDF using ReportLab and uploads it to the specified integration. Req
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `target` | `"drive" \| "slack"` | Yes | Destination integration |
+| `target` | `"drive"` | Yes | Destination integration |
 | `artist_name` | `string` | Yes | Appears in the PDF title and filename |
 | `payments` | `list[dict]` | Yes | Full payment rows from the calculation result |
 | `total_payments` | `float` | Yes | Grand total displayed in the PDF header |
-| `channel_id` | `string \| null` | Conditional | Required when `target` is `"slack"` |
 | `folder_id` | `string \| null` | No | Google Drive folder ID; uploads to root if omitted |
 
 The generated PDF filename follows the pattern:
@@ -106,7 +105,6 @@ The generated PDF filename follows the pattern:
 
 ```json
 { "success": true, "target": "drive", "file": { } }
-{ "success": true, "target": "slack", "result": { } }
 ```
 
 ---
@@ -115,8 +113,8 @@ The generated PDF filename follows the pattern:
 
 1. User completes a calculation and `CalculationResults` renders the results table and pie chart.
 2. User clicks the **Share** button (Share2 icon), which opens a `Popover`.
-3. The popover lists connected integrations. `useIntegrations()` determines which of Google Drive and Slack have an active connection. Disconnected integrations are shown as disabled.
-4. User clicks **Save to Google Drive** or **Share to Slack**.
+3. `useIntegrations()` determines whether Google Drive has an active connection; the button is hidden when it doesn't.
+4. User clicks **Save to Drive**.
 5. `handleShare(target)` in `CalculationResults.tsx` calls `POST /oneclick/share` with the current `calculationResult.payments`, `total_payments`, and the selected `target`.
 6. The backend generates the PDF in-memory (ReportLab), then calls the appropriate integration service (`export_pdf_to_drive` or `upload_file_to_channel`).
 7. A toast notification confirms success or surfaces the error message.
@@ -130,7 +128,7 @@ The generated PDF filename follows the pattern:
 | `OneClickDocuments` | `src/pages/OneClickDocuments.tsx` | Main page. Orchestrates file selection, SSE streaming, progress state, and confirmation flow. Entry point for the `/tools/oneclick` route (artist-scoped via `artistId` param). |
 | `ContractSelector` | `src/components/oneclick/ContractSelector.tsx` | Tabbed card for selecting contracts. Supports uploading new files or picking existing `project_files` (filtered to `folder_category = "contracts"`). Allows multi-select. |
 | `RoyaltyStatementSelector` | `src/components/oneclick/RoyaltyStatementSelector.tsx` | Tabbed card for selecting the royalty statement. Supports uploading new files or picking existing `project_files` (filtered to `folder_category = "royalty_statement"`). Single-select. |
-| `CalculationResults` | `src/components/oneclick/CalculationResults.tsx` | Renders the SSE progress ring, the results table, a pie chart of payment distribution, export buttons (CSV, Excel, chart PNG), and the Share popover for Drive/Slack. |
+| `CalculationResults` | `src/components/oneclick/CalculationResults.tsx` | Renders the SSE progress ring, the results table, a pie chart of payment distribution, export buttons (CSV, Excel, chart PNG), and the Save to Drive button. |
 
 ---
 
@@ -193,34 +191,6 @@ curl -X POST http://localhost:8000/oneclick/share \
   }'
 ```
 
-### Share endpoint (Slack target)
-
-```bash
-curl -X POST http://localhost:8000/oneclick/share \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <JWT>" \
-  -d '{
-    "target": "slack",
-    "artist_name": "Test Artist",
-    "channel_id": "C012AB3CD",
-    "payments": [
-      {
-        "song_title": "Track A",
-        "party_name": "Jane Doe",
-        "role": "Producer",
-        "royalty_type": "streaming",
-        "percentage": 50.0,
-        "total_royalty": 2000.00,
-        "amount_to_pay": 1000.00
-      }
-    ],
-    "total_payments": 1000.00
-  }'
-```
-
-### Streaming calculation (SSE)
-
-```bash
 curl -N "http://localhost:8000/oneclick/calculate-royalties-stream\
 ?project_id=<uuid>\
 &royalty_statement_file_id=<uuid>\

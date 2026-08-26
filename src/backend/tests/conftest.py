@@ -142,7 +142,10 @@ _PRO_TIER_ROW = {
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
-    "integrations_allowed": ["google_drive", "slack"],
+    "integrations_allowed": ["google_drive"],
+    "monthly_credits": 3000,
+    "max_works": -1,
+    "included_storage_bytes": 107374182400,
     "updated_at": "2026-05-09T00:00:00+00:00",
 }
 
@@ -158,6 +161,9 @@ _PRO_SUB_ROW = {
     "current_period_end": None,
     "cancel_at_period_end": False,
     "canceled_at": None,
+    "overage_enabled": False,
+    "overage_cap_credits": None,
+    "storage_overage_enabled": False,
     "created_at": "2026-05-01T00:00:00+00:00",
     "updated_at": "2026-05-01T00:00:00+00:00",
 }
@@ -173,12 +179,40 @@ _DEFAULT_USAGE_ROW = {
     "updated_at": "2026-05-09T00:00:00+00:00",
 }
 
+_DEFAULT_WALLET_ROW = {
+    "id": "w-default",
+    "owner_type": "user",
+    "owner_id": TEST_USER_ID,
+    "bundle_balance": 3000,
+    "reserve_balance": 0,
+    "overage_this_period": 0,
+    "period_start": "2026-05-09T00:00:00+00:00",
+    "period_end": "2099-05-09T00:00:00+00:00",
+}
+
+_DEFAULT_CREDIT_PRICES = [
+    {"action": "zoe_message", "credits": 3},
+    {"action": "oneclick_run", "credits": 21},
+    {"action": "registry_parse", "credits": 12},
+]
+
 # Includes 'profiles' because EntitlementsService.get_for_user now calls
 # is_db_admin(supabase, user_id) which reads from the profiles table — tests
 # that route subscription-related lookups through this set should also include
 # profiles so the admin short-circuit lookup doesn't fall through to whatever
 # domain builder the test installed.
-_SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
+_SUBSCRIPTION_TABLES = frozenset(
+    {
+        "subscriptions",
+        "tier_entitlements",
+        "tier_overrides",
+        "usage_counters",
+        "profiles",
+        "credit_wallets",
+        "credit_prices",
+        "credit_ledger",
+    }
+)
 
 
 def _default_table_side_effect(name):
@@ -203,7 +237,32 @@ def _default_table_side_effect(name):
         # implicit-Pro shape. Tests that specifically need admin behaviour
         # should override profiles to {"is_admin": True}.
         b.execute.return_value = MagicMock(data=[], count=0)
+    elif name == "credit_wallets":
+        b.execute.return_value = MagicMock(data=[_DEFAULT_WALLET_ROW], count=1)
+    elif name == "credit_prices":
+        b.execute.return_value = MagicMock(data=list(_DEFAULT_CREDIT_PRICES), count=3)
+    elif name == "credit_ledger":
+        b.execute.return_value = MagicMock(data=[], count=0)
     return b
+
+
+@pytest.fixture(autouse=True)
+def _disable_credits_by_default(monkeypatch):
+    """CREDITS_ENABLED / LICENSING_ENABLED default off in tests; the tests that
+    exercise them setenv('...', 'true') themselves (monkeypatch.setenv overrides
+    this delete).
+
+    LICENSING_ENABLED matters for the same reason BYPASS_PAYWALLS does below:
+    main.py load_dotenv()s at import, so a dev running with licensing on locally
+    otherwise gets ~16 failures in boards/registry tests whose supabase mocks are
+    sequence-based — org-context resolution adds table() calls and shifts the
+    sequence, which reads as an unrelated 500.
+    """
+    monkeypatch.delenv("CREDITS_ENABLED", raising=False)
+    monkeypatch.delenv("LICENSING_ENABLED", raising=False)
+    # Same leak path: a dev running with workspace scoping on locally would
+    # otherwise see entitlements payloads grow a workspaceScope key mid-suite.
+    monkeypatch.delenv("WORKSPACE_SCOPING_ENABLED", raising=False)
 
 
 @pytest.fixture(autouse=True)

@@ -3,25 +3,32 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
-import type { Board } from "@/types/teams";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
+import { BOARD_STALE_TIME } from "@/hooks/useBoards";
+import type { Board } from "@/types/boards";
 
 export function useBoardsList(teamId?: string | null) {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
   return useQuery({
-    queryKey: ["boards-list", user?.id, teamId ?? "personal"],
+    queryKey: ["boards-list", user?.id, teamId ?? "personal", scopeKey],
     queryFn: async () => {
       const qs = teamId ? `?team_id=${teamId}` : "";
-      return (await apiFetch<{ boards: Board[] }>(`${API_URL}/boards/boards${qs}`)).boards;
+      return (await apiFetch<{ boards: Board[] }>(withScope(`${API_URL}/boards/boards${qs}`))).boards;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
+    // Workspace and BoardSwitcher both observe this key; every mutation that
+    // changes it invalidates explicitly, so staleness never hides our writes.
+    staleTime: BOARD_STALE_TIME,
   });
 }
 
 export function useCreateBoard() {
   const qc = useQueryClient();
+  const { withScope } = useWorkspaceScope();
   return useMutation({
     mutationFn: (body: { name: string; team_id?: string | null; description?: string }) =>
-      apiFetch<Board>(`${API_URL}/boards/boards`, {
+      apiFetch<Board>(withScope(`${API_URL}/boards/boards`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -34,14 +41,22 @@ export function useCreateBoard() {
   });
 }
 
-export function useRenameBoard() {
+export interface BoardUpdate {
+  boardId: string;
+  name?: string;
+  description?: string;
+  restricted?: boolean;
+  member_user_ids?: string[];
+}
+
+export function useUpdateBoard() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ boardId, name }: { boardId: string; name: string }) =>
+    mutationFn: ({ boardId, ...body }: BoardUpdate) =>
       apiFetch<Board>(`${API_URL}/boards/boards/${boardId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(body),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["boards-list"] }),
     onError: (e: Error) => toast.error(e.message),
@@ -95,12 +110,13 @@ export function useRestoreBoard() {
 
 export function useArchivedBoards(teamId?: string | null) {
   const { user } = useAuth();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
   return useQuery({
-    queryKey: ["archived-boards", user?.id, teamId ?? "personal"],
+    queryKey: ["archived-boards", user?.id, teamId ?? "personal", scopeKey],
     queryFn: async () => {
       const qs = teamId ? `?team_id=${teamId}` : "";
-      return (await apiFetch<{ boards: Board[] }>(`${API_URL}/boards/archived${qs}`)).boards;
+      return (await apiFetch<{ boards: Board[] }>(withScope(`${API_URL}/boards/archived${qs}`))).boards;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 }

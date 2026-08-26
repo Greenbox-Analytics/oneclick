@@ -14,18 +14,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 
 from analytics import capture as analytics_capture
+from utils.llm.model_garden import model_for
 
 logger = logging.getLogger(__name__)
 # Logger name is load-bearing: tests use `caplog.at_level(logger="oneclick.audit")`.
 # Keep the string literal even though this module now lives outside oneclick/.
 audit_logger = logging.getLogger("oneclick.audit")
-
-LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5.2")
 
 _WS = re.compile(r"\s+")
 # PDF→markdown artifacts: curly quotes → straight, en/em dash → hyphen, soft hyphen → removed.
@@ -88,7 +86,7 @@ def audit_contract_basis(
             "{contract}", contract_markdown
         )
         resp = openai_client.chat.completions.create(
-            model=LLM_MODEL_LARGE,
+            model=model_for("contract_parser"),
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
         )

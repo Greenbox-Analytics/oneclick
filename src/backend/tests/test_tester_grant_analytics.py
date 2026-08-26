@@ -7,17 +7,14 @@ from subscriptions.service import EntitlementsService
 
 
 def _make_service_with_user(monkeypatch, identify_calls, user_id="user-123", email="t@example.com"):
-    """Mock sb.auth.admin.list_users() — that's what create_tester_grant uses
-    (admin_service.py:~182), NOT sb.table('users').select()."""
+    """Mock the admin_search_users_by_email RPC — that's what create_tester_grant
+    uses (admin_service.py: create_tester_grant), NOT sb.auth.admin.list_users()."""
     monkeypatch.setattr(
         "subscriptions.admin_service.analytics_identify",
         lambda uid, props: identify_calls.append((uid, dict(props))),
     )
     sb = MagicMock()
-    fake_user = MagicMock()
-    fake_user.id = user_id
-    fake_user.email = email
-    sb.auth.admin.list_users.return_value = [fake_user]
+    sb.rpc.return_value.execute.return_value.data = [{"id": user_id, "email": email, "created_at": "2026-01-01"}]
     return AdminService(sb, EntitlementsService(sb)), sb
 
 
@@ -62,10 +59,7 @@ def test_create_tester_grant_swallows_analytics_errors(monkeypatch):
     monkeypatch.setattr("subscriptions.admin_service.analytics_identify", explode)
 
     sb = MagicMock()
-    fake_user = MagicMock()
-    fake_user.id = "user-789"
-    fake_user.email = "x@y.z"
-    sb.auth.admin.list_users.return_value = [fake_user]
+    sb.rpc.return_value.execute.return_value.data = [{"id": "user-789", "email": "x@y.z", "created_at": "2026-01-01"}]
     svc = AdminService(sb, EntitlementsService(sb))
 
     # Should not raise

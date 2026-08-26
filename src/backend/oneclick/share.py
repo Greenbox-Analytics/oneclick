@@ -1,9 +1,10 @@
-"""OneClick results sharing - PDF generation and export to Drive/Slack."""
+"""OneClick results sharing - PDF generation and export to Google Drive."""
 
 import io
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
@@ -38,12 +39,11 @@ def _get_supabase():
 
 
 class ShareRequest(BaseModel):
-    target: str  # "drive" or "slack"
+    target: Literal["drive"]
     artist_name: str
     payments: list[dict]
     total_payments: float
     message: str | None = None  # dashboard result message, shown in the PDF header
-    channel_id: str | None = None
     folder_id: str | None = None
 
 
@@ -276,39 +276,17 @@ async def export_pdf(body: ExportPdfRequest, user_id: str = Depends(get_current_
 
 @router.post("/share")
 async def share_results(body: ShareRequest, user_id: str = Depends(get_current_user_id)):
-    """Share OneClick results as PDF to Google Drive or Slack."""
+    """Share OneClick results as PDF to Google Drive."""
     supabase = _get_supabase()
+
+    token = await get_valid_token(supabase, user_id, "google_drive")
+    if not token:
+        raise HTTPException(status_code=401, detail="Google Drive not connected")
+
     pdf_buffer = _generate_pdf(body.artist_name, body.payments, body.total_payments, message=body.message)
     filename = f"OneClick_Royalties_{body.artist_name}_{datetime.now().strftime('%Y%m%d')}.pdf"
 
-    if body.target == "drive":
-        token = await get_valid_token(supabase, user_id, "google_drive")
-        if not token:
-            raise HTTPException(status_code=401, detail="Google Drive not connected")
+    from integrations.google_drive.service import export_pdf_to_drive
 
-        from integrations.google_drive.service import export_pdf_to_drive
-
-        drive_file = await export_pdf_to_drive(token, pdf_buffer.read(), filename, body.folder_id)
-        return {"success": True, "target": "drive", "file": drive_file}
-
-    elif body.target == "slack":
-        token = await get_valid_token(supabase, user_id, "slack")
-        if not token:
-            raise HTTPException(status_code=401, detail="Slack not connected")
-
-        from integrations.slack.service import upload_file_to_channel
-
-        channel_id = body.channel_id
-        if not channel_id:
-            raise HTTPException(status_code=400, detail="No Slack channel specified")
-
-        result = await upload_file_to_channel(
-            token,
-            channel_id,
-            pdf_buffer.read(),
-            filename,
-            f"OneClick royalty results for {body.artist_name}",
-        )
-        return {"success": True, "target": "slack", "result": result}
-
-    raise HTTPException(status_code=400, detail="Invalid target. Use 'drive' or 'slack'.")
+    drive_file = await export_pdf_to_drive(token, pdf_buffer.read(), filename, body.folder_id)
+    return {"success": True, "target": "drive", "file": drive_file}

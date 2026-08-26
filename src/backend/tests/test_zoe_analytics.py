@@ -7,7 +7,7 @@ Verifies that POST /zoe/ask-stream emits:
 
 Mirrors the patching pattern from test_oneclick_analytics.py: uses the shared
 `client` + `mock_supabase` fixtures and patches `main.analytics_capture` plus
-`main.gated_feature` (to bypass paywall) and `main.get_zoe_chatbot` (to return
+`main.gated_credits` (to bypass paywall) and `main.get_zoe_chatbot` (to return
 a fake whose `ask_stream` is a controllable generator).
 """
 
@@ -59,7 +59,7 @@ class TestZoeStreamAnalytics:
         sink, fake = _capture_events()
         with (
             patch("main.analytics_capture", side_effect=fake),
-            patch("main.gated_feature", return_value=None),
+            patch("main.gated_credits", return_value=None),
             patch("main.get_zoe_chatbot", return_value=fake_bot),
         ):
             response = client.post(
@@ -104,7 +104,7 @@ class TestZoeStreamAnalytics:
         sink, fake = _capture_events()
         with (
             patch("main.analytics_capture", side_effect=fake),
-            patch("main.gated_feature", return_value=None),
+            patch("main.gated_credits", return_value=None),
             patch("main.get_zoe_chatbot", return_value=fake_bot),
         ):
             response = client.post(
@@ -136,7 +136,7 @@ class TestZoeStreamAnalytics:
 
         with (
             patch("main.analytics_capture", side_effect=fake),
-            patch("main.gated_feature", return_value=None),
+            patch("main.gated_credits", return_value=None),
             patch("main.get_zoe_chatbot", side_effect=explode),
         ):
             response = client.post(

@@ -19,14 +19,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  Loader2, ChevronRight, Upload, FileText, Search, Download, Trash2, HardDrive, Send,
+  Loader2, ChevronRight, Upload, FileText, Search, Download, Trash2, HardDrive, Send, Cloud,
 } from "lucide-react";
 import { toast } from "sonner";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { formatCurrency } from "@/lib/currency";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useDriveExport } from "@/hooks/useGoogleDrive";
+import type { IntegrationProvider } from "@/types/integrations";
 import { DriveImportDialog } from "./integrations/DriveImportDialog";
+import { DropboxFileModal } from "./integrations/DropboxFileModal";
 import ShareViaEmailDialog from "./ShareViaEmailDialog";
 import BulkActionReviewDialog, { type BulkAction } from "./BulkActionReviewDialog";
 import { useStorageStatus } from "@/hooks/useEntitlements";
@@ -79,11 +81,13 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
   });
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const [driveImportOpen, setDriveImportOpen] = useState(false);
+  const [importProvider, setImportProvider] = useState<IntegrationProvider | null>(null);
+  const [dropboxFile, setDropboxFile] = useState<{ id: string; name: string } | null>(null);
   const [shareFileIds, setShareFileIds] = useState<string[] | null>(null);
   const [shareSubject, setShareSubject] = useState<string>("");
   const { connections } = useIntegrations();
   const driveConnected = connections.some(c => c.provider === "google_drive" && c.status === "active");
+  const dropboxConnected = connections.some(c => c.provider === "dropbox" && c.status === "active");
   const driveExport = useDriveExport();
 
   // Work-linking dialog state (Fix #4)
@@ -466,10 +470,20 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setDriveImportOpen(true)}
+            onClick={() => setImportProvider("google_drive")}
           >
             <HardDrive className="w-4 h-4 mr-2" />
             Import from Drive
+          </Button>
+        )}
+        {dropboxConnected && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setImportProvider("dropbox")}
+          >
+            <Cloud className="w-4 h-4 mr-2" />
+            Import from Dropbox
           </Button>
         )}
       </div>
@@ -662,6 +676,17 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
                                 <HardDrive className="w-4 h-4" />
                               </Button>
                             )}
+                            {dropboxConnected && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                title="Save to Dropbox"
+                                onClick={() => setDropboxFile({ id: file.id, name: file.file_name })}
+                              >
+                                <Cloud className="w-4 h-4" />
+                              </Button>
+                            )}
                           </div>
                         );
                       })}
@@ -674,10 +699,21 @@ export default function FilesTab({ projectId, userRole }: FilesTabProps) {
         })}
       </div>
 
-      <DriveImportDialog
-        open={driveImportOpen}
-        onOpenChange={setDriveImportOpen}
-        projectId={projectId}
+      {importProvider && (
+        <DriveImportDialog
+          key={importProvider}
+          open
+          onOpenChange={(o) => !o && setImportProvider(null)}
+          projectId={projectId}
+          provider={importProvider}
+        />
+      )}
+
+      <DropboxFileModal
+        open={!!dropboxFile}
+        onOpenChange={(open) => !open && setDropboxFile(null)}
+        projectFileId={dropboxFile?.id ?? null}
+        fileName={dropboxFile?.name ?? ""}
       />
 
       <ShareViaEmailDialog

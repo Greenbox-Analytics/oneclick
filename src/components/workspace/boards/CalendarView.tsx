@@ -17,7 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ChevronLeft, ChevronRight, Loader2, Search, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Search, Plus, CalendarPlus, Copy, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import {
   startOfMonth,
   endOfMonth,
@@ -43,10 +44,19 @@ import {
   subYears,
   getDay,
 } from "date-fns";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { useCalendarTasks } from "@/hooks/useCalendarTasks";
+import { parseDateString } from "@/lib/dateUtils";
+import {
+  useCalendarTasks,
+  useCalendarFeeds,
+  useExternalEvents,
+  useCalendarSubscriptions,
+  type CalendarFeed,
+  type ExternalEvent,
+} from "@/hooks/useCalendarTasks";
 import { useBoards } from "@/hooks/useBoards";
-import { useTeams } from "@/hooks/useTeams";
+import { useMyOrgs, liveOrgs } from "@/hooks/useOrgs";
 import { useWorkspaceSettings } from "@/hooks/useWorkspaceSettings";
 import { TaskDetailPanel } from "./TaskDetailPanel";
 import { TEAM_COLORS, PERSONAL_COLOR } from "./labelColors";
@@ -59,6 +69,10 @@ type ColorFor = (task: BoardTask) => TeamColor;
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MAX_VISIBLE_TASKS = 3;
 
+/** "Jun 4" — parsed as local midnight so a YYYY-MM-DD due date can't slip a day. */
+const formatDueDate = (dateStr: string) =>
+  parseDateString(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
 export function CalendarView() {
   const { settings } = useWorkspaceSettings();
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -70,6 +84,7 @@ export function CalendarView() {
   );
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [syncOpen, setSyncOpen] = useState(false);
 
   // Task creation dialog state
   const [createDate, setCreateDate] = useState<string | null>(null);
@@ -115,8 +130,15 @@ export function CalendarView() {
   }, [currentDate, viewMode]);
 
   const { tasks, isLoading } = useCalendarTasks(rangeStart, rangeEnd);
-  const { columns, createTask } = useBoards();
-  const { data: teams } = useTeams();
+  const { events: externalEvents } = useExternalEvents(rangeStart, rangeEnd);
+  // Tasks here come from useCalendarTasks (date-ranged); the unfiltered list
+  // useBoards would fetch was never read.
+  const { columns, createTask } = useBoards({ withTasks: false });
+  const { data: allOrgs } = useMyOrgs();
+  // Same filter BoardSwitcher uses. Colours are keyed on this list's ORDER, so
+  // including orgs whose boards can never appear would shift a live team's
+  // swatch whenever an unrelated org changed state.
+  const teams = useMemo(() => liveOrgs(allOrgs), [allOrgs]);
 
   // Colour by team, keyed on the team list (not a hash of the task) so two teams can never
   // land on the same swatch and a team keeps its colour as you page through months.
@@ -161,6 +183,21 @@ export function CalendarView() {
     }
     return map;
   }, [tasks, searchQuery]);
+
+  // Imported events, keyed the same way as tasks so each day cell can render both.
+  // Filtered by the same search box — a search that hid half the calendar would be worse
+  // than not searching at all.
+  const eventsByDate = useMemo(() => {
+    const map = new Map<string, ExternalEvent[]>();
+    const filtered = searchQuery
+      ? externalEvents.filter((e) => e.title.toLowerCase().includes(searchQuery.toLowerCase()))
+      : externalEvents;
+    for (const event of filtered) {
+      if (!map.has(event.date)) map.set(event.date, []);
+      map.get(event.date)!.push(event);
+    }
+    return map;
+  }, [externalEvents, searchQuery]);
 
   // Legend: one entry per team actually present in the visible range (+ Personal).
   const legend = useMemo(() => {
@@ -262,6 +299,10 @@ export function CalendarView() {
             <Button variant="outline" size="sm" onClick={goToToday}>
               Today
             </Button>
+            <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>
+              <CalendarPlus className="h-4 w-4 mr-1.5" />
+              Sync to calendar
+            </Button>
           </div>
         </div>
 
@@ -286,6 +327,7 @@ export function CalendarView() {
               <MonthGrid
                 currentDate={currentDate}
                 tasksByDate={tasksByDate}
+                eventsByDate={eventsByDate}
                 colorFor={colorFor}
                 onTaskClick={setSelectedTaskId}
                 onAddTask={setCreateDate}
@@ -299,6 +341,7 @@ export function CalendarView() {
               <WeekGrid
                 currentDate={currentDate}
                 tasksByDate={tasksByDate}
+                eventsByDate={eventsByDate}
                 colorFor={colorFor}
                 onTaskClick={setSelectedTaskId}
                 onAddTask={setCreateDate}
@@ -310,6 +353,7 @@ export function CalendarView() {
           <DayView
             currentDate={currentDate}
             tasksByDate={tasksByDate}
+            eventsByDate={eventsByDate}
             colorFor={colorFor}
             onTaskClick={setSelectedTaskId}
             onAddTask={setCreateDate}
@@ -319,6 +363,7 @@ export function CalendarView() {
           <YearGrid
             currentDate={currentDate}
             tasksByDate={tasksByDate}
+            eventsByDate={eventsByDate}
             onDayClick={(date) => {
               setCurrentDate(date);
               setViewMode("day");
@@ -331,6 +376,8 @@ export function CalendarView() {
         taskId={selectedTaskId}
         onClose={() => setSelectedTaskId(null)}
       />
+
+      <SyncCalendarDialog open={syncOpen} onOpenChange={setSyncOpen} />
 
       {/* Create task dialog */}
       <Dialog open={!!createDate} onOpenChange={(open) => !open && setCreateDate(null)}>
@@ -413,6 +460,212 @@ export function CalendarView() {
   );
 }
 
+// --- Sync to calendar ---
+/**
+ * Picker label. Every feed shares the same "Msanii platform — … Calendar" branding, so
+ * repeating it on each row buries the one word that tells them apart. Show only what
+ * differs, with the team's own name carrying the emphasis.
+ */
+function FeedLabel({ feed }: { feed: CalendarFeed }) {
+  if (feed.team_name) {
+    return (
+      <span>
+        <span className="text-muted-foreground">Team</span> {feed.team_name}
+      </span>
+    );
+  }
+  return <span>{feed.scope === "personal" ? "Personal" : "All tasks"}</span>;
+}
+
+
+/**
+ * Hands the user their private .ics feed. Google and Apple both subscribe to a
+ * calendar URL natively, so one link covers both (plus Outlook) — the calendar
+ * re-reads it on its own schedule, which is what makes new tasks show up without
+ * anyone pressing anything.
+ *
+ * One feed per scope (everything / personal / each team) so each lands as its own
+ * named, separately colourable calendar rather than one undifferentiated blob.
+ */
+function SyncCalendarDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { feeds, isLoading } = useCalendarFeeds();
+  const [scope, setScope] = useState<string>("");
+  const selected = feeds.find((f) => f.scope === scope) ?? feeds[0];
+
+  const copyLink = async () => {
+    if (!selected) return;
+    await navigator.clipboard.writeText(selected.url);
+    toast.success(`${selected.name} link copied`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Calendar sync</DialogTitle>
+        </DialogHeader>
+        <Tabs defaultValue="export">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="export">Send to my calendar</TabsTrigger>
+            <TabsTrigger value="import">Bring calendars in</TabsTrigger>
+          </TabsList>
+          <TabsContent value="export">
+        {isLoading || !selected ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Add your tasks to the calendar you already use. Every task with a due date shows up
+              automatically — including new ones you add later.
+            </p>
+
+            {/* Only worth a picker once there's more than one calendar to pick. */}
+            {feeds.length > 1 && (
+              <div className="space-y-2">
+                <Label>Which tasks?</Label>
+                <Select value={selected.scope} onValueChange={setScope}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {feeds.map((feed) => (
+                      <SelectItem key={feed.scope} value={feed.scope}>
+                        <FeedLabel feed={feed} />
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="grid gap-2">
+              <Button asChild>
+                <a
+                  href={`https://calendar.google.com/calendar/r?cid=${encodeURIComponent(selected.webcal_url)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Add to Google Calendar
+                </a>
+              </Button>
+              <Button asChild variant="outline">
+                <a href={selected.webcal_url}>Add to Apple Calendar</a>
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Google and Apple show the raw link while you confirm — once added it appears as{" "}
+                <span className="font-medium text-foreground">{selected.name}</span>.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="cal-feed-url">Or paste this link into any other calendar app</Label>
+              <div className="flex gap-2">
+                <Input id="cal-feed-url" readOnly value={selected.url} onFocus={(e) => e.target.select()} />
+                <Button variant="outline" size="icon" onClick={copyLink} title="Copy link">
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Keep this link private — anyone with it can see your tasks. The calendar is read-only:
+              changes you make in Google or Apple won't come back to your board, and they refresh on
+              their own schedule (Apple lets you choose; Google can take a few hours).
+            </p>
+          </div>
+        )}
+          </TabsContent>
+          <TabsContent value="import">
+            <ImportCalendarPanel />
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * The import side: paste the secret iCal URL a calendar already publishes and its
+ * events render read-only on the Msanii calendar. Same mechanism as our export,
+ * pointed the other way — so it works for Google, Apple, Outlook alike.
+ */
+function ImportCalendarPanel() {
+  const { subscriptions, isLoading, add, isAdding, remove } = useCalendarSubscriptions();
+  const [url, setUrl] = useState("");
+
+  const submit = () => {
+    if (!url.trim()) return;
+    add({ url: url.trim() }, { onSuccess: () => setUrl("") });
+  };
+
+  return (
+    <div className="space-y-4 py-2">
+      <p className="text-sm text-muted-foreground">
+        Paste a calendar's secret iCal address and its events appear here alongside your tasks —
+        read-only, and never added to your board.
+      </p>
+
+      <div className="space-y-2">
+        <Label htmlFor="cal-import-url">Calendar link (.ics)</Label>
+        <div className="flex gap-2">
+          <Input
+            id="cal-import-url"
+            placeholder="https://calendar.google.com/calendar/ical/.../basic.ics"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+          />
+          <Button onClick={submit} disabled={!url.trim() || isAdding}>
+            {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Google: Settings → your calendar → <span className="font-medium">Secret address in iCal format</span>.
+          Apple iCloud: right-click the calendar → Share Calendar → Public Calendar.
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-4">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : subscriptions.length > 0 ? (
+        <div className="space-y-2">
+          <Label>Imported calendars</Label>
+          {subscriptions.map((sub) => (
+            <div key={sub.id} className="flex items-center gap-2 rounded-md border px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm truncate">{sub.name}</p>
+                {sub.last_error && (
+                  <p className="text-xs text-destructive truncate" title={sub.last_error}>
+                    {sub.last_error}
+                  </p>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => remove(sub.id)}
+                title={`Remove ${sub.name}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // --- Task pill component ---
 function TaskPill({
   task,
@@ -427,15 +680,38 @@ function TaskPill({
     <button
       onClick={() => onClick(task.id)}
       className={cn(
-        "w-full text-left px-1.5 py-0.5 rounded text-[10px] leading-tight truncate",
-        "hover:opacity-80 transition-opacity cursor-pointer",
+        "w-full text-left px-1.5 py-0.5 rounded text-[10px] leading-tight",
+        "flex items-center gap-1 hover:opacity-80 transition-opacity cursor-pointer",
         colors.bg,
         colors.text
       )}
       title={`${task.title} — ${task.team_name ?? "Personal"}`}
     >
-      {task.title}
+      <span className="truncate flex-1">{task.title}</span>
+      {task.due_date && (
+        <span className="shrink-0 tabular-nums opacity-70">{formatDueDate(task.due_date)}</span>
+      )}
     </button>
+  );
+}
+
+/**
+ * An imported calendar event. Deliberately quieter than a TaskPill and not a
+ * button — these are read-only mirrors of someone else's calendar, so anything
+ * that looks clickable would be promising an interaction we don't have.
+ */
+function EventPill({ event }: { event: ExternalEvent }) {
+  return (
+    <div
+      className={cn(
+        "w-full px-1.5 py-0.5 rounded text-[10px] leading-tight flex items-center gap-1",
+        "border border-dashed border-muted-foreground/30 text-muted-foreground",
+      )}
+      title={`${event.title}${event.time ? ` · ${event.time}` : ""} — ${event.source_name}`}
+    >
+      <span className="truncate flex-1">{event.title}</span>
+      {event.time && <span className="shrink-0 tabular-nums opacity-70">{event.time}</span>}
+    </div>
   );
 }
 
@@ -443,12 +719,14 @@ function TaskPill({
 function MonthGrid({
   currentDate,
   tasksByDate,
+  eventsByDate,
   colorFor,
   onTaskClick,
   onAddTask,
 }: {
   currentDate: Date;
   tasksByDate: Map<string, BoardTask[]>;
+  eventsByDate: Map<string, ExternalEvent[]>;
   colorFor: ColorFor;
   onTaskClick: (id: string) => void;
   onAddTask: (dateKey: string) => void;
@@ -472,10 +750,12 @@ function MonthGrid({
         {calendarDays.map((day) => {
           const dateKey = format(day, "yyyy-MM-dd");
           const dayTasks = tasksByDate.get(dateKey) || [];
+          const dayEvents = eventsByDate.get(dateKey) || [];
           const isCurrentMonth = isSameMonth(day, currentDate);
           const today = isToday(day);
           const visible = dayTasks.slice(0, MAX_VISIBLE_TASKS);
-          const overflow = dayTasks.length - MAX_VISIBLE_TASKS;
+          const visibleEvents = dayEvents.slice(0, Math.max(0, MAX_VISIBLE_TASKS - visible.length));
+          const overflow = dayTasks.length + dayEvents.length - visible.length - visibleEvents.length;
 
           return (
             <div
@@ -504,6 +784,9 @@ function MonthGrid({
                 {visible.map((task) => (
                   <TaskPill key={task.id} task={task} colors={colorFor(task)} onClick={onTaskClick} />
                 ))}
+                {visibleEvents.map((event) => (
+                  <EventPill key={event.uid} event={event} />
+                ))}
                 {overflow > 0 && (
                   <p className="text-[10px] text-muted-foreground px-1.5">+{overflow} more</p>
                 )}
@@ -520,12 +803,14 @@ function MonthGrid({
 function WeekGrid({
   currentDate,
   tasksByDate,
+  eventsByDate,
   colorFor,
   onTaskClick,
   onAddTask,
 }: {
   currentDate: Date;
   tasksByDate: Map<string, BoardTask[]>;
+  eventsByDate: Map<string, ExternalEvent[]>;
   colorFor: ColorFor;
   onTaskClick: (id: string) => void;
   onAddTask: (dateKey: string) => void;
@@ -549,6 +834,7 @@ function WeekGrid({
         {weekDays.map((day) => {
           const dateKey = format(day, "yyyy-MM-dd");
           const dayTasks = tasksByDate.get(dateKey) || [];
+          const dayEvents = eventsByDate.get(dateKey) || [];
           const today = isToday(day);
 
           return (
@@ -575,6 +861,9 @@ function WeekGrid({
                 {dayTasks.map((task) => (
                   <TaskPill key={task.id} task={task} colors={colorFor(task)} onClick={onTaskClick} />
                 ))}
+                {dayEvents.map((event) => (
+                  <EventPill key={event.uid} event={event} />
+                ))}
               </div>
             </div>
           );
@@ -588,18 +877,21 @@ function WeekGrid({
 function DayView({
   currentDate,
   tasksByDate,
+  eventsByDate,
   colorFor,
   onTaskClick,
   onAddTask,
 }: {
   currentDate: Date;
   tasksByDate: Map<string, BoardTask[]>;
+  eventsByDate: Map<string, ExternalEvent[]>;
   colorFor: ColorFor;
   onTaskClick: (id: string) => void;
   onAddTask: (dateKey: string) => void;
 }) {
   const dateKey = format(currentDate, "yyyy-MM-dd");
   const dayTasks = tasksByDate.get(dateKey) || [];
+  const dayEvents = eventsByDate.get(dateKey) || [];
   const today = isToday(currentDate);
 
   return (
@@ -620,7 +912,7 @@ function DayView({
         </Button>
       </div>
 
-      {dayTasks.length === 0 ? (
+      {dayTasks.length === 0 && dayEvents.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <p>No tasks scheduled for this day</p>
         </div>
@@ -658,6 +950,20 @@ function DayView({
               )}
             </button>
           ))}
+          {dayEvents.map((event) => (
+            <div
+              key={event.uid}
+              className="w-full px-4 py-3 rounded-lg border border-dashed flex items-center gap-3 text-muted-foreground"
+            >
+              <div className="w-3 h-3 rounded-full shrink-0 border border-dashed border-muted-foreground/50" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate">{event.title}</p>
+                <p className="text-xs truncate">
+                  {event.all_day ? "All day" : event.time} · {event.source_name}
+                </p>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -668,10 +974,12 @@ function DayView({
 function YearGrid({
   currentDate,
   tasksByDate,
+  eventsByDate,
   onDayClick,
 }: {
   currentDate: Date;
   tasksByDate: Map<string, BoardTask[]>;
+  eventsByDate: Map<string, ExternalEvent[]>;
   onDayClick: (date: Date) => void;
 }) {
   const months = useMemo(() => {
@@ -704,7 +1012,7 @@ function YearGrid({
               {/* Day cells */}
               {days.map((day) => {
                 const dateKey = format(day, "yyyy-MM-dd");
-                const hasTasks = tasksByDate.has(dateKey);
+                const hasTasks = tasksByDate.has(dateKey) || eventsByDate.has(dateKey);
                 const today = isToday(day);
 
                 return (
@@ -716,7 +1024,11 @@ function YearGrid({
                       "hover:bg-muted transition-colors cursor-pointer",
                       today && "font-bold text-primary"
                     )}
-                    title={hasTasks ? `${tasksByDate.get(dateKey)!.length} task(s)` : undefined}
+                    title={
+                      hasTasks
+                        ? `${(tasksByDate.get(dateKey)?.length || 0) + (eventsByDate.get(dateKey)?.length || 0)} item(s)`
+                        : undefined
+                    }
                   >
                     {format(day, "d")}
                     {hasTasks && (

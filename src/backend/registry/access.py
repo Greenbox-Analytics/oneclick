@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 
 from supabase import Client
 
+import artist_access
+from subscriptions.service import licensing_enabled
+
 _ELEVATED_PROJECT_ROLES = {"owner", "admin"}
 
 
@@ -50,11 +53,14 @@ class WorkAccess:
 async def get_work_access(db: Client, user_id: str, work_id: str) -> WorkAccess:
     # maybe_single (not single): a missing/duplicate work returns empty data instead of
     # raising, so the gate fails CLOSED (empty WorkAccess => can_view False) rather than 500.
-    work = db.table("works_registry").select("user_id, project_id").eq("id", work_id).maybe_single().execute()
+    work = (
+        db.table("works_registry").select("user_id, project_id, artist_id").eq("id", work_id).maybe_single().execute()
+    )
     if not work or not work.data:
         return WorkAccess()
     owner_id = work.data["user_id"]
     project_id = work.data.get("project_id")
+    artist_id = work.data.get("artist_id")
 
     wa = WorkAccess()
 
@@ -81,6 +87,17 @@ async def get_work_access(db: Client, user_id: str, work_id: str) -> WorkAccess:
             row = collab.data[0]
             wa.my_collaborator_id = row["id"]
             wa.work_role = "admin" if row.get("access_level") == "admin" else "viewer"
+
+    # Artist-ownership layer (docs/licensing.md's FIRST layer — this resolver
+    # long implemented only the other two): an active seat in the live org that
+    # owns the work's artist grants ELEVATED access, matching the
+    # `works_team_artist` FOR ALL RLS policy. Anything less would let a
+    # colleague list the work and then be refused its splits. The owner branch
+    # above runs first, so a creator is never demoted to "admin". Gated on
+    # LICENSING_ENABLED alone (not the scoping flag): the layer keeps the
+    # service-role path answering what RLS already grants.
+    if wa.work_role == "none" and licensing_enabled() and artist_access.can_access_artist(db, user_id, artist_id):
+        wa.work_role = "admin"
 
     if not wa.can_view:
         return wa

@@ -1005,6 +1005,77 @@ def cancel_payout(db, user_id: str, payout_id: str) -> None:
     db.table("royalty_payouts").delete().eq("id", payout_id).eq("user_id", user_id).execute()
 
 
+# Currencies a payout can be denominated in. Mirrors CURRENCIES in
+# src/components/oneclick/payments/shared.tsx — keep the two in step, since the
+# UI can only format a code it knows and the backend must not accept one the UI
+# would render as a bare string.
+PAYOUT_CURRENCIES = ("USD", "GBP", "EUR", "CAD", "AUD")
+
+
+def change_payout_currency(db, user_id: str, payout_id: str, currency: str) -> dict:
+    """Re-issue a DRAFT payout denominated in a different currency.
+
+    A payout's pay currency is not a display setting: the amounts and the FX
+    rate are captured into breakdown_snapshot when the draft is cut. Changing
+    it therefore means re-cutting the draft, not patching a column — which is
+    why this deletes and re-creates through create_payouts rather than growing
+    a second snapshot-building code path that would drift from it.
+
+    What does NOT move is what is owed: coverage.covered_amount is stored in
+    STATEMENT currency (see create_payouts' CRITICAL invariant), so only
+    total_amount and the snapshot's *_pay_ccy fields are re-derived.
+
+    PAID payouts are refused. Their currency and rate record money that
+    actually moved; re-denominating that after the fact is falsifying a payment
+    record, not editing a draft. Revert to draft first if one was recorded
+    wrongly.
+
+    The payee's default payout_currency is updated too — the next draft for
+    this payee should not silently revert to the old currency.
+
+    Raises PermissionError if the payout isn't the caller's.
+    Raises ValueError on a non-draft payout, an unsupported currency, or if the
+    re-issue produces nothing.
+    """
+    ccy = (currency or "").strip().upper()
+    if ccy not in PAYOUT_CURRENCIES:
+        raise ValueError(f"Unsupported payout currency: {currency}")
+
+    res = db.table("royalty_payouts").select("*").eq("id", payout_id).eq("user_id", user_id).execute()
+    rows = res.data or []
+    if not rows:
+        raise PermissionError("Payout not found")
+    payout = rows[0]
+    if payout.get("status") != "draft":
+        raise ValueError("Only draft payouts can be re-issued in another currency")
+    if (payout.get("pay_currency") or "").upper() == ccy:
+        return payout  # no-op — don't churn the draft for nothing
+
+    payee_id = payout["payee_id"]
+    note = payout.get("note")
+
+    # create_payouts reads the currency off the payee, so this has to land first.
+    patch_payee(db, user_id, payee_id, {"payout_currency": ccy})
+
+    # 'deleted' (not a new action name): royalty_ledger_history.action is under
+    # a CHECK constraint, so an unlisted verb would 400 at runtime — and the row
+    # genuinely is deleted a line below. The cause carries the why.
+    history.record(db, user_id, "deleted", dict(payout), "currency_reissue")
+
+    # Delete → recreate. Coverage cascades on delete, which returns the owed
+    # buckets this draft was holding so create_payouts can re-cut them.
+    cancel_payout(db, user_id, payout_id)
+
+    # force=True is load-bearing, not a shortcut: the draft being re-issued was
+    # already accepted once, and a source contract going stale in the meantime
+    # must not strand the payee with no draft at all now that the original row
+    # is gone.
+    created = create_payouts(db, user_id, [payee_id], None, note, force=True)
+    if not created:
+        raise ValueError("Nothing left to draft for this payee after the re-issue")
+    return created[0]
+
+
 def revert_payout_to_draft(db, user_id: str, payout_id: str) -> dict:
     """Revert a manually-completed payout back to draft (undo an accidental
     mark-paid). The coverage rows stay attached and move from paid→drafted on

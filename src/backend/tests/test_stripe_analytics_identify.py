@@ -60,7 +60,7 @@ def test_checkout_completed_identifies_pro(monkeypatch):
     assert len(identify_calls) == 1, f"Expected 1 identify call, got {len(identify_calls)}"
     user_id, props = identify_calls[0]
     assert user_id == TEST_USER_ID
-    assert props["plan"] == "pro"
+    assert props["plan"] == "basic"
 
 
 def test_subscription_deleted_identifies_free(monkeypatch):

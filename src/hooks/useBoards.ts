@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryKey 
 import { useAuth } from "@/contexts/AuthContext";
 import type { BoardColumn, BoardTask, ParentTaskWithChildren } from "@/types/integrations";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 interface UseBoardsOptions {
   artistId?: string;
@@ -9,7 +10,26 @@ interface UseBoardsOptions {
   periodStart?: string;
   periodEnd?: string;
   isCurrentPeriod?: boolean;
+  /** Skip the tasks query. Several callers (the calendar, the task overview)
+   *  only want `columns` and the mutations, but every one of them was pulling
+   *  a full unfiltered task list down with it. */
+  withTasks?: boolean;
+  /** Gate BOTH queries. For a component that is always mounted but usually
+   *  inert — a closed detail panel — so it stops fetching a board's whole task
+   *  list on page load just to be ready in case someone opens it. Mutations are
+   *  unaffected and stay callable. */
+  enabled?: boolean;
 }
+
+/**
+ * Board data is collaborative but not live-critical, and React Query's default
+ * `staleTime: 0` marks it stale the instant it lands — so a SECOND component
+ * mounting an observer on the same key fires an immediate background refetch.
+ * That is why one board load asked for /boards/columns and /boards/parents
+ * twice each. Our own writes still land instantly: mutations invalidate these
+ * keys explicitly, which overrides staleness.
+ */
+export const BOARD_STALE_TIME = 30_000;
 
 type ParentTaskQueryData = { parents: ParentTaskWithChildren[]; ungrouped: BoardTask[] };
 
@@ -47,30 +67,42 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
   const options: UseBoardsOptions = typeof artistIdOrOptions === "string"
     ? { artistId: artistIdOrOptions }
     : artistIdOrOptions || {};
-  const { artistId, boardId, periodStart, periodEnd, isCurrentPeriod } = options;
+  const {
+    artistId,
+    boardId,
+    periodStart,
+    periodEnd,
+    isCurrentPeriod,
+    withTasks = true,
+    enabled: callerEnabled = true,
+  } = options;
 
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { scopeKey, withScope, ready } = useWorkspaceScope();
 
   const columnsQuery = useQuery<BoardColumn[]>({
-    queryKey: ["board-columns", user?.id, artistId, boardId],
+    queryKey: ["board-columns", user?.id, artistId, boardId, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
       const params = new URLSearchParams();
       if (artistId) params.set("artist_id", artistId);
       if (boardId) params.set("board_id", boardId);
       const qs = params.toString();
-      const data = await apiFetch<{ columns: BoardColumn[] }>(`${API_URL}/boards/columns${qs ? `?${qs}` : ""}`);
+      const data = await apiFetch<{ columns: BoardColumn[] }>(
+        withScope(`${API_URL}/boards/columns${qs ? `?${qs}` : ""}`),
+      );
       return data.columns;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready && callerEnabled,
+    staleTime: BOARD_STALE_TIME,
   });
 
   const hasPeriod = !!(periodStart && periodEnd);
 
   const tasksQueryKey = hasPeriod
-    ? ["board-tasks", user?.id, periodStart, periodEnd, isCurrentPeriod, boardId]
-    : ["board-tasks", user?.id, boardId];
+    ? ["board-tasks", user?.id, periodStart, periodEnd, isCurrentPeriod, boardId, scopeKey]
+    : ["board-tasks", user?.id, boardId, scopeKey];
 
   const tasksQuery = useQuery<BoardTask[]>({
     queryKey: tasksQueryKey,
@@ -83,22 +115,23 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
           is_current: String(isCurrentPeriod ?? true),
         });
         if (boardId) params.set("board_id", boardId);
-        const data = await apiFetch<{ tasks: BoardTask[] }>(`${API_URL}/boards/tasks/period?${params}`);
+        const data = await apiFetch<{ tasks: BoardTask[] }>(withScope(`${API_URL}/boards/tasks/period?${params}`));
         return data.tasks;
       }
       const data = await apiFetch<{ tasks: BoardTask[] }>(
-        `${API_URL}/boards/tasks${boardId ? `?board_id=${boardId}` : ""}`,
+        withScope(`${API_URL}/boards/tasks${boardId ? `?board_id=${boardId}` : ""}`),
       );
       return data.tasks;
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready && callerEnabled && withTasks,
     placeholderData: keepPreviousData,
+    staleTime: BOARD_STALE_TIME,
   });
 
   const createColumnMutation = useMutation({
     mutationFn: async (data: { title: string; color?: string; artist_id?: string; board_id?: string; position?: number }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      return apiFetch(`${API_URL}/boards/columns`, {
+      return apiFetch(withScope(`${API_URL}/boards/columns`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...data, board_id: data.board_id ?? boardId }),
@@ -248,7 +281,9 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       labels?: string[];
     }) => {
       if (!user?.id) throw new Error("Not authenticated");
-      return apiFetch(`${API_URL}/boards/tasks`, {
+      // scope decides which workspace's default board catches a task created
+      // with no explicit board.
+      return apiFetch(withScope(`${API_URL}/boards/tasks`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...data, board_id: data.board_id ?? boardId }),
@@ -422,7 +457,7 @@ export function useBoards(artistIdOrOptions?: string | UseBoardsOptions) {
       if (artistId) params.set("artist_id", artistId);
       if (boardId) params.set("board_id", boardId);
       const qs = params.toString();
-      return apiFetch(`${API_URL}/boards/columns/defaults${qs ? `?${qs}` : ""}`, {
+      return apiFetch(withScope(`${API_URL}/boards/columns/defaults${qs ? `?${qs}` : ""}`), {
         method: "POST",
       });
     },

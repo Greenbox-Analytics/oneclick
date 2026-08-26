@@ -648,6 +648,72 @@ class TestCancelPayout:
 
 
 # ---------------------------------------------------------------------------
+# Tests: change_payout_currency — re-issue a draft in another currency
+# ---------------------------------------------------------------------------
+
+
+class TestChangePayoutCurrency:
+    """The guards, which are the whole point: a paid payout's currency records
+    money that already moved, so it must never be re-denominated."""
+
+    def test_paid_payout_is_refused(self):
+        db = MockDB(payouts=[_make_payout(status="paid")])
+        with pytest.raises(ValueError, match="Only draft payouts"):
+            service.change_payout_currency(db, USER_ID, PAYOUT_ID, "CAD")
+        assert PAYOUT_ID not in db.deleted_payout_ids
+
+    def test_unsupported_currency_is_refused_before_anything_is_deleted(self):
+        db = MockDB(payouts=[_make_payout(status="draft")])
+        with pytest.raises(ValueError, match="Unsupported payout currency"):
+            service.change_payout_currency(db, USER_ID, PAYOUT_ID, "XYZ")
+        assert PAYOUT_ID not in db.deleted_payout_ids
+
+    def test_wrong_user_raises_permission_error(self):
+        db = MockDB(payouts=[_make_payout(status="draft", user_id=USER_ID)])
+        with pytest.raises(PermissionError):
+            service.change_payout_currency(db, OTHER_USER_ID, PAYOUT_ID, "CAD")
+
+    def test_nonexistent_payout_raises_permission_error(self):
+        db = MockDB(payouts=[])
+        with pytest.raises(PermissionError):
+            service.change_payout_currency(db, USER_ID, "nonexistent-id", "CAD")
+
+    def test_same_currency_is_a_noop(self):
+        """Re-selecting the currency it already has must not churn the draft —
+        the row keeps its id, its created_at and its place in history."""
+        db = MockDB(payouts=[_make_payout(status="draft", pay_currency="USD")])
+        result = service.change_payout_currency(db, USER_ID, PAYOUT_ID, "usd")
+        assert result["id"] == PAYOUT_ID
+        assert PAYOUT_ID not in db.deleted_payout_ids
+
+    def test_draft_is_recut_in_the_new_currency(self):
+        db = MockDB(payouts=[_make_payout(status="draft", pay_currency="USD")])
+        with (
+            patch.object(service, "patch_payee") as patch_payee,
+            patch.object(
+                service, "create_payouts", return_value=[_make_payout(payout_id="new-1", pay_currency="CAD")]
+            ) as create,
+        ):
+            result = service.change_payout_currency(db, USER_ID, PAYOUT_ID, "CAD")
+
+        # The payee default moves too, so the next draft doesn't revert.
+        patch_payee.assert_called_once_with(db, USER_ID, PAYEE_ID, {"payout_currency": "CAD"})
+        # Old draft released, new one cut through the ONE snapshot code path.
+        assert PAYOUT_ID in db.deleted_payout_ids
+        assert create.call_args.kwargs["force"] is True
+        assert result["pay_currency"] == "CAD"
+
+    def test_reissue_producing_nothing_raises(self):
+        db = MockDB(payouts=[_make_payout(status="draft", pay_currency="USD")])
+        with (
+            patch.object(service, "patch_payee"),
+            patch.object(service, "create_payouts", return_value=[]),
+            pytest.raises(ValueError, match="Nothing left to draft"),
+        ):
+            service.change_payout_currency(db, USER_ID, PAYOUT_ID, "CAD")
+
+
+# ---------------------------------------------------------------------------
 # Tests: revert_payout_to_draft — undo an accidental mark-paid
 # ---------------------------------------------------------------------------
 

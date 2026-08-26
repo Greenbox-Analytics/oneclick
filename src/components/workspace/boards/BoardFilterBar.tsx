@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { MultiSelectCombobox } from "./MultiSelectCombobox";
-import { useTeamMembers } from "@/hooks/useTeams";
+import { useOrgRoster } from "@/hooks/useOrgs";
 import type { BoardTask } from "@/types/integrations";
 
 export interface BoardFilterValue {
@@ -18,7 +18,7 @@ interface BoardFilterBarProps {
 
 export function BoardFilterBar({ teamId, tasks, value, onChange }: BoardFilterBarProps) {
   // Team members power the "Created by" filter (only relevant on team boards).
-  const { data: members } = useTeamMembers(teamId ?? undefined);
+  const { data: members } = useOrgRoster(teamId);
 
   const memberOptions = useMemo(
     () => (members ?? []).map((m) => ({ id: m.user_id, label: m.full_name || m.user_id })),

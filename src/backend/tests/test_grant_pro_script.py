@@ -35,7 +35,7 @@ class TestGrantCommand:
                     return original_upsert(payload, *a, **kw)
 
                 b.upsert = _capture
-                b.execute.return_value = MagicMock(data=[{"user_id": TEST_USER_ID, "tier": "pro"}], count=1)
+                b.execute.return_value = MagicMock(data=[{"user_id": TEST_USER_ID, "tier": "basic"}], count=1)
             return b
 
         sb.table.side_effect = _table
@@ -43,7 +43,7 @@ class TestGrantCommand:
 
         exit_code = grant_pro.main(["grant", USER_EMAIL])
         assert exit_code == 0
-        assert captured["upsert_payload"]["tier"] == "pro"
+        assert captured["upsert_payload"]["tier"] == "basic"
         assert captured["upsert_payload"]["user_id"] == TEST_USER_ID
 
     def test_grant_unknown_email_exits_nonzero(self, monkeypatch, capsys):
@@ -191,7 +191,7 @@ class TestListCommand:
             b = MockQueryBuilder()
             if name == "subscriptions":
                 b.execute.return_value = MagicMock(
-                    data=[{"user_id": TEST_USER_ID, "tier": "pro", "status": "active"}],
+                    data=[{"user_id": TEST_USER_ID, "tier": "basic", "status": "active"}],
                     count=1,
                 )
             elif name == "tier_overrides":
@@ -207,7 +207,7 @@ class TestListCommand:
         exit_code = grant_pro.main(["list"])
         assert exit_code == 0
         out = capsys.readouterr().out
-        assert TEST_USER_ID in out or "pro" in out.lower()
+        assert TEST_USER_ID in out or "basic" in out.lower()
 
 
 class TestPagination:

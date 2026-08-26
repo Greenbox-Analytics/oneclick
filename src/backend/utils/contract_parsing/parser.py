@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Work
 from utils.llm.client import get_openai_client
+from utils.llm.model_garden import model_for
 from utils.text.normalize import normalize_name, normalize_title, simplify_role, split_alias_markers
 
 # Configure logging
@@ -32,8 +33,7 @@ def _normalize_basis(value) -> str | None:
     return v if v in ("net", "gross") else None
 
 
-# Configuration
-LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5.2")
+# Configuration — the extraction model comes from the "contract_parser" garden slot.
 STREAMING_EQUIVALENT_TERMS = [
     # Core streaming/digital terms
     "streaming",
@@ -234,8 +234,23 @@ class MusicContractParser:
         if not full_text:
             raise ValueError("full_text is required. The contract markdown must be provided.")
 
+        # Input cap. Credit prices are FLAT per action (registry_parse = 12 credits
+        # whatever the page count), so a 500-page upload costs us ~30x the LLM spend
+        # of a normal contract at the same price — and on the Free tier there is no
+        # card on file to bill the difference to. Guarded here because this is the
+        # one place every parse path routes through (Registry Add-Work, OneClick's
+        # calculator, and the shared contract_parse_cache). ~2600 chars/page is the
+        # pdf→markdown average the pricing dashboard models.
+        max_chars = int(os.getenv("CONTRACT_PARSE_MAX_CHARS", "250000"))
+        if len(full_text) > max_chars:
+            raise ValueError(
+                f"This contract is too long to analyze automatically "
+                f"(~{len(full_text) // 2600} pages; the limit is ~{max_chars // 2600}). "
+                "Upload just the royalty and splits sections, or contact support."
+            )
+
         start_time = time.time()
-        logger.info(f"📄 Extracting contract data (unified single-call, model={LLM_MODEL_LARGE})")
+        logger.info(f"📄 Extracting contract data (unified single-call, model={model_for('contract_parser')})")
         logger.info(f"   Document length: {len(full_text)} chars")
 
         # Single unified extraction
@@ -359,11 +374,11 @@ Return your answer as a JSON object with this exact structure:
 
 Return ONLY valid JSON."""
 
-        logger.info(f"   🧠 Sending unified extraction request to {LLM_MODEL_LARGE}...")
+        logger.info(f"   🧠 Sending unified extraction request to {model_for('contract_parser')}...")
         t_llm = time.time()
 
         response = self.openai_client.chat.completions.create(
-            model=LLM_MODEL_LARGE,
+            model=model_for("contract_parser"),
             messages=[
                 {
                     "role": "system",

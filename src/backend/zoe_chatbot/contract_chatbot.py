@@ -33,6 +33,8 @@ from openai import OpenAI
 from knowledge.reference_search import search_reference
 from utils.ingestion.pdf_markdown import strip_page_markers
 from utils.ingestion.tables import detect_and_extract_tables, linearize_table
+from utils.llm.model_garden import model_for
+from utils.llm.tracking import TrackedOpenAI
 from utils.text.normalize import normalize_name
 
 # Configure logging
@@ -508,11 +510,10 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env file")
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None)
+openai_client = TrackedOpenAI(OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None))
 
-# Configuration
-DEFAULT_LLM_MODEL = os.getenv("OPENAI_LLM_MODEL", "gpt-5-mini")  # Updated to stable model
-DEFAULT_LLM_MODEL_LARGE = os.getenv("OPENAI_LLM_MODEL_LARGE", "gpt-5")  # For multi-contract comparisons
+# Configuration — models come from config_panel.model_garden (slots: zoe,
+# zoe_routing, zoe_citations, zoe_large), never from a constant read at import.
 MIN_SIMILARITY_THRESHOLD = 0.30
 DEFAULT_TOP_K = 10
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
@@ -739,18 +740,29 @@ class ContractChatbot:
         "gross revenue",
     ]
 
-    def __init__(self, llm_model: str = DEFAULT_LLM_MODEL):
+    def __init__(self, llm_model: str | None = None):
         """
         Initialize the contract chatbot
 
         Args:
-            llm_model: LLM model to use for answer generation
+            llm_model: pin the answer model; None (normal) follows the model garden
         """
-        self.llm_model = llm_model
+        self._llm_model = llm_model
         self.memory = _conversation_memory  # Use global memory instance
         self.fact_ledger = _fact_ledger  # Use global fact ledger
         self.assumption_ledger = _assumption_ledger  # Use global assumption ledger
         self.conversation_summary = _conversation_summary  # Use global conversation summary
+
+    # A property, not an attribute: the chatbot is a process-lifetime singleton
+    # (main.py builds one), so an attribute would freeze the model at startup and
+    # defeat the point of the garden. Setter kept for tests that pin a model.
+    @property
+    def llm_model(self) -> str:
+        return self._llm_model or model_for("zoe")
+
+    @llm_model.setter
+    def llm_model(self, value: str) -> None:
+        self._llm_model = value
 
     def _get_current_scope(
         self, artist_id: str | None = None, project_id: str | None = None, contract_id: str | None = None
@@ -1041,14 +1053,7 @@ class ContractChatbot:
         Returns:
             True if it's an affirmative response
         """
-        query_lower = query.lower().strip()
-        query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace()).strip()
-
-        for pattern in self.AFFIRMATIVE_PATTERNS:
-            if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
-                return True
-
-        return False
+        return is_affirmative_text(query)
 
     def _no_result_message(self, contract_ids: list[str] | None = None) -> str:
         """Return a context-aware, actionable fallback message when no results are found."""
@@ -1206,19 +1211,7 @@ class ContractChatbot:
         Returns:
             True if it's a conversational query
         """
-        query_lower = query.lower().strip()
-        # Remove punctuation for matching
-        query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace())
-
-        # Check for exact or partial matches
-        for pattern in self.CONVERSATIONAL_PATTERNS:
-            if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
-                return True
-            # Also check if the entire query is just the pattern with punctuation
-            if pattern in query_clean and len(query_clean) < len(pattern) + 10:
-                return True
-
-        return False
+        return is_conversational_text(query)
 
     def _handle_conversational_query(self, query: str, session_id: str | None = None) -> dict:
         """
@@ -1301,7 +1294,7 @@ Respond with ONLY one word: either "artist" or "contract"."""
 
         try:
             response = openai_client.chat.completions.create(
-                model=self.llm_model,
+                model=model_for("zoe_routing"),
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": query}],
                 max_completion_tokens=10,
             )
@@ -1604,7 +1597,7 @@ Rules:
 
         try:
             response = openai_client.chat.completions.create(
-                model=self.llm_model,
+                model=model_for("zoe_routing"),
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 max_completion_tokens=2000,  # reasoning models consume the budget before output; keep it generous
             )
@@ -3672,7 +3665,7 @@ RULES:
         # Larger model whenever 2+ full contracts are in context (selected OR carried) — cross-contract
         # comparisons are usually over splits/royalty terms ("never approximate"), so spend the tokens.
         effective_count = len(contract_markdowns)
-        multi_contract_model = DEFAULT_LLM_MODEL_LARGE if effective_count >= 2 else None
+        multi_contract_model = model_for("zoe_large") if effective_count >= 2 else None
         if multi_contract_model:
             logger.info(f"[Stream] Multi-contract context ({effective_count} contracts) — using {multi_contract_model}")
 
@@ -3840,7 +3833,7 @@ RULES:
             # (NOT the input/context window). A small budget (e.g. 300) is fully consumed by
             # reasoning -> empty output. The actual output here is a tiny JSON array, so this
             # generous cap is almost entirely reasoning headroom; we only pay for tokens used.
-            raw = "".join(self._stream_llm_completion(messages, 16000, model_override=DEFAULT_LLM_MODEL))
+            raw = "".join(self._stream_llm_completion(messages, 16000, model_override=model_for("zoe_citations")))
             citations = parse_page_citations(raw)
         except Exception as e:  # noqa: BLE001 — extraction is best-effort
             logger.warning(f"[Stream][FullDoc] Page citation extraction failed: {e}")
@@ -4093,3 +4086,60 @@ Your answers should be:
             {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp.isoformat(), "metadata": msg.metadata}
             for msg in messages
         ]
+
+
+# ── Pure module-level text predicates ──
+#
+# Extracted from ContractChatbot._is_conversational_query /
+# _is_affirmative_response so the credit gate (main.py) can classify a query
+# WITHOUT constructing a chatbot. Defined after the class so the class-level
+# pattern lists (CONVERSATIONAL_PATTERNS / AFFIRMATIVE_PATTERNS) are resolved
+# lazily at call time — no import-order dependency.
+#
+# NOTE: the two originals clean the query slightly differently (conversational
+# does NOT .strip() after stripping punctuation; affirmative does). That's
+# preserved faithfully below rather than unified behind one shared cleaner.
+
+
+def is_conversational_text(query: str) -> bool:
+    """Pure-text version of ContractChatbot._is_conversational_query."""
+    query_lower = (query or "").lower().strip()
+    # Remove punctuation for matching
+    query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace())
+
+    # Check for exact or partial matches
+    for pattern in ContractChatbot.CONVERSATIONAL_PATTERNS:
+        if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
+            return True
+        # Also check if the entire query is just the pattern with punctuation
+        if pattern in query_clean and len(query_clean) < len(pattern) + 10:
+            return True
+
+    return False
+
+
+def is_affirmative_text(query: str) -> bool:
+    """Pure-text version of ContractChatbot._is_affirmative_response."""
+    query_lower = (query or "").lower().strip()
+    query_clean = "".join(c for c in query_lower if c.isalnum() or c.isspace()).strip()
+
+    for pattern in ContractChatbot.AFFIRMATIVE_PATTERNS:
+        if query_clean == pattern or query_clean.startswith(pattern + " ") or query_clean.endswith(" " + pattern):
+            return True
+
+    return False
+
+
+def is_zero_cost_query(query: str) -> bool:
+    """True only when stream_query is GUARANTEED to take the conversational
+    fast-path (canned reply, zero LLM cost) regardless of session state.
+
+    Affirmative-overlapping patterns ("ok", "sure") are excluded: with a
+    pending suggestion they route to a real LLM answer first (see
+    stream_query's routing order — the affirmative-with-pending-suggestion
+    branch is checked before the conversational fast path). Used by the
+    credit gate so zero-balance users still get free replies for guaranteed-
+    free queries. PURE — must never construct a chatbot or touch session
+    memory.
+    """
+    return is_conversational_text(query) and not is_affirmative_text(query)

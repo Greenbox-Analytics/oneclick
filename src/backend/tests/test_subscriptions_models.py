@@ -17,6 +17,23 @@ class TestCaps:
         )
         assert c.max_artists == -1
 
+    def test_team_dials_default_to_zero(self):
+        """Team dials (spec 2026-08-15 §1) default to 0, not -1 — they are not
+        count caps, so "unlimited" is never a valid value for them."""
+        from subscriptions.models import Caps
+
+        c = Caps(
+            max_artists=-1,
+            max_projects=-1,
+            max_tasks=-1,
+            max_storage_bytes=-1,
+            max_split_sheets_per_month=-1,
+            max_oneclick_runs_per_month=-1,
+        )
+        assert c.max_teams == 0
+        assert c.max_team_members == 0
+        assert c.team_storage_bytes == 0
+
 
 class TestFeatures:
     def test_default_integrations_list(self):
@@ -26,7 +43,7 @@ class TestFeatures:
             zoe_enabled=False, oneclick_enabled=False, registry_enabled=False, integrations_allowed=["google_drive"]
         )
         assert "google_drive" in f.integrations_allowed
-        assert "slack" not in f.integrations_allowed
+        assert "google_drive" in f.integrations_allowed
 
 
 class TestEntitlements:
@@ -52,6 +69,10 @@ class TestEntitlements:
         assert d["usage"]["splitSheetsThisPeriod"] == 0
         assert d["hasOverrides"] is False
         assert d["degraded"] is False
+        # Team dials (spec 2026-08-15 §1) — camelCase, present even at default 0
+        assert d["caps"]["maxTeams"] == 0
+        assert d["caps"]["maxTeamMembers"] == 0
+        assert d["caps"]["teamStorageBytes"] == 0
         # Stripe billing sub-object always present; None for free users
         assert "subscription" in d
         assert d["subscription"]["stripeSubscriptionId"] is None
@@ -67,7 +88,7 @@ class TestEntitlements:
             tier="pro",
             status="active",
             caps=Caps(-1, -1, -1, -1, -1, -1),
-            features=Features(True, True, True, ["google_drive", "slack"]),
+            features=Features(True, True, True, ["google_drive"]),
             usage=Usage(0, 0, 0, 0, datetime.now(UTC)),
             has_overrides=False,
             stripe_subscription_id="sub_abc123",
@@ -123,6 +144,7 @@ class TestAction:
             "create_artist",
             "create_project",
             "create_task",
+            "create_work",
             "upload_bytes",
             "generate_split_sheet",
             "use_zoe",
@@ -199,3 +221,106 @@ class TestOverridePayload:
 
         p = OverridePayload(max_artists=-1)
         assert p.max_artists == -1
+
+
+def _entitlements_with_credits():
+    """A fully-populated Entitlements carrying a credits block, for to_dict tests."""
+    from subscriptions.models import Caps, CreditsInfo, Entitlements, Features, Usage
+
+    return Entitlements(
+        user_id="u1",
+        tier="pro_max",
+        status="active",
+        caps=Caps(
+            max_artists=-1,
+            max_projects=-1,
+            max_tasks=-1,
+            max_storage_bytes=-1,
+            max_split_sheets_per_month=-1,
+            max_oneclick_runs_per_month=-1,
+            monthly_credits=8000,
+            max_works=-1,
+            included_storage_bytes=268435456000,
+        ),
+        features=Features(True, True, True, ["google_drive"]),
+        usage=Usage(0, 0, 0, 0, datetime(2026, 8, 1, tzinfo=UTC)),
+        has_overrides=False,
+        credits=CreditsInfo(
+            bundle_balance=7000,
+            reserve_balance=100,
+            monthly_grant=8000,
+            overage_this_period=0,
+            overage_enabled=False,
+            overage_cap_credits=None,
+            period_end=datetime(2026, 8, 1, tzinfo=UTC),
+            prices={"zoe_message": 3, "oneclick_run": 21, "registry_parse": 12, "split_sheet": 20},
+        ),
+    )
+
+
+class TestCreditModels:
+    def test_credit_action_keys_match_seeded_prices(self):
+        from subscriptions.models import CreditAction
+
+        assert {a.value for a in CreditAction} == {
+            "zoe_message",
+            "oneclick_run",
+            "registry_parse",
+            "split_sheet",
+        }
+
+    def test_create_work_action_exists(self):
+        from subscriptions.models import Action
+
+        assert Action.CREATE_WORK == "create_work"
+
+    def test_to_dict_includes_credits_block(self):
+        ent = _entitlements_with_credits()
+        d = ent.to_dict()
+        c = d["credits"]
+        assert c["balance"] == 7100  # bundle + reserve
+        assert c["bundleBalance"] == 7000
+        assert c["monthlyGrant"] == 8000
+        assert c["prices"]["oneclickRun"] == 21
+        assert d["caps"]["maxWorks"] == -1
+
+    def test_every_credit_action_is_in_the_prices_payload(self):
+        """to_dict hand-builds `prices`; a new CreditAction that never reaches the
+        client renders as a missing price in the UI, not an error."""
+        from subscriptions.models import CreditAction
+
+        payload = _entitlements_with_credits().to_dict()["credits"]["prices"]
+        camel = {
+            "zoe_message": "zoeMessage",
+            "oneclick_run": "oneclickRun",
+            "registry_parse": "registryParse",
+            "split_sheet": "splitSheet",
+        }
+        for action in CreditAction:
+            assert camel[str(action)] in payload, f"{action} missing from the prices payload"
+
+    def test_to_dict_credits_none_when_absent(self):
+        from subscriptions.models import Caps, Entitlements, Features, Usage
+
+        ent = Entitlements(
+            user_id="u1",
+            tier="pro",
+            status="active",
+            caps=Caps(-1, -1, -1, -1, -1, -1),
+            features=Features(True, True, True, []),
+            usage=Usage(0, 0, 0, 0, datetime.now(UTC)),
+            has_overrides=False,
+        )
+        assert ent.to_dict()["credits"] is None
+
+    def test_credit_check_result_defaults(self):
+        from subscriptions.models import CreditCheckResult
+
+        r = CreditCheckResult(allowed=True, price=3)
+        assert r.use_overage is False and r.reason is None
+
+    def test_credit_grant_shape(self):
+        from subscriptions.models import CreditGrant
+
+        g = CreditGrant(request_id="abc", action="zoe_message", price=3, kind="debit", enabled=True)
+        assert g.kind in ("debit", "overage_debit")

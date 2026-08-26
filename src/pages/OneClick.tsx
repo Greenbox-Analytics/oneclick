@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, BookOpen, Info, Calculator, Wallet } from "lucide-react";
+import { AlertCircle, Info, Calculator, Wallet } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -13,6 +13,7 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 import { PaymentTracking } from "@/components/oneclick/payments/PaymentTracking";
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 interface Artist {
   id: string; // UUID in database
@@ -31,9 +32,10 @@ const OneClick = () => {
   // modal. Consume the state once so it doesn't re-fire on re-render.
   const [initialPayoutNames, setInitialPayoutNames] = useState<string[] | undefined>(undefined);
 
-  // State for fetched artists
+  // State for fetched artists. The ref holds the scope the roster was fetched
+  // under (false = never fetched) so a workspace switch re-fetches once.
   const [artists, setArtists] = useState<Artist[]>([]);
-  const hasFetchedRef = useRef(false);
+  const hasFetchedRef = useRef<string | undefined | false>(false);
 
   // State tracks artist user has selected and errors
   // Changed to string[] because Supabase IDs are UUIDs (strings)
@@ -59,20 +61,24 @@ const OneClick = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
-  // Fetch artists from backend on component mount
+  // Fetch artists from backend on component mount, re-fetching when the
+  // active workspace changes (a stale roster here would let a calculation
+  // start from another workspace's artist).
+  const { scopeParam, withScope, ready } = useWorkspaceScope();
   useEffect(() => {
-    if (!user || hasFetchedRef.current) return;
+    if (!user || !ready) return;
+    if (hasFetchedRef.current === scopeParam) return;
 
-    hasFetchedRef.current = true;
+    hasFetchedRef.current = scopeParam;
 
-    apiFetch<Artist[]>(`${API_URL}/artists`)
+    apiFetch<Artist[]>(withScope(`${API_URL}/artists`))
       .then((data) => setArtists(data))
       .catch((err) => {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists. Please check your backend connection.");
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+  }, [user?.id, ready, scopeParam]);
 
   // This lets us select/deselect a single artist (only one artist can be selected at a time)
   const handleArtistToggle = (artistId: string) => {
@@ -101,17 +107,6 @@ const OneClick = () => {
       <div className="min-h-screen bg-background">
         <PageHeader
           backTo="/tools"
-          actions={
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate("/docs")}
-            title="Documentation"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <BookOpen className="w-4 h-4" />
-          </Button>
-        }
       />
 
       <main className="container mx-auto px-4 py-8 max-w-6xl">

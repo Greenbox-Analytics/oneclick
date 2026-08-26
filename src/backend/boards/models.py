@@ -100,6 +100,8 @@ class BoardCreate(BaseModel):
 class BoardUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    restricted: bool | None = None
+    member_user_ids: list[str] | None = None
 
 
 class AssigneeAdd(BaseModel):
@@ -108,3 +110,11 @@ class AssigneeAdd(BaseModel):
 
 class DeleteConfirm(BaseModel):
     confirm_name: str
+
+
+class CalendarSubscriptionCreate(BaseModel):
+    """Subscribe to an external .ics calendar. `url` is validated server-side
+    (scheme, public host, and that it actually parses as a calendar)."""
+
+    url: str
+    name: str | None = None

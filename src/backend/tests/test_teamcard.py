@@ -13,11 +13,18 @@ from tests.conftest import TEST_USER_ID, MockQueryBuilder, _default_table_side_e
 _SUBSCRIPTION_TABLES = frozenset({"subscriptions", "tier_entitlements", "tier_overrides", "usage_counters", "profiles"})
 
 
+# verify_user_owns_artist resolves the caller's org seats before deciding
+# visibility. These tests all exercise PERSONAL artists, so route those reads to
+# the empty default — "no active seats" — instead of the single shared builder
+# the tests hand back for the table under test.
+_ARTIST_ACCESS_TABLES = frozenset({"org_members", "organizations"})
+
+
 def _sub_wrap(fn):
     """Wrap a table side-effect function to route subscription tables through the Pro default."""
 
     def _wrapped(name):
-        if name in _SUBSCRIPTION_TABLES:
+        if name in _SUBSCRIPTION_TABLES or name in _ARTIST_ACCESS_TABLES:
             return _default_table_side_effect(name)
         return fn(name)
 

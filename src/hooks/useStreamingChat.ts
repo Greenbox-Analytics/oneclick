@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 
 // ── Types ──
 
@@ -24,11 +26,34 @@ export interface MessageSource {
   section_category?: string;
 }
 
+/**
+ * Verbatim `detail` payload of a credit-402 (subscriptions/enforcement.py's
+ * gated_credits) — present on a message when `confidence === "credit_wall"`.
+ * Only populated when the backend served the structured object shape; a
+ * legacy plain-string 402 (credits disabled) leaves this undefined and the
+ * reason lives in `content` instead.
+ */
+export interface CreditWallDetail {
+  reason?: string;
+  price?: number;
+  resetDate?: string | null;
+  upgradeRequired?: boolean;
+  overageAvailable?: boolean;
+  managedByOrg?: boolean;
+  /** True when the MEMBER hit their own monthly limit (remedy: ask for a
+   * raise). False/absent on a dry pool, where only an admin buying credits
+   * helps — two different walls with different CTAs. */
+  capReached?: boolean;
+  requestUrl?: string;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   confidence?: string;
+  /** Present when confidence === "credit_wall" — see CreditWallDetail. */
+  detail?: CreditWallDetail;
   sources?: MessageSource[];
   /** Contract IDs that were in context when this message was sent — pins the source
    *  chips to this turn so they don't re-attach to a later contract selection. */
@@ -115,7 +140,7 @@ type SSEEvent =
 
 // ── Hook ──
 
-import { API_URL, getAuthHeaders } from "@/lib/apiFetch";
+import { API_URL, getAuthHeaders, apiErrorFromBody, type ApiError } from "@/lib/apiFetch";
 const MAX_CONVERSATION_MESSAGES = 100;
 
 export function useStreamingChat() {
@@ -123,6 +148,7 @@ export function useStreamingChat() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState("");
   const abortControllerRef = useRef<AbortController | null>(null);
+  const queryClient = useQueryClient();
 
   // ── helpers ──
 
@@ -239,7 +265,8 @@ export function useStreamingChat() {
         });
 
         if (!response.ok) {
-          throw new Error("Failed to get response from Zoe");
+          const body = await response.json().catch(() => ({}));
+          throw apiErrorFromBody(body, response.status, "Failed to get response from Zoe");
         }
 
         const reader = response.body?.getReader();
@@ -379,18 +406,33 @@ export function useStreamingChat() {
           );
         } else {
           console.error("Error sending message:", err);
-          const errorText =
-            err instanceof Error ? err.message : "An unexpected error occurred";
+          const streamErr = err instanceof Error ? (err as Partial<ApiError>) : undefined;
+          // apiErrorFromBody attaches the raw `detail` (a string for legacy
+          // plain-string 402s); the credit_wall card only understands the
+          // structured object shape, so drop non-objects to undefined.
+          const detail =
+            streamErr?.detail && typeof streamErr.detail === "object"
+              ? (streamErr.detail as CreditWallDetail)
+              : undefined;
+          const errorText = streamErr?.message ?? "An unexpected error occurred";
           setError(errorText);
+
+          // Pre-stream HTTP 402 → credit-wall card (renderer branches on
+          // confidence === "credit_wall"; `content` carries the reason so the
+          // card is never blank). Anything else → today's canned bubble.
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? {
                     ...m,
-                    content:
-                      m.content ||
-                      "I'm sorry, I encountered an error. Please try again.",
-                    confidence: "error",
+                    ...(streamErr?.status === 402
+                      ? { content: errorText, confidence: "credit_wall", detail }
+                      : {
+                          content:
+                            m.content ||
+                            "I'm sorry, I encountered an error. Please try again.",
+                          confidence: "error",
+                        }),
                     isStreaming: false,
                   }
                 : m
@@ -400,6 +442,9 @@ export function useStreamingChat() {
       } finally {
         setIsStreaming(false);
         abortControllerRef.current = null;
+        // Zoe messages are credit-metered (conversational replies are free, but
+        // the debit is server-side either way) — refresh the ticker/chips.
+        invalidateCreditSurfaces(queryClient);
       }
 
       return {
@@ -410,7 +455,7 @@ export function useStreamingChat() {
         sources: returnSources,
       };
     },
-    []
+    [queryClient]
   );
 
   // ── stop / retry / clear ──

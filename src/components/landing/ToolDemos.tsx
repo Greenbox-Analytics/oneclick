@@ -245,116 +245,96 @@ function DemoOneClickInner({ playing, height }: DemoBodyProps) {
           </button>
         </div>
 
-        <div style={{ padding: 18, position: "relative" }}>
+        <div style={{ padding: 18, position: "relative", minWidth: 0 }}>
           {phase === 2 ? (
+            // Every flexible cell carries minWidth: 0 + ellipsis so this pane's
+            // min-content width stays well under the column it is given. A wide
+            // min-content here would inflate the demo's `fr` track the moment
+            // the results render, which is what used to make the frame jump.
             <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted-fg)" }}>Total payments owed</div>
-                  <div className="tighter" style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, color: "var(--muted-fg)" }}>Total payments owed</div>
+                  <div className="tighter" style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em" }}>
                     US$6,329.50
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <span
-                    style={{
-                      padding: "5px 10px",
-                      borderRadius: 999,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      background: "color-mix(in srgb, var(--accent) 14%, transparent)",
-                      color: "var(--accent)",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 5,
-                    }}
-                  >
-                    <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} />
-                    Cached
-                  </span>
-                  <button type="button" style={MINI_BTN}>CSV</button>
-                  <button type="button" style={MINI_BTN}>Excel</button>
-                  <button
-                    type="button"
-                    style={{
-                      ...MINI_BTN,
-                      border: "none",
-                      background: "var(--primary)",
-                      color: "var(--bg)",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 4,
-                    }}
-                  >
-                    ↑ Share
-                  </button>
+                <span
+                  style={{
+                    padding: "4px 9px",
+                    borderRadius: 999,
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    background: "color-mix(in srgb, var(--accent) 14%, transparent)",
+                    color: "var(--accent)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} />
+                  Cached
+                </span>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                <OneClickPie />
+                <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 5 }}>
+                  {ONECLICK_SEGS.map((s) => (
+                    <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+                      <span style={ELLIPSIS}>{s.label}</span>
+                      <span className="mono" style={{ color: "var(--muted-fg)" }}>
+                        {s.value}%
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 14, minHeight: 0, flex: 1 }}>
-                <div style={{ overflow: "hidden" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                    <thead>
-                      <tr style={{ color: "var(--muted-fg)", textAlign: "left" }}>
-                        {["Song", "Payee", "Role", "Share"].map((h) => (
-                          <th
-                            key={h}
-                            style={{
-                              fontWeight: 500,
-                              padding: "6px 4px",
-                              borderBottom: "1px solid var(--border)",
-                            }}
-                          >
-                            {h}
-                          </th>
-                        ))}
-                        <th
-                          style={{
-                            fontWeight: 500,
-                            padding: "6px 4px",
-                            borderBottom: "1px solid var(--border)",
-                            textAlign: "right",
-                          }}
-                        >
-                          Amount owed
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ONECLICK_ROWS.map((r, i) => (
-                        <tr
-                          key={`${r.song}-${r.party}`}
-                          style={{
-                            opacity: i < rowsVisible ? 1 : 0,
-                            transform: i < rowsVisible ? "translateY(0)" : "translateY(4px)",
-                            transition: "all 0.3s",
-                          }}
-                        >
-                          <td style={CELL}>{r.song}</td>
-                          <td style={CELL}>{r.party}</td>
-                          <td style={{ ...CELL, color: "var(--muted-fg)" }}>{r.role}</td>
-                          <td style={CELL} className="mono">
-                            {r.pct}%
-                          </td>
-                          <td style={{ ...CELL, textAlign: "right", fontWeight: 600 }} className="mono">
-                            {r.pay}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <span style={SHARE_CHIP}>
-                      <span style={{ width: 12, height: 12, borderRadius: 3, background: "#1a73e8" }} />
-                      Save to Google Drive
+              <div
+                style={{
+                  borderTop: "1px solid var(--border)",
+                  paddingTop: 8,
+                  display: "grid",
+                  gap: 6,
+                  minHeight: 0,
+                  overflow: "hidden",
+                }}
+              >
+                {ONECLICK_ROWS.map((r, i) => (
+                  <div
+                    key={`${r.song}-${r.party}`}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontSize: 10.5,
+                      opacity: i < rowsVisible ? 1 : 0,
+                      transform: i < rowsVisible ? "translateY(0)" : "translateY(4px)",
+                      transition: "all 0.3s",
+                    }}
+                  >
+                    <span style={ELLIPSIS}>
+                      {r.party}
+                      <span style={{ color: "var(--muted-fg)" }}> · {r.song}</span>
                     </span>
-                    <span style={SHARE_CHIP}>
-                      <span style={{ width: 12, height: 12, borderRadius: 3, background: "#611f69" }} />
-                      Share to Slack
+                    <span className="mono" style={{ color: "var(--muted-fg)" }}>
+                      {r.pct}%
+                    </span>
+                    <span className="mono" style={{ fontWeight: 600 }}>
+                      {r.pay}
                     </span>
                   </div>
-                </div>
-                <OneClickPie />
+                ))}
+              </div>
+
+              <div style={{ marginTop: "auto", display: "flex" }}>
+                <span style={SHARE_CHIP}>
+                  <span style={{ width: 12, height: 12, borderRadius: 3, background: "#1a73e8" }} />
+                  Save to Google Drive
+                </span>
               </div>
             </div>
           ) : (
@@ -427,34 +407,29 @@ function DemoOneClickInner({ playing, height }: DemoBodyProps) {
 function OneClickPie() {
   let acc = 0;
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ ...LABEL_STYLE, marginBottom: 6, fontSize: 10 }}>By payee</div>
-      <svg viewBox="0 0 120 120" width="104" height="104">
-        {ONECLICK_SEGS.map((s) => {
-          const start = arcPoint(acc / 100);
-          acc += s.value;
-          const end = arcPoint(acc / 100);
-          const large = s.value > 50 ? 1 : 0;
-          return (
-            <path
-              key={s.label}
-              d={`M60,60 L${start.x},${start.y} A48,48 0 ${large} 1 ${end.x},${end.y} Z`}
-              fill={s.color}
-              opacity={0.9}
-            />
-          );
-        })}
-        <circle cx="60" cy="60" r="22" fill="var(--card)" />
-      </svg>
-      <div style={{ marginTop: 8, display: "grid", gap: 4 }}>
-        {ONECLICK_SEGS.slice(0, 3).map((s) => (
-          <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10 }}>
-            <span style={{ width: 7, height: 7, borderRadius: 2, background: s.color }} />
-            <span>{s.label}</span>
-          </div>
-        ))}
-      </div>
-    </div>
+    <svg viewBox="0 0 120 120" width="96" height="96" style={{ flexShrink: 0 }} aria-hidden>
+      {ONECLICK_SEGS.map((s) => {
+        const start = arcPoint(acc / 100);
+        acc += s.value;
+        const end = arcPoint(acc / 100);
+        const large = s.value > 50 ? 1 : 0;
+        return (
+          <path
+            key={s.label}
+            d={`M60,60 L${start.x},${start.y} A48,48 0 ${large} 1 ${end.x},${end.y} Z`}
+            fill={s.color}
+            opacity={0.9}
+          />
+        );
+      })}
+      <circle cx="60" cy="60" r="26" fill="var(--card)" />
+      <text x="60" y="59" textAnchor="middle" fontSize="12" fontWeight="700" fill="var(--fg)">
+        US$6.3k
+      </text>
+      <text x="60" y="70" textAnchor="middle" fontSize="7" fill="var(--muted-fg)" letterSpacing="0.5">
+        5 PAYMENTS
+      </text>
+    </svg>
   );
 }
 
@@ -981,7 +956,6 @@ const WORKSPACE_COL_BASE = [
 
 const WORKSPACE_INTEGRATIONS = [
   { l: "Google Drive", d: "#1a73e8" },
-  { l: "Slack", d: "#611f69" },
 ];
 
 const TRAVELING_CARD = "Cold Mornings · Master";
@@ -1132,18 +1106,14 @@ const CHECK_DOT_STYLE: CSSProperties = {
   fontWeight: 700,
 };
 
-const MINI_BTN: CSSProperties = {
-  padding: "5px 10px",
-  borderRadius: 6,
-  fontSize: 11,
-  fontWeight: 600,
-  border: "1px solid var(--border)",
-  background: "var(--card)",
-};
-
-const CELL: CSSProperties = {
-  padding: "7px 4px",
-  borderBottom: "1px solid var(--border)",
+// Flexible text that truncates instead of widening its container — the
+// minWidth: 0 is what keeps a long label out of the parent's min-content width.
+const ELLIPSIS: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
 };
 
 const SHARE_CHIP: CSSProperties = {
@@ -1450,7 +1420,7 @@ export const TOOLS: Tool[] = [
     name: "Metadata Registry",
     tagline: "Works & ownership",
     blurb:
-      "Register every work and lock in who owns what — master and publishing splits, per collaborator. Track each work from draft to registered, with an auditable record of the stakes, roles and agreements behind every percentage.",
+      "Register every work and lock in who owns what, i.e. master and publishing splits, per collaborator. Track each work from draft to registered, with an auditable record of the stakes, roles and agreements behind every percentage.",
     bullets: [
       "Master & publishing splits per work",
       "Draft → pending → registered lifecycle",
@@ -1485,7 +1455,7 @@ export const TOOLS: Tool[] = [
     bullets: [
       "Task management",
       "Track various initiatives in one area",
-      "Connect files and contents from Google Drive, Slack and more",
+      "Connect files and contents from Google Drive and more",
       "Calendar synced to the project board",
     ],
     cta: "Open Workspace",

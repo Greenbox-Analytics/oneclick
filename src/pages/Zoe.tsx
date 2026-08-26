@@ -103,7 +103,6 @@ const Zoe = () => {
     handleRetry,
     handleCopyMessage,
     handleKeyDown,
-    error,
   } = useZoeData();
 
   const navigate = useNavigate();
@@ -237,7 +236,6 @@ const Zoe = () => {
           <ZoeInputBar
             inputMessage={inputMessage}
             onInputChange={setInputMessage}
-            error={error}
             isStreaming={isStreaming}
             isAtLimit={isAtLimit}
             selectedContracts={selectedContracts}

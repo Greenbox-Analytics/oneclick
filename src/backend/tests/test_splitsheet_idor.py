@@ -27,7 +27,7 @@ _PRO_TIER_ROW = {
     "zoe_enabled": True,
     "oneclick_enabled": True,
     "registry_enabled": True,
-    "integrations_allowed": ["google_drive", "slack"],
+    "integrations_allowed": ["google_drive"],
     "updated_at": "2026-05-09T00:00:00+00:00",
 }
 _PRO_SUB_ROW = {
@@ -167,7 +167,7 @@ class TestSplitSheetSaveToArtistIDOR:
             if name == "artists":
                 b.execute.return_value = MagicMock(data=[{"id": OWN_ARTIST_ID}])
             elif name == "projects":
-                b.execute.return_value = MagicMock(data=[{"id": OWN_PROJECT_ID}])
+                b.execute.return_value = MagicMock(data=[{"id": OWN_PROJECT_ID, "artist_id": OWN_ARTIST_ID}])
             elif name == "project_files":
                 b.execute.return_value = MagicMock(data=[{"id": "pf-001"}])
             elif name == "usage_counters":

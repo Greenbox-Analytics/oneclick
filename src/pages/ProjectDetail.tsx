@@ -1,16 +1,17 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useMyRole } from "@/hooks/useProjectMembers";
 import { InlineEdit } from "@/components/InlineEdit";
 import { Button } from "@/components/ui/button";
+import { HeaderDocsButton } from "@/components/layout/HeaderDocsButton";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Music, ArrowLeft, Loader2,
-  FileText, Volume2, Users, Settings, StickyNote, BookOpen, MessageSquare, Receipt,
+  FileText, Volume2, Users, Settings, StickyNote, Receipt,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -22,15 +23,13 @@ import ExpenseTrackerTab from "@/components/project/ExpenseTrackerTab";
 import SettingsTab from "@/components/project/SettingsTab";
 import NotesView from "@/components/notes/NotesView";
 import { useToolOnboardingStatus } from "@/hooks/useToolOnboardingStatus";
-import { useProjectSlackChannel } from "@/hooks/useProjectIntegrations";
-import { useSlackChannels } from "@/hooks/useSlackSettings";
-import { useIntegrations } from "@/hooks/useIntegrations";
 import { useToolWalkthrough } from "@/hooks/useToolWalkthrough";
 import { TOOL_CONFIGS } from "@/config/toolWalkthroughConfig";
 import ToolIntroModal from "@/components/walkthrough/ToolIntroModal";
 import ToolHelpButton from "@/components/walkthrough/ToolHelpButton";
 import { MobileNavSheet } from "@/components/layout/MobileNavSheet";
 import { useSmartBack } from "@/hooks/useSmartBack";
+import { useTabParam } from "@/hooks/useTabParam";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useIsMobile } from "@/hooks/use-mobile";
 import WalkthroughProvider from "@/components/walkthrough/WalkthroughProvider";
@@ -44,6 +43,8 @@ const ROLE_COLORS: Record<string, string> = {
 
 const canEdit = (role: string | null) => role === "owner" || role === "admin" || role === "editor";
 
+const VALID_TABS = ["works", "files", "expenses", "audio", "members", "notes", "settings"] as const;
+
 const ProjectDetail = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -52,19 +53,8 @@ const ProjectDetail = () => {
   const queryClient = useQueryClient();
   const userRole = useMyRole(projectId);
 
-  const [searchParams] = useSearchParams();
-  const VALID_TABS = ["works", "files", "expenses", "audio", "members", "notes", "settings"];
-  const initialTab = VALID_TABS.includes(searchParams.get("tab") ?? "")
-    ? (searchParams.get("tab") as string)
-    : "files";
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activeTab, setActiveTab] = useTabParam(VALID_TABS, "files");
   const isMobile = useIsMobile();
-
-  const { connections } = useIntegrations();
-  const slackConnected = connections.some(c => c.provider === "slack" && c.status === "active");
-  const { channelId } = useProjectSlackChannel(projectId);
-  const { data: channels } = useSlackChannels(slackConnected && !!channelId);
-  const linkedChannel = channels?.find(c => c.id === channelId);
 
   // Tour
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
@@ -181,16 +171,6 @@ const ProjectDetail = () => {
                       {userRole}
                     </Badge>
                   )}
-                  {slackConnected && linkedChannel && (
-                    <a
-                      href={`slack://channel?id=${channelId}`}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-[#4A154B]/10 text-[#4A154B] hover:bg-[#4A154B]/20 transition-colors"
-                      title={`Open #${linkedChannel.name} in Slack`}
-                    >
-                      <MessageSquare className="w-3 h-3" />
-                      #{linkedChannel.name}
-                    </a>
-                  )}
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {project.artists?.name || "Unknown Artist"}
@@ -200,15 +180,7 @@ const ProjectDetail = () => {
 
             <div className="flex items-center gap-2 shrink-0">
               <ToolHelpButton onClick={() => walkthrough.replay()} />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => navigate("/docs")}
-                title="Documentation"
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <BookOpen className="w-4 h-4" />
-              </Button>
+              <HeaderDocsButton />
             </div>
           </div>
         </div>

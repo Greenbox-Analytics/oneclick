@@ -34,12 +34,13 @@ import {
   Users,
   CheckCircle,
   Folder,
-  BookOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/PageHeader";
 
-import { API_URL, apiFetch, getAuthHeaders, ApiError } from "@/lib/apiFetch";
+import { API_URL, apiFetch, getAuthHeaders, apiErrorFromBody } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useGatedAction } from "@/hooks/useGatedAction";
 
 const ROLES = [
@@ -169,15 +170,21 @@ const SplitSheet = () => {
     }
   }, [onboardingLoading, statuses.splitsheet]);
 
-  // Fetch artists
+  // Fetch artists — scoped to the active workspace, re-fetched on switch
+  const { scopeParam, withScope, ready: scopeReady } = useWorkspaceScope();
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id || !scopeReady) return;
     setLoadingArtists(true);
-    apiFetch<Artist[]>(`${API_URL}/artists`)
-      .then((data) => setArtists(data || []))
+    apiFetch<Artist[]>(withScope(`${API_URL}/artists`))
+      .then((data) => {
+        setArtists(data || []);
+        // A workspace switch can drop the selected artist out of the roster.
+        setSelectedArtistId((prev) => (prev && !(data || []).some((a) => a.id === prev) ? "" : prev));
+      })
       .catch(() => setArtists([]))
       .finally(() => setLoadingArtists(false));
-  }, [user?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, scopeReady, scopeParam]);
 
   // Fetch projects when artist changes
   useEffect(() => {
@@ -299,11 +306,14 @@ const SplitSheet = () => {
 
       if (!response.ok) {
         const err = await response.json().catch(() => null);
-        // Surface 402 as ApiError so PaywallModal fires
-        if (response.status === 402) {
-          throw new ApiError(err?.detail || "Upgrade required", 402);
-        }
-        throw new Error(err?.detail || "Failed to generate split sheet");
+        // apiErrorFromBody keeps both 402 detail shapes readable (plain-string
+        // cap, structured credit gate) — useGatedAction only paywalls on 402,
+        // so other statuses just surface the message.
+        throw apiErrorFromBody(
+          err,
+          response.status,
+          response.status === 402 ? "Upgrade required" : "Failed to generate split sheet",
+        );
       }
 
       return response.blob();
@@ -383,26 +393,8 @@ const SplitSheet = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <PageHeader
-        actions={
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
-            <ToolHelpButton onClick={walkthrough.replay} />
-            <Button variant="outline" className="hidden md:inline-flex" onClick={() => navigate("/tools")}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Tools
-            </Button>
-          </>
-        }
-      />
+      {/* One Back, one destination — see Registry.tsx. */}
+      <PageHeader backTo="/tools" actions={<ToolHelpButton onClick={walkthrough.replay} />} />
 
       <main
         className="container mx-auto px-4 py-8 max-w-3xl"
@@ -1027,8 +1019,9 @@ const SplitSheet = () => {
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Back
               </Button>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
                 {!hasGenerated ? (
+                  <>
                   <Button disabled={!canGenerate} onClick={handleGenerate}>
                     {isGenerating ? (
                       <>
@@ -1046,6 +1039,8 @@ const SplitSheet = () => {
                       </>
                     )}
                   </Button>
+                  <CreditsChip action="split_sheet" />
+                  </>
                 ) : (
                   <Button onClick={handleDownload} className="gap-2">
                     <Download className="w-4 h-4" />

@@ -208,7 +208,7 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="workspace-integrations"]',
         title: "Integrations",
         description:
-          "Connect Google Drive to import contracts, royalty statements, and split sheets directly into your projects — each category only accepts the right file types (e.g., PDFs for contracts, Excel/CSV for royalty statements). Slack notifications are coming soon.",
+          "Connect Google Drive to import contracts, royalty statements, and split sheets directly into your projects — each category only accepts the right file types (e.g., PDFs for contracts, Excel/CSV for royalty statements).",
         placement: "bottom",
       },
     ],
@@ -321,8 +321,8 @@ const ALL_TOOL_CONFIGS: Record<string, ToolWalkthroughConfig> = {
         targetSelector: '[data-walkthrough="project-tabs"]',
         title: "Project Tabs",
         description: HIDE_REGISTRY_AND_WORKS
-          ? "Files: contracts, split sheets, and documents — upload directly or import from Google Drive (each category accepts specific file types like PDFs for contracts, Excel/CSV for royalty statements). Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration and Slack channel linking."
-          : "Works: tracks and compositions linked to this project. Files: contracts, split sheets, and documents — upload directly or import from Google Drive (each category accepts specific file types like PDFs for contracts, Excel/CSV for royalty statements). Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration and Slack channel linking.",
+          ? "Files: contracts, split sheets, and documents — upload directly or import from Google Drive (each category accepts specific file types like PDFs for contracts, Excel/CSV for royalty statements). Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration."
+          : "Works: tracks and compositions linked to this project. Files: contracts, split sheets, and documents — upload directly or import from Google Drive (each category accepts specific file types like PDFs for contracts, Excel/CSV for royalty statements). Audio: recordings. Members: who has access. Notes: collaborative notes. Settings: project configuration.",
         placement: "bottom",
       },
       ...(HIDE_REGISTRY_AND_WORKS

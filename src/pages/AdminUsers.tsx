@@ -1,993 +1,459 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+// src/pages/AdminUsers.tsx
+// Msanii admin console — sidebar shell over four views (Overview, Users,
+// Organizations, Beta testers) plus a ⌘K palette.
+//
+// The shell owns the cross-view selection state (selected user / org, the
+// users search + filter) so a row on Overview or a hit in the palette can
+// deep-link into another view's drawer.
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  Beaker,
+  Building2,
+  ChevronRight,
+  Home,
+  LineChart,
+  Search,
+  Users,
+  Zap,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Music, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useNavigate } from "react-router-dom";
-import {
-  useAdminUsers,
-  useAdminMutations,
-  type AdminUserRow,
-  type OverridePayloadInput,
-} from "@/hooks/useAdmin";
-import { useEntitlementsForUser, type RawOverride } from "@/hooks/useEntitlements";
-import {
-  useTesterGrants,
-  useCreateTesterGrant,
-  useRevokeTesterGrant,
-  ApiError,
-} from "@/hooks/useTesterGrants";
-import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { useAnalytics } from "@/hooks/useAnalytics";
+import { useAdminUsers } from "@/hooks/useAdmin";
+import { useAdminOrgs, type AdminOrgRow } from "@/hooks/useAdminOrgs";
+import { useTesterGrants } from "@/hooks/useTesterGrants";
+import { isPaidTier, tierLabel } from "@/lib/tiers";
 import { AnalyticsSummaryCard } from "@/components/admin/AnalyticsSummaryCard";
 import { BehaviorAnalyticsCard } from "@/components/admin/BehaviorAnalyticsCard";
+import { AdminOrgsPanel } from "@/components/admin/AdminOrgsPanel";
+import { AdminUsersPanel, type UserFilter } from "@/components/admin/AdminUsersPanel";
+import { AdminTestersPanel } from "@/components/admin/AdminTestersPanel";
+import { AdminPalette } from "@/components/admin/AdminPalette";
+import { PanelHeader, QueueRow, shortDate, StatTile, Tag } from "@/components/admin/ui";
 
-const formatBytes = (bytes: number): string => {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+type View = "overview" | "users" | "orgs" | "testers";
+
+const TITLES: Record<View, [string, string]> = {
+  overview: ["Overview", "Everything that needs an admin decision today"],
+  users: ["Users", "Search, filter, and manage accounts in place"],
+  orgs: ["Organizations", "Licenses, members, and shared credit pools"],
+  testers: ["Beta testers", "Grant, revoke, and track tester access"],
 };
 
-// ---------------------------------------------------------------------------
-// TesterGrantsPanel — grant / revoke beta tester access
-// ---------------------------------------------------------------------------
-
-const TesterGrantsPanel = () => {
-  const grantsQuery = useTesterGrants();
-  const createGrant = useCreateTesterGrant();
-  const revokeGrant = useRevokeTesterGrant();
-
-  const [email, setEmail] = useState("");
-  const [expiresAt, setExpiresAt] = useState("");
-  const [reason, setReason] = useState("");
-
-  // Autocomplete: search existing users by email as the admin types.
-  //
-  // - useDeferredValue lets React keep the input snappy while the network
-  //   request and downstream render lag behind a tick or two (Vercel rule
-  //   rerender-use-deferred-value). The React Query call is keyed by the
-  //   deferred value, so it doesn't re-fetch on every keystroke when the user
-  //   is typing fast.
-  // - 2-char minimum avoids a noisy first-keystroke fetch returning every user.
-  // - React Query caches by {search, page} for 30s, so backtracking is free.
-  const emailQuery = email.trim();
-  const deferredQuery = useDeferredValue(emailQuery);
-  const suggestionsQuery = useAdminUsers(deferredQuery, 1, 10);
-  const showSuggestions = deferredQuery.length >= 2;
-  const suggestions = showSuggestions ? (suggestionsQuery.data?.users ?? []) : [];
-
-  // Dropdown UI state.
-  const [isOpen, setIsOpen] = useState(false);
-  const [highlightedIndex, setHighlightedIndex] = useState(-1);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-
-  // Reset the highlight when the suggestion set changes. Primitive dep
-  // (length) per Vercel rule rerender-dependencies — referencing the array
-  // would refire every render.
-  useEffect(() => {
-    setHighlightedIndex(suggestions.length > 0 ? 0 : -1);
-  }, [suggestions.length]);
-
-  // Single document-level mousedown listener while the dropdown is open;
-  // cleaned up on close so we don't leak listeners across re-renders.
-  useEffect(() => {
-    if (!isOpen) return;
-    const onMouseDown = (e: MouseEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onMouseDown);
-    return () => document.removeEventListener("mousedown", onMouseDown);
-  }, [isOpen]);
-
-  // Keep the highlighted item visible when arrowing past the viewport edge.
-  useEffect(() => {
-    if (highlightedIndex < 0 || !listRef.current) return;
-    const item = listRef.current.children[highlightedIndex] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: "nearest" });
-  }, [highlightedIndex]);
-
-  const handleSelect = (selectedEmail: string) => {
-    setEmail(selectedEmail);
-    setIsOpen(false);
-    setHighlightedIndex(-1);
-  };
-
-  const handleEmailKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!isOpen) {
-      if (e.key === "ArrowDown" && suggestions.length > 0) {
-        e.preventDefault();
-        setIsOpen(true);
-        setHighlightedIndex(0);
-      }
-      return;
-    }
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        setHighlightedIndex((i) => Math.min(i + 1, suggestions.length - 1));
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        setHighlightedIndex((i) => Math.max(i - 1, 0));
-        break;
-      case "Enter": {
-        const picked = suggestions[highlightedIndex]?.email;
-        if (picked) {
-          e.preventDefault();
-          handleSelect(picked);
-        }
-        break;
-      }
-      case "Escape":
-        e.preventDefault();
-        setIsOpen(false);
-        break;
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim()) return;
-
-    try {
-      await createGrant.mutateAsync({
-        email: email.trim(),
-        expires_at: expiresAt ? expiresAt : null,
-        reason: reason.trim() || "tester",
-      });
-      toast.success(`Granted tester access to ${email.trim()}`);
-      setEmail("");
-      setExpiresAt("");
-      setReason("");
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        toast.error(`User ${email.trim()} hasn't signed up yet. Ask them to register first.`);
-      } else {
-        toast.error("Failed to grant tester access. Try again.");
-      }
-    }
-  };
-
-  const handleRevoke = async (userId: string) => {
-    try {
-      await revokeGrant.mutateAsync(userId);
-      toast.success("Tester access revoked.");
-    } catch {
-      toast.error("Failed to revoke tester access. Try again.");
-    }
-  };
-
-  return (
-    <Card className="p-4 mb-6">
-      <div className="text-sm font-semibold mb-4">Beta Tester Access</div>
-
-      {/* Grant form */}
-      <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 mb-6">
-        <label className="text-xs flex-1 min-w-[200px]">
-          Email (required)
-          <div ref={containerRef} className="relative mt-1">
-            <Input
-              type="email"
-              required
-              placeholder="user@example.com"
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                setIsOpen(true);
-              }}
-              onFocus={() => setIsOpen(true)}
-              onKeyDown={handleEmailKeyDown}
-              autoComplete="off"
-              role="combobox"
-              aria-expanded={isOpen && suggestions.length > 0}
-              aria-controls="tester-email-suggestions"
-              aria-activedescendant={
-                highlightedIndex >= 0 ? `tester-suggestion-${highlightedIndex}` : undefined
-              }
-            />
-            {isOpen && showSuggestions && (
-              <div
-                id="tester-email-suggestions"
-                role="listbox"
-                ref={listRef}
-                className="absolute z-50 mt-1 w-full max-h-60 overflow-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md"
-              >
-                {suggestionsQuery.isLoading && suggestions.length === 0 && (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">Searching…</div>
-                )}
-                {!suggestionsQuery.isLoading && suggestions.length === 0 && (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">No matches</div>
-                )}
-                {suggestions.map((u, i) =>
-                  u.email ? (
-                    <button
-                      type="button"
-                      key={u.id}
-                      id={`tester-suggestion-${i}`}
-                      role="option"
-                      aria-selected={i === highlightedIndex}
-                      onMouseDown={(e) => {
-                        // mousedown (not click) so we beat the document mousedown
-                        // close-on-outside handler — by the time click fires the
-                        // dropdown would already be closed.
-                        e.preventDefault();
-                        handleSelect(u.email!);
-                      }}
-                      onMouseEnter={() => setHighlightedIndex(i)}
-                      className={cn(
-                        "w-full text-left px-3 py-2 text-sm flex flex-col gap-0.5",
-                        i === highlightedIndex
-                          ? "bg-accent text-accent-foreground"
-                          : "hover:bg-accent/60",
-                      )}
-                    >
-                      <span className="font-medium">{u.email}</span>
-                      <span className="text-[11px] text-muted-foreground">
-                        {u.tier === "pro" ? "Pro" : "Free"}
-                        {u.is_admin || u.is_env_admin ? " · Admin" : ""}
-                        {u.has_override ? " · Override" : ""}
-                      </span>
-                    </button>
-                  ) : null,
-                )}
-              </div>
-            )}
-          </div>
-        </label>
-        <label className="text-xs w-40">
-          Expires (optional)
-          <Input
-            type="date"
-            value={expiresAt}
-            onChange={(e) => setExpiresAt(e.target.value)}
-            className="mt-1"
-          />
-        </label>
-        <label className="text-xs flex-1 min-w-[160px]">
-          Reason (optional)
-          <Input
-            type="text"
-            placeholder="tester"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            className="mt-1"
-          />
-        </label>
-        <Button type="submit" size="sm" disabled={createGrant.isPending} className="mb-0.5">
-          Grant Tester Access
-        </Button>
-      </form>
-
-      {/* Active grants table */}
-      <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Active grants</div>
-      <table className="w-full text-sm">
-        <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-          <tr>
-            <th className="px-3 py-2 font-medium">User</th>
-            <th className="px-3 py-2 font-medium">Expires</th>
-            <th className="px-3 py-2 font-medium text-right">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {grantsQuery.isLoading && (
-            <tr>
-              <td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">
-                Loading...
-              </td>
-            </tr>
-          )}
-          {!grantsQuery.isLoading && grantsQuery.data?.length === 0 && (
-            <tr>
-              <td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">
-                No active tester grants.
-              </td>
-            </tr>
-          )}
-          {grantsQuery.data?.map((grant) => (
-            <tr key={grant.user_id} className="border-t border-border hover:bg-muted/30">
-              <td className="px-3 py-2">
-                <div className="font-medium">{grant.name || grant.email || grant.user_id}</div>
-                {grant.name && grant.email && (
-                  <div className="text-xs text-muted-foreground">{grant.email}</div>
-                )}
-                {!grant.name && !grant.email && (
-                  <div className="text-xs text-muted-foreground font-mono">{grant.user_id}</div>
-                )}
-              </td>
-              <td className="px-3 py-2 text-muted-foreground">
-                {grant.expires_at ? grant.expires_at.split("T")[0] : "Never"}
-              </td>
-              <td className="px-3 py-2 text-right">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-destructive hover:text-destructive"
-                  onClick={() => handleRevoke(grant.user_id)}
-                  disabled={revokeGrant.isPending}
-                >
-                  Revoke
-                </Button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
-  );
-};
-
-const AdminUsers = () => {
+const AdminConsole = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const [view, setView] = useState<View>("overview");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [filter, setFilter] = useState<UserFilter>("all");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
 
-  const usersQuery = useAdminUsers(search, page);
+  // Own display name for the sidebar chip — profiles.full_name is what the
+  // Profile page writes from first + last name; email is only the fallback for
+  // accounts that never finished onboarding.
+  const { data: me } = useQuery({
+    queryKey: ["profile", user?.id, "name"],
+    enabled: !!user?.id,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", user!.id)
+        .maybeSingle();
+      return data;
+    },
+  });
+  const displayName = me?.full_name?.trim() || user?.email || "Account";
+
+  const orgsQuery = useAdminOrgs();
+  const grantsQuery = useTesterGrants();
+  const orgs = orgsQuery.data ?? [];
+  const grants = grantsQuery.data ?? [];
+  const pendingOrgs = orgs.filter((o) => o.status === "pending");
+  const activeTesters = grants.filter((g) => !g.pending);
+  const pendingInvites = grants.filter((g) => g.pending);
+
   const posthogUrl = import.meta.env.VITE_POSTHOG_DASHBOARD_URL || "https://us.posthog.com";
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  const openUser = (id: string) => {
+    setSelectedUserId(id);
+    setView("users");
+  };
+  const openOrg = (id: string) => {
+    setSelectedOrgId(id);
+    setView("orgs");
+  };
+
+  const nav: { id: View; label: string; icon: typeof Home; count?: number; alert?: number }[] = [
+    { id: "overview", label: "Overview", icon: Home, alert: pendingOrgs.length },
+    { id: "users", label: "Users", icon: Users },
+    { id: "orgs", label: "Organizations", icon: Building2, count: orgs.length },
+    { id: "testers", label: "Beta testers", icon: Beaker, count: activeTesters.length },
+  ];
+
+  const [title, subtitle] = TITLES[view];
+
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate("/")}
-          >
-            <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
-              <Music className="w-5 h-5 text-primary-foreground" />
-            </div>
-            <span className="text-lg font-semibold tracking-tight">Msanii Admin</span>
+    <div className="flex h-screen overflow-hidden bg-muted/40">
+      {/* Sidebar — collapses to an icon rail below md */}
+      <nav className="flex w-16 shrink-0 flex-col border-r border-border bg-card md:w-[236px]">
+        <Link
+          to="/dashboard"
+          title="Back to Msanii"
+          className="group flex items-center gap-2.5 rounded-lg px-3 py-4 hover:bg-muted/70 md:px-4"
+        >
+          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary text-[13px] font-bold text-primary-foreground">
+            M
           </div>
-          <Button variant="ghost" onClick={() => navigate("/dashboard")}>
-            Back to dashboard
-          </Button>
-        </div>
-      </header>
+          <div className="hidden min-w-0 md:block">
+            <b className="text-[15px] tracking-tight">Msanii</b>
+            <span className="block text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Admin
+            </span>
+          </div>
+          <ArrowLeft className="ml-auto hidden h-4 w-4 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 md:block" />
+        </Link>
 
-      <main className="container mx-auto px-4 py-8 max-w-6xl">
-        <h1 className="text-2xl font-semibold tracking-tight mb-6">Users</h1>
-
-        <div className="flex justify-end mb-4">
-          <Button variant="outline" asChild>
-            <a href={posthogUrl} target="_blank" rel="noopener noreferrer">
-              View Analytics ↗
-            </a>
-          </Button>
-        </div>
-
-        <AnalyticsSummaryCard />
-
-        <BehaviorAnalyticsCard />
-
-        <TesterGrantsPanel />
-
-        <div className="flex items-center gap-3 mb-4">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by email…"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              className="pl-9"
+        <div className="flex flex-col gap-0.5 px-2">
+          {nav.map((n) => (
+            <NavButton
+              key={n.id}
+              icon={n.icon}
+              label={n.label}
+              active={view === n.id}
+              onClick={() => setView(n.id)}
+              trailing={
+                n.alert ? (
+                  <span className="ml-auto rounded-full bg-amber-100 px-1.5 font-mono text-[11px] font-semibold text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                    {n.alert}
+                  </span>
+                ) : n.count !== undefined ? (
+                  <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+                    {n.count}
+                  </span>
+                ) : null
+              }
             />
-          </div>
+          ))}
         </div>
 
-        <Card className="overflow-hidden">
-          <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead className="bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3 font-medium">Email</th>
-                <th className="px-4 py-3 font-medium">Tier</th>
-                <th className="px-4 py-3 font-medium">Admin</th>
-                <th className="px-4 py-3 font-medium">Override</th>
-                <th className="px-4 py-3 font-medium">Created</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {usersQuery.isLoading && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
-              )}
-              {usersQuery.error && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-destructive">
-                  Couldn't load users — please refresh.
-                </td></tr>
-              )}
-              {usersQuery.data?.users.map((u: AdminUserRow) => (
-                <tr key={u.id} className="border-t border-border hover:bg-muted/30">
-                  <td className="px-4 py-3">{u.email ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="px-4 py-3">
-                    <Badge variant={u.tier === "pro" ? "default" : "outline"}>
-                      {u.tier === "pro" ? "Pro" : "Free"}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3">
-                    {u.is_env_admin ? (
-                      <Badge variant="secondary">Admin (env)</Badge>
-                    ) : u.is_admin ? (
-                      <Badge variant="secondary">Admin</Badge>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {u.has_override ? "Yes" : "—"}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs">
-                    {u.created_at?.split("T")[0] ?? "—"}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <Button size="sm" variant="ghost" onClick={() => setSelectedUserId(u.id)}>
-                      Manage →
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="mt-4 flex flex-col gap-0.5 px-2">
+          <div className="hidden px-2 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground md:block">
+            Shortcuts
           </div>
-        </Card>
-
-        <div className="flex items-center justify-end gap-2 mt-4">
-          <Button
-            size="sm" variant="outline"
-            disabled={page <= 1}
-            onClick={() => setPage(p => Math.max(1, p - 1))}
-          >
-            ← Prev
-          </Button>
-          <span className="text-sm text-muted-foreground">Page {page}</span>
-          <Button
-            size="sm" variant="outline"
-            disabled={!usersQuery.data?.has_more}
-            onClick={() => setPage(p => p + 1)}
-          >
-            Next →
-          </Button>
+          <NavButton
+            icon={Zap}
+            label="Overrides"
+            onClick={() => {
+              setFilter("override");
+              setView("users");
+            }}
+          />
+          <NavButton
+            icon={LineChart}
+            label="Analytics ↗"
+            onClick={() => window.open(posthogUrl, "_blank", "noopener,noreferrer")}
+          />
+          <NavButton icon={ArrowLeft} label="Back to app" onClick={() => navigate("/dashboard")} />
         </div>
-      </main>
 
-      <UserDetailSheet
-        userId={selectedUserId}
-        onClose={() => setSelectedUserId(null)}
+        <div className="mt-auto border-t border-border/60 p-2">
+          <Link
+            to="/profile"
+            title="Profile & billing"
+            className="flex items-center gap-2.5 rounded-lg p-1.5 hover:bg-muted/70"
+          >
+            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+              {initials(displayName)}
+            </div>
+            <div className="hidden min-w-0 flex-1 md:block">
+              <div className="truncate text-[12.5px] font-semibold leading-tight">{displayName}</div>
+              <div className="text-[11px] text-muted-foreground">Platform admin</div>
+            </div>
+            <ChevronRight className="hidden h-4 w-4 shrink-0 text-muted-foreground md:block" />
+          </Link>
+        </div>
+      </nav>
+
+      {/* Main */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-3 border-b border-border bg-card px-5 py-2.5">
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-semibold tracking-tight">{title}</h1>
+            <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
+          </div>
+          <div className="flex-1" />
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="hidden items-center gap-2 rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-[13px] text-muted-foreground hover:border-primary/40 sm:flex sm:w-56"
+          >
+            <Search className="h-4 w-4 shrink-0" />
+            <span className="truncate">Search users, orgs…</span>
+            <span className="ml-auto rounded border border-border border-b-2 px-1 font-mono text-[10.5px]">
+              ⌘K
+            </span>
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-auto p-5">
+          <div className="mx-auto max-w-[1180px]">
+            {view === "overview" && (
+              <Overview
+                orgs={orgs}
+                pendingOrgs={pendingOrgs}
+                activeTesterCount={activeTesters.length}
+                pendingInviteCount={pendingInvites.length}
+                onOpenOrg={openOrg}
+                onOpenUser={openUser}
+                onGoTo={setView}
+              />
+            )}
+            {view === "users" && (
+              <AdminUsersPanel
+                search={search}
+                onSearchChange={setSearch}
+                page={page}
+                onPageChange={setPage}
+                filter={filter}
+                onFilterChange={setFilter}
+                selectedUserId={selectedUserId}
+                onSelectUser={setSelectedUserId}
+                onOpenOrg={openOrg}
+                onGrantTester={() => setView("testers")}
+              />
+            )}
+            {view === "orgs" && (
+              <AdminOrgsPanel selectedOrgId={selectedOrgId} onSelectOrg={setSelectedOrgId} />
+            )}
+            {view === "testers" && <AdminTestersPanel onSelectUser={openUser} />}
+          </div>
+        </div>
+      </div>
+
+      <AdminPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onGoUser={openUser}
+        onGoOrg={openOrg}
+        actions={[
+          { label: "Grant beta tester access", run: () => setView("testers") },
+          { label: "Review organizations", run: () => setView("orgs") },
+          { label: "Browse all users", run: () => setView("users") },
+          { label: "Back to overview", run: () => setView("overview") },
+        ]}
       />
     </div>
   );
 };
 
-// ---------------------------------------------------------------------------
-// User-detail side sheet
-// ---------------------------------------------------------------------------
-
-interface SheetProps {
-  userId: string | null;
-  onClose: () => void;
+/** "Yash Khapre" → "YK"; falls back to the first two characters of an email. */
+function initials(name: string): string {
+  const words = name.trim().split(/\s+/);
+  if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
 }
 
-const UserDetailSheet = ({ userId, onClose }: SheetProps) => {
-  const detailQuery = useEntitlementsForUser(userId);
-  const { grantPro, revokePro, clearOverride, promoteAdmin, demoteAdmin, recalcStorage } = useAdminMutations();
-  const [overrideOpen, setOverrideOpen] = useState(false);
-  const { user: currentUser } = useAuth();
-  const { captureAdminUserPromoted, captureAdminUserDemoted } = useAnalytics();
+function NavButton({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+  trailing,
+}: {
+  icon: typeof Home;
+  label: string;
+  active?: boolean;
+  onClick: () => void;
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active || undefined}
+      title={label}
+      className={cn(
+        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13.5px] font-medium",
+        active
+          ? "bg-secondary font-semibold text-primary"
+          : "text-muted-foreground hover:bg-muted/70",
+      )}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="hidden truncate md:inline">{label}</span>
+      <span className="hidden md:contents">{trailing}</span>
+    </button>
+  );
+}
 
-  const handleGrant = async () => {
-    if (!userId) return;
-    try {
-      await grantPro.mutateAsync(userId);
-      toast.success("Granted Pro");
-    } catch (e) {
-      toast.error(`Failed: ${(e as Error).message}`);
-    }
-  };
+// ---------------------------------------------------------------------------
+// Overview
+// ---------------------------------------------------------------------------
 
-  const handleRevoke = async () => {
-    if (!userId) return;
-    try {
-      await revokePro.mutateAsync(userId);
-      toast.success("Revoked Pro");
-    } catch (e) {
-      toast.error(`Failed: ${(e as Error).message}`);
-    }
-  };
-
-  const handleClearOverride = async () => {
-    if (!userId) return;
-    try {
-      await clearOverride.mutateAsync(userId);
-      toast.success("Override cleared");
-    } catch (e) {
-      toast.error(`Failed: ${(e as Error).message}`);
-    }
-  };
-
-  const handlePromote = async () => {
-    if (!userId) return;
-    try {
-      await promoteAdmin.mutateAsync(userId);
-      captureAdminUserPromoted(userId);
-      toast.success("Promoted to admin");
-    } catch (e) {
-      toast.error(`Failed: ${(e as Error).message}`);
-    }
-  };
-
-  const handleDemote = async () => {
-    if (!userId) return;
-    try {
-      await demoteAdmin.mutateAsync(userId);
-      captureAdminUserDemoted(userId);
-      toast.success("Demoted from admin");
-    } catch (e) {
-      toast.error(`Failed: ${(e as Error).message}`);
-    }
-  };
-
-  const handleRecalcStorage = async () => {
-    if (!userId) return;
-    try {
-      const res = await recalcStorage.mutateAsync(userId);
-      toast.success(`Storage recalculated: ${formatBytes(res.total_storage_bytes)}`);
-    } catch (e) {
-      toast.error(`Failed: ${(e as Error).message}`);
-    }
-  };
-
-  const data = detailQuery.data;
+function Overview({
+  orgs,
+  pendingOrgs,
+  activeTesterCount,
+  pendingInviteCount,
+  onOpenOrg,
+  onOpenUser,
+  onGoTo,
+}: {
+  orgs: AdminOrgRow[];
+  pendingOrgs: AdminOrgRow[];
+  activeTesterCount: number;
+  pendingInviteCount: number;
+  onOpenOrg: (id: string) => void;
+  onOpenUser: (id: string) => void;
+  onGoTo: (v: View) => void;
+}) {
+  // Page 1 of the unfiltered listing — same query key the Users view uses, so
+  // this warms that table's cache rather than adding a request. The auth admin
+  // API returns newest-first and exposes no total count, which is why there is
+  // no "total users" tile here.
+  const recentQuery = useAdminUsers("", 1);
+  const recent = (recentQuery.data?.users ?? []).slice(0, 5);
+  const poolTotal = orgs.reduce((sum, o) => sum + o.bundleBalance + o.reserveBalance, 0);
+  const lowestPools = [...orgs]
+    .sort((a, b) => a.bundleBalance + a.reserveBalance - (b.bundleBalance + b.reserveBalance))
+    .slice(0, 5);
 
   return (
-    <Sheet open={!!userId} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle>{data?.user.email ?? "Loading…"}</SheetTitle>
-        </SheetHeader>
+    <>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile
+          label="Organizations"
+          value={orgs.length.toLocaleString()}
+          hint={`${pendingOrgs.length} awaiting activation`}
+        />
+        <StatTile
+          label="Credits in pools"
+          value={poolTotal.toLocaleString()}
+          hint={`across ${orgs.length} organization${orgs.length === 1 ? "" : "s"}`}
+        />
+        <StatTile
+          label="Active testers"
+          value={activeTesterCount.toLocaleString()}
+          hint={`${pendingInviteCount} invite${pendingInviteCount === 1 ? "" : "s"} awaiting first sign-in`}
+        />
+        <StatTile
+          label="Pending invites"
+          value={pendingInviteCount.toLocaleString()}
+          hint="activate on first verified sign-in"
+        />
+      </div>
 
-        {detailQuery.isLoading && (
-          <div className="py-8 flex items-center justify-center">
-            <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      <Card className="mb-4 overflow-hidden p-0">
+        <PanelHeader
+          title="Needs your attention"
+          subtitle="Licenses waiting on credits before they activate"
+        >
+          {pendingOrgs.length > 0 ? (
+            <Tag tone="warn">{pendingOrgs.length} open</Tag>
+          ) : (
+            <Tag tone="ok">Clear</Tag>
+          )}
+        </PanelHeader>
+        {pendingOrgs.length === 0 && (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            Nothing needs an admin decision right now.
           </div>
         )}
-
-        {data && (
-          <div className="space-y-6 mt-6">
-            <div className="text-xs text-muted-foreground">
-              User since {data.user.created_at?.split("T")[0] ?? "—"}
+        {pendingOrgs.map((o) => (
+          <QueueRow key={o.id}>
+            <Tag tone="warn">Activation</Tag>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13.5px] font-medium">{o.name ?? "Organization"}</div>
+              <div className="text-xs text-muted-foreground">
+                {o.cumulativePaidIn.toLocaleString()} of {o.activationFloor.toLocaleString()} credits
+                paid in · {o.memberCount} member{o.memberCount === 1 ? "" : "s"}
+              </div>
             </div>
+            <Button size="sm" variant="outline" onClick={() => onOpenOrg(o.id)}>
+              Review
+            </Button>
+          </QueueRow>
+        ))}
+      </Card>
 
-            {/* Tier */}
-            <section>
-              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Tier</div>
-              <div className="flex items-center gap-2">
-                <Badge variant={data.entitlements.tier === "pro" ? "default" : "outline"}>
-                  {data.entitlements.tier === "pro" ? "Pro" : "Free"}
-                </Badge>
-                {data.entitlements.tier === "free" ? (
-                  <Button size="sm" onClick={handleGrant} disabled={grantPro.isPending}>
-                    Grant Pro
-                  </Button>
-                ) : (
-                  <Button size="sm" variant="outline" onClick={handleRevoke} disabled={revokePro.isPending}>
-                    Revoke Pro
-                  </Button>
-                )}
-              </div>
-            </section>
-
-            {/* Role */}
-            <section>
-              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Role</div>
-              <div className="flex items-center gap-2 flex-wrap">
-                {data.user.is_env_admin ? (
-                  <>
-                    <Badge variant="secondary">Admin (env)</Badge>
-                    <span className="text-xs text-muted-foreground">
-                      Managed via ADMIN_EMAILS — edit env to revoke.
-                    </span>
-                  </>
-                ) : data.user.is_admin ? (
-                  <>
-                    <Badge variant="secondary">Admin</Badge>
-                    {currentUser?.id === userId ? (
-                      <span className="text-xs text-muted-foreground">
-                        (cannot demote yourself)
-                      </span>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={handleDemote}
-                        disabled={demoteAdmin.isPending}
-                      >
-                        Demote
-                      </Button>
-                    )}
-                  </>
-                ) : (
-                  <Button
-                    size="sm"
-                    onClick={handlePromote}
-                    disabled={promoteAdmin.isPending}
-                  >
-                    Promote to admin
-                  </Button>
-                )}
-              </div>
-            </section>
-
-            {/* Override */}
-            <section>
-              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Override</div>
-              <div className="text-sm mb-2">
-                {data.entitlements.hasOverrides ? "Active override applied" : "No override"}
-              </div>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => setOverrideOpen(true)}>
-                  {data.entitlements.hasOverrides ? "Edit override" : "Apply override"}
-                </Button>
-                {data.entitlements.hasOverrides && (
-                  <Button size="sm" variant="ghost" onClick={handleClearOverride} disabled={clearOverride.isPending}>
-                    Clear override
-                  </Button>
-                )}
-              </div>
-            </section>
-
-            {/* Usage */}
-            <section>
-              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Current usage</div>
-              <div className="space-y-1 text-sm">
-                <div className="flex items-center gap-2">
-                  <span>Storage: <span className="font-medium">{formatBytes(data.entitlements.usage.totalStorageBytes)}</span></span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 px-2 text-xs"
-                    onClick={handleRecalcStorage}
-                    disabled={recalcStorage.isPending}
-                  >
-                    {recalcStorage.isPending ? "..." : "Recalculate"}
-                  </Button>
+      <div className="mb-4 grid gap-3 lg:grid-cols-2">
+        <Card className="overflow-hidden p-0">
+          <PanelHeader title="Newest users">
+            <Button size="sm" variant="ghost" onClick={() => onGoTo("users")}>
+              View all
+            </Button>
+          </PanelHeader>
+          {recentQuery.isLoading && (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</div>
+          )}
+          {recent.map((u) => (
+            <QueueRow key={u.id} onClick={() => onOpenUser(u.id)}>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13.5px] font-medium">
+                  {u.name ?? u.email ?? u.id}
                 </div>
-                <div>Split sheets this period: <span className="font-medium">{data.entitlements.usage.splitSheetsThisPeriod}</span></div>
-                <div>Zoe queries this period: <span className="font-medium">{data.entitlements.usage.zoeQueriesThisPeriod}</span></div>
-                <div>OneClick runs this period: <span className="font-medium">{data.entitlements.usage.oneclickRunsThisPeriod}</span></div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {u.name ? u.email : `Joined ${shortDate(u.created_at)}`}
+                </div>
               </div>
-            </section>
-          </div>
-        )}
+              <Tag tone={isPaidTier(u.tier) ? "paid" : "neutral"}>{tierLabel(u.tier)}</Tag>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </QueueRow>
+          ))}
+        </Card>
 
-        {overrideOpen && userId && (
-          <OverrideEditor
-            userId={userId}
-            currentOverride={data?.override ?? null}
-            onDone={() => setOverrideOpen(false)}
-          />
-        )}
-      </SheetContent>
-    </Sheet>
+        <Card className="overflow-hidden p-0">
+          <PanelHeader title="Lowest credit pools">
+            <Button size="sm" variant="ghost" onClick={() => onGoTo("orgs")}>
+              View all
+            </Button>
+          </PanelHeader>
+          {lowestPools.length === 0 && (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+              No organizations yet.
+            </div>
+          )}
+          {lowestPools.map((o) => (
+            <QueueRow key={o.id} onClick={() => onOpenOrg(o.id)}>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13.5px] font-medium">{o.name ?? "Organization"}</div>
+                <div className="text-xs text-muted-foreground">
+                  {o.memberCount} member{o.memberCount === 1 ? "" : "s"} ·{" "}
+                  {o.monthlyDispersalCredits.toLocaleString()}/mo
+                </div>
+              </div>
+              <span className="font-mono font-semibold tabular-nums">
+                {(o.bundleBalance + o.reserveBalance).toLocaleString()}
+              </span>
+            </QueueRow>
+          ))}
+        </Card>
+      </div>
+
+      <AnalyticsSummaryCard />
+      <BehaviorAnalyticsCard />
+    </>
   );
-};
-
-// ---------------------------------------------------------------------------
-// Override editor (inline form within the sheet)
-// ---------------------------------------------------------------------------
-
-interface OverrideEditorProps {
-  userId: string;
-  currentOverride: RawOverride | null;
-  onDone: () => void;
 }
 
-// Normalize a number-or-null override field to its string form for an <input>.
-const numToInput = (v: number | null | undefined): string =>
-  v === null || v === undefined ? "" : String(v);
-
-// Same as numToInput but also treats -1 (the "unlimited" sentinel) as empty,
-// since unlimited is represented by a separate checkbox in the UI.
-const numToInputOrEmpty = (v: number | null | undefined): string =>
-  v === null || v === undefined || v === -1 ? "" : String(v);
-
-// Normalize a tri-state bool override field to the select's value.
-const boolToSelect = (v: boolean | null | undefined): "" | "true" | "false" =>
-  v === null || v === undefined ? "" : v ? "true" : "false";
-
-const ALL_INTEGRATIONS = ["google_drive", "slack"] as const;
-
-const OverrideEditor = ({ userId, currentOverride, onDone }: OverrideEditorProps) => {
-  const { applyOverride } = useAdminMutations();
-
-  // Inputs pre-fill from currentOverride and are re-submitted with their current
-  // values (the editor doesn't omit unchanged fields). Why this is safe: Supabase
-  // upsert uses PostgREST merge-duplicates → INSERT ... ON CONFLICT DO UPDATE SET
-  // col = EXCLUDED.col for fields in the payload only. Re-submitting the same
-  // value is a no-op write; columns not in the payload are not touched.
-  //
-  // Known UX limitation: clearing an input (deleting the pre-filled value) is
-  // silently ignored — handleSubmit skips empty fields, so the existing override
-  // value stays in the DB. To remove individual override fields, admins must use
-  // "Clear override" (full row delete) and re-apply with only the fields they
-  // want to keep. Helper text below the form makes this explicit.
-
-  // Caps (numbers — null/undefined → empty string; -1 → empty since unlimited
-  // is represented by the separate checkbox)
-  const [maxArtists, setMaxArtists] = useState(numToInputOrEmpty(currentOverride?.max_artists));
-  const [maxProjects, setMaxProjects] = useState(numToInputOrEmpty(currentOverride?.max_projects));
-  const [maxTasks, setMaxTasks] = useState(numToInputOrEmpty(currentOverride?.max_tasks));
-  // Storage stored as bytes in DB; admin enters GB for ergonomics
-  const [maxStorageGb, setMaxStorageGb] = useState(
-    currentOverride?.max_storage_bytes != null && currentOverride.max_storage_bytes !== -1
-      ? String(currentOverride.max_storage_bytes / (1024 * 1024 * 1024))
-      : "",
-  );
-  const [maxSplitSheets, setMaxSplitSheets] = useState(numToInputOrEmpty(currentOverride?.max_split_sheets_per_month));
-
-  // "Unlimited" flags — when true, the corresponding input is disabled and -1
-  // is sent on submit. Pre-fill from currentOverride: -1 → unlimited checked.
-  const [maxArtistsUnlimited, setMaxArtistsUnlimited] = useState(currentOverride?.max_artists === -1);
-  const [maxProjectsUnlimited, setMaxProjectsUnlimited] = useState(currentOverride?.max_projects === -1);
-  const [maxTasksUnlimited, setMaxTasksUnlimited] = useState(currentOverride?.max_tasks === -1);
-  const [maxStorageUnlimited, setMaxStorageUnlimited] = useState(currentOverride?.max_storage_bytes === -1);
-  const [maxSplitSheetsUnlimited, setMaxSplitSheetsUnlimited] = useState(currentOverride?.max_split_sheets_per_month === -1);
-
-  // Feature flags (tri-state)
-  const [zoe, setZoe] = useState(boolToSelect(currentOverride?.zoe_enabled));
-  const [oneclick, setOneclick] = useState(boolToSelect(currentOverride?.oneclick_enabled));
-  const [registry, setRegistry] = useState(boolToSelect(currentOverride?.registry_enabled));
-
-  // Integrations — checkboxes; null override = "use tier default"
-  const [integrationsOverridden, setIntegrationsOverridden] = useState(
-    currentOverride?.integrations_allowed != null,
-  );
-  const [integrations, setIntegrations] = useState<string[]>(
-    currentOverride?.integrations_allowed ?? [],
-  );
-
-  const [reason, setReason] = useState(currentOverride?.reason ?? "");
-  const [expiresDays, setExpiresDays] = useState<string>("");  // expiry is set anew each save
-
-  const toggleIntegration = (name: string) => {
-    setIntegrations((prev) =>
-      prev.includes(name) ? prev.filter((i) => i !== name) : [...prev, name],
-    );
-  };
-
-  const handleSubmit = async () => {
-    const payload: OverridePayloadInput = {};
-
-    // Caps — Unlimited flag wins; otherwise parse the number input if non-empty.
-    if (maxArtistsUnlimited) payload.max_artists = -1;
-    else if (maxArtists.trim() !== "") payload.max_artists = parseInt(maxArtists, 10);
-
-    if (maxProjectsUnlimited) payload.max_projects = -1;
-    else if (maxProjects.trim() !== "") payload.max_projects = parseInt(maxProjects, 10);
-
-    if (maxTasksUnlimited) payload.max_tasks = -1;
-    else if (maxTasks.trim() !== "") payload.max_tasks = parseInt(maxTasks, 10);
-
-    if (maxStorageUnlimited) payload.max_storage_bytes = -1;
-    else if (maxStorageGb.trim() !== "")
-      payload.max_storage_bytes = Math.round(parseFloat(maxStorageGb) * 1024 * 1024 * 1024);
-
-    if (maxSplitSheetsUnlimited) payload.max_split_sheets_per_month = -1;
-    else if (maxSplitSheets.trim() !== "") payload.max_split_sheets_per_month = parseInt(maxSplitSheets, 10);
-
-    // Feature toggles
-    if (zoe) payload.zoe_enabled = zoe === "true";
-    if (oneclick) payload.oneclick_enabled = oneclick === "true";
-    if (registry) payload.registry_enabled = registry === "true";
-
-    // Integrations — only include if "override integrations" is checked
-    if (integrationsOverridden) payload.integrations_allowed = integrations;
-
-    if (reason.trim()) payload.reason = reason.trim();
-    if (expiresDays.trim()) payload.expires_days = parseInt(expiresDays, 10);
-
-    if (Object.keys(payload).length === 0) {
-      toast.error("Set at least one field");
-      return;
-    }
-
-    try {
-      await applyOverride.mutateAsync({ userId, payload });
-      toast.success("Override applied");
-      onDone();
-    } catch (e) {
-      toast.error(`Failed: ${(e as Error).message}`);
-    }
-  };
-
-  return (
-    <Card className="p-4 mt-6 space-y-3">
-      <div className="text-sm font-medium">
-        Override fields {currentOverride ? "(pre-filled with current values)" : "(only set what you want to override)"}
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="text-xs space-y-1">
-          <label className="block">
-            Max artists
-            <Input
-              type="number"
-              value={maxArtists}
-              onChange={(e) => setMaxArtists(e.target.value)}
-              placeholder="—"
-              disabled={maxArtistsUnlimited}
-              className={maxArtistsUnlimited ? "opacity-50" : ""}
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={maxArtistsUnlimited}
-              onChange={(e) => setMaxArtistsUnlimited(e.target.checked)}
-            />
-            Unlimited
-          </label>
-        </div>
-        <div className="text-xs space-y-1">
-          <label className="block">
-            Max projects
-            <Input
-              type="number"
-              value={maxProjects}
-              onChange={(e) => setMaxProjects(e.target.value)}
-              placeholder="—"
-              disabled={maxProjectsUnlimited}
-              className={maxProjectsUnlimited ? "opacity-50" : ""}
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={maxProjectsUnlimited}
-              onChange={(e) => setMaxProjectsUnlimited(e.target.checked)}
-            />
-            Unlimited
-          </label>
-        </div>
-        <div className="text-xs space-y-1">
-          <label className="block">
-            Max tasks
-            <Input
-              type="number"
-              value={maxTasks}
-              onChange={(e) => setMaxTasks(e.target.value)}
-              placeholder="—"
-              disabled={maxTasksUnlimited}
-              className={maxTasksUnlimited ? "opacity-50" : ""}
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={maxTasksUnlimited}
-              onChange={(e) => setMaxTasksUnlimited(e.target.checked)}
-            />
-            Unlimited
-          </label>
-        </div>
-        <div className="text-xs space-y-1">
-          <label className="block">
-            Max storage (GB)
-            <Input
-              type="number"
-              step="0.1"
-              value={maxStorageGb}
-              onChange={(e) => setMaxStorageGb(e.target.value)}
-              placeholder="—"
-              disabled={maxStorageUnlimited}
-              className={maxStorageUnlimited ? "opacity-50" : ""}
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={maxStorageUnlimited}
-              onChange={(e) => setMaxStorageUnlimited(e.target.checked)}
-            />
-            Unlimited
-          </label>
-        </div>
-        <div className="text-xs space-y-1">
-          <label className="block">
-            Max split sheets / month
-            <Input
-              type="number"
-              value={maxSplitSheets}
-              onChange={(e) => setMaxSplitSheets(e.target.value)}
-              placeholder="—"
-              disabled={maxSplitSheetsUnlimited}
-              className={maxSplitSheetsUnlimited ? "opacity-50" : ""}
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={maxSplitSheetsUnlimited}
-              onChange={(e) => setMaxSplitSheetsUnlimited(e.target.checked)}
-            />
-            Unlimited
-          </label>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-3">
-        <label className="text-xs">
-          Zoe enabled
-          <select className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={zoe} onChange={(e) => setZoe(e.target.value as typeof zoe)}>
-            <option value="">— (use tier default)</option><option value="true">Yes</option><option value="false">No</option>
-          </select>
-        </label>
-        <label className="text-xs">
-          OneClick enabled
-          <select className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={oneclick} onChange={(e) => setOneclick(e.target.value as typeof oneclick)}>
-            <option value="">— (use tier default)</option><option value="true">Yes</option><option value="false">No</option>
-          </select>
-        </label>
-        <label className="text-xs">
-          Registry enabled
-          <select className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={registry} onChange={(e) => setRegistry(e.target.value as typeof registry)}>
-            <option value="">— (use tier default)</option><option value="true">Yes</option><option value="false">No</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="space-y-2">
-        <label className="flex items-center gap-2 text-xs">
-          <input type="checkbox" checked={integrationsOverridden}
-                 onChange={(e) => setIntegrationsOverridden(e.target.checked)} />
-          Override integrations (uncheck to use tier default)
-        </label>
-        {integrationsOverridden && (
-          <div className="flex flex-wrap gap-3 pl-6">
-            {ALL_INTEGRATIONS.map((name) => (
-              <label key={name} className="flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={integrations.includes(name)}
-                  onChange={() => toggleIntegration(name)}
-                />
-                {name.replace("_", " ")}
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <label className="text-xs block">
-        Reason (optional)
-        <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Beta tester comp" />
-      </label>
-      <label className="text-xs block">
-        Expires in N days (optional, leave empty for no expiry)
-        <Input type="number" value={expiresDays} onChange={(e) => setExpiresDays(e.target.value)} placeholder="—" />
-      </label>
-
-      <p className="text-xs text-muted-foreground border-t border-border pt-3">
-        Heads up: deleting a pre-filled value or switching a feature back to "—"
-        is silently ignored — Save preserves the existing override field. To
-        remove individual overrides, use <strong>Clear override</strong> and
-        re-apply with only the fields you want to keep.
-      </p>
-
-      <div className="flex justify-end gap-2 pt-2">
-        <Button variant="ghost" size="sm" onClick={onDone}>Cancel</Button>
-        <Button size="sm" onClick={handleSubmit} disabled={applyOverride.isPending}>Save</Button>
-      </div>
-    </Card>
-  );
-};
-
-export default AdminUsers;
+export default AdminConsole;

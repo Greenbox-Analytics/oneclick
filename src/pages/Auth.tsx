@@ -39,7 +39,10 @@ const Auth = () => {
         title: "Success!",
         description: "You have been signed in.",
       });
-      navigate(redirectTo);
+      // `replace`: the sign-in form must not sit in history behind the app —
+      // Back from the landing page would otherwise show a login screen to an
+      // already-signed-in user.
+      navigate(redirectTo, { replace: true });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : undefined;
       toast({
@@ -61,7 +64,7 @@ const Auth = () => {
         title: "Welcome!",
         description: "Check your email to confirm your account.",
       });
-      navigate("/auth/confirm-email", { state: { email: signUpEmail } });
+      navigate("/auth/confirm-email", { state: { email: signUpEmail }, replace: true });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : undefined;
       toast({

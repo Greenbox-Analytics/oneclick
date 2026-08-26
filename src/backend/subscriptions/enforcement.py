@@ -1,14 +1,16 @@
 """Thin wrappers around EntitlementsService.can() that raise HTTPException(402)
 on denial. One-line gates at endpoint entry; consistent error shape."""
 
+import hashlib
 import logging
+import uuid
 
 from fastapi import HTTPException
 
 from analytics import capture as analytics_capture
 from subscriptions.deps import _get_entitlements_service
-from subscriptions.models import Action
-from subscriptions.service import EntitlementsService
+from subscriptions.models import Action, CreditAction, CreditGrant
+from subscriptions.service import EntitlementsService, credits_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,7 @@ _RESOURCE_TO_ACTION = {
     "artist": Action.CREATE_ARTIST,
     "project": Action.CREATE_PROJECT,
     "task": Action.CREATE_TASK,
+    "work": Action.CREATE_WORK,
     # "board" intentionally absent — cap dropped in SP3
 }
 
@@ -25,8 +28,20 @@ def _service() -> EntitlementsService:
     return _get_entitlements_service()
 
 
-def gated_create(user_id: str, resource: str, current_count: int) -> None:
-    """402 if user is at the create cap for this resource."""
+def gated_create(
+    user_id: str,
+    resource: str,
+    current_count: int,
+    resource_project_id: str | None = None,
+) -> None:
+    """402 if user is at the create cap for this resource.
+
+    `resource_project_id` (Licensing Phase C) is the project the resource will
+    live in; when it is linked to an org where the caller holds an active seat,
+    the org's (unlimited) count caps apply — threaded into can() (rule 9). Only
+    CREATE_WORK derives; other resources ignore it. Default None → today's
+    personal cap check, byte-identical.
+    """
     action = _RESOURCE_TO_ACTION.get(resource)
     if action is None:
         # Unknown resource — silently no-op so a typo doesn't block requests,
@@ -36,7 +51,7 @@ def gated_create(user_id: str, resource: str, current_count: int) -> None:
             resource,
         )
         return
-    result = _service().can(user_id, action, current_count=current_count)
+    result = _service().can(user_id, action, current_count=current_count, resource_project_id=resource_project_id)
     if not result.allowed:
         analytics_capture(
             user_id,
@@ -75,13 +90,18 @@ def gated_upload(
     user_id: str,
     size: int,
     host_user_id: str | None = None,
+    resource_project_id: str | None = None,
 ) -> None:
-    """402 if upload would exceed the project owner's storage cap."""
+    """402 if upload would exceed the project owner's storage cap.
+
+    `resource_project_id` (Licensing Phase C) is the project being uploaded to;
+    when the caller IS the storage-counter owner AND that project is linked to
+    an org where they hold an active seat, the org's larger seat storage applies
+    (rule 9 — derivation NEVER fires when host_user_id is a different owner).
+    Default None → today's owner-scoped check, byte-identical.
+    """
     result = _service().can(
-        user_id,
-        Action.UPLOAD_BYTES,
-        size=size,
-        host_user_id=host_user_id,
+        user_id, Action.UPLOAD_BYTES, size=size, host_user_id=host_user_id, resource_project_id=resource_project_id
     )
     if not result.allowed:
         analytics_capture(
@@ -109,3 +129,127 @@ def gated_split_sheet(user_id: str) -> None:
             },
         )
         raise HTTPException(status_code=402, detail=result.reason or "Split sheet limit reached")
+
+
+# Legacy feature-flag equivalent for each credit action (fallback when
+# CREDITS_ENABLED is off — preserves today's behavior exactly).
+_CREDIT_TO_LEGACY = {
+    CreditAction.ZOE_MESSAGE: Action.USE_ZOE,
+    CreditAction.ONECLICK_RUN: Action.USE_ONECLICK,
+    CreditAction.REGISTRY_PARSE: Action.USE_REGISTRY,
+    # Legacy mode reproduces today's behavior exactly: the cap, and only the cap.
+    CreditAction.SPLIT_SHEET: Action.GENERATE_SPLIT_SHEET,
+}
+
+
+def gated_credits(
+    user_id: str,
+    action: CreditAction,
+    host_user_id: str | None = None,
+    *,
+    resource_project_id: str | None = None,
+    resource_contract_ids: list[str] | None = None,
+    dedupe_key: str | None = None,
+) -> CreditGrant:
+    """Credit gate for metered AI actions. Returns a CreditGrant to hand to
+    debit_for_action() after the action SUCCEEDS (charge-on-success, spec §3).
+
+    request_id is a fresh uuid4 per invocation: internal RPC retries dedupe on
+    it; an intentional user re-run is a new invocation and charges again.
+    The ACTING user pays — host_user_id only feeds the legacy fallback.
+
+    `dedupe_key` identifies the DELIVERABLE (not the request) and makes the
+    debit idempotent for the rest of the billing period. Pass it when the same
+    inputs must not be charged twice — cache hits, where the user gets nothing
+    new on a re-run. The debit_credits RPC fast-paths a repeated request_id and
+    returns {'duplicate': true} without writing a second row, so this needs no
+    RPC change. Omit it for real work: an intentional re-run charges again.
+
+    `resource_project_id` / `resource_contract_ids` (Licensing Phase C) are the
+    resource the action operates on; they thread straight into check_credits so
+    an action on an org-linked project bills the linked org's seat (rule 5).
+    Both default None → the pre-Phase-C ambient/personal decision, unchanged.
+    """
+    if not credits_enabled():
+        legacy = _CREDIT_TO_LEGACY.get(action)
+        if legacy is None:
+            # Unmapped CreditAction — fail LOUD (this is a gating path).
+            raise RuntimeError(f"gated_credits: no legacy mapping for {action!r}")
+        gated_feature(user_id, legacy, host_user_id=host_user_id)
+        return CreditGrant(request_id="", action=str(action), price=0, kind="debit", enabled=False)
+
+    result = _service().check_credits(
+        user_id,
+        str(action),
+        resource_project_id=resource_project_id,
+        resource_contract_ids=resource_contract_ids,
+    )
+    if not result.allowed:
+        analytics_capture(
+            user_id,
+            "paywall_blocked",
+            {
+                "kind": "credits",
+                "gate": "credits",
+                "action": str(action),
+                "reason": result.reason,
+                "degraded": result.degraded,
+                "managed_by_org": result.managed_by_org,
+                "cap_reached": result.cap_reached,
+            },
+        )
+        detail = {
+            "reason": result.reason or "Not enough credits.",
+            "price": result.price,
+            "resetDate": result.reset_date.isoformat() if result.reset_date else None,
+            "upgradeRequired": result.upgrade_required,
+            "overageAvailable": result.overage_available,
+        }
+        if result.managed_by_org:
+            # Org wall (Licensing Phase B, rule 8): there is no upgrade / overage
+            # path — the member asks their org admin. `requestUrl` points the wall
+            # at the org member view where the request form lives. `capReached`
+            # splits the two org walls, which have different remedies: the member's
+            # own monthly ceiling (ask for a raise) versus a dry pool (only an admin
+            # buying credits fixes that, so a member sees no actionable CTA).
+            detail["managedByOrg"] = True
+            detail["requestUrl"] = "/teams"
+            detail["capReached"] = result.cap_reached
+        raise HTTPException(status_code=402, detail=detail)
+    request_id = str(uuid.uuid4())
+    if dedupe_key is not None and result.wallet_id:
+        # Deterministic per (action, wallet, deliverable, period). Scoped to the
+        # period so the same cached deliverable is free for the rest of THIS
+        # month and chargeable again next month — the user gets nothing new, so
+        # they pay nothing new. Falls back to uuid4 when there is no wallet to
+        # scope against (legacy / zero-price grants, which never debit anyway).
+        digest = hashlib.sha256(dedupe_key.encode("utf-8")).hexdigest()[:32]
+        period = result.reset_date.isoformat() if result.reset_date else "noperiod"
+        request_id = f"dedupe:{action}:{result.wallet_id}:{digest}:{period}"
+    return CreditGrant(
+        request_id=request_id,
+        action=str(action),
+        price=result.price,
+        kind="overage_debit" if result.use_overage else "debit",
+        enabled=result.price > 0,
+        # Rule 9: the debit targets the exact wallet the check cleared (the org
+        # pool in org context, personal wallet otherwise). None on legacy /
+        # zero-price. `org_member_id` rides along so the debit moves that member's
+        # cap counter under the same lock.
+        wallet_id=result.wallet_id,
+        org_member_id=result.org_member_id,
+    )
+
+
+def free_credit_grant(action: CreditAction) -> CreditGrant:
+    """Grant for a canned, ZERO-DELIVERABLE invocation: skips the wall AND the
+    debit. Exactly ONE caller remains — Zoe's conversational fast-path, where
+    is_zero_cost_query guarantees a canned reply with no LLM call and no answer.
+
+    Result-cache hits are NOT free any more (spec 2026-08-17 §4): a cached parse
+    or calculation hands back the same complete deliverable as a fresh one, so it
+    pays the base rate. The rule is "charge for the deliverable, not the
+    computation" — this helper is for invocations that produce no deliverable at
+    all. Callers gate usage on credits_enabled() so legacy-mode feature gating is
+    preserved when the flag is off."""
+    return CreditGrant(request_id="", action=str(action), price=0, kind="debit", enabled=False)

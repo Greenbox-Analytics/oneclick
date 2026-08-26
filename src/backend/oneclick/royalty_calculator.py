@@ -37,6 +37,8 @@ from utils.contract_parsing.parser import (
 )
 from utils.contract_parsing.split_verification import ReviewResult, SplitFinding, verify_royalty_shares
 from utils.llm.client import get_openai_client
+from utils.llm.model_garden import model_for
+from utils.llm.tracking import submit_with_context
 from utils.text.normalize import find_matching_song, normalize_name, normalize_title, simplify_role
 
 # Configure logging
@@ -742,7 +744,7 @@ class RoyaltyCalculator:
                 )
 
                 response = client.chat.completions.create(
-                    model="gpt-5.4-mini",  # Use a fast/cheap model
+                    model=model_for("oneclick_columns"),
                     messages=[
                         {
                             "role": "system",
@@ -1063,7 +1065,8 @@ class RoyaltyCalculator:
 
             with ThreadPoolExecutor(max_workers=4) as executor:
                 future_to_cid = {
-                    executor.submit(
+                    submit_with_context(
+                        executor,
                         self.contract_parser.parse_contract,
                         full_text=contract_markdowns.get(cid) if contract_markdowns else None,
                     ): cid
@@ -1117,7 +1120,8 @@ class RoyaltyCalculator:
             unavailable_findings: list[SplitFinding] = []
             with ThreadPoolExecutor(max_workers=4) as executor:
                 future_map = {
-                    executor.submit(
+                    submit_with_context(
+                        executor,
                         verify_royalty_shares,
                         contract_markdowns.get(cid) if contract_markdowns else None,
                         data,

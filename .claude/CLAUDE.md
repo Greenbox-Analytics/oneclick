@@ -30,6 +30,27 @@ If a skill plausibly applies, invoke it — don't rationalize skipping it.
 
 **After every new feature or bugfix, run the full verification suite** (frontend build + backend lint + backend tests — see the Verification section below) and confirm everything passes before declaring the work complete. A green local run is the bar; "should work" is not.
 
+## Secrets — NEVER read `.env`
+
+**Do not read, cat, grep, or otherwise load `.env` (or any secrets file) into context.** Not with the Read tool, not via `dotenv_values`/`load_dotenv` in a script you write, not with `grep`/`head`/`sed` — a key that reaches the transcript is a leaked key, even if it is never printed to the user.
+
+Reference secrets **by variable name only**. When a script needs credentials, read them from the process environment and let the shell supply the values:
+
+```python
+# Correct — names only, values never enter context.
+import os
+sb = create_client(os.environ["VITE_SUPABASE_URL"], os.environ["VITE_SUPABASE_SECRET_KEY"])
+```
+
+```bash
+# Correct — the subshell loads the file; the values are never echoed or read back.
+set -a; . .env; set +a; poetry run python my_script.py
+```
+
+Never echo, print, or interpolate a secret's value into command output, a log line, a test fixture, or a file. To confirm a variable is set, test for presence (`[ -n "$KEY" ]`), never print it. If a task genuinely cannot proceed without the user seeing a key, ask them to run the command themselves with `!` rather than reading it yourself.
+
+`.env.example` is safe to read — it holds names and placeholders, no values.
+
 ## Tech Stack
 
 **Frontend:** React 18 + TypeScript, Vite, Tailwind CSS, Radix UI / shadcn components, TanStack React Query, React Router DOM, React Hook Form + Zod, BlockNote (rich text editor)
@@ -98,14 +119,14 @@ src/
 │   ├── main.py             # App entry point, mounts all routers, event handler registration
 │   ├── auth.py             # JWT authentication via Supabase JWKS
 │   ├── pagination.py       # Shared pagination utilities
-│   ├── boards/             # Kanban board management
+│   ├── boards/             # Kanban board management (personal + org-owned)
+│   │   └── authz.py        # can_access_board — Python mirror of the SQL predicate
 │   ├── integrations/       # Third-party integrations
 │   │   ├── oauth.py        # Shared OAuth token management (encryption, refresh, state JWT)
 │   │   ├── events.py       # Internal event bus (emit/subscribe for notifications)
 │   │   ├── connections_router.py  # GET /integrations/connections (list user's connections)
 │   │   ├── google_drive/   # OAuth, file browse, import/export, PDF upload
-│   │   └── slack/          # OAuth, channels, Block Kit notifications, webhook (@mentions)
-│   ├── oneclick/           # Royalty calculation tool + PDF share to Drive/Slack
+│   ├── oneclick/           # Royalty calculation tool + PDF share to Drive
 │   ├── registry/           # Metadata registry (works, stakes, collaborators, licensing, PDF)
 │   ├── splitsheet/         # Split sheet PDF/DOCX generator
 │   ├── settings/           # User/workspace settings
@@ -116,12 +137,12 @@ src/
 │   ├── ui/                 # shadcn base components
 │   ├── oneclick/           # OneClick calculation results, contract/statement selectors
 │   ├── project/            # Project detail tabs (works, files, audio, members, settings)
-│   │   └── integrations/   # Drive import dialog, project Slack settings
+│   │   └── integrations/   # Drive import dialog
 │   ├── profile/            # User profile components
 │   ├── registry/           # Metadata registry panels
 │   ├── workspace/          # Workspace tabs, integration hub, boards
 │   │   ├── boards/         # Kanban board, calendar view, task detail panel
-│   │   └── integrations/   # DrivePanel, SlackPanel (workspace-level config)
+│   │   └── integrations/   # DrivePanel (workspace-level config)
 │   ├── notes/              # BlockNote rich text editor
 │   ├── walkthrough/        # Tool onboarding/walkthrough system
 │   ├── onboarding/         # Onboarding flow steps
@@ -158,13 +179,12 @@ All routers are mounted in `src/backend/main.py`:
 |--------|--------|---------|
 | `/integrations` | Connections | List user's integration connections |
 | `/integrations/google-drive` | Google Drive | OAuth, file browse, import/export, PDF upload |
-| `/integrations/slack` | Slack | OAuth, channels, notification settings, webhook |
 | `/boards` | Boards | Kanban board CRUD |
 | `/settings` | Settings | Workspace settings |
 | `/splitsheet` | Split Sheet | PDF/DOCX generation |
 | `/registry` | Registry | Works, stakes, collaborators, licensing |
 | `/projects` | Projects | Project management |
-| `/oneclick` | OneClick Share | PDF generation + share to Drive/Slack |
+| `/oneclick` | OneClick Share | PDF generation + share to Drive |
 
 Additional endpoints (file upload, Zoe chat, OneClick calculation) are defined directly in `main.py`.
 
@@ -183,15 +203,17 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 | `/tools/oneclick` | OneClick | Royalty calculation entry point |
 | `/tools/zoe` | Zoe | AI contract analysis chat |
 | `/tools/split-sheet` | SplitSheet | Split sheet generator |
-| `/workspace` | Workspace | Kanban boards, calendar, settings |
+| `/workspace` | Workspace | Kanban boards (personal + team), calendar, settings |
+| `/teams` | Organization | Teams/org console (admin + member views); `/organization` is a query-preserving redirect kept for old invite emails and Stripe return URLs — every new link, email, and `requestUrl` must use `/teams` |
 | `/artists` | Artists | Artist profile management |
 
 ## Core Concepts
 
 ### Artists & Projects
-- Users create **artist profiles** (private to the creator — personal docs/notes folder)
+- Users create **artist profiles**. `artists.team_id` decides who owns one: `NULL` = personal (private to the creator), `NOT NULL` = owned by that organization and visible to every ACTIVE member. See `docs/licensing.md`
 - Each artist has **projects** (albums, EPs, singles, etc.)
 - Projects contain **works** (individual tracks/compositions)
+- **`artists.user_id` is the CREATOR, not the owner.** It keeps pointing at whoever made the artist after it is handed to a team. Never write `artists.user_id = auth.uid()` in a policy or query without `AND team_id IS NULL`, and never use it to mean "owner"
 
 ### Metadata Registry
 - Works are registered with ownership stakes (master % and publishing %)
@@ -199,21 +221,58 @@ Each module follows: `router.py` (FastAPI routes) + `service.py` (business logic
 - Collaboration flow: Invited -> Accepted / Declined
 - Work statuses: Draft -> Pending -> Registered
 
-### Dual-Layer Access Control
+### Three-Layer Access Control
+- **Artist ownership** — the personal owner, or every active member of the owning org. Sees the whole subtree: projects, works, files, audio, credentials
 - **Project members** (owner/admin/editor/viewer) — see all works in a project
 - **Work-only collaborators** — see only the specific work they're invited to
-- RLS policies enforce both layers
+- RLS policies enforce all three, and they OR together. The artist layer is expressed once as `can_access_artist(artist_id, auth.uid(), require_admin => false)` — **a new artist-scoped table needs exactly one `FOR ALL` policy calling that function**
 
 ### File Management
 - Files stored in Supabase Storage (`project-files`, `audio-files` buckets)
 - Files linked to projects AND optionally to specific works (via `work_files` join table)
 - Audio files are artist-scoped via `audio_folders` (`audio_files.folder_id → audio_folders.artist_id`), and linkable to specific works via `work_audio_links`
 - SHA-256 content hash for deduplication on upload
+- **Storage attribution follows artist ownership, and lives in TRIGGERS.** `trigger_storage_pf_change` / `trigger_storage_af_change` call `_bump_storage(artist_id, delta)`, which routes bytes to `organizations.storage_bytes` for a team artist and to the creator's `usage_counters` otherwise. `recalc_user_storage` / `recalc_team_storage` are repair paths only — changing just those leaves every real upload charging the wrong side
+- A file cannot cross an ownership boundary: `lock_asset_owner_move` blocks `UPDATE project_files SET project_id = <other owner>`. `WITH CHECK` can't see `OLD` and permissive policies OR, so no policy can express "the owner must not change"
 
 ### Tool Integration
 - **OneClick** reads contracts from portfolio, works, and artist profiles for royalty analysis. Confirmed calculations feed a gated payment ledger (`src/backend/oneclick/royalties/ledger_sync.py` is the ONLY writer of `royalty_lines`) — identity, gates, credits, and invariants are documented in `src/backend/oneclick/ONECLICK.md` ("Royalty Ledger & Payment Tracking"); read that before touching royalties code
 - **Zoe** analyzes contracts tied to works (including shared works where user is a collaborator)
 - Both tools are standalone but read from the shared data model
+
+### Credits (behind `CREDITS_ENABLED`)
+Metered AI actions (Zoe message, OneClick run, Registry contract parse, Registry derive-from-contracts) draw from a per-user **credit wallet** (`credit_wallets` two buckets: `bundle_balance` expires monthly, `reserve_balance` — admin grants and purchased packs — never expires) backed by an append-only `credit_ledger` and transactional RPCs (`debit_credits`/`grant_credits`/`rollover_wallet`, all `SECURITY DEFINER`, service-role only).
+
+**Charges are BASE RATES with a metered tail** (2026-08-17; spec `2026-08-17-credit-base-rates-design.md` supersedes the pure-metering model). `credit_prices` (DB, public read) holds a per-action BASE: **zoe_message 5 / oneclick_run 30 / registry_parse 30 / split_sheet 20**. The charge is `max(base, metered)` — the base is the published price of the deliverable and a FLOOR; the metered half only wins when a run cost more than the base already covers. Metering itself is unchanged and still load-bearing: the `TrackedOpenAI` proxy accumulates real OpenAI cost into a per-request contextvar (`utils/llm/tracking.py` — `llm_usage_totals`, read via `credits_for_llm_usage()`), and `credits_for_cost()` (`ai_pricing.py`) converts it (`cost × CREDIT_MARKUP (default 3.0) ÷ CREDIT_OVERAGE_USD`, rounded up). At a 30-credit base the tail only fires past ~$0.20 of measured cost — roughly 20× a median run, or a derive over ~18 contracts — so `CREDIT_MARKUP` now governs the outlier boundary, not revenue. Fallback to the base happens when cost is unmeasurable: no tracked scope, or a model missing from `MODEL_RATES`. Any new endpoint that reaches an LLM still needs BOTH a `gated_credits` gate and a tracking scope, or its cost leaks entirely.
+
+**A cache hit measures 0 and still pays the base** — the user received the same deliverable, so the cache is our cost optimisation and not their discount. Instead, a **deterministic `request_id`** dedupes it: `gated_credits(dedupe_key=...)` builds `dedupe:{action}:{wallet}:{sha256(deliverable)}:{period_end}`, and the `debit_credits` RPC's existing fast-path duplicate check makes the second debit a no-op with no second ledger row (no RPC change was needed). So one deliverable is charged **once per billing period**. **Key it on `not force_recalculate`, NEVER on "was this a cache hit"** — the common double-charge is fresh-run-then-reconnect, where the fresh run charges under a `uuid4` and the reconnect under the dedupe id. This is a DEBIT-side guarantee only: `check_credits` still requires `balance >= base`, so UI copy says "you won't be charged twice", never "re-running is free". The only genuinely free paths left are Zoe's conversational fast-path (`is_zero_cost_query` = `is_conversational_text AND NOT is_affirmative_text` — **greetings and thanks ONLY**; a substantive question charges), `/oneclick/recalculate-net` and `/oneclick/confirm`. `free_credit_grant()` now has exactly one caller (the Zoe fast-path).
+
+Ledger metadata splits the two halves — `base`, `measurable`, `metered_credits`, and `metered` (true ONLY when the tail decided the amount, so do not read it as "cost was readable"). **`REGISTRY_PARSE` has THREE call sites**, not two: `registry/router.py` parse-contract-splits (one contract per request), `registry/router.py` derive-from-contracts (N contracts but ONE deliverable → one base charge), and the OneClick pair in `main.py`. Split sheets carry TWO gates in `splitsheet/router.py` — the **cap FIRST** (unbuyable, no CTA) then credits — and are charged per FORMAT (`pdf`|`docx` is one per request). `Entitlements.to_dict()`'s `prices` block is **hand-built**: a new `credit_prices` row does not reach the client until that dict gains a line.
+
+**Admins are metered like everyone else** (owner decision, 2026-08-15): `check_credits` has NO admin bypass — `BYPASS_PAYWALLS=true` is the only short-circuit (ops escape hatch). Admin ledger rows are what make the credit system testable by its own operators; admins self-grant when low. Admin-implicit-Pro (unlimited caps/features in `get_for_user`) is unchanged — it's the credit gate that admins don't skip. Also note: `load_dotenv()` runs once at backend startup and `uvicorn --reload` does not watch `.env` — a flag added to `.env` needs a backend restart to take effect.
+
+**The debit MUST be called inside the `set_llm_context` / `iter_with_llm_context` scope** — outside it the accumulator is invisible and the charge silently falls back to the flat estimate. Decision chokepoint: `EntitlementsService.check_credits()`; charge-on-success via `gated_credits()` → `debit_for_action()` at the tool endpoints. Any new endpoint that reaches an LLM needs BOTH a `gated_credits` gate and a tracking scope, or its cost leaks entirely. Overage is opt-in (`/me/billing-prefs`), billed off the request path via Stripe InvoiceItems (daily `POST /internal/billing-sweep` + `invoice.created` webhook). Tiers are Free / Basic / Pro, keyed `free` / `basic` / `pro` (`tier_entitlements.monthly_credits`; renamed from `pro`/`pro_max` in `20260728000001_rename_tier_keys.sql` — pre-rename analytics used `pro` for the $25 plan). Under credits the AI tools are open on every tier including Free (the wallet is the only gate); storage is a hard cap with no pay-per-use. **Flag off = legacy tier gating; the stored feature flags are bypassed in code, never mutated, so it's a true rollback.** Real LLM cost is logged to `ai_usage_log` (via the `TrackedOpenAI` proxy) to calibrate prices; the planning dashboard is `subscriptions/pricing_model/` (`task pricing`).
+
+**Monthly grants: free 150 / basic 2,000 / pro 5,000** (free rescaled 100 → 150 on 2026-08-17 alongside base rates; basic/pro set by the 2026-08-16 rescale). Subscribers paid at merge time keep their pre-rescale grants (basic 3,000 / pro 8,000) via `subscriptions.grandfathered_monthly_credits`, honored only while `now() < grandfathered_until` — stamped ONCE at the backfill from the row's `current_period_end` (a monthly subscriber keeps the old grant until this month's renewal, an annual subscriber until their term ends; `now() + 1 month` when there's no Stripe period). The stamp is never extended — not by interval switches, only a TIER CHANGE ends it, and it ends it EARLY by NULLing both columns immediately in the same webhook write (`handle_subscription_updated`, `handle_subscription_deleted`, and the checkout-completed re-grant when the stored tier differs). Precedence — explicit admin override > unexpired grandfather > tier value — lives in exactly ONE helper, `EntitlementsService._resolve_monthly_grant`, called at all five grant sites (`get_for_user`, `check_credits`, `get_credit_usage`, the sweep's rollover, and the checkout-completed webhook) so a mismatch there can't silently hand two different users two different bundles.
+
+### Licensing / organizations (behind `LICENSING_ENABLED`)
+**Full guide: `docs/licensing.md`. Read it before touching orgs, team artists, or org billing.**
+
+**Team-owned artists are the ownership edge.** `artists.team_id` NULL = personal, NOT NULL = the org owns the artist and everything that hangs off it (ten tables cascade off one row). One `SECURITY DEFINER` predicate — `can_access_artist(artist_id, user_id, require_admin => false)` — answers visibility for every artist-scoped table, so a new table needs exactly one `FOR ALL` policy calling it. `artists.user_id` stays the CREATOR after a transfer, which is why `20260803000002` re-scopes all 21 pre-existing creator-keyed policies with `AND team_id IS NULL` — without that an offboarded member keeps full read/write on the subtree of any artist they created. `team_id` has one writer: `POST /orgs/{id}/artists/{id}/transfer` (one-way in v1, 409 on re-transfer), enforced by the `artists_lock_team_id` trigger, which refuses any change made under an end-user JWT. Artists are created **client-side** (`NewArtist.tsx` and `NewArtistDialog.tsx` — there is no backend `POST /artists`), so `artists_insert_team`'s `WITH CHECK` is the only thing stopping a caller inserting into someone else's team. Storage follows the same edge inside the storage triggers via `_bump_storage`; a team's cap is `ENTERPRISE_SEAT_STORAGE_BYTES` × active seats (the env value is per-seat). **`org_project_links` was retired in `20260804000001`** — a project's payer comes from its artist; any reference to linking/unlinking a project is stale.
+
+**Dispersal + caps** (`20260730000001_dispersal_and_caps.sql` — a fix-forward over the applied `20260721000001_licensing_core.sql`, which still describes the retired seat-wallet shape). An org negotiates a monthly credit volume — set ONLY by a Msanii admin (`PUT /admin/orgs/{id}/dispersal`), never by the org's own admin: any signed-in user can create an org and is auto-made its admin, and dispersed credits count toward the activation floor, so a customer-writable dial would mint free credits and self-activate. The org admin owns `default_member_cap` (dividing what they paid for) via `PUT /orgs/{id}`. The daily sweep rolls the org's **one** pool wallet (`credit_wallets` `owner_type='org'`) each period — pending orgs included: dispersal counts toward the activation floor and auto-activates the org when met (`maybe_activate_org`, shared with pack purchases) — granting `organizations.monthly_dispersal_credits` into the EXPIRING bundle bucket, so an unspent month can't be banked and burned later, while purchased packs (reserve) never expire. Members hold **no wallet**: they spend straight from the pool, bounded by `org_members.monthly_cap` (falling back to `organizations.default_member_cap`, then uncapped). The cap counter (`cap_used`/`cap_period_end`) moves **inside `debit_credits`** under the pool lock — a service pre-check can't stop a member's two concurrent actions both slipping under the ceiling. An over-cap debit is recorded and flagged (`cap_exceeded`), never rejected: charge-on-success means the work already happened.
+
+**Pool visibility is admin-only.** The pool balance — and the dispersal, activation floor, `cumulative_paid_in` and org `storage_bytes` beside it — are commercial facts about the ORG, so only an ACTIVE org admin sees them. Two matching predicates enforce it at the read, never in the UI: `subscriptions.service._pool_visible_to(role)` for the credits payload (`get_for_user` org branch + `_get_credit_usage_org` → `bundleBalance`/`reserveBalance`/`balance` become **None**) and `orgs.service.redact_org_for_role(org, role)` for the org row (`get_org` + `list_my_orgs`, which both `select("*")`). Both default CLOSED, and "admin" means admin AND active — a suspended admin gets the member view, matching `is_org_admin`. **Redaction is None/absent, never 0**: a 0 reads as "the org is out of credits", which a member would act on. A member sees `memberCap`/`memberCapUsed`; with no cap there is no number at all and the UI says "Pulling from org credits pool" (`POOL_ONLY_LABEL`). Frontend surfaces must go through `creditStanding()` in `src/lib/credits.ts` — it returns null for "no number exists", and hand-rolling the cap→balance fallback chain is how `0` gets rendered for a redacted pool. Relatedly, `/me/credits/usage` `tools` is always the CALLER's own spend (`_aggregate_tool_usage(..., org_member_id=...)`, matching `metadata.org_member_id`); org-wide rollups are admin-only on `GET /orgs/{id}/usage`.
+
+**New members start CAPPED, and "no limit" needs a sentinel.** `20260814000001` backfills and defaults `organizations.default_member_cap` to **2,000**, so the chain `org_members.monthly_cap → organizations.default_member_cap → uncapped` now caps a new member out of the box. That closes NULL's old meaning, so `-1` is the explicit "no limit" (the same `-1 = unlimited` idiom `tier_entitlements` uses) at BOTH levels. Three distinct settings on a member row: `N` = own ceiling, `NULL` = inherit the org default, `-1` = no limit. The sentinel is normalized to None/NULL on every read — `EntitlementsService._member_cap`, `orgs.service.effective_member_cap`, and a `CASE` inside `debit_credits` — so nothing above storage ever sees a negative cap; skip any of the three and a -1 member gets flagged `cap_exceeded` on every debit. **Invites live 48h** (`20260814000002`, `orgs.service.INVITE_TTL` for re-invites — keep the two in step) and gain a terminal `expired` status that exists purely to give `expire_stale_invites` (daily, from the billing sweep) a one-shot edge to notify the inviting admin off; the status UPDATE is filtered on `pending` and IS the claim, so a retry notifies nobody. `get_pending_invites` also filters `expires_at`, since a lapsed row reads `pending` until the sweep catches it.
+
+**An invite notification is a to-do, not a message.** Its Accept/Decline buttons are gated on `notification.read`, so anything that marks it read strands the invite — which is why `registry.service.mark_all_notifications_read` skips actionable invite rows (a PostgREST `.or_` filter that is the exact negation of `NotificationRow.tsx`'s `isOrgInvite` — `type == 'invitation' AND entity_type == 'org'`) and why accept/decline close their own row via `mark_invite_notifications_read`. Never mark an invite row read except by actioning it.
+
+**Self-serve teams (spec `2026-08-15-pricing-tiers-teams`; "teams" = "orgs", same table).** `organizations.kind` is `self_serve` | `enterprise` (existing orgs backfilled `enterprise`). Enterprise keeps today's negotiated model and is now admin-created ONLY — `POST /admin/orgs` + `PUT /admin/orgs/{id}/kind`, the ONLY producers of `kind='enterprise'` rows — because plain `POST /orgs` is now self-serve and slot-gated (both flags on: `kind='self_serve'`, born `active`, no activation floor — the slot IS the activation; `LICENSING_ENABLED` on with `CREDITS_ENABLED` off is a 503, never a silent fall-through to an ungoverned enterprise row). Team slots (teams a tier may COVER) are Basic 1 / Pro 3; team sizes (members EXCLUDING the covering owner) are 3 / 10 — `tier_entitlements.max_teams`/`max_team_members`/`team_storage_bytes`, and a Msanii admin's own dials resolve as Pro regardless of their subscription tier. Pro's 10 isn't flat: seats unlock in blocks of `SEATS_PER_PRO` (5, `orgs/service.py`) per Pro member, the covering owner counting as the first Pro for free — `effective_limit = min(max_team_members, SEATS_PER_PRO * (1 + pro_member_count))`, so a lone Pro coverer gets 5 and a second Pro member joining unlocks the full 10; Basic's 3-cap sits below `SEATS_PER_PRO` so the formula never engages there. `pro_member_count` reads each other active member's tier via `orgs.standing.resolve_tier_for_user` (the same admin-implicit-Pro resolution `team_dials_for_user` uses, factored out so the two can't drift). This gates ADDING a member only, never holding one — a Pro member leaving/downgrading later shrinks the ceiling for future invites/accepts but never evicts an existing member. Past the ceiling the invite-time seat wall (`TeamFullError`, `team_seat_wall_hit` analytics event) points to Enterprise, never a per-org override or paid seat add-on (owner decision 2026-08-16). Joining a team is free on every tier — only owning (covering) one draws on a slot. **Coverage is claim-based, never assigned — one coverer per team, admin ≠ payer, and it never moves automatically (owner decision 2026-08-16: the sweep grace-stamps and notifies every admin, it does NOT hunt for a co-admin with a free slot):** `covered_by`/`covered_at` are set at creation and move only through `POST /orgs/{id}/coverage/claim` (free-slot-gated) and `.../release` (current coverer only — the release write is conditioned on `WHERE covered_by = user_id`, so a rival's claim landing in the read-then-write gap loses the race cleanly instead of getting silently overwritten). **Standing is a daily-sweep PREDICATE, never an event:** `orgs.standing.evaluate_standing` ranks each coverer's orgs `covered_at DESC` up to their slot count; an uncovered org gets `grace_started_at`, then past `ORG_GRACE_DAYS` (env, default 14) flips to `status='lapsed'` — the one new RLS predicate this whole feature adds, `can_access_artist`'s team branch gaining `AND o.status <> 'lapsed'`, denies the entire subtree to everyone (admins included), same posture as `archived_at`. **Archive is reversible** (frees the slot, admin-only, no balance precondition — whatever the pool holds survives). **Dissolve is terminal-soft**: `dissolved_at` is stamped, every team artist reverts to its creator (or the dissolving admin, when the creator no longer holds a seat) via a service-role `UPDATE artists SET team_id = NULL`, the pool's purchased reserve is forfeited through the existing clawback RPC, and the org row/pool wallet/ledger are all RETAINED (archived, never deleted — support still needs to read them). `_require_live_org` guards the mutating lifecycle endpoints (invite/accept, member cap/role, credit-requests, project-member grants, claim-coverage, transfer-credits); reads (`get_org`, dissolve-preview, usage, ledger) and `cancel-topup` are deliberately exempt — the latter is the documented retry path for a Stripe cancel that failed mid-archive/dissolve, so a dead org must still be able to stop its own charge. **Team storage is a fully separate per-OWNER pool from personal storage**, summed across every self-serve org `covered_by` still points at, active + archived but excluding dissolved (`orgs.storage_guard.pool_state` — parked bytes in an archived team still count against the cap, so archive-then-recreate can't dodge it): sized to match personal storage (`20260817000001`): Basic 100 GiB hard cap, Pro 250 GiB then PAYG at `TEAM_STORAGE_OVERAGE_USD_PER_GB` (env, seeded $0.025/GB/mo, billed monthly as a Stripe InvoiceItem on the covering owner's PERSONAL customer, idempotent per owner-period). `storage_guard.pool_state`'s `is_pro_like` is keyed on the RESOLVED TIER (`TeamDials.tier == "pro"`), never on pool size — Basic and Pro pools can no longer be told apart by bytes. Funding is admin-driven, all landing in the pool's reserve (never expires): the reserve-only `transfer_credits` RPC (personal reserve → pool, 409 on insufficient reserve — never a silent clamp), packs, and a recurring top-up riding the purchasing admin's PERSONAL Stripe customer (`kind='org_topup'` metadata — the personal subscription webhook handlers early-return on it so an org top-up can never overwrite the purchaser's own plan; `invoice.paid` grants pool reserve, idempotent on the Stripe invoice id; offboarding the purchasing admin cancels it).
+
+**Boards on Teams (spec `2026-08-16-boards-on-teams`).** The workspace's board-teams (`teams`/`team_members`, `src/backend/teams/`, the Workspace "Teams" tab) were merged into organizations: `boards.team_id → organizations(id)` (same edge as `artists.team_id`), membership = the org's ACTIVE seats in a LIVE org, invites only in `/teams`. ONE predicate, `can_access_board(board_id, user_id)` (SQL, RLS on `boards`/`board_members`/`board_task_assignees`/`board_task_works`) mirrored by `boards/authz._can_access` — keep them in step: personal → owner; team → live seat AND (NOT `boards.restricted` OR owner OR org admin OR listed in `board_members`). **RLS is not the writer-side gate on its own:** a `FOR UPDATE` policy with no `WITH CHECK` reuses `USING` as the check, so "can see it" would mean "can write it" — the `boards` UPDATE policy is therefore owner-or-admin (NOT `can_access_board`), and because `WITH CHECK` cannot see `OLD`, a `boards_lock_team_id` BEFORE UPDATE trigger refuses any `team_id` change made under an end-user JWT (same shape as `artists_lock_team_id`). Without both, a plain member could flip `restricted` or move a board to another org straight from the anon-key client. Restricted narrowing is a visibility list, not a role; `PUT /boards/boards/{id}` `restricted`/`member_user_ids` (replace-set, ids must be active seats → 422) is gated to org admin OR the board's creator; archive/delete/restore stay org-admin. `GET /orgs/{id}/members` is the member-visible roster (names/avatars, no emails) that feeds assignee/filter/board-member pickers. Free users can only own personal boards because they can't own an org — that gate is `standing.require_free_slot` inside `create_org`, which only runs when `standing.self_serve_enabled()` (both flags on); with self-serve off there is no slot check at all. Joining someone else's team is free on every tier. REMOVING a member purges their `board_members` rows (`_purge_member_from_org_boards`) — suspend purges nothing, because it is reversible and task assignments are history, not access (an inactive seat already fails the predicate). Dissolve reverts each board to its creator, or to the dissolving admin when the creator no longer holds a seat (`_revert_org_boards`, the same recipient rule as `_dissolve_recipients`, not best-effort). Migrations: `20260818000001` (repoint + predicate + policies; legacy board-team boards became their creators' personal boards) then `20260818000002` (drops the old tables — apply only after deploy).
+
+Caps are ceilings, not reservations, so they may deliberately sum to more than the dispersal. Two org walls with different remedies: `capReached` → the member asks an admin to raise it (`credit_requests` is a **cap-raise** request; approving writes `monthly_cap` and moves nothing); a dry pool → only an admin buying credits helps, so the member sees no CTA. No pay-as-you-go on a pool. Offboarding is a soft status transition with nothing to reclaim, and archiving leaves pool credits for support (admin clawback is reserve-only) and leaves `artists.team_id` attached — `can_access_artist` already denies on `archived_at`, so the roster goes inert without being destroyed. Per-member spend for the console comes from the pool ledger grouped by `metadata.org_member_id`. QA: `scripts/qa_licensing_loop.py` (HTTP lifecycle) + `supabase/qa/gates_team_artists.sql` (artist ownership, RLS, storage triggers) + `supabase/qa/launch_gates_credit_rpcs.sql` (the money RPCs) — pytest mocks `sb.rpc()` and never reaches Postgres, so the gate scripts are the SQL layer's ONLY executable coverage.
 
 ### Admin Roles
 
@@ -250,6 +309,13 @@ The canonical "a tool was used" signal is `tool_used` with `properties.tool ∈ 
 | `contract_uploaded` | `main.py` | Includes `file_size`. |
 | `checkout_started` / `billing_portal_opened` | `subscriptions/billing_router.py` | Stripe entry points. |
 | `subscription_activated` / `subscription_canceled` / `payment_failed` | `subscriptions/stripe_events.py` | Stripe webhook outcomes. |
+| `team_created` / `team_archived` / `team_unarchived` / `team_dissolved` | `orgs/router.py` | Self-serve team lifecycle (`POST /orgs` is self-serve-only now; enterprise creation via `POST /admin/orgs` is admin tooling and untracked). |
+| `team_grace_started` / `team_lapsed` / `team_reactivated` | `orgs/standing.py` (`_notify_standing`, `f"team_{kind}"`) | Daily standing-sweep transitions (`evaluate_standing`); captured to the covering admin, not the affected members. |
+| `coverage_claimed` / `coverage_released` | `orgs/router.py` | Team-slot coverage claim/release. |
+| `credits_transferred` | `orgs/router.py` | Personal reserve → org pool (`transfer_credits` RPC). |
+| `org_topup_started` / `org_topup_renewed` | `subscriptions/stripe_events.py` | Recurring org top-up lifecycle, off Stripe `invoice.paid`. |
+| `org_topup_canceled` | `orgs/router.py` (manual cancel) + `orgs/service.py` (offboard, dissolve) | Three call sites by design — `trigger` property (`manual`/`offboard`/`dissolve`) distinguishes them; not a double-fire. |
+| `team_storage_overage_billed` | `orgs/storage_guard.py` | Pro team-storage PAYG, billed by the sweep. |
 | `request_completed` / `request_failed` | Middleware | Every API request — useful for traffic, noisy for tool counts. |
 
 When adding a new tool or feature, follow the existing pattern: emit a step event when work starts (e.g. `<tool>_started`) and a completion event when it succeeds. `tool_used` may be redundant if you already have a step event — prefer one or the other consistently.
@@ -322,6 +388,7 @@ poetry run python -m scripts.posthog_apply_env_filter \
 - Backend is a separate Python project in `src/backend/` with its own `Dockerfile`; deps are managed with Poetry (`pyproject.toml` + `poetry.lock`) and installed directly in the container — no `requirements.txt`
 - Backend deploys to Cloud Run on port 8080 (Docker), runs locally on port 8000
 - All endpoints accept `user_id` query param for RLS context
+- `stripe-python` is pinned to 15.1.0 (`pyproject.toml` range `>=11,<16`) where `StripeObject` stopped being a `dict` subclass: any `x.metadata.get(...)`-style read on a live Stripe payload must go through `_plain()` in `subscriptions/stripe_events.py` instead of dict-style access, and webhook-path tests must build events with `stripe.Event.construct_from(...)`, never a raw dict mock
 
 ## Deployment
 
@@ -340,3 +407,5 @@ Both environments share the same Supabase database — data is user-scoped.
 Current design spec: `docs/superpowers/specs/2026-04-03-portfolio-registry-redesign.md`
 
 This covers the Portfolio -> Project Detail -> Work Detail page restructure, dual-layer access control, Registry dashboard redesign, and OneClick/Zoe integration points.
+
+**Superseded in part:** access control is now three layers, not two — artist ownership sits above project members and work-only collaborators. See `docs/licensing.md`.

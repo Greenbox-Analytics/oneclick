@@ -1,8 +1,13 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import type { TierKey } from "@/lib/tiers";
 
-export type Tier = "free" | "pro";
+/** Canonical tier keys live in @/lib/tiers (single source of truth — keys are
+ * permanent, display labels come from tierLabel()). Re-exported here so the
+ * many existing `import { Tier } from useEntitlements` sites keep working. */
+export type Tier = TierKey;
 export type SubscriptionStatus = "active" | "canceled" | "past_due" | "trialing";
 
 export interface EntitlementCaps {
@@ -12,6 +17,102 @@ export interface EntitlementCaps {
   maxStorageBytes: number;
   maxSplitSheetsPerMonth: number;
   maxOneclickRunsPerMonth: number;
+  /** Credits system (present when the backend has the columns). */
+  maxWorks?: number;
+  includedStorageBytes?: number;
+  monthlyCredits?: number;
+  /**
+   * Self-serve teams (2026-08-15 pricing/teams spec §1) — team SLOTS this
+   * tier can own/cover, seats per owned team EXCLUDING the covering owner,
+   * and the per-owner storage pool shared across all owned teams. 0 on Free.
+   * Optional for payloads served before the backend shipped these columns.
+   */
+  maxTeams?: number;
+  maxTeamMembers?: number;
+  teamStorageBytes?: number;
+}
+
+/**
+ * Per-action credit BASE RATES (backend `credit_prices`, camelCase).
+ *
+ * This IS the price, not an estimate: the charge is max(base, metered), and the
+ * metered half only wins on a pathological run (spec 2026-08-17 §2). Safe to
+ * render as a firm number — "Runs for 30 credits" — rather than hedged copy.
+ */
+export interface CreditPrices {
+  zoeMessage: number;
+  oneclickRun: number;
+  registryParse: number;
+  splitSheet: number;
+}
+
+/**
+ * The org whose seat is paying, when the caller is in ORG billing context
+ * (Licensing Phase B, spec §5). Mirrors backend `ManagedByOrg.to_dict()`.
+ */
+export interface OrgBillingContext {
+  orgId: string;
+  orgName: string;
+  role: string;
+  /** "self_serve" | "enterprise" | null (pre-migration org row). Drives
+   * orgNoun()/orgNounCap() in @/lib/tiers for team-vs-organization copy. */
+  kind?: "self_serve" | "enterprise" | null;
+}
+
+/**
+ * One entry in `availableContexts` — every billing context the caller could
+ * switch to via `useSetBillingContext` (Licensing Phase B, spec §5). Present
+ * only when `LICENSING_ENABLED` is on.
+ */
+export type BillingContextOption =
+  | { type: "personal" }
+  | (OrgBillingContext & { type: "org"; pending: boolean });
+
+/**
+ * The caller's CURRENT billing-context identity (Licensing follow-ups Task 3).
+ * Present whenever `LICENSING_ENABLED` is on, REGARDLESS of `CREDITS_ENABLED` —
+ * unlike `credits.managedByOrg`, which only exists when the credits block
+ * itself is built. Prefer this field for org/personal rendering; components
+ * written before this field existed fall back to `credits?.managedByOrg`.
+ */
+export type BillingContext = { type: "personal" } | (OrgBillingContext & { type: "org" });
+
+/**
+ * Wallet state — present only when CREDITS_ENABLED is on (else `credits` is null).
+ * Shape mirrors the backend Entitlements.to_dict()["credits"] block.
+ */
+export interface EntitlementCredits {
+  /**
+   * Spendable = bundleBalance + reserveBalance.
+   *
+   * `null` means REDACTED, never "zero": the caller is a plain member of an
+   * org, and the shared pool is the org's money — admins only. Since this
+   * whole block is absent when credits are off, `null` here has exactly one
+   * meaning. Render the member's own `memberCap` instead, or — with no cap —
+   * say they draw on the org pool, with no number.
+   */
+  balance: number | null;
+  /** Monthly grant remainder; expires at period rollover. null = redacted. */
+  bundleBalance: number | null;
+  /** Admin grants; never expire. null = redacted. */
+  reserveBalance: number | null;
+  /** This tier's monthly credit grant. */
+  monthlyGrant: number;
+  overageThisPeriod: number;
+  overageEnabled: boolean;
+  /** USD per overage credit — quote this, never a hardcoded rate. */
+  overageUsdPerCredit: number;
+  overageCapCredits: number | null;
+  /** Org context only: this member's monthly ceiling on the shared pool, and
+   * what they've spent against it this period. null/0 in personal context,
+   * where the wallet balance IS the limit. */
+  memberCap?: number | null;
+  memberCapUsed?: number;
+  /** ISO timestamp when the credit period resets. */
+  periodEnd: string | null;
+  prices: CreditPrices;
+  /** Present only in ORG billing context — the seat's org (Licensing Phase B, spec §5). */
+  managedByOrg?: OrgBillingContext | null;
 }
 
 export interface EntitlementFeatures {
@@ -43,6 +144,14 @@ export interface EntitlementSubscription {
   planPeriod: "monthly" | "annual" | null;
 }
 
+/**
+ * The active workspace — which artists (and therefore projects, works, files,
+ * boards and tool inputs) every list should show. Emitted only when
+ * `WORKSPACE_SCOPING_ENABLED` + `LICENSING_ENABLED` are both on; its absence
+ * is useWorkspaceScope's rollback signal (no `?scope=` param is sent).
+ */
+export type WorkspaceScope = { type: "personal" } | { type: "org"; orgId: string; orgName: string };
+
 export interface Entitlements {
   tier: Tier;
   status: SubscriptionStatus;
@@ -54,6 +163,69 @@ export interface Entitlements {
   degraded: boolean;
   /** Stripe billing details — always present; fields are null for free users. */
   subscription: EntitlementSubscription;
+  /** Credit wallet — null unless CREDITS_ENABLED is on. */
+  credits?: EntitlementCredits | null;
+  /**
+   * Every context the caller could switch billing to — personal + active
+   * seats (Licensing Phase B, spec §5). Present only when `LICENSING_ENABLED`
+   * is on; `undefined`/`null` otherwise so pre-licensing payloads are unaffected.
+   */
+  availableContexts?: BillingContextOption[] | null;
+  /**
+   * The caller's current billing-context identity (Licensing follow-ups
+   * Task 3). Present whenever `LICENSING_ENABLED` is on, independent of
+   * `CREDITS_ENABLED` — `undefined`/`null` when licensing is off.
+   */
+  billingContext?: BillingContext | null;
+  /**
+   * The active workspace for LISTINGS (see useWorkspaceScope). Rides the
+   * stored billing context server-side; absent unless workspace scoping is
+   * live.
+   */
+  workspaceScope?: WorkspaceScope | null;
+}
+
+// ---------------------------------------------------------------------------
+// Silent payer-switch detection: when the billing context flips org → personal
+// WITHOUT the user choosing it (seat suspended/removed, org lapsed), tell them
+// once that their personal wallet is now paying. A deliberate switch goes
+// through useSetBillingContext, which calls clearRememberedBillingContext()
+// first so this never false-fires. Runs inside the queryFn (once per actual
+// fetch, deduped across every component using this hook).
+// ---------------------------------------------------------------------------
+
+const lastBillingContextKey = (userId: string) => `msanii:lastBillingContext:${userId}`;
+
+/** Forget the remembered context — called on a DELIBERATE switch so the next
+ * entitlements fetch records the new context without treating it as a
+ * surprise. */
+export function clearRememberedBillingContext(userId?: string): void {
+  if (!userId) return;
+  try {
+    localStorage.removeItem(lastBillingContextKey(userId));
+  } catch {
+    // storage unavailable — nothing to clear
+  }
+}
+
+function noticePayerSwitch(userId: string, ents: Entitlements): void {
+  try {
+    const key = lastBillingContextKey(userId);
+    const current =
+      ents.billingContext?.type === "org"
+        ? { type: "org", orgId: ents.billingContext.orgId, orgName: ents.billingContext.orgName }
+        : { type: "personal" as const };
+    const raw = localStorage.getItem(key);
+    const prev = raw ? (JSON.parse(raw) as { type?: string; orgName?: string }) : null;
+    if (prev?.type === "org" && current.type === "personal") {
+      toast(
+        `You're no longer billing to ${prev.orgName ?? "your organization"} — your usage now comes out of your personal plan.`,
+      );
+    }
+    localStorage.setItem(key, JSON.stringify(current));
+  } catch {
+    // storage unavailable / bad JSON — skip silently, never block the fetch
+  }
 }
 
 /**
@@ -64,7 +236,11 @@ export function useEntitlements(): UseQueryResult<Entitlements> {
   const { user } = useAuth();
   return useQuery<Entitlements>({
     queryKey: ["entitlements", user?.id],
-    queryFn: async () => apiFetch<Entitlements>(`${API_URL}/me/entitlements`),
+    queryFn: async () => {
+      const ents = await apiFetch<Entitlements>(`${API_URL}/me/entitlements`);
+      if (user?.id) noticePayerSwitch(user.id, ents);
+      return ents;
+    },
     enabled: !!user?.id,
     staleTime: 60_000,
     gcTime: 5 * 60_000,
@@ -140,17 +316,6 @@ export function useStorageStatus(): {
   return { used, cap, pct, nearLimit: pct >= 0.8, loading: false, error: null };
 }
 
-export type IntegrationName = "google_drive" | "slack";
-
-export function useIntegrationAllowed(
-  name: IntegrationName,
-): { allowed: boolean; loading: boolean; error: Error | null } {
-  const { data, isLoading, error } = useEntitlements();
-  if (error) return { allowed: false, loading: false, error: error as Error };
-  if (isLoading || !data) return { allowed: false, loading: true, error: null };
-  return { allowed: data.features.integrationsAllowed.includes(name), loading: false, error: null };
-}
-
 /** Raw tier_overrides row shape (returned by GET /admin/users/{id}). */
 export interface RawOverride {
   user_id: string;
@@ -171,6 +336,8 @@ export interface RawOverride {
 export interface AdminUserDetailUser {
   id: string;
   email: string | null;
+  /** profiles.full_name — null until the user finishes onboarding. */
+  name: string | null;
   created_at: string | null;
   is_admin: boolean;
   is_env_admin: boolean;

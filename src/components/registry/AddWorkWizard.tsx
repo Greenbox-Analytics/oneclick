@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -40,7 +40,10 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
+import { parseCreditWallDetail, type CreditWallInfo } from "@/components/paywall/creditWall";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useCreateWork, useCreateStake, useInviteCollaborator } from "@/hooks/useRegistry";
 import {
@@ -91,7 +94,9 @@ const TYPES = [
 // A contract queued for AI split parsing. Splits are often spread across
 // several contracts (producer deal, feature deal, …) that only together
 // account for 100% — the queue lets the user parse them all and merge.
-interface QueuedContract {
+// Credit-wall fields (CreditWallInfo) are set when `error` came from a
+// credit-402 — see creditWall.tsx for the two org walls' semantics.
+interface QueuedContract extends Partial<CreditWallInfo> {
   id: string;
   kind: "upload" | "project";
   file?: File;
@@ -149,17 +154,19 @@ export function AddWorkWizard({
     toast.success("Project created");
   };
 
+  // Backend /artists (not raw supabase) so the picker only offers the active
+  // workspace's artists — a raw select would list every workspace's roster.
+  const { scopeKey, withScope, ready: scopeReady } = useWorkspaceScope();
   const artistsQuery = useQuery<ArtistOption[]>({
-    queryKey: ["registry-wizard-artists", user?.id],
+    queryKey: ["registry-wizard-artists", user?.id, scopeKey],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("artists")
-        .select("id, name")
-        .order("name");
-      if (error) throw error;
-      return (data || []) as ArtistOption[];
+      const data = await apiFetch<unknown>(withScope(`${API_URL}/artists`));
+      const rows = Array.isArray(data) ? data : ((data as { data?: unknown[] })?.data ?? []);
+      return (rows as ArtistOption[])
+        .map((a) => ({ id: a.id, name: a.name }))
+        .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
     },
-    enabled: open && !!user?.id && needsDestination,
+    enabled: open && !!user?.id && needsDestination && scopeReady,
   });
 
   const projectsQuery = useQuery<ProjectOption[]>({
@@ -423,12 +430,18 @@ export function AddWorkWizard({
       return;
     }
     const done: QueuedContract[] = [];
+    // Counted into LOCALS, never re-read off `queuedContracts`: patchQueued is
+    // a setState, so the array in this synchronous handler is still the
+    // pre-loop snapshot. Same reason `done` exists.
+    let attempted = 0;
+    let walled = 0;
     for (const qc of queuedContracts) {
       if (qc.status === "done" && qc.parties) {
         // already parsed — reuse the result, don't re-run the AI
         done.push(qc);
         continue;
       }
+      attempted += 1;
       patchQueued(qc.id, { status: "parsing", error: undefined });
       try {
         const result = await parseSplits.mutateAsync(
@@ -449,13 +462,26 @@ export function AddWorkWizard({
         });
         done.push(parsed);
       } catch (e) {
-        patchQueued(qc.id, { status: "error", error: (e as Error).message || "Parse failed" });
+        const cw = parseCreditWallDetail(e instanceof ApiError ? e.detail : undefined);
+        if (cw.isCreditWall) walled += 1;
+        patchQueued(qc.id, {
+          status: "error",
+          error: (e as Error).message || "Parse failed",
+          ...cw,
+        });
       }
     }
     if (done.length === 0) {
-      // every contract failed to parse — stay in AI mode so the per-file
-      // errors remain visible and the user can retry or remove files
-      toast.error("We couldn't read these contracts — see the errors below");
+      // every contract failed — stay in AI mode so the per-file errors remain
+      // visible and the user can retry or remove files. Don't blame the
+      // contracts when the real cause was a credit wall: at 30 credits a parse
+      // that is a likely outcome, and "we couldn't read these" sends the user
+      // off editing perfectly good files.
+      toast.error(
+        walled > 0 && walled === attempted
+          ? "You're out of credits — top up or upgrade to read these contracts"
+          : "We couldn't read these contracts — see the errors below",
+      );
       return;
     }
     applyMerge(done);
@@ -1809,6 +1835,16 @@ function RoyaltyStep({
                       {q.status === "done" &&
                         `Parsed · ${q.parties?.length ?? 0} ${(q.parties?.length ?? 0) === 1 ? "party" : "parties"} found`}
                       {q.status === "error" && (q.error || "Parse failed")}
+                      {/* Cap wall only — a dry pool has no member-side remedy,
+                          so no link there (only an admin buying credits helps). */}
+                      {q.status === "error" && q.managedByOrg && q.capReached && (
+                        <>
+                          {" · "}
+                          <Link to={q.requestUrl || "/teams"} className="underline underline-offset-2">
+                            Ask for a higher limit
+                          </Link>
+                        </>
+                      )}
                     </div>
                   </div>
                   <button
@@ -1848,12 +1884,16 @@ function RoyaltyStep({
                     ? "Add splits from contract"
                     : `Read ${queuedContracts.length} contracts`}
               </Button>
+              <CreditsChip action="registry_parse" />
             </div>
             {queuedContracts.length === 0 && (
               <p className="mt-1.5 text-[11px] text-muted-foreground">
                 Select or upload at least one contract first.
               </p>
             )}
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              You won&apos;t be charged twice for the same result this month.
+            </p>
           </div>
         </>
       )}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -41,7 +41,6 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
-  BookOpen,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useGatedAction } from "@/hooks/useGatedAction";
@@ -316,15 +315,6 @@ const Portfolio = () => {
       <PageHeader
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }
@@ -547,7 +537,7 @@ const Portfolio = () => {
                       <div className={`transition-all duration-300 overflow-hidden ${isCollapsed ? "max-h-0 opacity-0" : "max-h-[2000px] opacity-100"}`}>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                           {projects.map((project) => (
-                            <ProjectCardComponent key={project.id} project={project} artistColor={artistColor} onClick={() => navigate(`/projects/${project.id}`)} />
+                            <ProjectCardComponent key={project.id} project={project} artistColor={artistColor} to={`/projects/${project.id}`} />
                           ))}
                         </div>
                       </div>
@@ -612,7 +602,7 @@ const Portfolio = () => {
                               key={project.id}
                               project={project}
                               artistColor={artistColor}
-                              onClick={() => navigate(`/projects/${project.id}`)}
+                              to={`/projects/${project.id}`}
                             />
                           ))}
                         </div>
@@ -661,16 +651,18 @@ const Portfolio = () => {
 function ProjectCardComponent({
   project,
   artistColor,
-  onClick,
+  to,
 }: {
   project: ProjectCard;
   artistColor?: (typeof ARTIST_ACCENT_COLORS)[number];
-  onClick: () => void;
+  /** Real link, not an onClick: cards are navigation, so cmd/middle-click,
+   *  "open in new tab" and hover-preview of the URL all have to work. */
+  to: string;
 }) {
   return (
+    <Link to={to} className="block">
     <Card
       className="group cursor-pointer border border-border/50 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 rounded-xl overflow-hidden"
-      onClick={onClick}
     >
       {artistColor && <div className={`h-0.5 ${artistColor.topBg}`} />}
       <CardContent className="p-6">
@@ -715,6 +707,7 @@ function ProjectCardComponent({
         </div>
       </CardContent>
     </Card>
+    </Link>
   );
 }
 
@@ -723,16 +716,16 @@ function ProjectCardComponent({
 function SharedProjectCardComponent({
   project,
   artistColor,
-  onClick,
+  to,
 }: {
   project: SharedProjectCard;
   artistColor?: (typeof ARTIST_ACCENT_COLORS)[number];
-  onClick: () => void;
+  to: string;
 }) {
   return (
+    <Link to={to} className="block">
     <Card
       className="group cursor-pointer border border-border/50 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 rounded-xl overflow-hidden"
-      onClick={onClick}
     >
       {artistColor && <div className={`h-0.5 ${artistColor.topBg}`} />}
       <CardContent className="p-6">
@@ -783,6 +776,7 @@ function SharedProjectCardComponent({
         </div>
       </CardContent>
     </Card>
+    </Link>
   );
 }
 

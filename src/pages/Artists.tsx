@@ -5,9 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, FileText, Trash2, CheckCircle, BookOpen, Users } from "lucide-react";
+import { Plus, Search, FileText, Trash2, CheckCircle, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import {
   AlertDialog,
@@ -35,6 +35,9 @@ interface Artist {
   has_contract: boolean;
   avatar_url: string | null;
   verified?: boolean;
+  /** NOT NULL = owned by that organization (both fetch paths select * on
+   * artists, so the column is already in the payload). */
+  team_id?: string | null;
   teamcard?: {
     display_name?: string;
     avatar_url?: string;
@@ -44,6 +47,8 @@ interface Artist {
 
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useCanCreate } from "@/hooks/useEntitlements";
+import { useContextScopedArtists } from "@/hooks/useArtistTeam";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 const Artists = () => {
   const navigate = useNavigate();
@@ -51,15 +56,16 @@ const Artists = () => {
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [artistToDelete, setArtistToDelete] = useState<Artist | null>(null);
+  const { scopeKey, scopeLabel, withScope, ready, enabled: scopeEnabled } = useWorkspaceScope();
 
   // Fetch artists with TeamCard overlay for verified artists
   const { data: artists = [], isLoading, refetch } = useQuery<Artist[]>({
-    queryKey: ["artists-with-teamcards", user?.id],
+    queryKey: ["artists-with-teamcards", user?.id, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
       // Try batch overlay endpoint first, fall back to direct Supabase query
       try {
-        const data = await apiFetch<{ artists: Artist[] }>(`${API_URL}/registry/artists/with-teamcards`);
+        const data = await apiFetch<{ artists: Artist[] }>(withScope(`${API_URL}/registry/artists/with-teamcards`));
         return data.artists || [];
       } catch {
         // Fall back to direct Supabase query
@@ -74,10 +80,27 @@ const Artists = () => {
       }
       return data || [];
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 
-  const { allowed: canCreateArtist } = useCanCreate("artist", artists.length);
+  // Quota check against the PERSONAL cap: team artists consume their org's
+  // allowance, and the scoped list length would compare an org roster to the
+  // personal cap — same count/key as NewArtist.tsx.
+  const { data: personalArtists } = useQuery({
+    queryKey: ["artists-count", user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase
+        .from("artists")
+        .select("id")
+        .eq("user_id", user.id)
+        .is("team_id", null);
+      if (error) return [];
+      return data || [];
+    },
+    enabled: !!user?.id,
+  });
+  const { allowed: canCreateArtist } = useCanCreate("artist", personalArtists?.length ?? 0);
 
   // Tool walkthrough
   const { statuses, loading: onboardingLoading, markToolCompleted } = useToolOnboardingStatus();
@@ -116,7 +139,12 @@ const Artists = () => {
     setArtistToDelete(null);
   };
 
-  const filteredArtists = artists.filter(artist =>
+  // Scope to the active "Working as" context before searching, so the search
+  // box searches what's on screen. Display only — the backend already refused
+  // anything this user can't reach.
+  const scopedArtists = useContextScopedArtists(artists);
+
+  const filteredArtists = scopedArtists.filter(artist =>
     artist.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -126,15 +154,6 @@ const Artists = () => {
         backTo="/dashboard"
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
             <ToolHelpButton onClick={walkthrough.replay} />
           </>
         }
@@ -193,10 +212,18 @@ const Artists = () => {
                 return (
                 <Card
                   key={artist.id}
-                  className="group cursor-pointer border border-border hover:border-primary/30 hover:shadow-md transition-all overflow-hidden"
-                  onClick={() => navigate(`/artists/${artist.id}`)}
+                  className="group relative cursor-pointer border border-border hover:border-primary/30 hover:shadow-md transition-all overflow-hidden"
                   data-walkthrough={index === 0 ? "artists-card" : undefined}
                 >
+                  {/* Stretched link: the whole card navigates, but as a real
+                      <a> (cmd/middle-click, open-in-new-tab, hover preview).
+                      Overlaid rather than wrapped so the delete button below
+                      isn't a <button> nested inside an <a>. */}
+                  <Link
+                    to={`/artists/${artist.id}`}
+                    className="absolute inset-0"
+                    aria-label={cardDisplayName}
+                  />
                   <div className="h-0.5 bg-primary/40 group-hover:bg-primary transition-colors" />
                   <CardContent className="p-5">
                     <div className="flex items-start gap-4">
@@ -222,16 +249,19 @@ const Artists = () => {
                               <FileText className="w-3 h-3" /> Contract
                             </Badge>
                           )}
+                          {artist.team_id && (
+                            <Badge variant="outline" className="text-xs gap-1">
+                              <Users className="w-3 h-3" /> Team
+                            </Badge>
+                          )}
                         </div>
                       </div>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setArtistToDelete(artist);
-                        }}
+                        // `relative z-10` lifts it above the stretched link.
+                        className="relative z-10 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
+                        onClick={() => setArtistToDelete(artist)}
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -245,9 +275,17 @@ const Artists = () => {
             {filteredArtists.length === 0 && !isLoading && (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <Users className="w-12 h-12 text-muted-foreground/30 mb-3" />
-                <p className="text-muted-foreground font-medium">No artists found</p>
+                {/* Name the workspace so a scoped-empty list reads as "this
+                    workspace is empty", never as "my artists are gone". */}
+                <p className="text-muted-foreground font-medium">
+                  {scopeEnabled ? `No artists in ${scopeLabel} yet` : 'No artists found'}
+                </p>
                 <p className="text-sm text-muted-foreground/60 mt-1">
-                  {searchQuery ? 'Try a different search term' : 'Add your first artist to get started'}
+                  {searchQuery
+                    ? 'Try a different search term'
+                    : scopeEnabled
+                      ? 'Add an artist here, or switch workspace with the "Working as" menu above'
+                      : 'Add your first artist to get started'}
                 </p>
               </div>
             )}

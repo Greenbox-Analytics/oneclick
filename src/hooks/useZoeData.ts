@@ -5,6 +5,7 @@ import { useStreamingChat } from "@/hooks/useStreamingChat";
 import type { Message, AssistantQuickAction } from "@/hooks/useStreamingChat";
 import { useConversationPersistence, restoreLatestSession } from "@/hooks/useConversationPersistence";
 import { useMyCollaborations } from "@/hooks/useRegistry";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 import { type WorkFileLink } from "@/hooks/useWorkFiles";
 import type {
   Artist, Project, Contract,
@@ -159,16 +160,22 @@ export function useZoeData() {
     setInputMessage("");
   }, [clearSession, clearMessages, selectedArtist, selectedArtistName, selectedProject, selectedProjectName]);
 
+  const { scopeParam, withScope, ready: scopeReady } = useWorkspaceScope();
+
   useEffect(() => {
-    if (!user) return;
-    apiFetch<Artist[]>(`${API_URL}/artists`)
-      .then((data) => setArtists(data))
+    if (!user || !scopeReady) return;
+    apiFetch<Artist[]>(withScope(`${API_URL}/artists`))
+      .then((data) => {
+        setArtists(data);
+        // A workspace switch can drop the selected artist out of the roster.
+        setSelectedArtist((prev) => (prev && !data.some((a) => a.id === prev) ? "" : prev));
+      })
       .catch((err) => {
         console.error("Error fetching artists:", err);
         setError("Failed to load artists");
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+  }, [user?.id, scopeReady, scopeParam]);
 
   useEffect(() => {
     if (selectedArtist) {
@@ -383,15 +390,15 @@ export function useZoeData() {
 
   // Comparison-context tree (artists + projects with counts).
   const fetchContextTree = useCallback(async () => {
-    if (!user) return;
+    if (!user || !scopeReady) return;
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch(`${API_URL}/zoe/context-tree`, { headers });
+      const res = await fetch(withScope(`${API_URL}/zoe/context-tree`), { headers });
       if (res.ok) setContextTree(await res.json());
     } catch (err) {
       console.warn("Failed to fetch Zoe context tree:", err);
     }
-  }, [user]);
+  }, [user, scopeReady, withScope]);
 
   useEffect(() => {
     fetchContextTree();

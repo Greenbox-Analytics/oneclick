@@ -432,3 +432,64 @@ class TestSplitSheetGated:
 
         assert resp.status_code == 402
         assert "split sheet" in resp.json()["detail"].lower()
+
+
+class TestSplitSheetCredits:
+    """Split sheets carry TWO gates: cap first (unbuyable), then credits."""
+
+    def test_cap_wall_fires_before_the_credit_check(self, client, mock_supabase, monkeypatch):
+        """A capped user must never see a top-up CTA — the cap cannot be bought
+        past, so the credit gate is not even consulted."""
+        from unittest.mock import MagicMock
+
+        credit_gate = MagicMock()
+        monkeypatch.setattr("splitsheet.router.gated_credits", credit_gate)
+
+        def _capped(user_id):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=402, detail="You've used your 5 split sheet(s) for this period.")
+
+        monkeypatch.setattr("splitsheet.router.gated_split_sheet", _capped)
+
+        resp = client.post("/splitsheet/generate", json=BASE_PAYLOAD)
+        assert resp.status_code == 402
+        assert "split sheet(s) for this period" in resp.json()["detail"]
+        credit_gate.assert_not_called()
+
+    def test_success_increments_counter_and_debits(self, client, mock_supabase, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from tests.conftest import TEST_USER_ID
+
+        ent = MagicMock()
+        monkeypatch.setattr("splitsheet.router._get_entitlements_service", lambda: ent)
+        monkeypatch.setattr("splitsheet.router.gated_split_sheet", lambda uid: None)
+
+        resp = client.post("/splitsheet/generate", json=BASE_PAYLOAD)
+        assert resp.status_code == 200
+        ent.increment_usage.assert_called_once_with(TEST_USER_ID, "split_sheets_this_period")
+        ent.debit_for_action.assert_called_once()
+        _, grant = ent.debit_for_action.call_args.args
+        assert grant.action == "split_sheet"
+
+    def test_each_format_is_its_own_charge(self, client, mock_supabase, monkeypatch):
+        from unittest.mock import MagicMock
+
+        ent = MagicMock()
+        monkeypatch.setattr("splitsheet.router._get_entitlements_service", lambda: ent)
+        monkeypatch.setattr("splitsheet.router.gated_split_sheet", lambda uid: None)
+
+        client.post("/splitsheet/generate", json={**BASE_PAYLOAD, "format": "pdf"})
+        client.post("/splitsheet/generate", json={**BASE_PAYLOAD, "format": "docx"})
+        assert ent.debit_for_action.call_count == 2
+
+
+def test_split_sheet_has_a_legacy_mapping():
+    """gated_credits raises RuntimeError on an unmapped action, so every
+    CreditAction member must appear in _CREDIT_TO_LEGACY."""
+    from subscriptions.enforcement import _CREDIT_TO_LEGACY
+    from subscriptions.models import CreditAction
+
+    missing = [a for a in CreditAction if a not in _CREDIT_TO_LEGACY]
+    assert missing == [], f"CreditAction members with no legacy mapping: {missing}"

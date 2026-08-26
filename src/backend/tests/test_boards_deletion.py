@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from boards import service
 from tests.conftest import MockQueryBuilder
@@ -85,22 +86,36 @@ async def test_delete_board_denied_when_personal_board_owned_by_other():
         await service.delete_board(db, USER, BOARD, "My Board")
 
 
-async def test_delete_board_denied_for_team_board_when_not_admin(monkeypatch):
-    # Real _can_archive_board: team board → gate on authz.is_team_admin (False here).
-    monkeypatch.setattr(service.authz, "is_team_admin", lambda db, u, t: False)
-    db = _db({"boards": MagicMock(data=[{"id": BOARD, "name": "My Board", "team_id": "t1", "owner_id": "x"}])})
+def _org_db(tbl: dict, *, admin: bool):
+    """_db plus a live seat in org 't1' and an is_org_admin rpc answer — what
+    authz.is_board_admin consults for a team board."""
+    db = _db({"org_members": MagicMock(data=[{"org_id": "t1", "user_id": USER}]), **tbl})
+    db.rpc.return_value.execute.return_value = MagicMock(data=admin)
+    return db
+
+
+async def test_delete_board_denied_for_team_board_when_not_admin():
+    # Real _can_archive_board: team board → live seat but not an org admin.
+    db = _org_db(
+        {
+            "organizations": MagicMock(data=[{"id": "t1"}]),
+            "boards": MagicMock(data=[{"id": BOARD, "name": "My Board", "team_id": "t1", "owner_id": "x"}]),
+        },
+        admin=False,
+    )
     with pytest.raises(PermissionError):
         await service.delete_board(db, USER, BOARD, "My Board")
 
 
-async def test_delete_board_ok_for_team_board_when_admin(monkeypatch):
-    # Real _can_archive_board: team board → admin allowed → delete proceeds.
-    monkeypatch.setattr(service.authz, "is_team_admin", lambda db, u, t: True)
-    db = _db(
+async def test_delete_board_ok_for_team_board_when_admin():
+    # Real _can_archive_board: team board → live org admin → delete proceeds.
+    db = _org_db(
         {
+            "organizations": MagicMock(data=[{"id": "t1"}]),
             "boards": MagicMock(data=[{"id": BOARD, "name": "My Board", "team_id": "t1", "owner_id": "x"}]),
             "board_tasks": MagicMock(data=[], count=7),
-        }
+        },
+        admin=True,
     )
     result = await service.delete_board(db, USER, BOARD, "My Board")
     assert result == {"deleted": BOARD, "tasks": 7}
@@ -109,20 +124,26 @@ async def test_delete_board_ok_for_team_board_when_admin(monkeypatch):
 # --- list_archived_boards --------------------------------------------------------
 
 
-async def test_list_archived_boards_denied_for_non_admin_team(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_team_admin", lambda db, u, t: False)
-    db = _db({})
-    with pytest.raises(PermissionError):
+async def test_list_archived_boards_denied_for_non_admin_team():
+    """authz.require_org_admin raises HTTPException(403) rather than PermissionError —
+    the router lets it through unchanged, so the caller still sees 403."""
+    db = _org_db({"organizations": MagicMock(data=[{"id": "t1"}])}, admin=False)
+    with pytest.raises(HTTPException) as exc:
         await service.list_archived_boards(db, USER, team_id="t1")
+    assert exc.value.status_code == 403
 
 
-async def test_list_archived_boards_team_admin_attaches_task_count(monkeypatch):
-    monkeypatch.setattr(service.authz, "is_team_admin", lambda db, u, t: True)
-    db = _db(
+async def test_list_archived_boards_team_admin_attaches_task_count():
+    db = _org_db(
         {
-            "boards": MagicMock(data=[{"id": "ab1", "name": "Arch", "archived": True}]),
+            "organizations": MagicMock(data=[{"id": "t1"}]),
+            "boards": MagicMock(
+                data=[{"id": "ab1", "name": "Arch", "archived": True, "team_id": "t1", "owner_id": USER}]
+            ),
+            "board_members": MagicMock(data=[]),
             "board_tasks": MagicMock(data=[], count=4),
-        }
+        },
+        admin=True,
     )
     result = await service.list_archived_boards(db, USER, team_id="t1")
     assert len(result) == 1

@@ -3,15 +3,27 @@ import { useState } from "react";
 import { CheckCheck, Clock, PieChart, Receipt, Download, Music, Users, Banknote, AlertTriangle, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { API_URL } from "@/lib/apiFetch";
 import type { PayoutOut } from "@/hooks/useRoyalties";
-import { StatusBadge, fmtMoney, fmtDate, idToColor, downloadPdf } from "./shared";
+import { useChangePayoutCurrency } from "@/hooks/useRoyalties";
+import { StatusBadge, fmtMoney, fmtDate, idToColor, downloadPdf, CURRENCIES } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 
 interface PayoutDetailModalProps {
   payout: PayoutOut;
   onClose: () => void;
+  /** Called with the NEW payout id after a draft is re-issued in another
+   *  currency — re-cutting a draft replaces the row, so the caller has to
+   *  re-point at it. */
+  onReissued?: (payoutId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +116,7 @@ function Donut({ slices, total, payCur }: { slices: DonutSlice[]; total: number;
 // PayoutDetailModal
 // ---------------------------------------------------------------------------
 
-export function PayoutDetailModal({ payout, onClose }: PayoutDetailModalProps) {
+export function PayoutDetailModal({ payout, onClose, onReissued }: PayoutDetailModalProps) {
   const { toast } = useToast();
   const [exporting, setExporting] = useState(false);
 
@@ -124,6 +136,24 @@ export function PayoutDetailModal({ payout, onClose }: PayoutDetailModalProps) {
   const snap = castSnapshot(payout.breakdown_snapshot);
   const isDraft = payout.status === "draft";
   const payCur = payout.pay_currency;
+
+  const changeCurrency = useChangePayoutCurrency();
+  const handleCurrencyChange = async (next: string) => {
+    if (next === payCur) return;
+    try {
+      const reissued = await changeCurrency.mutateAsync({ id: payout.id, currency: next });
+      // The re-cut draft is a NEW row, so this modal's `payout` prop is stale.
+      // Hand the caller the new id rather than rendering a payout that no
+      // longer exists.
+      onReissued?.(reissued.id);
+      toast({ title: `Draft re-issued in ${next}.` });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Couldn't change the payout currency. Please try again.",
+      });
+    }
+  };
 
   // Badge
   const badge = isDraft ? (
@@ -245,7 +275,38 @@ export function PayoutDetailModal({ payout, onClose }: PayoutDetailModalProps) {
               <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
                 {badge}
                 <span className="h-[3px] w-[3px] rounded-full bg-border" />
-                <span>Paid in {payCur}</span>
+                {/* A draft isn't money yet, so its currency is still a choice —
+                    changing it re-cuts the draft at today's FX rate. A PAID
+                    payout's currency and rate record money that already moved,
+                    so it stays read-only: re-denominating it after the fact
+                    would be rewriting a payment record, not editing a draft.
+                    (Revert it to draft first if it was recorded wrongly.) */}
+                {isDraft ? (
+                  <span className="flex items-center gap-1.5">
+                    <span>Paid in</span>
+                    <Select
+                      value={payCur}
+                      disabled={changeCurrency.isPending}
+                      onValueChange={handleCurrencyChange}
+                    >
+                      <SelectTrigger className="h-6 w-[92px] px-2 text-[12.5px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.values(CURRENCIES).map((c) => (
+                          <SelectItem key={c.code} value={c.code}>
+                            {c.flag} {c.code}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {changeCurrency.isPending && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                    )}
+                  </span>
+                ) : (
+                  <span>Paid in {payCur}</span>
+                )}
                 <span className="h-[3px] w-[3px] rounded-full bg-border" />
                 <span>Created {fmtDate(payout.created_at)}</span>
                 {payout.paid_at && (

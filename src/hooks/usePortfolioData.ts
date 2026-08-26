@@ -3,11 +3,15 @@ import { useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
+import { useContextScopedArtists } from "@/hooks/useArtistTeam";
+import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 
 export interface ArtistInfo {
   id: string;
   name: string;
   avatar?: string;
+  /** NULL = personal, otherwise the owning org — drives context scoping. */
+  team_id?: string | null;
 }
 
 export interface ProjectCard {
@@ -36,13 +40,14 @@ export interface PortfolioFilters {
 
 export function usePortfolioData(filters: PortfolioFilters) {
   const { user } = useAuth();
+  const { scopeId, scopeKey, withScope, ready, enabled: scopingEnabled } = useWorkspaceScope();
 
-  // Query 1: Fetch artists from backend API
+  // Query 1: Fetch artists from backend API (server-scoped to the active workspace)
   const artistsQuery = useQuery<ArtistInfo[]>({
-    queryKey: ["portfolio-artists", user?.id],
+    queryKey: ["portfolio-artists", user?.id, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
-      const data = await apiFetch<unknown>(`${API_URL}/artists`);
+      const data = await apiFetch<unknown>(withScope(`${API_URL}/artists`));
       const rows = Array.isArray(data)
         ? data
         : ((data as { artists?: unknown[]; data?: unknown[] })?.artists || (data as { data?: unknown[] })?.data || []);
@@ -51,19 +56,26 @@ export function usePortfolioData(filters: PortfolioFilters) {
           id: a.id as string,
           name: a.name as string,
           avatar: (a.avatar_url as string) || (a.avatar as string) || undefined,
+          team_id: (a.team_id as string | null) ?? null,
         })
       );
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
+
+  // Scope to the active "Working as" context. Applied HERE rather than in the
+  // page so projects follow their artists — query 2 keys off `artistIds`, so a
+  // scoped-out artist takes its projects with it instead of leaving them
+  // stranded under a context that no longer shows their owner.
+  const scopedArtists = useContextScopedArtists(artistsQuery.data);
 
   const artistMap = useMemo(() => {
     const map = new Map<string, ArtistInfo>();
-    for (const a of artistsQuery.data || []) map.set(a.id, a);
+    for (const a of scopedArtists) map.set(a.id, a);
     return map;
-  }, [artistsQuery.data]);
+  }, [scopedArtists]);
 
-  const artistIds = useMemo(() => (artistsQuery.data || []).map(a => a.id), [artistsQuery.data]);
+  const artistIds = useMemo(() => scopedArtists.map(a => a.id), [scopedArtists]);
 
   // Query 2: Fetch projects for user's artists
   const projectsQuery = useQuery({
@@ -175,11 +187,15 @@ export function usePortfolioData(filters: PortfolioFilters) {
     enabled: projectIds.length > 0,
   });
 
-  // Query 5: Fetch shared projects (where user is a member but NOT the owner)
+  // Query 5: Fetch shared projects (where user is a member but NOT the owner).
+  // "Shared with me" is membership-grant access, which belongs to the PERSONAL
+  // workspace: in an org workspace it lists nothing, and in Personal it drops
+  // projects whose artist an org owns (those appear in that org's workspace).
   const sharedProjectsQuery = useQuery<SharedProjectCard[]>({
-    queryKey: ["portfolio-shared-projects", user?.id],
+    queryKey: ["portfolio-shared-projects", user?.id, scopeKey],
     queryFn: async () => {
       if (!user?.id) return [];
+      if (scopingEnabled && scopeId) return [];
       // Get all project memberships for current user where role is not owner
       const { data: memberships, error: memberError } = await supabase
         .from("project_members")
@@ -193,21 +209,28 @@ export function usePortfolioData(filters: PortfolioFilters) {
       const roleMap = new Map(memberships.map(m => [m.project_id, m.role]));
 
       // Fetch the projects
-      const { data: projects, error: projectError } = await supabase
+      const { data: rawProjects, error: projectError } = await supabase
         .from("projects")
         .select("*")
         .in("id", sharedProjectIds);
       if (projectError) { console.error("Error fetching shared projects:", projectError); return []; }
-      if (!projects || projects.length === 0) return [];
+      if (!rawProjects || rawProjects.length === 0) return [];
 
       // Fetch artists for these projects
-      const sharedArtistIds = [...new Set(projects.map(p => p.artist_id))];
+      const sharedArtistIds = [...new Set(rawProjects.map(p => p.artist_id))];
       const { data: artists, error: artistError } = await supabase
         .from("artists")
-        .select("id, name, avatar_url")
+        .select("id, name, avatar_url, team_id")
         .in("id", sharedArtistIds);
       if (artistError) console.error("Error fetching shared artists:", artistError);
       const sharedArtistMap = new Map((artists || []).map(a => [a.id, a]));
+
+      // Personal workspace: a project on an org-owned artist lists under that
+      // org, not under "Shared with me".
+      const projects = scopingEnabled
+        ? rawProjects.filter(p => !sharedArtistMap.get(p.artist_id)?.team_id)
+        : rawProjects;
+      if (projects.length === 0) return [];
 
       // Fetch member counts for shared projects
       const { data: memberRows } = await supabase
@@ -267,7 +290,7 @@ export function usePortfolioData(filters: PortfolioFilters) {
         };
       });
     },
-    enabled: !!user?.id,
+    enabled: !!user?.id && ready,
   });
 
   // Build filtered + sorted project cards grouped by artist
@@ -343,7 +366,7 @@ export function usePortfolioData(filters: PortfolioFilters) {
   return {
     myProjects,
     sharedProjects,
-    allArtists: artistsQuery.data || [],
+    allArtists: scopedArtists,
     isLoading: artistsQuery.isLoading || projectsQuery.isLoading,
     refetchProjects: projectsQuery.refetch,
   };

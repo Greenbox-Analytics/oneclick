@@ -3,6 +3,8 @@
 import httpx
 from supabase import Client
 
+from integrations.storage_import import store_imported_file
+
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 
@@ -56,7 +58,12 @@ async def download_drive_file(token: str, file_id: str) -> bytes:
 
 async def import_drive_file(token: str, supabase: Client, user_id: str, data: dict) -> dict:
     """Import a file from Drive into a Supabase project."""
-    # Check if this Drive file is already imported into this project
+    # Check if this Drive file is already imported into this project.
+    # No .eq("provider", ...) here on purpose: that column only exists after
+    # migration 20260807000000, and this dedup query must keep working on a
+    # backend deployed before that migration runs. Dropbox ids are always
+    # "id:"-prefixed and Drive ids never are, so a cross-provider collision
+    # can't happen — the filter would buy nothing but a 42703 failure mode.
     existing = (
         supabase.table("drive_sync_mappings")
         .select("id")
@@ -80,44 +87,37 @@ async def import_drive_file(token: str, supabase: Client, user_id: str, data: di
     # Download file content
     content = await download_drive_file(token, data["drive_file_id"])
 
-    # Store in Supabase storage
     file_name = metadata["name"]
-    import time
+    mime = metadata.get("mimeType") or "application/octet-stream"
+    file_size = int(metadata["size"]) if metadata.get("size") else None
 
-    timestamp = int(time.time())
-    storage_path = f"{user_id}/{data['project_id']}/{timestamp}_{file_name}"
-    supabase.storage.from_("project-files").upload(
-        storage_path,
+    # Storage write -> project_files insert -> orphan cleanup on failure,
+    # shared with the Dropbox import path. The DB storage trigger
+    # (-> StorageCapExceededError) is the cap gate.
+    file_row = store_imported_file(
+        supabase,
+        user_id,
+        data["project_id"],
+        file_name,
         content,
-        file_options={"content-type": metadata.get("mimeType") or "application/octet-stream"},
+        mime=mime,
+        folder_category=data.get("file_type", "contract"),
+        file_size=file_size,
     )
 
-    # Create project_files record
-    file_url = supabase.storage.from_("project-files").get_public_url(storage_path)
-    file_record = {
-        "project_id": data["project_id"],
-        "file_name": file_name,
-        "folder_category": data.get("file_type", "contract"),
-        "file_path": storage_path,
-        "file_url": file_url,
-        "file_size": int(metadata["size"]) if metadata.get("size") else None,
-        "file_type": metadata.get("mimeType", "application/octet-stream"),
-    }
-    result = supabase.table("project_files").insert(file_record).execute()
-
     # Create sync mapping
-    if result.data:
+    if file_row:
         supabase.table("drive_sync_mappings").insert(
             {
                 "user_id": user_id,
-                "project_file_id": result.data[0]["id"],
+                "project_file_id": file_row["id"],
                 "project_id": data["project_id"],
                 "drive_file_id": data["drive_file_id"],
                 "sync_direction": "from_drive",
             }
         ).execute()
 
-    return {"file": result.data[0] if result.data else {}, "source": "google_drive"}
+    return {"file": file_row, "source": "google_drive"}
 
 
 async def export_to_drive(token: str, supabase: Client, user_id: str, data: dict) -> dict:

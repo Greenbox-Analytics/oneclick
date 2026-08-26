@@ -223,3 +223,31 @@ def test_mark_all_notifications_read_bulk(client, mock_supabase):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+# ============================================================
+# "Mark all read" must not consume an unanswered invitation
+# ============================================================
+# An invite row is a to-do, not a message: NotificationRow gates its
+# Accept/Decline buttons on unread. Sweeping one up with the rest is what made
+# an invite unrecoverable — the user clicks "Mark all read", the buttons vanish,
+# and the invite is still pending server-side with no in-app way to accept it.
+
+
+async def test_mark_all_read_skips_org_invites():
+    """One UPDATE whose filter is the exact negation of NotificationRow.tsx's
+    isOrgInvite (type == 'invitation' AND entity_type == 'org'), spelled with
+    an explicit NULL arm so registry 'invitation' rows (entity_type NULL) are
+    still marked."""
+    from registry import service
+
+    db = MagicMock()
+    await service.mark_all_notifications_read(db, TEST_USER_ID)
+
+    update_chain = db.table.return_value.update
+    update_chain.assert_called_once_with({"read": True})
+    eq_calls = [c.args for c in update_chain.return_value.eq.call_args_list]
+    assert ("user_id", TEST_USER_ID) in eq_calls
+    or_chain = update_chain.return_value.eq.return_value.eq.return_value.or_
+    or_chain.assert_called_once_with("type.neq.invitation,entity_type.is.null,entity_type.neq.org")
+    or_chain.return_value.execute.assert_called_once()

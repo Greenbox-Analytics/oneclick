@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Camera, Edit, Save, X, Instagram, Youtube, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, BookOpen, Plus, StickyNote } from "lucide-react";
+import { Camera, Edit, Save, X, Instagram, Youtube, Mic2, Link as LinkIcon, Users, Music2, Trash2, CheckCircle, Plus, StickyNote } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
@@ -27,7 +27,10 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { useActiveTeam, useTransferArtistToTeam } from "@/hooks/useArtistTeam";
+import { useMyOrgs } from "@/hooks/useOrgs";
 
 // Helper component for field containers (defined outside to prevent re-renders)
 const FieldContainer = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
@@ -119,6 +122,22 @@ const ArtistProfile = () => {
   const teamcard = teamcardQuery.data?.teamcard;
   const isVerified = teamcardQuery.data?.verified === true;
 
+  // Ownership (Team-Owned Artists). teamId is loaded with the artist row below;
+  // activeTeam is null whenever LICENSING_ENABLED is off, so with the flag down
+  // neither the badge nor the transfer button ever renders.
+  const [teamId, setTeamId] = useState<string | null>(null);
+  const activeTeam = useActiveTeam();
+  const transfer = useTransferArtistToTeam();
+  const isTeamOwned = !!teamId;
+  // Name the owning team on the badge. useMyOrgs is cached app-wide; when the
+  // org isn't in the caller's list (or licensing is off) fall back to the
+  // generic label.
+  const { data: myOrgs } = useMyOrgs();
+  const teamName = teamId
+    ? myOrgs?.find((o) => o.id === teamId)?.name ??
+      (activeTeam?.orgId === teamId ? activeTeam.orgName : null)
+    : null;
+
   // Display fields: prefer TeamCard data when verified
   const displayName = (isVerified && teamcard?.display_name) || formData.name;
   const displayBio = (isVerified && teamcard?.bio) || formData.bio;
@@ -147,6 +166,7 @@ const ArtistProfile = () => {
       }
 
       if (data) {
+        setTeamId(data.team_id ?? null);
         const artistData = {
           name: data.name,
           email: data.email,
@@ -504,15 +524,6 @@ const ArtistProfile = () => {
         actions={
           <>
             <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => navigate("/docs")}
-              title="Documentation"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <BookOpen className="w-4 h-4" />
-            </Button>
-            <Button
               variant="outline"
               size="sm"
               className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
@@ -548,6 +559,45 @@ const ArtistProfile = () => {
                     <Badge className="bg-green-100 text-green-800 flex items-center gap-1">
                       <CheckCircle className="w-3 h-3" /> Verified
                     </Badge>
+                  )}
+                  {isTeamOwned && (
+                    <Badge variant="outline" className="flex items-center gap-1">
+                      <Users className="w-3 h-3" /> Shared with {teamName ?? "your team"}
+                    </Badge>
+                  )}
+                  {!isTeamOwned && activeTeam && id && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="outline" size="sm" disabled={transfer.isPending}>
+                          Move to {activeTeam.orgName}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Move this artist to {activeTeam.orgName}?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Its projects, files, audio and credentials move with it, everyone on the
+                            team will be able to see them, and its storage and AI usage will come
+                            out of the team&apos;s allowance instead of yours. If any works under
+                            this artist have collaborators, their splits and agreements will become
+                            visible to everyone on the team. This can&apos;t be undone from the app.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() =>
+                              transfer.mutate(
+                                { orgId: activeTeam.orgId, artistId: id },
+                                { onSuccess: () => setTeamId(activeTeam.orgId) },
+                              )
+                            }
+                          >
+                            Move to team
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   )}
                 </div>
                 <div className="flex flex-wrap justify-center sm:justify-start gap-2 mb-3">
