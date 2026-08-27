@@ -237,7 +237,20 @@ export function ZoeInputBar({
             )}
           </div>
 
-          <p className="composer-note">{noteText}</p>
+          {/* Zoe is the highest-frequency metered action, and the only one
+              whose price was invisible: this file imported CreditsChip and
+              never rendered it. Greetings and thanks stay free (the
+              conversational fast-path), so the chip states the price of a real
+              question rather than promising anything about chat. */}
+          <p className="composer-note">
+            {noteText}
+            {!isAtLimit && (
+              <>
+                {" "}
+                <CreditsChip action="zoe_message" className="align-middle" />
+              </>
+            )}
+          </p>
         </div>
       </div>
 

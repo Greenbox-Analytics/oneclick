@@ -32,6 +32,7 @@ import { useIntegrations } from "@/hooks/useIntegrations";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 import EarningsBreakdown from "@/components/oneclick/EarningsBreakdown";
 import { formatCurrency } from "@/lib/currency";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 import "./royalty-results.css";
 
 export interface RoyaltyPayment {
@@ -669,10 +670,19 @@ const CalculationResults = ({
                 <p className="page-sub">{calculationResult.message}</p>
               </div>
               <div className="res-actions">
-                <Button variant="outline" size="sm" onClick={() => handleCalculateRoyalties(true)} disabled={isUploading}>
-                  <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
-                  Recalculate
-                </Button>
+                {/* This is the FORCED path: it bypasses the result cache, redoes
+                    the LLM work and charges the full base EVERY time — unlike
+                    "Calculate Royalties" on the setup page, which is deduped to
+                    one charge per result per billing period. Two buttons that
+                    look alike and bill differently need the price on the
+                    expensive one. */}
+                <div className="inline-flex items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={() => handleCalculateRoyalties(true)} disabled={isUploading}>
+                    <RefreshCw className={`w-4 h-4 mr-2 ${isUploading ? 'animate-spin' : ''}`} />
+                    Recalculate
+                  </Button>
+                  <CreditsChip action="oneclick_run" />
+                </div>
                 {driveConnected && (
                   <Button variant="outline" size="sm" onClick={handleShare} disabled={sharing}>
                     <HardDrive className="w-4 h-4 mr-2" />

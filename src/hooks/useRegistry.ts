@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { API_URL, apiFetch, getAuthHeaders } from "@/lib/apiFetch";
 import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
+import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 
 // --- Types ---
 
@@ -677,12 +678,17 @@ export interface DeriveResult {
   terms: Array<{ label: string; value: string }>; matched_file_ids: string[];
 }
 export function useDeriveFromContracts() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (body: { work_id: string; name: string; email?: string; contract_file_ids?: string[] }) =>
       apiFetch<DeriveResult>(`${API_URL}/registry/collaborators/derive-from-contracts`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
+    // REGISTRY_PARSE, same base rate as a single parse (one deliverable, N
+    // contracts). Without this the balance the user is looking at stays at its
+    // pre-charge number, which reads as "it didn't charge me".
+    onSuccess: () => invalidateCreditSurfaces(queryClient),
     onError: (e: Error) => toast.error(e.message),
   });
 }

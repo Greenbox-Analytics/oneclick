@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { type DeriveResult, useDeriveFromContracts } from "@/hooks/useRegistry";
+import { CreditsChip } from "@/components/billing/CreditsChip";
 import { useWorkFiles } from "@/hooks/useWorkFiles";
 import { useStorageStatus } from "@/hooks/useEntitlements";
 import { useGatedAction } from "@/hooks/useGatedAction";
@@ -364,6 +365,16 @@ export default function DeriveCollaboratorSplitDialog({
               )}
               {result ? "Re-run Derive" : "Derive"}
             </Button>
+            {/* Derive is REGISTRY_PARSE — one charge for the whole batch, no
+                matter how many contracts it reads. Re-running the same
+                collaborator over the same contracts is deduped for the billing
+                period, which is why "Re-run Derive" is safe to offer. */}
+            <div className="flex flex-col items-center gap-1">
+              <CreditsChip action="registry_parse" />
+              <p className="text-[11px] text-muted-foreground">
+                You won&apos;t be charged twice for the same result this month.
+              </p>
+            </div>
           </div>
 
           {/* Review state */}

@@ -41,6 +41,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { API_URL, apiFetch, getAuthHeaders, apiErrorFromBody } from "@/lib/apiFetch";
 import { useWorkspaceScope } from "@/hooks/useWorkspaceScope";
 import { CreditsChip } from "@/components/billing/CreditsChip";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateCreditSurfaces } from "@/hooks/useCreditUsage";
 import { useGatedAction } from "@/hooks/useGatedAction";
 
 const ROLES = [
@@ -109,6 +111,7 @@ const Req = () => <span className="text-green-600">*</span>;
 const SplitSheet = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [step, setStep] = useState(0);
 
   // Step 1
@@ -321,6 +324,11 @@ const SplitSheet = () => {
     onSuccess: (blob) => {
       setGeneratedBlob(blob);
       setHasGenerated(true);
+      // The sheet just cost SPLIT_SHEET credits (per FORMAT). Nothing else on
+      // this page refetches, so without this the CreditsChip beside the button
+      // keeps quoting the pre-charge balance — which reads as "it charged me
+      // nothing", the exact complaint this fixes.
+      invalidateCreditSurfaces(queryClient);
       const savedMsg = saveToArtist ? " and saved to artist profile" : "";
       toast.success(`Split sheet generated${savedMsg} successfully`);
     },
