@@ -465,7 +465,10 @@ const OneClickDocuments = () => {
                     streamResult = result;
                     setCalculationResult(result);
                     setShowProgressModal(false);
-                    // Runs are credit-metered (cache hits free — refetch is harmless).
+                    // Runs are credit-metered. A cache hit is NOT free any more
+                    // (base rates, 2026-08-17) — it charges the base, deduped to
+                    // one charge per deliverable per billing period, so the
+                    // balance only moves on the first re-run of a given result.
                     invalidateCreditSurfaces(queryClient);
                     if (needsReview) {
                         setExpenseReview(data.expenses || []);
