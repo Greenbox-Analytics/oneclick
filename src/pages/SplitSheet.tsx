@@ -1029,7 +1029,6 @@ const SplitSheet = () => {
               </Button>
               <div className="flex gap-2 items-center">
                 {!hasGenerated ? (
-                  <>
                   <Button disabled={!canGenerate} onClick={handleGenerate}>
                     {isGenerating ? (
                       <>
@@ -1047,14 +1046,19 @@ const SplitSheet = () => {
                       </>
                     )}
                   </Button>
-                  <CreditsChip action="split_sheet" />
-                  </>
                 ) : (
                   <Button onClick={handleDownload} className="gap-2">
                     <Download className="w-4 h-4" />
                     Download
                   </Button>
                 )}
+                {/* OUTSIDE the branch on purpose. It used to live in the
+                    pre-generate arm, so it vanished at the exact moment
+                    "what did that cost, and what's left?" becomes the
+                    question. The balance here is the POST-charge one —
+                    onSuccess invalidates the credit surfaces — so the drop
+                    is visible right where the work happened. */}
+                <CreditsChip action="split_sheet" />
               </div>
             </div>
 

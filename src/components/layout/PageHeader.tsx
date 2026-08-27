@@ -45,30 +45,28 @@ export function PageHeader({
   // (The context switcher renders nothing unless the user has more than one
   // context.)
   //
-  // "Home" means ONE thing for a signed-in user: the dashboard. It used to
-  // point at the marketing landing page while the logo two inches away went
-  // to /dashboard — two home affordances, two destinations. Now they agree,
-  // and the button only renders where the logo isn't already doing the job,
-  // so a header never shows both.
-  const renderGlobalActions = (showHome: boolean) =>
+  // Two destinations, two controls: the LOGO goes to /dashboard (app home),
+  // this icon goes to "/" (the public landing page). They are deliberately
+  // different, so unlike before this renders on every header rather than only
+  // where the logo is absent — a signed-in user otherwise has no route back to
+  // the marketing site, and the logo doesn't serve that.
+  const renderGlobalActions = () =>
     user ? (
       <>
         <HeaderContextSwitcher />
         <HeaderCreditsTicker />
-        {showHome && (
-          <Button
-            asChild
-            variant="ghost"
-            size="icon"
-            aria-label="Dashboard"
-            title="Dashboard"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <Link to="/dashboard">
-              <Home className="w-4 h-4" />
-            </Link>
-          </Button>
-        )}
+        <Button
+          asChild
+          variant="ghost"
+          size="icon"
+          aria-label="Home page"
+          title="Home page"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <Link to="/">
+            <Home className="w-4 h-4" />
+          </Link>
+        </Button>
         <HeaderDocsButton />
         <NotificationBell />
       </>
@@ -123,9 +121,7 @@ export function PageHeader({
           {(actions || user || userMenu) && (
             <div className="flex items-center gap-1 shrink-0">
               {actions}
-              {/* The nav sheet already has a Dashboard item, so on mobile the
-                  Home icon is always redundant. */}
-              {renderGlobalActions(false)}
+              {renderGlobalActions()}
               {userMenu}
             </div>
           )}
@@ -172,7 +168,7 @@ export function PageHeader({
         {(actions || user || userMenu) && (
           <div className="flex items-center gap-2 shrink-0">
             {actions}
-            {renderGlobalActions(!showLogo)}
+            {renderGlobalActions()}
             {userMenu}
           </div>
         )}
