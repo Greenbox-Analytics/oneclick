@@ -18,6 +18,7 @@ from subscriptions.models import (
     Action,
     Caps,
     CheckResult,
+    CreditAction,
     CreditCheckResult,
     CreditsInfo,
     Entitlements,
@@ -1688,10 +1689,16 @@ class EntitlementsService:
                 a["count"] += 1
                 a["spent"] += amt
 
+        # Derived from CreditAction, NEVER a literal list. A hard-coded tuple is
+        # how split_sheet ended up missing from this payload while the tool
+        # itself charged 20 credits: the billing card renders an absent action
+        # as price null -> the string "free", so a forgotten action doesn't fail
+        # loudly, it publishes a wrong price.
         tools = []
-        for action in ("oneclick_run", "registry_parse", "zoe_message"):
-            a = agg.get(action, {"count": 0, "spent": 0})
-            tools.append({"action": action, "price": prices.get(action), "count": a["count"], "spent": a["spent"]})
+        for action in CreditAction:
+            key = str(action)
+            a = agg.get(key, {"count": 0, "spent": 0})
+            tools.append({"action": key, "price": prices.get(key), "count": a["count"], "spent": a["spent"]})
         return tools
 
     def get_credit_usage(self, user_id: str) -> dict:

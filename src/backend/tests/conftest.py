@@ -190,10 +190,14 @@ _DEFAULT_WALLET_ROW = {
     "period_end": "2099-05-09T00:00:00+00:00",
 }
 
+# Must carry a row for EVERY CreditAction: _price_or_wall treats a missing
+# action as a config error and DENIES it, so an action left out here is
+# untestable through the real gate rather than merely unpriced.
 _DEFAULT_CREDIT_PRICES = [
     {"action": "zoe_message", "credits": 3},
     {"action": "oneclick_run", "credits": 21},
     {"action": "registry_parse", "credits": 12},
+    {"action": "split_sheet", "credits": 20},
 ]
 
 # Includes 'profiles' because EntitlementsService.get_for_user now calls
@@ -240,7 +244,7 @@ def _default_table_side_effect(name):
     elif name == "credit_wallets":
         b.execute.return_value = MagicMock(data=[_DEFAULT_WALLET_ROW], count=1)
     elif name == "credit_prices":
-        b.execute.return_value = MagicMock(data=list(_DEFAULT_CREDIT_PRICES), count=3)
+        b.execute.return_value = MagicMock(data=list(_DEFAULT_CREDIT_PRICES), count=len(_DEFAULT_CREDIT_PRICES))
     elif name == "credit_ledger":
         b.execute.return_value = MagicMock(data=[], count=0)
     return b

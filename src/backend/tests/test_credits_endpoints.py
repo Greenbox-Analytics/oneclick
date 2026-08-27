@@ -13,7 +13,7 @@ import pytest
 
 import main
 import subscriptions.enforcement as enforcement
-from subscriptions.models import Action, CheckResult, CreditCheckResult
+from subscriptions.models import Action, CheckResult, CreditAction, CreditCheckResult
 from subscriptions.service import EntitlementsService
 from tests.conftest import (
     _DEFAULT_CREDIT_PRICES,
@@ -852,6 +852,28 @@ class TestRegistryParseCharge:
 # ---------------------------------------------------------------------------
 
 
+def test_every_credit_action_appears_in_the_usage_payload():
+    """Twin of test_every_credit_action_is_in_the_prices_payload, for the OTHER
+    hand-built credits payload.
+
+    An action missing from `tools` does not fail loudly — CreditsUsageCard reads
+    a missing row as price null and renders the word "free", so the gap publishes
+    a wrong price on the billing page while the tool charges its base rate. That
+    is exactly what happened to split_sheet. `_aggregate_tool_usage` iterates
+    CreditAction so a new action cannot be forgotten again.
+
+    wallet_id=None skips the ledger read entirely: this pins the SHAPE of the
+    payload, which is the part that silently drifts.
+    """
+    prices = {str(a): 7 for a in CreditAction}
+    tools = EntitlementsService(MagicMock())._aggregate_tool_usage(None, prices)
+
+    assert {t["action"] for t in tools} == {str(a) for a in CreditAction}
+    # A priced action must never surface as price None — that IS the "free" bug.
+    assert all(t["price"] == 7 for t in tools)
+    assert all(t["count"] == 0 and t["spent"] == 0 for t in tools)
+
+
 class _NoGteMockQueryBuilder(MockQueryBuilder):
     """Same chainable mock as MockQueryBuilder, but `.gte()` raises — proves
     the org-context aggregation never floors the ledger scan by created_at
@@ -905,7 +927,7 @@ class TestGetCreditUsageOrgContext:
             if name == "credit_wallets":
                 b.execute.return_value = MagicMock(data=[pool_wallet], count=1)
             elif name == "credit_prices":
-                b.execute.return_value = MagicMock(data=list(_DEFAULT_CREDIT_PRICES), count=3)
+                b.execute.return_value = MagicMock(data=list(_DEFAULT_CREDIT_PRICES), count=len(_DEFAULT_CREDIT_PRICES))
             elif name == "credit_ledger":
                 # `.gte` must never be called in this branch — see the class docstring.
                 b = _NoGteMockQueryBuilder()
