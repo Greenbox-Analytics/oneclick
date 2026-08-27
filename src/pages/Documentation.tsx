@@ -10,11 +10,14 @@ import {
   Info, CheckCircle2, Zap, Volume2, StickyNote, Settings, Lock,
   Scale, FileCheck, UserPlus, Pencil, User, LogOut,
   AlertTriangle, Copy, Search, Plug, ThumbsUp, ThumbsDown, Wallet,
-  DollarSign, Receipt, BarChart3, SplitSquareHorizontal,
+  DollarSign, Receipt, BarChart3, SplitSquareHorizontal, Coins,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSmartBack } from "@/hooks/useSmartBack";
+import { useToolPrices } from "@/hooks/useCreditPacks";
+import { ACTION_ORDER, estimateCredits, SIZED_ACTIONS, TOOL_META, type ToolCreditPrices } from "@/lib/credits";
+import type { CreditAction } from "@/hooks/useCreditUsage";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -33,7 +36,7 @@ const NAV_GROUPS: { group: string; ids: string[] }[] = [
   { group: "Getting started", ids: ["getting-started"] },
   { group: "Roster & projects", ids: ["artist-management", "portfolio", "project-detail", "work-detail", "rights-registry"] },
   { group: "Tools", ids: ["oneclick", "royalty-tracking", "zoe", "split-sheet"] },
-  { group: "Platform", ids: ["workspace", "integrations", "best-practices"] },
+  { group: "Platform", ids: ["workspace", "integrations", "credits", "best-practices"] },
 ];
 
 const SECTION_LABELS: Record<string, { label: string; icon: React.ElementType }> = {
@@ -49,6 +52,7 @@ const SECTION_LABELS: Record<string, { label: string; icon: React.ElementType }>
   "split-sheet": { label: "Split Sheet", icon: Scale },
   workspace: { label: "Workspace", icon: LayoutGrid },
   integrations: { label: "Integrations", icon: Plug },
+  credits: { label: "Credits & Pricing", icon: Coins },
   "best-practices": { label: "Best Practices", icon: Lightbulb },
 };
 
@@ -78,6 +82,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   "artist-management": "Manage your roster with profiles, streaming links, and organized projects.",
   workspace: "Your project-management hub with Kanban boards, a calendar, and integrations.",
   integrations: "Connect Msanii to Google Drive — and see what's coming next.",
+  credits: "What each AI action costs, and what's free.",
   "best-practices": "Tips for getting the most out of Msanii.",
 };
 
@@ -889,6 +894,186 @@ const IntegrationsContent = () => (
   </div>
 );
 
+// Prices come from GET /billing/credit-packs (the same `credit_prices` rows the
+// charge is computed from), never literals — the base rates have already moved
+// once, and a hardcoded table is a promise that silently goes wrong.
+/** "What will this cost me?" — the one question the tables above can't answer,
+ *  because it depends on how long your contracts are and how often you run.
+ *  Math lives in lib/credits.ts and is pinned to the backend's own test values. */
+const CostEstimator = ({ prices }: { prices?: ToolCreditPrices | null }) => {
+  const [action, setAction] = useState<CreditAction>("oneclick_run");
+  const [pages, setPages] = useState(15);
+  const [runs, setRuns] = useState(10);
+
+  const PRICE_KEY: Record<CreditAction, keyof ToolCreditPrices> = {
+    oneclick_run: "oneclickRun",
+    registry_parse: "registryParse",
+    zoe_message: "zoeMessage",
+    split_sheet: "splitSheet",
+  };
+  const base = prices?.[PRICE_KEY[action]] ?? 0;
+  const sized = SIZED_ACTIONS.includes(action);
+  const each = estimateCredits(action, pages, base);
+  const monthly = each * Math.max(0, runs);
+
+  const field = "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground";
+
+  return (
+    <div className="my-5 rounded-xl border border-border bg-muted/20 p-5">
+      <div className="grid gap-4 sm:grid-cols-[1.4fr_1fr] sm:items-end">
+        <label className="block">
+          <span className="mb-1.5 block text-[12px] font-medium text-muted-foreground">Action</span>
+          <select className={field} value={action} onChange={(e) => setAction(e.target.value as CreditAction)}>
+            {ACTION_ORDER.map((a) => (
+              <option key={a} value={a}>{TOOL_META[a].label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-[12px] font-medium text-muted-foreground">Per month</span>
+          <input
+            type="number"
+            min={0}
+            className={`${field} tabular-nums`}
+            value={runs}
+            onChange={(e) => setRuns(Math.max(0, Number(e.target.value) || 0))}
+          />
+        </label>
+      </div>
+
+      {sized && (
+        <label className="mt-4 block">
+          <span className="mb-1.5 flex items-baseline justify-between text-[12px] font-medium text-muted-foreground">
+            Pages per run
+            <span className="tabular-nums text-foreground">{pages}</span>
+          </span>
+          <input
+            type="range"
+            min={1}
+            max={150}
+            value={pages}
+            onChange={(e) => setPages(Number(e.target.value))}
+            className="w-full accent-primary"
+          />
+        </label>
+      )}
+
+      <div className="mt-5 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t border-border/60 pt-4">
+        <span className="text-[26px] font-bold tabular-nums text-foreground">{each}</span>
+        <span className="text-sm text-muted-foreground">credits each</span>
+        <span className="text-muted-foreground/50">·</span>
+        <span className="text-[26px] font-bold tabular-nums text-foreground">{monthly.toLocaleString()}</span>
+        <span className="text-sm text-muted-foreground">per month</span>
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        An estimate. Long documents vary in density, and anything you&apos;ve already run costs the base.
+      </p>
+    </div>
+  );
+};
+
+const CreditsContent = () => {
+  const { data } = useToolPrices();
+  const prices = data?.prices;
+  const cr = (n: number | null | undefined) => (n == null ? "—" : `${n} credits`);
+
+  return (
+    <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
+      <div>
+        <SectionHeading>What things cost</SectionHeading>
+        <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+          AI actions cost credits. Everything else — artists, projects, files, boards, invoices — is free.
+        </p>
+        <div className="my-5 overflow-hidden rounded-xl border border-border">
+          <table className="w-full border-collapse text-[13.5px]">
+            <thead>
+              <tr className="bg-muted/50 text-left">
+                {["Action", "Cost", "Includes"].map((h) => (
+                  <th key={h} className="border-b border-border px-3.5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ["OneClick run", cr(prices?.oneclickRun), "One statement calculated · ~10 pages of contracts"],
+                ["Contract parse", cr(prices?.registryParse), "Splits and terms read out · ~10 pages"],
+                ["Zoe message", cr(prices?.zoeMessage), "One answer, plus the reading behind it"],
+                ["Split sheet", cr(prices?.splitSheet), "One document (PDF and Word count separately)"],
+              ].map((r) => (
+                <tr key={r[0]} className="border-b border-border/60 last:border-0">
+                  <td className="whitespace-nowrap px-3.5 py-2.5 font-semibold text-foreground">{r[0]}</td>
+                  <td className="whitespace-nowrap px-3.5 py-2.5 font-semibold tabular-nums text-foreground">{r[1]}</td>
+                  <td className="px-3.5 py-2.5 leading-snug text-muted-foreground">{r[2]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Charged per action, not per file. Three short contracts cost the same as one of the same total
+          length.
+        </p>
+      </div>
+
+      <div>
+        <SectionHeading>Long documents</SectionHeading>
+        <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+          Every action includes about <strong>10 pages</strong>. After that, roughly{" "}
+          <strong>2 credits per 5 extra pages</strong>. Pages are counted across the whole run.
+        </p>
+        <div className="my-5 overflow-hidden rounded-xl border border-border">
+          <table className="w-full border-collapse text-[13.5px]">
+            <thead>
+              <tr className="bg-muted/50 text-left">
+                {["Contract length", "OneClick run"].map((h) => (
+                  <th key={h} className="border-b border-border px-3.5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[["Up to 10 pages", "30 credits"], ["15 pages", "32 credits"], ["30 pages", "37 credits"], ["60 pages", "46 credits"], ["100 pages", "58 credits"]].map((r) => (
+                <tr key={r[0]} className="border-b border-border/60 last:border-0">
+                  <td className="whitespace-nowrap px-3.5 py-2.5 font-semibold text-foreground">{r[0]}</td>
+                  <td className="whitespace-nowrap px-3.5 py-2.5 tabular-nums text-muted-foreground">{r[1]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Callout type="info" title="Put simply">
+          A normal contract costs the listed price. A long one costs a bit more.
+        </Callout>
+      </div>
+
+      <div>
+        <SectionHeading>Estimate your cost</SectionHeading>
+        <CostEstimator prices={prices} />
+      </div>
+
+      <div>
+        <SectionHeading>Free</SectionHeading>
+        <ul className="space-y-2 text-sm text-muted-foreground leading-relaxed list-disc pl-5">
+          <li>Greetings and thanks to Zoe — only real questions are charged</li>
+          <li>Reviewing expenses and confirming a OneClick result</li>
+          <li>Reading, exporting, or downloading anything you&apos;ve already made</li>
+        </ul>
+      </div>
+
+      <div>
+        <SectionHeading>Your credits</SectionHeading>
+        <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+          Monthly credits reset on your billing date and don&apos;t roll over. Credits you buy never expire
+          and are spent last. Track them under <strong>Account &amp; Billing → Credits &amp; usage</strong>.
+        </p>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Run out? Buy more, or turn on pay-per-use and it goes on your next invoice. On a team, you draw
+          from the shared pool up to the limit your admin sets.
+        </p>
+      </div>
+    </div>
+  );
+};
+
 const BestPracticesContent = () => (
   <div className="space-y-8 divide-y divide-border/30 [&>*]:pt-6 [&>*:first-child]:pt-0">
     <Callout type="tip" title="Organize with projects">
@@ -1031,6 +1216,7 @@ const SECTION_CONTENT: Record<string, React.FC> = {
   "artist-management": ArtistManagementContent,
   workspace: WorkspaceContent,
   integrations: IntegrationsContent,
+  credits: CreditsContent,
   "best-practices": BestPracticesContent,
 };
 

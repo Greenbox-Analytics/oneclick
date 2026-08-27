@@ -45,6 +45,20 @@ export function useCreditPacks() {
   });
 }
 
+/** Live per-action prices for PUBLIC surfaces (the docs page).
+ *
+ * Same endpoint and same cache entry as useCreditPacks — `/billing/credit-packs`
+ * is unauthenticated — minus the session gate, so a logged-out visitor reading
+ * the docs still gets real numbers instead of hardcoded ones that go stale the
+ * next time base rates move. */
+export function useToolPrices() {
+  return useQuery<CreditPacksResponse>({
+    queryKey: ["credit-packs"],
+    queryFn: () => apiFetch<CreditPacksResponse>(`${API_URL}/billing/credit-packs`),
+    staleTime: 5 * 60_000,
+  });
+}
+
 export interface CreateTopupArgs {
   /** A catalog bundle. Mutually exclusive with `credits` — the backend 422s
    * when both or neither are set. */

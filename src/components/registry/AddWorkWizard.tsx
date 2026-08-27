@@ -1891,9 +1891,6 @@ function RoyaltyStep({
                 Select or upload at least one contract first.
               </p>
             )}
-            <p className="mt-1.5 text-[11px] text-muted-foreground">
-              You won&apos;t be charged twice for the same result this month.
-            </p>
           </div>
         </>
       )}

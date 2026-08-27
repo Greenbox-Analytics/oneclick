@@ -366,14 +366,9 @@ export default function DeriveCollaboratorSplitDialog({
               {result ? "Re-run Derive" : "Derive"}
             </Button>
             {/* Derive is REGISTRY_PARSE — one charge for the whole batch, no
-                matter how many contracts it reads. Re-running the same
-                collaborator over the same contracts is deduped for the billing
-                period, which is why "Re-run Derive" is safe to offer. */}
-            <div className="flex flex-col items-center gap-1">
+                matter how many contracts it reads. */}
+            <div className="flex justify-center">
               <CreditsChip action="registry_parse" />
-              <p className="text-[11px] text-muted-foreground">
-                You won&apos;t be charged twice for the same result this month.
-              </p>
             </div>
           </div>
 

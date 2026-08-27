@@ -67,6 +67,62 @@ export function creditStanding(credits: EntitlementCredits | null | undefined): 
 /** Copy for the no-number case, so every surface words it identically. */
 export const POOL_ONLY_LABEL = "Pulling from org credits pool";
 
+// ---------------------------------------------------------------------------
+// Cost estimator (docs page)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirror of the backend charge rule, for the "what will this cost me?" widget.
+ *
+ * BACKEND SOURCE: subscriptions/service.py::debit_for_action computes
+ *   max(base, metered, base + tail)
+ * with `metered`/`tail` from subscriptions/ai_pricing.py. The constants below
+ * are that module's dials plus the measured cost-per-token from the 2026-08-27
+ * calibration against ai_usage_log.
+ *
+ * This is an ESTIMATE and says so in the UI: real token counts vary with a
+ * document's density, and a cache hit costs the base flat. It exists so a user
+ * can answer "is a 90-page deal going to blow my month?" without running one.
+ * `src/lib/__tests__/credits-estimate.test.ts` pins it to the same page/credit
+ * pairs as the Python tests, so the two can't silently drift.
+ */
+const TOKENS_PER_PAGE = 650;
+/** Measured: 4,824 tokens per OneClick run cost $0.0149 across the pipeline. */
+const USD_PER_TOKEN = 0.0149 / 4824;
+/** CREDIT_MARKUP (3.0) / CREDIT_OVERAGE_USD (0.02). */
+const CREDITS_PER_USD = 150;
+/** ai_pricing.TAIL_FREE_TOKENS — tokens included before size starts to cost. */
+const FREE_TOKENS: Record<CreditAction, number> = {
+  oneclick_run: 6_500,
+  registry_parse: 6_500,
+  zoe_message: 30_000,
+  split_sheet: 6_500,
+};
+
+/** Actions whose price moves with how much there is to read. */
+export const SIZED_ACTIONS: CreditAction[] = ["oneclick_run", "registry_parse"];
+
+/** Canonical display order — usage-card rows and ring segments, docs estimator.
+ *  One list so a new action appears everywhere or nowhere. */
+export const ACTION_ORDER: CreditAction[] = ["oneclick_run", "registry_parse", "zoe_message", "split_sheet"];
+
+/** Estimated credits for one run of `action` over `pages` pages of documents. */
+export function estimateCredits(action: CreditAction, pages: number, base: number): number {
+  if (!Number.isFinite(base) || base <= 0) return 0;
+  // Split sheets make no LLM call and Zoe isn't measured in pages, so neither
+  // has a size input in the UI — they're their base rate, flat.
+  if (!SIZED_ACTIONS.includes(action)) return base;
+
+  const tokens = Math.max(0, pages) * TOKENS_PER_PAGE;
+  const cost = tokens * USD_PER_TOKEN;
+  const metered = cost > 0 ? Math.ceil(cost * CREDITS_PER_USD) : 0;
+
+  const free = FREE_TOKENS[action] ?? 6_500;
+  const tail = tokens > free ? Math.ceil(cost * (1 - free / tokens) * CREDITS_PER_USD) : 0;
+
+  return Math.max(base, metered, base + tail);
+}
+
 /**
  * Per-action credit prices as the API serves them (camelCase). Structurally
  * what `EntitlementCredits["prices"]` and GET /billing/credit-packs both

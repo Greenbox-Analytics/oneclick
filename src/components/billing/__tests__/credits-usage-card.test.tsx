@@ -11,6 +11,8 @@ import type { CreditUsage } from "@/hooks/useCreditUsage";
 // usage.tools — and quote its base rate rather than calling it free.
 
 let usageData: CreditUsage | undefined;
+const PERSONAL_ENT = { tier: "pro", credits: {}, caps: {}, usage: {} };
+let entData: Record<string, unknown> = PERSONAL_ENT;
 
 vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn() }));
 
@@ -20,7 +22,7 @@ vi.mock("@/hooks/useCreditUsage", async (importOriginal) => ({
 }));
 
 vi.mock("@/hooks/useEntitlements", () => ({
-  useEntitlements: () => ({ data: { tier: "pro", credits: {}, caps: {}, usage: {} } }),
+  useEntitlements: () => ({ data: entData }),
 }));
 
 vi.mock("@/hooks/useCreditPacks", () => ({
@@ -35,6 +37,7 @@ vi.mock("@/hooks/useBilling", () => ({
 afterEach(() => {
   cleanup();
   usageData = undefined;
+  entData = PERSONAL_ENT;
 });
 
 const renderCard = (opts: { usage: Partial<CreditUsage> }) => {
@@ -71,5 +74,62 @@ describe("CreditsUsageCard", () => {
     });
     expect(await screen.findByText("Registry parse")).toBeInTheDocument();
     expect(screen.queryByText(/cache hits free/)).not.toBeInTheDocument();
+  });
+
+  describe("org billing context", () => {
+    const asOrgMember = (credits: Record<string, unknown>) => {
+      entData = {
+        tier: "free",
+        caps: {},
+        usage: {},
+        billingContext: { type: "org", orgId: "o1", orgName: "Acme Records", role: "member" },
+        credits,
+      };
+    };
+
+    it("shows a member their own per-tool spend", async () => {
+      // The pool is shared, so where a member's OWN credits went is the only
+      // spend they can act on. The backend already scopes /me/credits/usage to
+      // the caller (metadata.org_member_id); this card used to drop it.
+      asOrgMember({ memberCap: 2000, memberCapUsed: 50, balance: null });
+      renderCard({
+        usage: {
+          enabled: true,
+          memberCap: 2000,
+          memberCapUsed: 50,
+          tools: [
+            { action: "oneclick_run", price: 30, count: 1, spent: 30 },
+            { action: "zoe_message", price: 5, count: 4, spent: 20 },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("OneClick run")).toBeInTheDocument();
+      expect(screen.getByText("Zoe message")).toBeInTheDocument();
+      expect(screen.getByText("30 cr")).toBeInTheDocument();
+      expect(screen.getByText("20 cr")).toBeInTheDocument();
+    });
+
+    it("still hides the pool balance from a plain member", async () => {
+      // Redaction is None/absent, never 0 — a 0 reads as "the org is out of
+      // credits", which a member would act on. Adding the breakdown must not
+      // smuggle the pool in alongside it.
+      asOrgMember({ memberCap: 2000, memberCapUsed: 50, balance: null });
+      renderCard({
+        usage: {
+          enabled: true,
+          memberCap: 2000,
+          memberCapUsed: 50,
+          balance: null,
+          bundleBalance: null,
+          reserveBalance: null,
+          tools: [{ action: "oneclick_run", price: 30, count: 1, spent: 30 }],
+        },
+      });
+
+      expect(await screen.findByText("OneClick run")).toBeInTheDocument();
+      expect(screen.queryByText(/in the shared pool/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/0 credits/)).not.toBeInTheDocument();
+    });
   });
 });

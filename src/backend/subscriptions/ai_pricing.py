@@ -53,6 +53,84 @@ def credits_for_cost(cost_usd: float) -> int:
     return max(1, math.ceil(round(cost_usd * credit_markup() / per_credit, 6)))
 
 
+# ---------------------------------------------------------------------------
+# Size tail: the free token allowance before a run starts costing extra
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS. Before this, the tail threshold was not a decision anyone
+# made — it fell out of the base rate. max(base, metered) starts charging extra
+# only once metered exceeds the base, i.e. at cost > base / markup x
+# price-per-credit = $0.20 for a 30-credit action. Measured runs cost ~$0.015,
+# so the implied threshold sat at ~13x the largest run anyone had ever done and
+# a 60-page contract cost exactly what a 3-page one did. Setting the allowance
+# explicitly decouples "when does size start to matter" from "what does this
+# action cost", which were only ever welded together by arithmetic.
+#
+# CALIBRATED 2026-08-27 against ai_usage_log (39 calls) + credit_ledger token
+# metadata, reconstructed into runs. Sample is SMALL (12 runs) — re-run
+# scripts/ against a bigger window before trusting these to two significant
+# figures. Observed, tokens per run:
+#
+#   oneclick + registry   median 4,824   p90  5,105   max  8,056   (~7.4 pages)
+#   zoe                   median 27,164  p90 35,971   max 63,115
+#
+# Zoe burns ~6x a document run because retrieval reads across the corpus, and
+# its base is 5 rather than 30 — so ONE global allowance would have quietly
+# tripled the price of a median Zoe message. Hence per-action values.
+#
+# ponytail: a dict, not a credit_prices column. These want tuning as data
+# accumulates, but n=12 means they want tuning from a dashboard by a human, not
+# hot-swapping in prod. Move them into credit_prices (public read, next to the
+# base) if a deploy-per-tune ever becomes the annoying part.
+DEFAULT_TAIL_FREE_TOKENS = 6_500  # ~10 pages at ~650 tokens/page
+
+TAIL_FREE_TOKENS: dict[str, int] = {
+    # Document extraction: ~10 pages included, then ~0.3 credits/page.
+    "oneclick_run": 6_500,
+    "registry_parse": 6_500,
+    # Retrieval-heavy. 30,000 sits just above the observed median so the
+    # advertised 5 still holds for a normal question, and is deliberately kept
+    # at or below what the base is worth in COGS (5 / 150 = $0.033) so the
+    # allowance can never be more generous than the base already paid for.
+    "zoe_message": 30_000,
+    # No LLM call at all, so no tail can ever fire. Present for completeness.
+    "split_sheet": 6_500,
+}
+
+
+def tail_free_tokens(action: str) -> int:
+    """Tokens a single run of `action` gets before the size tail engages.
+
+    CREDIT_TAIL_FREE_TOKENS overrides every action at once — an ops dial for
+    turning the tail off (set it very high) without a deploy, not a per-action
+    knob.
+    """
+    override = os.getenv("CREDIT_TAIL_FREE_TOKENS")
+    if override:
+        try:
+            return max(0, int(override))
+        except ValueError:
+            pass
+    return TAIL_FREE_TOKENS.get(action, DEFAULT_TAIL_FREE_TOKENS)
+
+
+def credits_for_excess(cost_usd: float, total_tokens: int, free_tokens: int) -> int:
+    """Credits owed for the portion of a run ABOVE its free token allowance.
+
+    The excess cost is pro-rated by token share rather than recomputed from the
+    per-call rows: the accumulator holds one total, and which specific tokens
+    were "the free ones" is not a real distinction. Pro-rating keeps the
+    expensive/cheap model mix of the actual run instead of assuming the excess
+    was all cheap input.
+
+    0 when the run fits in its allowance, when nothing was measured, or when the
+    allowance is disabled — so a cache hit (0 tokens, 0 cost) never tails.
+    """
+    if total_tokens <= free_tokens or total_tokens <= 0 or cost_usd <= 0:
+        return 0
+    return credits_for_cost(cost_usd * (1.0 - free_tokens / total_tokens))
+
+
 @dataclass(frozen=True)
 class ModelRate:
     input_usd: float  # $/1M input tokens
