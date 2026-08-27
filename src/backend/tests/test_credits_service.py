@@ -675,14 +675,15 @@ class TestMeteredDebit:
         return calls[0] if calls else None
 
     def test_measured_spend_overrides_flat_price(self, monkeypatch):
-        """$0.05 of gpt-5-mini -> 8 credits, charged instead of the flat 3."""
+        """200k tokens on a 3-credit base: metered 8, and the size tail adds 7
+        on top of the base (170k tokens past zoe's 30k allowance) -> 10."""
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _paid_supabase(bundle=100)
         with set_llm_context(TEST_USER_ID, "zoe"):
             _burn(input_tokens=200_000)
             EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
         args = self._debit_args(sb)
-        assert args["p_amount"] == 8
+        assert args["p_amount"] == 10
         assert args["p_metadata"]["input_tokens"] == 200_000
         assert args["p_metadata"]["estimated"] == 3
         assert args["p_metadata"]["metered"] is True
@@ -730,10 +731,11 @@ class TestMeteredDebit:
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _paid_supabase(bundle=100)
         with set_llm_context(TEST_USER_ID, "oneclick"):
-            _burn(input_tokens=200_000)
+            _burn(input_tokens=2_000)
             EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant(price=21, kind="overage_debit"))
         args = self._debit_args(sb)
-        # metered 8 sits under the 21 base — the floor applies to overage too.
+        # A normal-sized run: metered 1 and no size tail, so the 21 base is the
+        # floor — and the floor applies to overage exactly as it does to bundle.
         assert args["p_kind"] == "overage_debit" and args["p_amount"] == 21
 
 
@@ -1772,7 +1774,13 @@ class TestSelfServeOrgUploadGate:
 
 
 class TestBaseRateCharge:
-    """charge = max(base, metered) — spec 2026-08-17 §2."""
+    """charge = max(base, metered, base + size tail).
+
+    Base rates: spec 2026-08-17 §2. Size tail added 2026-08-27 — a run gets a
+    per-action free token allowance (~10 pages for document tools) and pays for
+    what it burns past it, so a 60-page contract no longer costs what a 3-page
+    one does.
+    """
 
     @staticmethod
     def _grant(price=30, kind="debit"):
@@ -1783,30 +1791,37 @@ class TestBaseRateCharge:
         calls = [c.args[1] for c in sb.rpc.call_args_list if c.args[0] == "debit_credits"]
         return calls[0] if calls else None
 
-    def test_metered_below_base_charges_base(self, monkeypatch):
-        """$0.05 of gpt-5-mini meters to 8, but the 30-credit base is a FLOOR."""
+    def test_a_normal_sized_run_charges_exactly_the_base(self, monkeypatch):
+        """4,800 tokens is the MEASURED median OneClick run (ai_usage_log,
+        2026-08-27). It fits inside the 6,500-token allowance and meters to 1,
+        so the advertised 30 is the real price — which is the whole point of
+        publishing a base rate."""
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _paid_supabase(bundle=1000)
         with set_llm_context(TEST_USER_ID, "oneclick"):
-            _burn(input_tokens=200_000)
+            _burn(input_tokens=4_800)
             EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
         args = self._debit_args(sb)
         assert args["p_amount"] == 30
         assert args["p_metadata"]["base"] == 30
         assert args["p_metadata"]["measurable"] is True
-        assert args["p_metadata"]["metered_credits"] == 8
-        assert args["p_metadata"]["metered"] is False  # the tail did NOT decide it
+        assert args["p_metadata"]["tail_credits"] == 0
+        assert args["p_metadata"]["free_tokens"] == 6_500
+        assert args["p_metadata"]["metered"] is False  # nothing beat the base
 
-    def test_metered_above_base_charges_metered(self, monkeypatch):
-        """$0.25 meters to 38 — past the base, so the tail wins."""
+    def test_an_oversized_run_pays_base_plus_the_excess(self, monkeypatch):
+        """1M tokens is ~1,500 pages. Metered alone would say 38; base + the
+        tail on the 993.5k tokens past the allowance says 68, and the max()
+        takes it. Under the OLD two-term rule this was 38."""
         monkeypatch.setenv("CREDITS_ENABLED", "true")
         sb = _paid_supabase(bundle=1000)
         with set_llm_context(TEST_USER_ID, "oneclick"):
             _burn(input_tokens=1_000_000)
             EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant())
         args = self._debit_args(sb)
-        assert args["p_amount"] == 38
+        assert args["p_amount"] == 68
         assert args["p_metadata"]["metered_credits"] == 38
+        assert args["p_metadata"]["tail_credits"] == 38
         assert args["p_metadata"]["metered"] is True
 
     def test_cache_hit_measures_zero_and_still_charges_base(self, monkeypatch):
@@ -1837,3 +1852,79 @@ class TestBaseRateCharge:
             _burn(input_tokens=1_000_000)
             EntitlementsService(sb).debit_for_action(TEST_USER_ID, self._grant(price=0))
         assert self._debit_args(sb) is None
+
+
+class TestSizeTail:
+    """The size curve the /docs page promises, pinned end to end.
+
+    These are the numbers a user can check against their own invoice, so they
+    are asserted as whole charges rather than as internals. Pages are converted
+    at ~650 tokens/page, the figure the pricing model uses.
+    """
+
+    PAGE = 650
+
+    @staticmethod
+    def _debit_args(sb):
+        calls = [c.args[1] for c in sb.rpc.call_args_list if c.args[0] == "debit_credits"]
+        return calls[0] if calls else None
+
+    def _charge(self, monkeypatch, *, pages, action="oneclick_run", price=30, tool="oneclick"):
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=100_000)
+        grant = CreditGrant(request_id=f"req-{pages}", action=action, price=price, kind="debit", enabled=True)
+        with set_llm_context(TEST_USER_ID, tool):
+            _burn(input_tokens=pages * self.PAGE)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, grant)
+        return self._debit_args(sb)["p_amount"]
+
+    def test_ten_pages_is_the_advertised_price(self, monkeypatch):
+        """The allowance is set AT the promise: 10 pages costs exactly 30."""
+        assert self._charge(monkeypatch, pages=10) == 30
+
+    def test_under_the_allowance_is_the_advertised_price(self, monkeypatch):
+        assert self._charge(monkeypatch, pages=1) == 30
+        assert self._charge(monkeypatch, pages=9) == 30
+
+    def test_the_curve_is_monotonic_in_size(self, monkeypatch):
+        """The defect this whole change fixes: a bigger run must never cost the
+        same as a smaller one once past the allowance."""
+        charges = [self._charge(monkeypatch, pages=p) for p in (10, 30, 60, 120)]
+        assert charges == sorted(charges)
+        assert len(set(charges)) == len(charges), f"sizes collapsed to one price: {charges}"
+
+    def test_a_cache_hit_never_tails(self, monkeypatch):
+        """Zero tokens burned means zero excess, however big the document was.
+        Consistent with charge-for-the-deliverable — and the reason the tail is
+        keyed on tokens BURNED rather than document size."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=1000)
+        grant = CreditGrant(request_id="req-c", action="oneclick_run", price=30, kind="debit", enabled=True)
+        with set_llm_context(TEST_USER_ID, "oneclick"):
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, grant)
+        assert self._debit_args(sb)["p_amount"] == 30
+
+    def test_zoe_keeps_its_own_larger_allowance(self, monkeypatch):
+        """Zoe burns ~6x a document run because retrieval reads the corpus. One
+        global allowance would have tripled the price of a median question, so
+        the allowance is per-action. 27k tokens is Zoe's MEASURED median."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        sb = _paid_supabase(bundle=1000)
+        grant = CreditGrant(request_id="req-z", action="zoe_message", price=5, kind="debit", enabled=True)
+        with set_llm_context(TEST_USER_ID, "zoe"):
+            _burn(input_tokens=27_000)
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, grant)
+        assert self._debit_args(sb)["p_amount"] == 5
+
+    def test_the_charge_never_dips_below_real_cost(self, monkeypatch):
+        """The safety property that makes the allowance safe to mis-tune: set it
+        absurdly high and the charge falls back to measured cost, never below
+        it. Mis-tuning this dial can cost margin; it can never cost money."""
+        monkeypatch.setenv("CREDITS_ENABLED", "true")
+        monkeypatch.setenv("CREDIT_TAIL_FREE_TOKENS", "99999999")
+        sb = _paid_supabase(bundle=100_000)
+        grant = CreditGrant(request_id="req-s", action="oneclick_run", price=30, kind="debit", enabled=True)
+        with set_llm_context(TEST_USER_ID, "oneclick"):
+            _burn(input_tokens=1_000_000)  # $0.25 -> 38 metered credits
+            EntitlementsService(sb).debit_for_action(TEST_USER_ID, grant)
+        assert self._debit_args(sb)["p_amount"] == 38

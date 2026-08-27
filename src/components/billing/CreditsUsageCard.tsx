@@ -12,9 +12,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { creditStanding, orgContext, POOL_ONLY_LABEL, TOOL_META } from "@/lib/credits";
+import { ACTION_ORDER as ORDER, creditStanding, orgContext, POOL_ONLY_LABEL, TOOL_META } from "@/lib/credits";
 import { useEntitlements } from "@/hooks/useEntitlements";
-import { useCreditUsage, type CreditAction } from "@/hooks/useCreditUsage";
+import { useCreditUsage, type CreditUsage } from "@/hooks/useCreditUsage";
 import { useCreditPacks } from "@/hooks/useCreditPacks";
 import { useSetBillingPrefs } from "@/hooks/useBilling";
 import { CreditRing, type RingSegment } from "@/components/billing/CreditRing";
@@ -22,8 +22,77 @@ import { TopUpCreditsDialog } from "@/components/billing/TopUpCreditsDialog";
 import { isPaidTier, tierLabel, ENTERPRISE_LABEL } from "@/lib/tiers";
 import { fmtDate, fmtDay } from "@/lib/utils";
 
-// Ring/list order matches the mockup.
-const ORDER: CreditAction[] = ["oneclick_run", "registry_parse", "zoe_message", "split_sheet"];
+/** Per-tool rows in ring order. An action absent from the payload lands as
+ *  price `null`, which the row renders as "free" — that is only ever correct
+ *  for a genuinely unpriced action, so keep the backend's `tools` derived from
+ *  CreditAction (see _aggregate_tool_usage). */
+function toolRows(usage: CreditUsage) {
+  const byAction = new Map((usage.tools ?? []).map((t) => [t.action, t]));
+  return ORDER.map((action) => ({
+    ...TOOL_META[action],
+    spent: byAction.get(action)?.spent ?? 0,
+    count: byAction.get(action)?.count ?? 0,
+    price: byAction.get(action)?.price ?? null,
+  }));
+}
+
+type ToolRow = ReturnType<typeof toolRows>[number];
+
+/** The per-tool cost/usage list.
+ *
+ * Shared by the personal and org cards deliberately. `/me/credits/usage` is
+ * always the CALLER's own spend — in org context the backend filters the pool
+ * ledger on `metadata.org_member_id`, so these rows mean "what I spent" in both
+ * contexts and nothing here leaks another member's activity. Org-wide rollups
+ * are a different endpoint (admin-only `GET /orgs/{id}/usage`).
+ */
+function ToolBreakdown({ rows, heading }: { rows: ToolRow[]; heading: string }) {
+  const maxSpent = Math.max(0, ...rows.map((r) => r.spent));
+  return (
+    <div>
+      <div className="text-[11px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 mb-3.5">
+        {heading}
+      </div>
+      <div>
+        {rows.map((r) => {
+          const pct = maxSpent ? Math.round((r.spent / maxSpent) * 100) : 0;
+          // The base rate IS the price (spec 2026-08-17 §2), so quote it
+          // flat. Only surface an average when the metered tail actually
+          // moved the total — i.e. the period's spend exceeds count x base,
+          // which happens on pathological runs and nowhere else.
+          const unit =
+            r.price == null
+              ? "free"
+              : r.count > 0 && r.spent > r.count * r.price
+                ? `${r.price} cr ea · ${Math.round(r.spent / r.count)} cr avg`
+                : `${r.price} cr ea`;
+          return (
+            <div key={r.label} className="py-[13px] border-t border-border/60 first:border-t-0">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 text-[14.5px] font-medium">
+                  <span className="w-[9px] h-[9px] rounded-[3px] flex-none" style={{ background: r.color }} />
+                  {r.label}
+                </div>
+                <div className="text-sm font-semibold text-right tabular-nums">
+                  {r.spent > 0 ? `${r.spent} cr` : "—"}
+                  <small className="block text-[11px] font-normal text-muted-foreground mt-px">
+                    {r.count} · {unit}
+                  </small>
+                </div>
+              </div>
+              <div className="h-[7px] rounded-[5px] bg-muted mt-2.5 overflow-hidden">
+                <span
+                  className="block h-full rounded-[5px]"
+                  style={{ width: `${Math.max(pct, r.spent > 0 ? 4 : 0)}%`, background: r.color }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function CreditsUsageCard() {
   const { data: usage, isLoading } = useCreditUsage();
@@ -106,6 +175,14 @@ export function CreditsUsageCard() {
             Request a higher limit
           </Button>
         </div>
+
+        {/* A member spends from a shared pool, so "where did my credits go?" is
+            the question they can actually act on — it's the only spend they
+            control. Heading says "Your" because these rows are filtered to this
+            member; the org's total is admin-only and lives on /teams. */}
+        <div className="border-t border-border/60 px-6 py-[22px]">
+          <ToolBreakdown rows={toolRows(usage)} heading="Your cost &amp; usage per tool" />
+        </div>
       </Card>
     );
   }
@@ -115,16 +192,8 @@ export function CreditsUsageCard() {
   const grant = usage.monthlyGrant ?? 0;
   const bundle = usage.bundleBalance ?? 0;
   const reserve = usage.reserveBalance ?? 0;
-  const byAction = new Map((usage.tools ?? []).map((t) => [t.action, t]));
-
-  const rows = ORDER.map((action) => ({
-    ...TOOL_META[action],
-    spent: byAction.get(action)?.spent ?? 0,
-    count: byAction.get(action)?.count ?? 0,
-    price: byAction.get(action)?.price ?? null,
-  }));
+  const rows = toolRows(usage);
   const used = Math.max(0, grant - bundle);
-  const maxSpent = Math.max(0, ...rows.map((r) => r.spent));
   const segments: RingSegment[] = rows.map((r) => ({ value: r.spent, color: r.color }));
 
   const tier = ent?.tier ?? "free";
@@ -206,49 +275,7 @@ export function CreditsUsageCard() {
           resetLabel={fmtDate(usage.periodEnd)}
         />
         <div>
-          <div className="text-[11px] font-semibold tracking-[0.11em] uppercase text-muted-foreground/70 mb-3.5">
-            Cost &amp; usage per tool
-          </div>
-          <div>
-            {rows.map((r) => {
-              const pct = maxSpent ? Math.round((r.spent / maxSpent) * 100) : 0;
-              // The base rate IS the price (spec 2026-08-17 §2), so quote it
-              // flat. Only surface an average when the metered tail actually
-              // moved the total — i.e. the period's spend exceeds count x base,
-              // which happens on pathological runs and nowhere else.
-              const unit =
-                r.price == null
-                  ? "free"
-                  : r.count > 0 && r.spent > r.count * r.price
-                    ? `${r.price} cr ea · ${Math.round(r.spent / r.count)} cr avg`
-                    : `${r.price} cr ea`;
-              return (
-                <div key={r.label} className="py-[13px] border-t border-border/60 first:border-t-0">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5 text-[14.5px] font-medium">
-                      <span
-                        className="w-[9px] h-[9px] rounded-[3px] flex-none"
-                        style={{ background: r.color }}
-                      />
-                      {r.label}
-                    </div>
-                    <div className="text-sm font-semibold text-right tabular-nums">
-                      {r.spent > 0 ? `${r.spent} cr` : "—"}
-                      <small className="block text-[11px] font-normal text-muted-foreground mt-px">
-                        {r.count} · {unit}
-                      </small>
-                    </div>
-                  </div>
-                  <div className="h-[7px] rounded-[5px] bg-muted mt-2.5 overflow-hidden">
-                    <span
-                      className="block h-full rounded-[5px]"
-                      style={{ width: `${Math.max(pct, r.spent > 0 ? 4 : 0)}%`, background: r.color }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <ToolBreakdown rows={rows} heading="Cost &amp; usage per tool" />
           {reserve > 0 && (
             <p className="text-xs text-muted-foreground mt-3">
               + {reserve.toLocaleString()} bonus credits (don&apos;t expire).

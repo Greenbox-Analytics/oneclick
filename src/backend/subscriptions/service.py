@@ -14,6 +14,7 @@ from dateutil.relativedelta import relativedelta
 from supabase import Client
 
 import artist_access
+from subscriptions.ai_pricing import credits_for_excess, tail_free_tokens
 from subscriptions.models import (
     Action,
     Caps,
@@ -1559,12 +1560,35 @@ class EntitlementsService:
         if grant is None or not grant.enabled or grant.price <= 0:
             return
         measured = credits_for_llm_usage()
-        # BASE RATE (spec 2026-08-17 §2): grant.price is the per-action base, not
-        # an estimate. It is a FLOOR — the metered value only decides the charge
-        # when the run cost more than the base already covers. A 30-credit base
-        # covers ~$0.20 of COGS, roughly 20x a median run, so the tail fires only
-        # on a pathological input (e.g. a derive over ~18 contracts).
-        amount = grant.price if measured is None else max(grant.price, measured)
+        usage = llm_usage_snapshot() or {}
+        # THREE terms, and the max() of all three is the charge (2026-08-27):
+        #
+        #   grant.price          the BASE — published price of the deliverable,
+        #                        and a hard floor. Never charge below it.
+        #   measured             what the run actually cost, in credits. Keeps
+        #                        the original guarantee that we never sell a run
+        #                        below COGS, whatever the allowance is set to.
+        #   base + size tail     the SIZE term: a run gets ~10 pages of tokens
+        #                        included, and pays for what it burns past that
+        #                        (see ai_pricing.TAIL_FREE_TOKENS).
+        #
+        # The size term is what makes a 60-page contract cost more than a 3-page
+        # one. The old two-term rule couldn't: its threshold was implied by the
+        # base (30 credits => $0.20 of COGS), which sat ~13x above the largest
+        # run ever measured, so size was invisible in practice.
+        #
+        # `measured` stays in the max() as a belt: it makes any allowance value
+        # SAFE by construction. Set an allowance too generously and the charge
+        # falls back to real cost rather than dipping below it — so mis-tuning
+        # this dial can cost margin, never money.
+        tail = 0
+        if measured is not None:
+            tail = credits_for_excess(
+                usage.get("cost_usd", 0.0),
+                (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0),
+                tail_free_tokens(grant.action),
+            )
+        amount = grant.price if measured is None else max(grant.price, measured, grant.price + tail)
         if amount <= 0:
             return
         try:
@@ -1587,18 +1611,25 @@ class EntitlementsService:
             # ledger row: with a metered price, "why 9 credits?" is otherwise
             # unanswerable from the ledger alone. `estimated` records what the
             # gate reserved, so over/under-runs are measurable.
-            usage = llm_usage_snapshot() or {}
             # `metered` answers "was this charge cost-driven?", NOT "was cost
             # readable?". Under base rates `measured is not None` is true on
             # nearly every LLM-touching row while the amount is still the base,
             # so the old meaning would make it impossible to find the rows where
             # metering actually decided the price. Keep both facts, separately.
+            #
+            # With three terms in the max(), "above the base" is no longer
+            # enough to say WHY: `tail_credits` and `metered_credits` record
+            # what each term wanted, so a ledger row alone answers "was this
+            # charged for size, or for cost?" — the question the next
+            # recalibration has to ask.
             metadata = {
                 "estimated": grant.price,
                 "base": grant.price,
                 "measurable": measured is not None,
                 "metered_credits": measured,
-                "metered": measured is not None and measured > grant.price,
+                "tail_credits": tail,
+                "free_tokens": tail_free_tokens(grant.action),
+                "metered": amount > grant.price,
             }
             if usage:
                 metadata.update(

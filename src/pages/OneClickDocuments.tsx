@@ -763,9 +763,6 @@ const OneClickDocuments = () => {
             )}
           </Button>
           <CreditsChip action="oneclick_run" />
-          <p className="mt-1.5 text-[11px] text-muted-foreground">
-            You won&apos;t be charged twice for the same result this month.
-          </p>
         </div>
 
         {/* Error Alert */}
