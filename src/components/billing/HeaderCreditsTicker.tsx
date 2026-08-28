@@ -5,7 +5,7 @@
 // load or when the credits system is off — same guard as CreditsChip.
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, AlertTriangle, Coins } from "lucide-react";
+import { AlertCircle, AlertTriangle, Building2, Coins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn, fmtDay } from "@/lib/utils";
@@ -189,6 +189,20 @@ export function HeaderCreditsTicker() {
                 Usage details
               </Button>
             </div>
+
+            {managedByOrg && (
+              <button
+                type="button"
+                className="w-full mt-2 rounded-md border border-border py-1.5 text-[12px] text-muted-foreground hover:bg-muted hover:text-foreground inline-flex items-center justify-center gap-1.5 transition-colors"
+                onClick={() => {
+                  setOpen(false);
+                  navigate("/teams");
+                }}
+              >
+                <Building2 className="w-3 h-3 flex-none" />
+                View team
+              </button>
+            )}
           </PopoverContent>
         </Popover>
       )}
