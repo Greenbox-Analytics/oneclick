@@ -421,7 +421,7 @@ function RoyaltiesConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
         <textarea id={`${id}-exp`} rows={2} value={expenses} onChange={(e) => setExpenses(e.target.value)} spellCheck={false} className={AREA} />
       </Field>
       <RunButton running={running} disabled={!apiKey.trim()} onClick={run}>
-        Run request · {ROYALTIES_PRICE} credits
+        Run request
       </RunButton>
       <Hint>
         A real run against your key. It spends {ROYALTIES_PRICE} credits from the team balance, the same as a call from your own server
@@ -492,7 +492,7 @@ function RegistryConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
         <input id={`${id}-artist`} type="text" value={artist} onChange={(e) => setArtist(e.target.value)} placeholder="Jane Doe" className={INPUT} />
       </Field>
       <RunButton running={running} disabled={!apiKey.trim()} onClick={run}>
-        Run request · {REGISTRY_PRICE} credits
+        Run request
       </RunButton>
       <Hint>
         A real parse against your key: Msanii&apos;s AI reads the PDFs and returns the deal as data. Up to 10 files, 20 MB in total;
@@ -563,7 +563,7 @@ function SplitSheetConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
         </select>
       </Field>
       <RunButton running={running} disabled={!apiKey.trim()} onClick={run}>
-        Run request · {SPLIT_SHEET_PRICE} credits
+        Run request
       </RunButton>
       <Hint>
         A real document against your key. No AI runs, so a sheet always costs exactly {SPLIT_SHEET_PRICE} credits — per document: the pdf
@@ -614,7 +614,7 @@ function ZoeConsole({ apiKey, onApiKeyChange, hidden }: ConsoleProps) {
         <textarea id={id} rows={3} value={message} onChange={(e) => setMessage(e.target.value)} className={AREA} />
       </Field>
       <RunButton running={running} disabled={!apiKey.trim() || !message.trim()} onClick={run}>
-        Run request · {ZOE_PRICE} credits
+        Run request
       </RunButton>
       <Hint>
         Charged per completion, the same as a call through the OpenAI SDK. Zoe on the API has no memory and no access to
