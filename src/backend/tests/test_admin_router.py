@@ -397,6 +397,34 @@ class TestGrantRevoke:
         assert resp.json() == {"ok": True}
         assert captured["payload"]["tier"] == "basic"
 
+    def test_grant_pro_sets_pro(self, admin_client, mock_supabase):
+        """The body picks the paid tier; a bodiless POST still means Basic (above)."""
+        captured = {}
+
+        def _table(name):
+            b = MockQueryBuilder()
+            if name == "subscriptions":
+                original = b.upsert
+
+                def _capture(payload, *a, **kw):
+                    captured["payload"] = payload
+                    return original(payload, *a, **kw)
+
+                b.upsert = _capture
+            return b
+
+        mock_supabase.table.side_effect = _table
+
+        resp = admin_client.post(f"/admin/users/{TEST_USER_ID}/grant", json={"tier": "pro"})
+        assert resp.status_code == 200
+        assert captured["payload"]["tier"] == "pro"
+
+    def test_grant_rejects_non_paid_tier(self, admin_client, mock_supabase):
+        # "free" is /revoke's job; anything else is a typo. Neither must reach set_tier.
+        mock_supabase.table.side_effect = lambda name: MockQueryBuilder()
+        assert admin_client.post(f"/admin/users/{TEST_USER_ID}/grant", json={"tier": "free"}).status_code == 422
+        assert admin_client.post(f"/admin/users/{TEST_USER_ID}/grant", json={"tier": "enterprise"}).status_code == 422
+
     def test_revoke_returns_ok(self, admin_client, mock_supabase):
         captured = {}
 
@@ -955,7 +983,13 @@ class TestCreateEnterpriseOrg:
 
         resp = admin_client.post("/admin/orgs", json={"name": "Acme Inc", "admin_email": "boss@acme.com"})
         assert resp.status_code == 200
-        assert captured["payload"] == {"name": "Acme Inc", "created_by": self.CUSTOMER_ID, "kind": "enterprise"}
+        # Born with the partner surface on — creation by a Msanii admin IS the vetting.
+        assert captured["payload"] == {
+            "name": "Acme Inc",
+            "created_by": self.CUSTOMER_ID,
+            "kind": "enterprise",
+            "partner_api_enabled": True,
+        }
         assert resp.json()["created_by"] == self.CUSTOMER_ID
 
     def test_unknown_email_returns_404(self, admin_client, mock_supabase):
@@ -1171,4 +1205,5 @@ class TestSetOrgKind:
         mock_supabase.table.side_effect = _table
         resp = admin_client.put(f"/admin/orgs/{ORG_ID}/kind", json={"kind": "enterprise"})
         assert resp.status_code == 200
-        assert captured["payload"] == {"kind": "enterprise", "grace_started_at": None}
+        # partner_api_enabled rides along: promotion to enterprise IS the vetting.
+        assert captured["payload"] == {"kind": "enterprise", "grace_started_at": None, "partner_api_enabled": True}

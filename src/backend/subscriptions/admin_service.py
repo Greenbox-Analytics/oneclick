@@ -959,6 +959,10 @@ def create_enterprise_org(supabase: Client, name: str, admin_email: str) -> dict
     MSANII the customer's admin, and a NULL would leave nobody able to
     invite. `kind='enterprise'` is written explicitly here.
 
+    `partner_api_enabled` is TRUE from birth: an enterprise org only exists
+    because a Msanii admin created it, which is the vetting the capability
+    bit was guarding. The bit stays admin-revocable (PUT .../partner-api).
+
     Status defaults to 'pending' (DB CHECK default) — the activation floor
     still applies, same as today.
 
@@ -974,7 +978,7 @@ def create_enterprise_org(supabase: Client, name: str, admin_email: str) -> dict
 
     res = (
         supabase.table("organizations")
-        .insert({"name": name, "created_by": customer_id, "kind": "enterprise"})
+        .insert({"name": name, "created_by": customer_id, "kind": "enterprise", "partner_api_enabled": True})
         .execute()
     )
     org = res.data[0] if res.data else None
@@ -1052,6 +1056,10 @@ def set_org_kind(supabase: Client, org_id: str, kind: str, covered_by_user_id: s
         payload["monthly_dispersal_credits"] = 0
     else:
         payload["grace_started_at"] = None
+        # Same vetting as create_enterprise_org. Flipping AWAY leaves the bit
+        # alone: yanking a partner's live keys is an explicit revoke, not a
+        # side effect of a plan change.
+        payload["partner_api_enabled"] = True
 
     res = supabase.table("organizations").update(payload).eq("id", org_id).execute()
     if not res.data:
@@ -1074,7 +1082,10 @@ def list_orgs_admin(supabase) -> list[dict]:
     default_floor = int(os.getenv("ENTERPRISE_MIN_INITIAL_CREDITS", "10000"))
     orgs_res = (
         supabase.table("organizations")
-        .select("id, name, status, archived_at, monthly_dispersal_credits, min_initial_purchase_credits, created_at")
+        .select(
+            "id, name, status, archived_at, kind, partner_api_enabled, monthly_dispersal_credits, "
+            "min_initial_purchase_credits, created_at"
+        )
         .order("created_at")
         .execute()
     )
@@ -1102,6 +1113,8 @@ def list_orgs_admin(supabase) -> list[dict]:
                 "name": org.get("name"),
                 "status": org.get("status"),
                 "archivedAt": org.get("archived_at"),
+                "kind": org.get("kind"),
+                "partnerApiEnabled": bool(org.get("partner_api_enabled")),
                 "memberCount": members_res.count or 0,
                 "bundleBalance": (wallet or {}).get("bundle_balance") or 0,
                 "reserveBalance": (wallet or {}).get("reserve_balance") or 0,

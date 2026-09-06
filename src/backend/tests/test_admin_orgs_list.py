@@ -43,6 +43,8 @@ def _wire_tables(mock_supabase, wallet_rows=None):
                     "name": "Archived Corp",
                     "status": "archived",
                     "archived_at": "2026-07-01T00:00:00Z",
+                    "kind": "enterprise",
+                    "partner_api_enabled": True,
                     "monthly_dispersal_credits": 5000,
                     "min_initial_purchase_credits": None,
                     "created_at": "2026-06-01T00:00:00Z",
@@ -76,6 +78,8 @@ class TestAdminOrgsList:
         assert org["status"] == "archived"
         assert org["archivedAt"] == "2026-07-01T00:00:00Z"
         assert org["memberCount"] == 3
+        assert org["kind"] == "enterprise"
+        assert org["partnerApiEnabled"] is True
         assert org["bundleBalance"] == 100
         assert org["reserveBalance"] == 400
         assert org["monthlyDispersalCredits"] == 5000

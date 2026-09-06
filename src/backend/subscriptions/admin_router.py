@@ -17,6 +17,8 @@ if str(BACKEND_DIR) not in sys.path:
 
 from auth import get_current_user_email, get_current_user_id
 from orgs.models import OrgDispersalUpdate
+from partner_api import service as psvc
+from partner_api.models import PartnerKeyCreate
 from subscriptions.admin_auth import is_env_admin, is_user_admin, require_admin
 from subscriptions.admin_service import AdminService
 from subscriptions.models import OverridePayload
@@ -71,6 +73,16 @@ class SetOrgKindRequest(BaseModel):
 
     kind: Literal["self_serve", "enterprise"]
     covered_by_user_id: str | None = None
+
+
+class PartnerApiToggle(BaseModel):
+    enabled: bool
+
+
+class TierGrant(BaseModel):
+    # Which paid tier to hand out. Defaults to the entry tier so a bodiless
+    # POST (the pre-2026-09-04 client) keeps meaning "grant Basic".
+    tier: Literal["basic", "pro"] = "basic"
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -131,13 +143,14 @@ async def get_user_detail(
 
 
 @router.post("/users/{user_id}/grant")
-async def grant_pro(
+async def grant_tier(
     user_id: str,
+    body: TierGrant | None = None,
     _admin: str = Depends(require_admin),
 ) -> dict:
+    """Manual paid-tier grant (no Stripe). Basic or Pro; revoke drops to free."""
     try:
-        # Admin grants the ENTRY paid tier (keyed 'basic', labeled "Basic").
-        _get_admin_service().set_tier(user_id, "basic")
+        _get_admin_service().set_tier(user_id, body.tier if body else "basic")
     except Exception as e:
         msg = str(e).lower()
         if "foreign key" in msg or "violates" in msg:
@@ -494,6 +507,77 @@ async def set_org_dispersal(
         return await orgs_service.set_org_dispersal(sb, org_id, body.monthly_dispersal_credits)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _require_org(sb, org_id: str) -> None:
+    org = sb.table("organizations").select("id").eq("id", org_id).maybe_single().execute()
+    if not (org and org.data):
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+
+@router.put("/orgs/{org_id}/partner-api")
+async def set_org_partner_api(
+    org_id: str,
+    body: PartnerApiToggle,
+    _admin: str = Depends(require_admin),
+) -> dict:
+    """Grant/revoke the partner API surface for an org. MSANII ADMIN ONLY —
+    same reasoning as dispersal: any signed-in user can create an org and is
+    auto-made its admin, so a customer-writable capability dial would hand the
+    partner surface (and its org-pool spend path) to anyone."""
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    _require_org(sb, org_id)
+    sb.table("organizations").update({"partner_api_enabled": body.enabled}).eq("id", org_id).execute()
+    return {"org_id": org_id, "partner_api_enabled": body.enabled}
+
+
+# Key lifecycle. Msanii-admin for the SAME reason as the toggle — a key spends
+# the org pool, so whoever can mint one holds the whole partner surface. Lives
+# on the PRODUCT backend on purpose:
+# not partner-flag-gated (an operator must be able to prepare keys before the
+# partner service is even deployed), and the partner host's lockdown
+# middleware makes these unreachable there anyway.
+
+
+@router.post("/orgs/{org_id}/partner-keys")
+async def create_partner_key(
+    org_id: str,
+    body: PartnerKeyCreate,
+    _admin: str = Depends(require_admin),
+    admin_id: str = Depends(get_current_user_id),
+) -> dict:
+    """Mint a key for the org — the same body the org console posts. The
+    response carries the plaintext secret EXACTLY ONCE."""
+    from main import get_supabase_client
+
+    sb = get_supabase_client()
+    _require_org(sb, org_id)
+    return psvc.mint_key(
+        sb,
+        org_id,
+        label=body.label,
+        created_by=admin_id,
+        expires_at=body.expires_at.isoformat() if body.expires_at else None,
+    )
+
+
+@router.get("/orgs/{org_id}/partner-keys")
+async def list_partner_keys(org_id: str, _admin: str = Depends(require_admin)) -> dict:
+    from main import get_supabase_client
+
+    return {"keys": psvc.list_keys(get_supabase_client(), org_id)}
+
+
+@router.delete("/orgs/{org_id}/partner-keys/{key_id}")
+async def revoke_partner_key(org_id: str, key_id: str, _admin: str = Depends(require_admin)) -> dict:
+    """404 when the id is not one of this org's keys."""
+    from main import get_supabase_client
+
+    if not psvc.revoke_key(get_supabase_client(), org_id, key_id):
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"status": "revoked"}
 
 
 @router.post("/orgs/{org_id}/suspend")

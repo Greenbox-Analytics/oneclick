@@ -25,11 +25,15 @@ export function TransferCreditsDialog({
   orgName,
   open,
   onOpenChange,
+  onBuyCredits,
 }: {
   orgId: string;
   orgName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** When given, the no-reserve state offers a one-step "buy straight into
+   * the pool" button instead of sending the admin off to personal billing. */
+  onBuyCredits?: () => void;
 }) {
   const { data: ent } = useEntitlements();
   const [value, setValue] = useState("");
@@ -97,13 +101,34 @@ export function TransferCreditsDialog({
               <p className="text-xs text-muted-foreground">Up to {reserve.toLocaleString()} credits available.</p>
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              You don&apos;t have any reserve credits to transfer. Buy a credit pack from your{" "}
-              <a href="/profile" className="underline underline-offset-2">
-                personal billing
-              </a>{" "}
-              page first — packs never expire and can be moved to a team any time.
-            </p>
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-muted-foreground">
+                You don&apos;t have any reserve credits to transfer.{" "}
+                {onBuyCredits ? (
+                  <>Buy credits straight into the team pool instead — one step, and they never expire.</>
+                ) : (
+                  <>
+                    Buy a credit pack from your{" "}
+                    <a href="/profile" className="underline underline-offset-2">
+                      personal billing
+                    </a>{" "}
+                    page first — packs never expire and can be moved to a team any time.
+                  </>
+                )}
+              </p>
+              {onBuyCredits && (
+                <Button
+                  size="sm"
+                  className="self-start"
+                  onClick={() => {
+                    handleOpenChange(false);
+                    onBuyCredits();
+                  }}
+                >
+                  Buy credits for {orgName}
+                </Button>
+              )}
+            </div>
           )}
 
           {errorMessage && <p className="text-sm text-destructive">{errorMessage}</p>}

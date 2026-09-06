@@ -78,3 +78,25 @@ describe("TransferCreditsDialog", () => {
     expect(screen.getByText(/don.t have any reserve credits/i)).toBeInTheDocument();
   });
 });
+
+describe("TransferCreditsDialog — buy instead", () => {
+  it("with onBuyCredits and no reserve, offers a one-step buy into the pool and swaps dialogs", () => {
+    reserveBalance = 0;
+    const onOpenChange = vi.fn();
+    const onBuyCredits = vi.fn();
+    render(
+      <TransferCreditsDialog
+        orgId="org-1"
+        orgName="Greenbox Analytics"
+        open
+        onOpenChange={onOpenChange}
+        onBuyCredits={onBuyCredits}
+      />,
+    );
+    // The detour to personal billing is gone when a direct buy exists.
+    expect(screen.queryByText(/personal billing/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /buy credits for greenbox analytics/i }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onBuyCredits).toHaveBeenCalledTimes(1);
+  });
+});

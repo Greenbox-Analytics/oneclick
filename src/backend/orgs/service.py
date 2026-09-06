@@ -28,6 +28,7 @@ from supabase import Client
 import artist_access
 from analytics import capture as analytics_capture
 from orgs import authz, wallets
+from pagination import fetch_all
 
 logger = logging.getLogger(__name__)
 
@@ -560,6 +561,9 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
     auto_create_org_admin trigger never goes through accept_invite) falls back to
     `_resolve_user_email` ONCE and is written back onto the row, best-effort and
     deliberately non-raising: a failed heal must never break the usage read.
+
+    # ponytail: full period ledger scan per console load — one debit row per
+    # partner API call, so replace with a DB-side rollup before a partner goes live.
     """
     authz.require_admin(db, user_id, org_id)
 
@@ -582,10 +586,14 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
 
     ledger_rows: list[dict] = []
     if pool_wallet:
-        query = db.table("credit_ledger").select("delta, kind, metadata").eq("wallet_id", pool_wallet["id"])
-        if pool_wallet.get("period_start"):
-            query = query.gte("created_at", pool_wallet["period_start"])
-        ledger_rows = query.execute().data or []
+
+        def _ledger_query():
+            q = db.table("credit_ledger").select("delta, kind, metadata, created_at").eq("wallet_id", pool_wallet["id"])
+            if pool_wallet.get("period_start"):
+                q = q.gte("created_at", pool_wallet["period_start"])
+            return q
+
+        ledger_rows = fetch_all(_ledger_query)
 
     cumulative_paid_in = wallets.cumulative_paid_in(db, pool_wallet["id"]) if pool_wallet else 0
 
@@ -593,10 +601,27 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
     # member who spent them. Pools have no overage path (rule 8), so there is
     # no 'overage_debit' kind to fold in as there is on the personal view.
     spent_by_member: Counter[str] = Counter()
+    # Partner API spend per key (phase-2 portal, spec 2026-09-04 §3): the same
+    # debit rows, grouped by metadata.partner_key_id. source='partner_api' AND
+    # a key id — member spend carries neither and must not leak in, and a
+    # partner debit carries no org_member_id so it never lands in a seat.
+    by_key: dict[str, dict] = {}
     for r in ledger_rows:
-        member_id = (r.get("metadata") or {}).get("org_member_id")
-        if r.get("kind") == "debit" and member_id:
+        if r.get("kind") != "debit":
+            continue
+        meta = r.get("metadata") or {}
+        member_id = meta.get("org_member_id")
+        if member_id:
             spent_by_member[member_id] += abs(r.get("delta", 0))
+        key_id = meta.get("partner_key_id")
+        if key_id and meta.get("source") == "partner_api":
+            slot = by_key.setdefault(key_id, {"keyId": key_id, "credits": 0, "runs": 0, "lastUsedAt": None})
+            slot["credits"] += abs(r.get("delta", 0))
+            slot["runs"] += 1
+            created = r.get("created_at")
+            # ISO-8601 UTC strings from PostgREST compare correctly as strings.
+            if created and (slot["lastUsedAt"] is None or created > slot["lastUsedAt"]):
+                slot["lastUsedAt"] = created
 
     seats = []
     for m in members:
@@ -630,6 +655,7 @@ async def get_org_usage(db: Client, user_id: str, org_id: str) -> dict:
         "periodStart": pool_wallet.get("period_start") if pool_wallet else None,
         "periodEnd": pool_wallet.get("period_end") if pool_wallet else None,
         "seats": seats,
+        "byKey": sorted(by_key.values(), key=lambda k: -k["credits"]),
     }
 
 
@@ -1132,6 +1158,73 @@ def create_org_join_notifications(db: Client, org_id: str, member_user_id: str, 
     db.table("notifications").insert(rows).execute()
 
 
+def notify_admins_of_removed_members_keys(db: Client, org_id: str, leaver_user_id: str | None) -> int:
+    """Removal leaves the leaver's partner API keys ALIVE on purpose — keys are
+    the org's, and auto-revoking would take down "Production backend" because
+    a person left (spec 2026-09-04 §3b). So the remaining admins must be told
+    there is something to rotate.
+
+    One 'confirmation' row per remaining ACTIVE admin, leaver excluded — never
+    the 'invitation' type, which renders Accept/Decline and is dodged by
+    mark_all_notifications_read. Only when the leaver created at least one
+    still-active key in THIS org. Best-effort and never raises: the removal is
+    already committed when this runs. Returns the number of rows written.
+    """
+    if not leaver_user_id:
+        return 0
+    try:
+        keys = (
+            db.table("partner_api_keys")
+            .select("id")
+            .eq("org_id", org_id)
+            .eq("created_by", leaver_user_id)
+            .eq("status", "active")
+            .execute()
+            .data
+            or []
+        )
+        if not keys:
+            return 0
+        admins = (
+            db.table("org_members")
+            .select("user_id")
+            .eq("org_id", org_id)
+            .eq("role", "admin")
+            .eq("status", "active")
+            .execute()
+            .data
+            or []
+        )
+        recipients = [a["user_id"] for a in admins if a.get("user_id") and a["user_id"] != leaver_user_id]
+        if not recipients:
+            return 0
+        org_name = _org_name(db, org_id, "your team")
+        leaver = _resolve_user_email(db, leaver_user_id) or "A removed member"
+        n = len(keys)
+        noun = "API key" if n == 1 else "API keys"
+        verb = "is" if n == 1 else "are"
+        rows = [
+            {
+                "user_id": uid,
+                "type": "confirmation",
+                "title": "API keys created by a removed member",
+                "message": (
+                    f"{leaver} created {n} {noun} that {verb} still active for {org_name}. "
+                    "They keep working until you rotate them. Open Teams → API keys to review."
+                ),
+                "entity_type": "org",
+                "entity_id": org_id,
+                "metadata": {"org_id": org_id, "removed_user_id": leaver_user_id, "active_key_count": n},
+            }
+            for uid in recipients
+        ]
+        db.table("notifications").insert(rows).execute()
+        return len(rows)
+    except Exception:
+        logger.exception("partner key removal notice failed org_id=%s", org_id)
+        return 0
+
+
 def _close_invite_notification(db: Client, user_id: str, token: str) -> None:
     """Retire the bell's copy of an invite once it has been actioned.
 
@@ -1422,6 +1515,7 @@ async def _offboard(db: Client, user_id: str, org_id: str, member_id: str, final
     if not member:
         raise ValueError("Member not found")
 
+    transitioned = False
     if member.get("status") == final_status and member.get("revoked_at"):
         row = member
     else:
@@ -1442,9 +1536,16 @@ async def _offboard(db: Client, user_id: str, org_id: str, member_id: str, final
         if not updated.data:
             raise ValueError("Member not found")
         row = updated.data[0]
+        transitioned = True
 
     _revoke_offboarded_member_access(db, org_id, row.get("user_id"), final_status)
     _cancel_topup_if_purchaser(db, org_id, row.get("user_id"))
+    if final_status == "removed" and transitioned:
+        # Keys outlive their minter (spec 2026-09-04 §3b): tell the remaining
+        # admins there is something to rotate. Suspension is reversible and
+        # purges nothing, so it stays silent; a retried removal already told them.
+        # The notifier swallows its own failures — a notice never fails a removal.
+        notify_admins_of_removed_members_keys(db, org_id, row.get("user_id"))
     return row
 
 

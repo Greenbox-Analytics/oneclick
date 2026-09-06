@@ -45,6 +45,10 @@ export interface OrgSummary {
   status: OrgStatus;
   archived_at?: string | null;
   kind?: OrgKind;
+  /** Msanii-admin-set capability bit: this org may use the partner API and
+   * manage its keys from the console (OrgApiKeysPanel). The backend spreads
+   * the column via select("*"); the type was the only thing missing. */
+  partner_api_enabled?: boolean;
   /** Admin currently on the hook for this org's slot/storage/billing. Stays
    * set (last coverer) even when released — see release_coverage. */
   covered_by?: string | null;
@@ -132,6 +136,14 @@ export interface OrgSeatUsage {
   spentThisPeriod: number;
 }
 
+/** One partner API key's spend this pool period (get_org_usage.byKey). */
+export interface PartnerKeyUsageRow {
+  keyId: string;
+  credits: number;
+  runs: number;
+  lastUsedAt: string | null;
+}
+
 /** GET /orgs/{id}/usage — admin-only per-member rollup. */
 export interface OrgUsage {
   poolBalance: number;
@@ -141,6 +153,8 @@ export interface OrgUsage {
   periodStart: string | null;
   periodEnd: string | null;
   seats: OrgSeatUsage[];
+  /** Partner API spend per key, credits desc; [] for an org with no partner traffic. */
+  byKey: PartnerKeyUsageRow[];
 }
 
 export interface OrgInvite {

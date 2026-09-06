@@ -9,6 +9,7 @@ import { ChevronRight, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -124,7 +125,7 @@ export function AdminOrgsPanel({
 
 function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: () => void }) {
   const poolQuery = useAdminOrgPool(org?.id ?? null);
-  const { grantCredits, setDispersal, setStatus } = useAdminOrgMutations();
+  const { grantCredits, setDispersal, setStatus, setPartnerApi } = useAdminOrgMutations();
 
   const [giftAmount, setGiftAmount] = useState("");
   const [giftReason, setGiftReason] = useState("");
@@ -232,6 +233,7 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
             {org.memberCount} member{org.memberCount === 1 ? "" : "s"}
           </Tag>
           {org.archivedAt && <Tag tone="bad">Archived {shortDate(org.archivedAt)}</Tag>}
+          {org.partnerApiEnabled && <Tag tone="good">Partner API</Tag>}
         </div>
 
         <Tabs value={tab} onValueChange={setTab} className="mt-4">
@@ -298,6 +300,30 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
                   ? "A pending org has never been activated — there is nothing to suspend yet."
                   : "Suspending blocks the org's members from spending the pool. Credits are left untouched."}
               </p>
+            </section>
+            <section>
+              <SectionLabel>Partner API</SectionLabel>
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
+                <p className="text-xs text-muted-foreground">
+                  Lets this org&apos;s admins issue API keys and run calculations against its pool.
+                  On by default for enterprise orgs; a self-serve team needs it flipped here.
+                  Turning it off makes every one of their keys stop working immediately.
+                </p>
+                <Switch
+                  aria-label="Partner API enabled"
+                  checked={org.partnerApiEnabled}
+                  disabled={setPartnerApi.isPending}
+                  onCheckedChange={(enabled) =>
+                    setPartnerApi.mutate(
+                      { orgId: org.id, enabled },
+                      {
+                        onSuccess: () => toast.success(enabled ? "Partner API enabled." : "Partner API disabled."),
+                        onError: (e) => toast.error(e instanceof Error ? e.message : "Change failed."),
+                      },
+                    )
+                  }
+                />
+              </div>
             </section>
           </TabsContent>
 

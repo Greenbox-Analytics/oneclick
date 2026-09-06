@@ -12,6 +12,8 @@ Domain-specific guides organized by tool/product area. Each doc covers backend e
 | [OneClick](oneclick.md) | OneClick | `/tools/oneclick` | Royalty calculator, PDF generation, sharing to Drive |
 | [Zoe](zoe.md) | Zoe AI | `/tools/zoe` | AI contract analysis chatbot, streaming, document processing |
 | [Split Sheet](split-sheet.md) | Split Sheet | `/tools/split-sheet` | Split sheet PDF/DOCX generator |
+| [Partner API](partner-api.md) | Partner API | `/oneclick/v1`, `/registry/v1`, `/splitsheet/v1`, `/zoe/v1` | External partner access to the tools: bearer keys, SSE calculation and splits, split sheets, OpenAI-compatible Zoe, org-pool billing, the key console in `/teams` |
+| [Partner API reference](partner-api-reference.md) | Partner API | `/oneclick/v1`, `/registry/v1`, `/splitsheet/v1`, `/zoe/v1` | The partner-facing reference: endpoints, request/response fields, error codes, billing — plus the drop-in Python client + smoke test in `examples/partner-api/` |
 
 ## Operational Guides
 

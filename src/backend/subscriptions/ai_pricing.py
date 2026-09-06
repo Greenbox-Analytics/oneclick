@@ -87,7 +87,12 @@ DEFAULT_TAIL_FREE_TOKENS = 6_500  # ~10 pages at ~650 tokens/page
 TAIL_FREE_TOKENS: dict[str, int] = {
     # Document extraction: ~10 pages included, then ~0.3 credits/page.
     "oneclick_run": 6_500,
+    # Same document-extraction shape as oneclick_run, same allowance. The dict
+    # fallback would give this number anyway; the explicit entry is what a
+    # future retune will look for.
+    "partner_oneclick_run": 6_500,
     "registry_parse": 6_500,
+    "partner_registry_parse": 6_500,
     # Retrieval-heavy. 30,000 sits just above the observed median so the
     # advertised 5 still holds for a normal question, and is deliberately kept
     # at or below what the base is worth in COGS (5 / 150 = $0.033) so the
@@ -95,6 +100,7 @@ TAIL_FREE_TOKENS: dict[str, int] = {
     "zoe_message": 30_000,
     # No LLM call at all, so no tail can ever fire. Present for completeness.
     "split_sheet": 6_500,
+    "partner_split_sheet": 6_500,
 }
 
 
@@ -129,6 +135,66 @@ def credits_for_excess(cost_usd: float, total_tokens: int, free_tokens: int) -> 
     if total_tokens <= free_tokens or total_tokens <= 0 or cost_usd <= 0:
         return 0
     return credits_for_cost(cost_usd * (1.0 - free_tokens / total_tokens))
+
+
+def compute_charge(action: str, base: int, measured: int | None, usage: dict | None) -> tuple[int, dict]:
+    """THE charge for one metered action, and the ledger metadata that explains it.
+
+    Three terms, and the max() of all three is the charge (2026-08-27):
+
+      base              the published price of the deliverable, and a hard
+                        floor. Never charge below it.
+      measured          what the run actually cost, in credits (real OpenAI
+                        cost x CREDIT_MARKUP / price-per-credit). Keeps the
+                        guarantee that we never sell a run below COGS,
+                        whatever the allowance is set to.
+      base + size tail  a run gets tail_free_tokens(action) of tokens
+                        included and pays for what it burns past that. This
+                        is what makes a 60-page contract cost more than a
+                        3-page one.
+
+    `measured is None` = unmeasurable (no tracked scope, or a model missing
+    from MODEL_RATES): charge the base, and say so in the metadata. A cache
+    hit measures 0 and still pays the base — the user got the same
+    deliverable; the dedupe request_id is what stops a second charge.
+
+    Metadata: `metered` means "did a term ABOVE the base decide the amount",
+    NOT "was cost readable" — under base rates `measurable` is true on nearly
+    every LLM-touching row while the amount is still the base. `tail_credits`
+    and `metered_credits` record what each term wanted, so a ledger row alone
+    answers "charged for size, or for cost?" — the recalibration question.
+
+    Callers: EntitlementsService.debit_for_action (product) and the partner
+    calculate endpoint. There must never be a third max() anywhere.
+    """
+    usage = usage or {}
+    tail = 0
+    if measured is not None:
+        tail = credits_for_excess(
+            usage.get("cost_usd", 0.0),
+            (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0),
+            tail_free_tokens(action),
+        )
+    amount = base if measured is None else max(base, measured, base + tail)
+    metadata = {
+        "estimated": base,
+        "base": base,
+        "measurable": measured is not None,
+        "metered_credits": measured,
+        "tail_credits": tail,
+        "free_tokens": tail_free_tokens(action),
+        "metered": amount > base,
+    }
+    if usage:
+        metadata.update(
+            {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "llm_calls": usage.get("calls", 0),
+                "cost_usd": round(usage.get("cost_usd", 0.0), 6),
+            }
+        )
+    return amount, metadata
 
 
 @dataclass(frozen=True)

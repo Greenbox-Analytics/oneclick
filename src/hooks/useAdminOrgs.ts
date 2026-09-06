@@ -10,6 +10,9 @@ export interface AdminOrgRow {
   name: string | null;
   status: string;
   archivedAt: string | null;
+  kind?: "self_serve" | "enterprise" | null;
+  /** Msanii-admin capability bit — on by default for enterprise orgs. */
+  partnerApiEnabled: boolean;
   memberCount: number;
   bundleBalance: number;
   reserveBalance: number;
@@ -88,5 +91,14 @@ export function useAdminOrgMutations() {
     onSuccess: invalidate,
   });
 
-  return { grantCredits, setDispersal, setStatus };
+  const setPartnerApi = useMutation({
+    mutationFn: (args: { orgId: string; enabled: boolean }) =>
+      apiFetch<{ org_id: string; partner_api_enabled: boolean }>(
+        `${API_URL}/admin/orgs/${args.orgId}/partner-api`,
+        { method: "PUT", body: JSON.stringify({ enabled: args.enabled }) },
+      ),
+    onSuccess: invalidate,
+  });
+
+  return { grantCredits, setDispersal, setStatus, setPartnerApi };
 }

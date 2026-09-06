@@ -541,14 +541,27 @@ tasks:
       VITE_BACKEND_API_URL: '{{.VITE_BACKEND_API_URL | default "https://placeholder.example.com"}}'
 
   dev:
-    desc: Start both frontend and backend dev servers
-    deps: [dev:backend, dev:frontend]
+    desc: Start the frontend, the backend, and the partner API dev servers
+    deps: [dev:backend, dev:partner, dev:frontend]
 
   dev:backend:
     desc: Start FastAPI backend server
     dir: "{{.BACKEND_DIR}}"
     cmds:
       - poetry run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  dev:partner:
+    desc: |
+      Start the partner API on :8001 — the same app with PARTNER_API_ENABLED=true,
+      matching the second Cloud Run service in prod. The flag is set HERE and must
+      never go in .env: it makes the process 404 every route outside /partner/* and
+      /health, which would take the main backend on :8000 down with it.
+      Point the console's API panel at this with VITE_PARTNER_API_URL=http://localhost:8001.
+    dir: "{{.BACKEND_DIR}}"
+    env:
+      PARTNER_API_ENABLED: "true"
+    cmds:
+      - poetry run uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 
   dev:frontend:
     desc: Start Vite frontend dev server
