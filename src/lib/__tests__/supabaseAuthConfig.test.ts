@@ -29,6 +29,15 @@ describe("supabase/config.toml", () => {
     expect(config).toContain('"http://localhost:8080/**"');
   });
 
+  it("pins the hourly email rate limit above the CLI default of 2", () => {
+    // Unpinned, a push re-applies the CLI default (2/hour project-wide) and
+    // the third auth email in an hour fails with "email rate limit exceeded".
+    expect(config).toMatch(/^\[auth\.rate_limit\]\s*$/m);
+    const match = config.match(/^email_sent\s*=\s*(\d+)\s*$/m);
+    expect(match).not.toBeNull();
+    expect(Number(match![1])).toBeGreaterThanOrEqual(30);
+  });
+
   it("reads the SMTP password from the environment, never inline", () => {
     expect(config).toMatch(/^pass\s*=\s*"env\(RESEND_API_KEY\)"\s*$/m);
     expect(config).not.toMatch(/re_[A-Za-z0-9]{10,}/);

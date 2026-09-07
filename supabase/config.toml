@@ -29,6 +29,14 @@ enable_confirmations = true
 double_confirm_changes = true
 secure_password_change = false
 
+# Auth emails per hour, PROJECT-WIDE (signups, resends, resets, magic links,
+# email changes all share the bucket). The CLI default is 2, which every
+# unpinned push re-applied — two signups in an hour and the third request
+# failed with "email rate limit exceeded". Editable only because custom SMTP
+# is enabled below; Resend's relay has no trouble at this rate.
+[auth.rate_limit]
+email_sent = 30
+
 # Auth email templates. The hosted project reads these on `supabase config push`
 # (Auth → Email Templates in the dashboard shows the same fields); local
 # `supabase start` uses them directly. Keep the design in step with the backend
