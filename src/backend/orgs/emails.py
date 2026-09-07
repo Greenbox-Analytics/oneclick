@@ -8,9 +8,15 @@ import os
 import resend
 
 
-def _send(subject: str, html_body: str, recipients: list[str]):
+def _send(subject: str, html_body: str, recipients: list[str], text_body: str | None = None):
     """Shared Resend dispatch + env guard. Returns None (no send) when
-    RESEND_API_KEY / RESEND_FROM_EMAIL are unset."""
+    RESEND_API_KEY / RESEND_FROM_EMAIL are unset.
+
+    Deliverability: every message carries a plain-text part, a real reply-to
+    (RESEND_REPLY_TO, falling back to the sender) and List-Unsubscribe headers.
+    HTML-only mail with a single button and no reply path is the shape spam
+    filters score hardest, and it is why cold-recipient invites landed in spam
+    while the welcome mail from the same sender did not."""
     api_key = os.getenv("RESEND_API_KEY")
     from_address = os.getenv("RESEND_FROM_EMAIL")
     if not api_key or not from_address:
@@ -18,14 +24,20 @@ def _send(subject: str, html_body: str, recipients: list[str]):
         return None
 
     resend.api_key = api_key
-    return resend.Emails.send(
-        {
-            "from": from_address,
-            "to": recipients,
-            "subject": subject,
-            "html": html_body,
-        }
-    )
+    payload = {
+        "from": from_address,
+        "to": recipients,
+        "subject": subject,
+        "html": html_body,
+        "reply_to": os.getenv("RESEND_REPLY_TO") or from_address,
+        "headers": {
+            "List-Unsubscribe": f"<{_frontend_url()}/profile>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
+    }
+    if text_body:
+        payload["text"] = text_body
+    return resend.Emails.send(payload)
 
 
 def _frontend_url() -> str:
@@ -86,20 +98,46 @@ def send_org_invite_email(
     cta_href = f"{_frontend_url()}/orgs/invite/{token}"
     if existing_user:
         cta_label = "Review invitation"
-        footer = "Accept or Decline this invite from the link above."
+        footer = "You can accept or decline from the link above. This invitation expires in 48 hours."
     else:
-        cta_label = "Sign Up to Join"
-        footer = "Create your account with this email, then accept the invitation to join."
+        cta_label = "Join the team"
+        footer = (
+            "Create your Msanii account with this email address, then accept the invitation. "
+            "This invitation expires in 48 hours."
+        )
 
-    detail = f"""<p style="font-size: 15px; color: #555;">
-        <strong>{safe_inviter}</strong> has invited you as a <strong>{safe_role}</strong>
-        on the organization <strong>&ldquo;{safe_org}&rdquo;</strong>.
+    # Copy is deliberately fuller than the old one-liner. The recipient is cold
+    # (they have never received mail from us), the inviter's name is
+    # user-controlled, and the subject used to carry it in quotes — together
+    # that read as a phishing template. Keep the inviter out of the subject,
+    # explain what Msanii is and what accepting does, and don't shout.
+    detail = f"""<p style="font-size: 15px; color: #555; line-height: 1.5;">
+        {safe_inviter} has invited you to join <strong>{safe_org}</strong> on Msanii
+        as a <strong>{safe_role}</strong>.
+      </p>
+      <p style="font-size: 15px; color: #555; line-height: 1.5;">
+        Msanii is where artists, managers, and collaborators keep their music
+        projects, ownership splits, contracts, and royalties in one place. Joining
+        {safe_org} gives you access to the team's artists, projects, and shared
+        workspace boards.
       </p>"""
 
+    text_body = (
+        f"Hi,\n\n"
+        f"{inviter_name} has invited you to join {org_name} on Msanii as a {role}.\n\n"
+        "Msanii is where artists, managers, and collaborators keep their music projects, "
+        "ownership splits, contracts, and royalties in one place. Joining the team gives you "
+        "access to its artists, projects, and shared workspace boards.\n\n"
+        f"{cta_label}: {cta_href}\n\n"
+        f"{html.unescape(footer)}\n\n"
+        "If you weren't expecting this invitation, you can ignore this email."
+    )
+
     return _send(
-        subject=f'{safe_inviter} invited you to "{safe_org}" on Msanii',
-        html_body=_layout("You've been invited to an organization!", detail, cta_href, cta_label, footer),
+        subject=f"You're invited to join {org_name} on Msanii",
+        html_body=_layout("Hi, you've been invited to a team on Msanii.", detail, cta_href, cta_label, footer),
         recipients=[recipient_email],
+        text_body=text_body,
     )
 
 

@@ -9,6 +9,7 @@ import { Music } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
+import { orgInvitePath, orgInviteTokenFromPath, stashPendingInvite } from "@/lib/pendingInvite";
 
 const Auth = () => {
   const navigate = useNavigate();
@@ -59,7 +60,17 @@ const Auth = () => {
     e.preventDefault();
     setIsLoading(true);
     try {
-      await signUp(signUpEmail, signUpPassword, signUpName);
+      // An org invite must survive the confirm-email detour: stash the token
+      // for ConfirmEmail/Onboarding and send the confirmation link back to
+      // the claim page rather than straight to /onboarding.
+      const inviteToken = orgInviteTokenFromPath(redirectTo);
+      if (inviteToken) stashPendingInvite({ token: inviteToken, accepted: false });
+      await signUp(
+        signUpEmail,
+        signUpPassword,
+        signUpName,
+        inviteToken ? orgInvitePath(inviteToken) : "/onboarding",
+      );
       toast({
         title: "Welcome!",
         description: "Check your email to confirm your account.",

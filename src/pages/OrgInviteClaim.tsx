@@ -1,25 +1,23 @@
 // src/pages/OrgInviteClaim.tsx
 // Licensing Phase B (spec §7, plan Task 13) — the /orgs/invite/:token claim
 // page. Mirrors src/pages/InviteClaim.tsx's (registry collaborator invite)
-// shell/gate structure, with one structural difference: the orgs backend has
-// no GET preview endpoint (unlike registry's /invite/{token}/preview), so
-// there's nothing to pre-fetch and show before the user commits — Accept /
-// Decline call the real POST endpoints directly and the resulting
-// success/error shape (200 body `type`, or 403/410/404) drives which screen
-// renders. That's also why `useAcceptOrgInvite`/`useDeclineOrgInvite`
+// shell/gate structure. A best-effort GET preview names the org, but nothing
+// gates on it — Accept / Decline call the real POST endpoints directly and
+// the resulting success/error shape (200 body `type`, or 403/410/404) drives
+// which screen renders. That's also why `useAcceptOrgInvite`/`useDeclineOrgInvite`
 // (src/hooks/useOrgs.ts) don't auto-toast on error like this file's other
 // hooks — this page owns the distinct expired/wrong-email/not-found copy.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { Loader2, Building2, ShieldAlert } from "lucide-react";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { API_URL, ApiError, apiFetch } from "@/lib/apiFetch";
-import { useAcceptOrgInvite, useDeclineOrgInvite } from "@/hooks/useOrgs";
+import { ApiError } from "@/lib/apiFetch";
+import { useAcceptOrgInvite, useDeclineOrgInvite, useOrgInvitePreview } from "@/hooks/useOrgs";
 import { orgNoun } from "@/lib/tiers";
+import { clearPendingInvite, stashPendingInvite } from "@/lib/pendingInvite";
 
 const Shell = ({ children }: { children: React.ReactNode }) => (
   <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-secondary to-background p-4">
@@ -32,8 +30,13 @@ const Shell = ({ children }: { children: React.ReactNode }) => (
  * accept and decline endpoints require auth, so neither fires until the user
  * is signed in (same idiom as InviteClaim.tsx's SignedOut).
  */
-const SignedOut = ({ invitePath }: { invitePath: string }) => {
+const SignedOut = ({ invitePath, token }: { invitePath: string; token: string }) => {
   const navigate = useNavigate();
+  // Remember the invite before the auth detour so a new signup's onboarding
+  // knows a team is waiting (Google OAuth round-trips keep sessionStorage).
+  useEffect(() => {
+    stashPendingInvite({ token, accepted: false });
+  }, [token]);
   return (
     <Shell>
       <Card>
@@ -93,21 +96,11 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
   const [errorState, setErrorState] = useState<ErrorKind | null>(null);
   const [declined, setDeclined] = useState(false);
 
-  // Best-effort invite preview so the card can NAME the org (GET /orgs/invites/
-  // {token}/preview, backend orgs/router.py). It 404s for an unknown/expired
-  // token — any failure just leaves the generic "an organization" copy below.
-  const { data: invitePreview } = useQuery<{
-    orgName: string | null;
-    // "self_serve" | "enterprise" | null (pre-migration org row) — orgNoun()
-    // reads anything but "self_serve" as "organization", which is also the
-    // right neutral default while the preview loads.
-    kind: "self_serve" | "enterprise" | null;
-  }>({
-    queryKey: ["org-invite-preview", token],
-    queryFn: () => apiFetch(`${API_URL}/orgs/invites/${token}/preview`),
-    retry: false,
-    staleTime: Infinity,
-  });
+  // Best-effort invite preview so the card can NAME the org. It 404s for an
+  // unknown/expired token — any failure just leaves the generic
+  // "an organization" copy below (also the right neutral default while it
+  // loads).
+  const { data: invitePreview } = useOrgInvitePreview(token);
   const previewOrgName = invitePreview?.orgName ?? null;
   const previewNoun = orgNoun(invitePreview?.kind);
   const previewArticle = previewNoun === "team" ? "a" : "an";
@@ -116,6 +109,15 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
     setErrorState(null);
     try {
       await acceptInvite.mutateAsync(token);
+      // A brand-new account gets bounced from /teams into onboarding by
+      // ProtectedRoute; the accepted stash lets onboarding skip the plan
+      // step and name the team instead.
+      stashPendingInvite({
+        token,
+        accepted: true,
+        orgName: previewOrgName,
+        kind: invitePreview?.kind ?? null,
+      });
       // The preview already named the org; fall back to the generic label
       // when it failed to load.
       const orgName = previewOrgName ?? `your ${previewNoun}`;
@@ -139,6 +141,7 @@ const OrgInviteClaimAuthed = ({ token }: { token: string }) => {
   const handleDecline = async () => {
     try {
       await declineInvite.mutateAsync(token);
+      clearPendingInvite();
       setDeclined(true);
     } catch {
       toast.error("Couldn't decline the invitation. Please try again.");
@@ -276,7 +279,7 @@ const OrgInviteClaim = () => {
   // through /auth with a redirect back to this exact invite link, same
   // pattern as the registry collaborator invite claim (InviteClaim.tsx).
   if (!user) {
-    return <SignedOut invitePath={`/orgs/invite/${token}`} />;
+    return <SignedOut invitePath={`/orgs/invite/${token}`} token={token} />;
   }
 
   return <OrgInviteClaimAuthed token={token} />;
