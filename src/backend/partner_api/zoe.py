@@ -1,25 +1,19 @@
 """Zoe on the API — OpenAI-compatible chat completions under /zoe/v1.
 
-Point any OpenAI SDK at base_url=<host>/zoe/v1 with a partner key and it
-works: POST /chat/completions (JSON in; JSON out, or SSE `chat.completion.chunk`
-frames ending in `data: [DONE]` with stream=true) and GET /models.
+Point any OpenAI SDK at base_url=<host>/zoe/v1: POST /chat/completions (JSON
+in; JSON out, or `chat.completion.chunk` SSE frames ending in `data: [DONE]`)
+and GET /models.
 
-STATELESS by design — no stored contracts, no conversation memory, no RAG.
-The partner supplies the whole context in `messages`, exactly as with
-OpenAI. A key spends credits; it must never widen into an org's stored
-documents, which belong to members and their artists.
+STATELESS by design — no stored contracts, no memory, no RAG. The partner
+supplies the whole context in `messages`. A key spends credits; it must never
+widen into an org's stored documents, which belong to members and artists.
 
-Billing mirrors the calculation endpoint: pool-checked before any work,
-priced by credit_prices.partner_zoe_message through ai_pricing.compute_charge
-(base / metered tail), and debited ONLY after the answer is delivered — after
-the JSON body is yielded, or after the last content chunk and before the
-terminal `stop` + [DONE] frames on a stream (a client that drops mid-answer
-closes the generator there and is never charged). Every completion pays at
-least the base: the product's free "conversational" fast path is a UI nicety
-the API does not have. Every delivered body, and the stream's final `stop`
-frame, carries `billing` (credits + request id). OpenAI's `usage` token block
-is not sent — partners are told what a call cost, not how many tokens it
-burned.
+Billing mirrors the calculation endpoint: pool-checked first, priced through
+compute_charge, debited only after the answer is delivered (a client that
+drops mid-answer closes the generator and is never charged). Every completion
+pays at least the base — the product's free conversational fast path is a UI
+nicety the API does not have. `billing` rides on the body / the final `stop`
+frame; OpenAI's `usage` token block is not sent.
 """
 
 import asyncio
@@ -46,8 +40,7 @@ TRACKING_TOOL = "zoe_partner"
 # Money path with a metered tail — bound both ends of the prompt.
 MAX_INPUT_CHARS = 100_000
 MAX_OUTPUT_TOKENS = 4_000
-# The in-app general-knowledge persona (contract_chatbot), minus the
-# per-account bits. Topical guard is prompt-only, same as the product.
+# The in-app persona minus the per-account bits. Topical guard is prompt-only.
 ZOE_SYSTEM_PROMPT = (
     "You are Zoe, a knowledgeable music-business assistant for the Msanii platform. Only answer "
     "questions about the music industry (deals, royalties, rights, publishing, management, etc.). "
@@ -79,8 +72,8 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    # Other OpenAI fields (n, top_p, stop, user, tools…) are ignored, not
-    # rejected, so a stock SDK call works. Only these four are honoured.
+    # Other OpenAI fields (n, top_p, tools…) are ignored, not rejected, so a
+    # stock SDK call works.
     model_config = ConfigDict(extra="ignore")
     model: str = MODEL_ID
     messages: list[ChatMessage] = Field(min_length=1, max_length=100)
@@ -96,8 +89,8 @@ class ChatCompletionRequest(BaseModel):
 
 
 def _openai_messages(req: ChatCompletionRequest) -> list[dict]:
-    # Ours first; a partner's own system message follows and may add context
-    # (a contract, house style) — it cannot remove the persona above it.
+    # Ours first: a partner's own system message may add context, never
+    # remove the persona above it.
     return [{"role": "system", "content": ZOE_SYSTEM_PROMPT}] + [
         {"role": m.role, "content": m.text()} for m in req.messages
     ]
@@ -110,19 +103,10 @@ def _llm_kwargs(req: ChatCompletionRequest) -> dict:
     return kw
 
 
-def _charge_for(price: int, measured, usage) -> tuple[int, dict]:
-    """THE charge formula (ai_pricing.compute_charge), computed before the
-    frame that reports it. Never a local max()."""
-    return compute_charge(ZOE_ACTION, price, measured, usage)
-
-
 def _debit(sb, ctx: PartnerContext, pool: dict, charge: int, meta: dict, request_id: str) -> None:
     """Charge-on-delivery. No idempotency: a chat completion has no natural
     request identity (OpenAI has none either), so every delivered answer pays.
-    A debit failure never turns a delivered answer into a partner-visible
-    error — log loudly. The number the partner was shown is the charge as
-    computed; if the RPC fails the ledger never records it — fail-open on the
-    request path, by design."""
+    Fail-open by design — a debit failure is logged, never surfaced."""
     try:
         psvc.debit_run(
             sb,
@@ -142,7 +126,7 @@ def _debit(sb, ctx: PartnerContext, pool: dict, charge: int, meta: dict, request
 
 def complete(org_id: str, req: ChatCompletionRequest) -> tuple[dict, int | None, dict | None]:
     """One completion in a worker thread. Returns the OpenAI-shaped body plus
-    the two pricing inputs, both read INSIDE the tracking scope."""
+    the two pricing inputs, read inside the tracking scope."""
     from utils.llm.client import get_openai_client
     from utils.llm.model_garden import model_for
 
@@ -172,9 +156,8 @@ def complete(org_id: str, req: ChatCompletionRequest) -> tuple[dict, int | None,
 
 
 def _stream(sb, ctx: PartnerContext, pool: dict, price: int, req: ChatCompletionRequest):
-    """SYNC generator (Starlette steps it in the threadpool); main wraps it in
-    iter_with_llm_context so every step sees the tracking scope and ONE
-    accumulator spans the whole stream."""
+    """SYNC generator (Starlette steps it in the threadpool), wrapped in
+    iter_with_llm_context so ONE accumulator spans the whole stream."""
     from utils.llm.client import get_openai_client
     from utils.llm.model_garden import model_for
 
@@ -199,7 +182,7 @@ def _stream(sb, ctx: PartnerContext, pool: dict, price: int, req: ChatCompletion
         yield frame({"role": "assistant", "content": ""})
         for chunk in stream:
             if not chunk.choices:
-                continue  # the terminal usage-only chunk (stream_options.include_usage)
+                continue  # the terminal usage-only chunk
             delta = chunk.choices[0].delta
             if delta is not None and delta.content:
                 yield frame({"content": delta.content})
@@ -219,9 +202,9 @@ def _stream(sb, ctx: PartnerContext, pool: dict, price: int, req: ChatCompletion
         yield "data: [DONE]\n\n"
         return
     # The whole answer is on the wire: bill, then close. A client that dropped
-    # mid-answer raised GeneratorExit at a yield above and never reaches here.
+    # raised GeneratorExit at a yield above and never reaches here.
     request_id = str(uuid.uuid4())
-    charge, meta = _charge_for(price, credits_for_llm_usage(), llm_usage_snapshot())
+    charge, meta = compute_charge(ZOE_ACTION, price, credits_for_llm_usage(), llm_usage_snapshot())
     _debit(sb, ctx, pool, charge, meta, request_id)
     analytics_capture(ctx.org_id, "partner_zoe_completed", {"charged": charge, "stream": True})
     yield frame({}, finish="stop", billing=psvc.billing_block(charge, request_id))
@@ -233,7 +216,7 @@ def _stream(sb, ctx: PartnerContext, pool: dict, price: int, req: ChatCompletion
 
 @zoe_router.get("/models")
 async def zoe_models(ctx: PartnerContext = Depends(get_partner_context)):
-    """OpenAI's model listing, so SDKs and gateways that probe it don't 404."""
+    """OpenAI's model listing, so SDKs that probe it don't 404."""
     return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "created": 0, "owned_by": "msanii"}]}
 
 
@@ -265,12 +248,11 @@ async def zoe_chat_completions(req: ChatCompletionRequest, ctx: PartnerContext =
         raise HTTPException(status_code=502, detail={"code": "zoe_failed"}) from None
 
     request_id = str(uuid.uuid4())
-    charge, meta = _charge_for(price, measured, usage)
+    charge, meta = compute_charge(ZOE_ACTION, price, measured, usage)
     body["billing"] = psvc.billing_block(charge, request_id)
 
     async def deliver():
-        # The body is ONE frame: yield it, then bill — same rule as the
-        # calculation stream. Nothing below runs for a client that is gone.
+        # ONE frame: yield, then bill. Nothing below runs for a gone client.
         yield json.dumps(body)
         _debit(sb, ctx, pool, charge, meta, request_id)
         analytics_capture(ctx.org_id, "partner_zoe_completed", {"charged": charge, "stream": False})

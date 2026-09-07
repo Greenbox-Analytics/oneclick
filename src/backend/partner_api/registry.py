@@ -2,24 +2,16 @@
 
 The Registry's contract parse, for partners: send contract PDFs, get the deal
 back as data. `contract_terms` is exactly the shape /oneclick/v1/royalties
-accepts (parse a contract once, then run every statement against it at the
-base price), and `splits` is the per-party master / publishing / SoundExchange
-pivot the Registry uses for ownership stakes.
+accepts (parse once, then run every statement against it at the base price);
+`splits` is the per-party master / publishing / SoundExchange pivot.
 
-Nothing is stored. The parse cache is keyed by the contract's text — shared
-with the product, deliberately cross-tenant — and holds no org data, so a key
-never widens into anyone's stored documents.
-
-Same shape as the calculation endpoint: multipart in, SSE out (heartbeats
-while the parse runs), priced by credit_prices.partner_registry_parse through
-ai_pricing.compute_charge (base / metered tail), debited ONLY after the result
-frame is on the wire (the frame reports it in `billing`), idempotent under
-Idempotency-Key.
+Nothing is stored — the parse cache is keyed by contract text and holds no org
+data, so a key never widens into anyone's documents. Multipart in, SSE out,
+billed by stream_billed_run.
 """
 
 import asyncio
 import hashlib
-import logging
 import shutil
 import tempfile
 from pathlib import Path as FSPath
@@ -34,12 +26,11 @@ from partner_api.router import (
     MAX_CONTRACTS_BYTES,
     _get_supabase,
     _save_upload,
-    _sse,
     get_partner_context,
     require_partner_api,
+    stream_billed_run,
 )
 from partner_api.service import PartnerContext
-from subscriptions.ai_pricing import compute_charge
 
 registry_router = APIRouter(prefix="/registry/v1", dependencies=[Depends(require_partner_api)])
 
@@ -53,7 +44,7 @@ async def partner_splits(
 ):
     sb = _get_supabase()
 
-    # ---- pre-stream validation: plain HTTP statuses --------------------------
+    # ---- pre-stream validation: plain HTTP statuses ----
     if not contracts:
         raise HTTPException(
             status_code=422,
@@ -85,13 +76,13 @@ async def partner_splits(
             p = tmp / f"contract_{i}.pdf"
             total += _save_upload(c, p, MAX_CONTRACTS_BYTES - total, "file_too_large", hasher)
             contract_paths.append(str(p))
-        # The pivot depends on who the main artist is, so the same PDFs for a
+        # The pivot depends on the main artist, so the same PDFs for a
         # different artist are a different deliverable.
         hasher.update(main_artist_name.strip().encode())
         request_id = psvc.derive_request_id(ctx.key_id, idempotency_key, hasher.hexdigest(), pool.get("period_end"))
         analytics_capture(ctx.org_id, "partner_registry_parse_started", {"contract_count": len(contract_paths)})
-        # Started HERE, not in the generator: run_partner_parse's finally is the
-        # only thing that deletes tmpdir. Must stay LAST in this try.
+        # Started HERE: run_partner_parse's finally is the only thing that
+        # deletes tmpdir. Must stay LAST in this try.
         task = asyncio.create_task(
             asyncio.to_thread(
                 psvc.run_partner_parse,
@@ -106,72 +97,32 @@ async def partner_splits(
         shutil.rmtree(tmpdir, ignore_errors=True)
         raise
 
-    async def generate():
-        # Heartbeats: a proxied response dies after ~100 s of silence, and the
-        # LLM parse is exactly that long. SSE comments keep bytes flowing.
-        while True:
-            done, _ = await asyncio.wait({task}, timeout=15)
-            if done:
-                break
-            yield ": ping\n\n"
-        try:
-            result, measured, usage = task.result()
-        except ValueError as e:
-            # The contract itself: no text, encrypted, not really a PDF.
-            analytics_capture(ctx.org_id, "partner_registry_parse_failed", {"error_code": "CONTRACT_UNREADABLE"})
-            yield _sse(
-                {
-                    "type": "error",
-                    "code": "CONTRACT_UNREADABLE",
-                    "message": "We couldn't read this contract.",
-                    "suggestion": (
-                        "Make sure each file is a text PDF (not a scanned image), isn't password-protected, "
-                        "and isn't empty."
-                    ),
-                    "details": {"reason": str(e)},
-                    "billing": psvc.unbilled(),
-                }
-            )
-            return
-        except Exception:
-            logging.exception("partner parse failed org=%s key=%s request_id=%s", ctx.org_id, ctx.key_id, request_id)
-            analytics_capture(ctx.org_id, "partner_registry_parse_failed", {"error_code": "internal_error"})
-            yield _sse(
-                {"type": "error", "code": "internal_error", "request_id": request_id, "billing": psvc.unbilled()}
-            )
-            return
-        # THE charge formula, computed BEFORE the frame so the body can report
-        # what this call costs; the debit still runs after the frame (below).
-        # A replay under an Idempotency-Key was charged on its first run — the
-        # debit RPC dedupes it — so the body says so instead of repeating the price.
-        charge, charge_meta = compute_charge(psvc.REGISTRY_ACTION, price, measured, usage)
-        replayed = bool(idempotency_key) and psvc.already_charged(sb, request_id)
-        billing = psvc.billing_block(charge, request_id, replayed=replayed)
-        yield _sse({"type": "result", **result, "billing": billing})
-        # Bill only AFTER the result is on the wire — a client that dropped
-        # closed the generator at the yield above and is never charged. THE
-        # charge formula, never a local max(); a debit failure is logged, not
-        # surfaced, because the deliverable already went out.
-        try:
-            psvc.debit_run(
-                sb,
-                wallet_id=pool["wallet_id"],
-                amount=charge,
-                request_id=request_id,
-                key_id=ctx.key_id,
-                metadata=charge_meta,
-                action=psvc.REGISTRY_ACTION,
-            )
-        except Exception:
-            logging.exception("partner parse debit failed org=%s request_id=%s", ctx.org_id, request_id)
-        analytics_capture(
-            ctx.org_id,
-            "partner_registry_parse_completed",
-            {
-                "party_count": len(result["splits"].get("parties", [])),
-                "charged": billing["credits"],
-                "replayed": replayed,
-            },
-        )
+    def on_error(exc):
+        # The contract itself: no text, encrypted, not really a PDF.
+        if not isinstance(exc, ValueError):
+            return None
+        return {
+            "type": "error",
+            "code": "CONTRACT_UNREADABLE",
+            "message": "We couldn't read this contract.",
+            "suggestion": (
+                "Make sure each file is a text PDF (not a scanned image), isn't password-protected, and isn't empty."
+            ),
+            "details": {"reason": str(exc)},
+        }
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        stream_billed_run(
+            sb,
+            ctx,
+            task=task,
+            action=psvc.REGISTRY_ACTION,
+            price=price,
+            pool=pool,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            on_error=on_error,
+            completed_props=lambda result: {"party_count": len(result["splits"].get("parties", []))},
+        ),
+        media_type="text/event-stream",
+    )

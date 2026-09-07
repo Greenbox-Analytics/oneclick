@@ -184,7 +184,7 @@ def test_create_key(client, flags, admin_of_live_org, monkeypatch):
 
     r = client.post(f"/orgs/{ORG_ID}/partner-keys", json={"label": "Staging", "expires_at": "2099-01-01"})
     assert r.status_code == 200
-    assert minted[1]["expires_at"].endswith("+00:00")  # naive date normalized to UTC by ExpiringKeyCreate
+    assert minted[1]["expires_at"].endswith("+00:00")  # naive date normalized to UTC by PartnerKeyCreate
 
     assert [e for e, _ in events] == ["partner_key_created", "partner_key_created"]
     assert events[1][1] == {"org_id": ORG_ID, "via": "portal"}

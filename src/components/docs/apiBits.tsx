@@ -1,7 +1,5 @@
-// src/components/docs/apiBits.tsx
-// Small pieces of the docs' API section. Tag and MethodBadge are the shared
-// ones — the console and the page both render them, so they live outside
-// either; ResponseExample is the page's alone but sits here for company.
+// Small pieces of the docs' API section. Tag and MethodBadge are shared by the
+// page and the console; ResponseExample is the page's alone.
 import type { ReactNode } from "react";
 import type { ResponseSection } from "./partnerApiSamples";
 
@@ -31,9 +29,8 @@ export function MethodBadge({ method }: { method: keyof typeof METHOD_STYLES }) 
   );
 }
 
-/** A response, one captioned block per part of the response: the caption and
- * a note on the left, the JSON fragment on the right, a field table beneath
- * where the fields need explaining. */
+/** One captioned block per part of a response: caption and note left, JSON
+ * fragment right, a field table beneath where the fields need explaining. */
 export function ResponseExample({ label, sections }: { label: string; sections: ResponseSection[] }) {
   return (
     <div className="my-5 overflow-hidden rounded-xl border border-border">

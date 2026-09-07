@@ -13,7 +13,8 @@ import {
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 import { useSaveReceiptToProject } from "@/hooks/useRoyalties";
 import type { PayoutOut } from "@/hooks/useRoyalties";
-import { PartyAvatar, fmtMoney, fmtDate, downloadPdf } from "./shared";
+import { PartyAvatar, fmtMoney, fmtDate } from "./shared";
+import { downloadPdf } from "@/lib/downloadPdf";
 import { useToast } from "@/hooks/use-toast";
 
 interface Artist {

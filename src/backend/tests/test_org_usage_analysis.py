@@ -115,7 +115,11 @@ def admin(monkeypatch):
 def test_usage_window_floors():
     now = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
     assert service.usage_window("all", WALLET["period_start"], now) == (None, None)
-    assert service.usage_window("mtd", None, now) == (None, None)
+    # A pool with no period (any team whose dispersal is 0, so the sweep never
+    # rolls it) falls back to the calendar month — NEVER to all-time, which
+    # used to widen "this period" to lifetime everywhere it was read.
+    since, prev = service.usage_window("mtd", None, now)
+    assert since == "2026-09-01T00:00:00+00:00" and prev == "2026-08-17T12:00:00+00:00"
     since, prev = service.usage_window("mtd", WALLET["period_start"], now)
     assert since == "2026-09-01T00:00:00+00:00" and prev == "2026-08-17T12:00:00+00:00"
     since, prev = service.usage_window("7d", WALLET["period_start"], now)
@@ -199,6 +203,24 @@ async def test_all_time_has_no_floor_and_no_previous():
     assert out["since"] is None and out["previous"] is None and out["series"] == []
     assert len(db.ledger_queries) == 1
     assert db.ledger_queries[0].gte.call_count == 0
+
+
+async def test_mtd_on_a_pool_with_no_period_bounds_the_scan_to_this_month():
+    """A team funded by transfers/packs has monthly_dispersal_credits = 0, so
+    the sweep never calls rollover_wallet and the pool's period_start stays
+    NULL forever. That used to make MTD unbounded: the report header read
+    "All time" with MTD selected, spentThisPeriod became lifetime spend, and
+    the previous-window delta vanished. MTD must floor at the month instead."""
+    with patch.dict(WALLET, {"period_start": None, "period_end": None}):
+        db = _db([[], []])
+        out = await service.get_org_usage(db, U_ADMIN, ORG)
+
+    since = out["since"]
+    assert since is not None, "MTD fell back to all-time"
+    assert since.startswith(datetime.now(UTC).strftime("%Y-%m-01T00:00:00"))
+    assert out["previous"] is not None  # a real window has a comparable one
+    # The floor has to reach the QUERY, not just the payload.
+    assert db.ledger_queries[0].gte.call_args[0] == ("created_at", since)
 
 
 async def test_rows_without_action_or_timestamp_still_count_as_spend():

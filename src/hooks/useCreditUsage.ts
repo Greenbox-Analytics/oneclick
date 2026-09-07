@@ -44,9 +44,8 @@ export function useCreditUsage(enabled = true) {
   });
 }
 
-/** One org's partner-API spend through keys the CALLER created. Same row
- * shapes as GET /orgs/{id}/usage, restricted to this user's own keys — so a
- * plain member sees their own API spend without the admin-only pool payload. */
+/** One org's partner spend through keys the CALLER created — the same row
+ * shapes as the org payload, without its admin-only pool half. */
 export interface MyOrgApiUsage {
   orgId: string;
   orgName: string | null;

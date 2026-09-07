@@ -3,10 +3,6 @@ import { useState, useRef, useEffect } from "react";
 import { Check, ChevronDown, Globe, Hourglass, Clock, CheckCheck, Coins } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// Authenticated PDF download — moved to @/lib/downloadPdf; re-exported so the
-// existing importers in this folder keep working.
-export { downloadPdf } from "@/lib/downloadPdf";
-
 // ---------------------------------------------------------------------------
 // Currency metadata (symbol/flag/name only — NO toUSD conversion rates).
 // Amounts arriving from the server are already converted; this map is used

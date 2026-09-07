@@ -1,8 +1,7 @@
 // src/lib/usageTools.ts
 // The four tools a credit action belongs to. Members spend the product actions
-// and API keys spend the partner ones; the Usage card shows both under one
-// name per tool, in the same colours the billing card uses (TOOL_META, which
-// itself reads --t-* from index.css).
+// and API keys the partner ones; the Usage card shows both under one name per
+// tool, in the billing card's colours.
 import type { CreditAction } from "@/hooks/useCreditUsage";
 import { TOOL_META } from "@/lib/credits";
 
@@ -10,8 +9,8 @@ export type ToolId = "oneclick" | "registry" | "splitsheet" | "zoe";
 
 export type UsageAction = CreditAction | `partner_${CreditAction}`;
 
-// A Record over the CreditAction/partner union is exhaustive: adding a new
-// CreditAction without mapping it here is a compile error, not a silent drop.
+// Exhaustive over the union: a new CreditAction unmapped here is a compile
+// error, not a silent drop.
 const ACTION_TOOL: Record<UsageAction, ToolId> = {
   oneclick_run: "oneclick",
   partner_oneclick_run: "oneclick",

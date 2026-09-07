@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
 import { API_URL } from "@/lib/apiFetch";
 import type { PayoutOut } from "@/hooks/useRoyalties";
 import { useChangePayoutCurrency } from "@/hooks/useRoyalties";
-import { StatusBadge, fmtMoney, fmtDate, idToColor, downloadPdf, CURRENCIES } from "./shared";
+import { StatusBadge, fmtMoney, fmtDate, idToColor, CURRENCIES } from "./shared";
+import { downloadPdf } from "@/lib/downloadPdf";
 import { useToast } from "@/hooks/use-toast";
 
 interface PayoutDetailModalProps {

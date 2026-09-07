@@ -1,7 +1,5 @@
-// src/components/orgs/CreateApiKeyDialog.tsx
-// "New API key": name + optional expiry -> secret shown ONCE. One key type:
-// every key is this team's credential. Copy is for the person paying, not a
-// developer — "credits", never bearer/hash.
+// "New API key": name + optional expiry -> the secret, shown ONCE. Copy is for
+// the person paying, not a developer — "credits", never bearer/hash.
 import { useState } from "react";
 import { Check, Copy, CalendarIcon, Loader2 } from "lucide-react";
 import { format } from "date-fns";
@@ -54,8 +52,8 @@ export function CreateApiKeyDialog({
   const missing = !label.trim() ? "Add a name" : folder.missing;
   const canSubmit = !missing && !create.isPending && !folder.isPending;
   const tomorrow = new Date(`${tomorrowInputValue()}T00:00:00`);
-  // Custom with no date chosen is treated as "never" for the payload, but the
-  // helper copy below still nudges toward picking one instead of reading "never".
+  // Custom with no date is "never" in the payload, but the copy below nudges
+  // toward picking one rather than reading "never".
   const resolvedExpiry = preset === "custom" ? (customDate ? toInputValue(customDate) : null) : expiryFromPreset(preset);
   const expiryHelp =
     preset === "custom" && !customDate ? "Pick a date, or the key won't expire." : expiryLabel(resolvedExpiry);
@@ -71,8 +69,8 @@ export function CreateApiKeyDialog({
   };
 
   const handleOpenChange = (next: boolean) => {
-    // While a secret is on screen the ONLY way out is Done — a backdrop click
-    // must not throw away the one chance to copy it.
+    // With a secret on screen the only way out is Done: a backdrop click must
+    // not throw away the one chance to copy it.
     if (!next && secret) return;
     if (!next) reset();
     onOpenChange(next);
@@ -85,7 +83,7 @@ export function CreateApiKeyDialog({
 
   const handleCreate = () => {
     if (!canSubmit) return;
-    // A typed folder name has to exist before the key can point at it.
+    // A typed folder must exist before the key can point at it.
     folder.resolve((folderId) =>
       create.mutate({
         orgId,
@@ -103,8 +101,8 @@ export function CreateApiKeyDialog({
       setCopied(true);
       setCopyFailed(false);
     } catch {
-      // navigator.clipboard is absent on a non-secure origin — say so, the
-      // secret is unrecoverable once Done is clicked.
+      // No clipboard on a non-secure origin — say so; the secret is
+      // unrecoverable once Done is clicked.
       setCopied(false);
       setCopyFailed(true);
     }
@@ -223,7 +221,7 @@ export function CreateApiKeyDialog({
               <Button type="button" variant="outline" onClick={() => handleOpenChange(false)}>
                 Cancel
               </Button>
-              {/* aria-disabled, not disabled: keyboard and screen-reader users can reach it and hear why. */}
+              {/* aria-disabled, not disabled: reachable, and it says why. */}
               <Button
                 type="button"
                 onClick={handleCreate}

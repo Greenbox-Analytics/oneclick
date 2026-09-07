@@ -4,6 +4,13 @@ The Partner API lets your own software run Msanii's tools: royalty calculations 
 
 Everything on this page is what a partner integrating with Msanii needs. Nothing here requires a Msanii account beyond the team that issued your key.
 
+<!-- MAINTAINERS: this file is the partner HANDOUT — a hand-written copy of the
+     same facts the in-app reference states at /docs?section=api. Those come
+     from src/components/docs/partnerApiSamples.ts, which is the source of
+     truth (the page and the trial console both render from it). Change that
+     file first, then mirror the change here in the same commit. -->
+
+
 ## Base URL and authentication
 
 Your base URL is shown on your team's page in Msanii, under **API documentation**. All paths below are relative to it.

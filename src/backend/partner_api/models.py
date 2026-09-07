@@ -1,9 +1,8 @@
 """Frozen v1 DTOs for the partner API — the public contract.
 
-Internal shapes (ContractData / RoyaltyPayment) map to and from these
-EXPLICITLY; test_partner_models.py pins the internal field sets so internal
-drift fails a test instead of silently breaking partners. Breaking changes
-go to /partner/v2, never into these models.
+Internal shapes map to and from these EXPLICITLY; test_partner_models.py pins
+the internal field sets, so internal drift fails a test instead of silently
+breaking partners. Breaking changes go to v2, never into these models.
 """
 
 from datetime import UTC, datetime
@@ -16,35 +15,28 @@ from utils.contract_parsing.models import ContractData, Party, RoyaltyShare, Wor
 # ---- key-mint request base --------------------------------------------------
 
 
-class ExpiringKeyCreate(BaseModel):
-    """Base for the key-mint body: one place decides what a valid expiry is."""
+class PartnerKeyCreate(BaseModel):
+    """Body of every mint — the Msanii-admin endpoint and the org console.
+    One model, two callers, so they can't drift."""
 
-    # Typed datetime, not str — a malformed string must 422 at the edge, not
-    # 500 at the DB.
+    label: str = Field(min_length=1, max_length=120)
+    # Typed, so a malformed string 422s at the edge rather than 500ing at the DB.
     expires_at: datetime | None = None
+    # Validated against the org at mint time: a well-formed id for another
+    # org's folder is still unknown.
+    folder_id: str | None = None
 
     @field_validator("expires_at")
     @classmethod
     def _future_and_aware(cls, v: datetime | None) -> datetime | None:
         if v is None:
             return None
-        # A bare date ("2026-09-30") parses to NAIVE midnight. Treat naive as
-        # UTC so the stored value is unambiguous, then refuse the past — a key
-        # born expired is always a caller mistake, never an intent.
+        # A bare date parses to NAIVE midnight — read it as UTC so the stored
+        # value is unambiguous, then refuse the past (always a caller mistake).
         aware = v if v.tzinfo else v.replace(tzinfo=UTC)
         if aware <= datetime.now(UTC):
             raise ValueError("expires_at must be in the future")
         return aware
-
-
-class PartnerKeyCreate(ExpiringKeyCreate):
-    """Body of every mint — the Msanii-admin endpoint and the org console.
-    One model, two callers, so they can't drift."""
-
-    label: str = Field(min_length=1, max_length=120)
-    # Optional grouping. Validated against the org at mint time, not here: a
-    # well-formed id for another org's folder is still unknown.
-    folder_id: str | None = None
 
 
 class KeyFolderCreate(BaseModel):
@@ -53,9 +45,7 @@ class KeyFolderCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def _stripped(cls, v: str) -> str:
-        # min_length sees the raw string, so "   " passes it. Strip and
-        # re-check: the service stores the stripped name, and a whitespace-only
-        # one must 422 at the edge rather than raise deeper in.
+        # min_length sees the raw string, so "   " passes it.
         v = v.strip()
         if not 1 <= len(v) <= 80:
             raise ValueError("name must be 1-80 characters")
@@ -102,8 +92,7 @@ class PartnerContractTerms(BaseModel):
 class PartnerExpense(BaseModel):
     amount: float = Field(ge=0)
     description: str | None = None
-    # Track titles this expense is tagged to; empty = project-wide.
-    # allocate_expenses reads `work_titles` from each expense dict (royalty_calculator.py:127).
+    # Titles this expense is tagged to; empty = project-wide.
     work_titles: list[str] = []
 
 
@@ -112,9 +101,8 @@ class PartnerContributor(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     role: str = Field(min_length=1, max_length=100)
-    # Publishing side — composition. A self-published writer keeps the whole
-    # publishing_share; a published writer collects writer_share while their
-    # publisher collects publisher_share.
+    # Publishing side. A self-published writer keeps the whole publishing_share;
+    # a published one collects writer_share and their publisher publisher_share.
     publishing_share: float | None = Field(default=None, ge=0, le=100)
     writer_share: float | None = Field(default=None, ge=0, le=100)
     publisher_share: float | None = Field(default=None, ge=0, le=100)
@@ -159,8 +147,8 @@ class PartnerAmounts(BaseModel):
 
 
 class PartnerPayment(BaseModel):
-    """One line of a calculation — the song, who is paid, on what share, and
-    the money — sectioned so a partner reads it without a field legend."""
+    """One line of a calculation, sectioned so a partner reads it without a
+    field legend: the song, who is paid, on what share, and the money."""
 
     song: str
     payee: PartnerPayee
@@ -197,7 +185,7 @@ class PartnerSplits(BaseModel):
 
 def to_contract_data(terms: PartnerContractTerms) -> ContractData:
     """Partner DTO -> internal ContractData. source_contract_ids stays empty:
-    partner-supplied terms have no stored-contract provenance."""
+    partner terms have no stored-contract provenance."""
     return ContractData(
         parties=[Party(name=p.name, role=p.role, aliases=list(p.aliases)) for p in terms.parties],
         works=[Work(title=w.title, work_type=w.work_type) for w in terms.works],
@@ -217,10 +205,9 @@ def to_contract_data(terms: PartnerContractTerms) -> ContractData:
 
 
 def payment_to_dto(p: dict) -> PartnerPayment:
-    """RoyaltyPayment (as dict, via dataclasses.asdict) -> the sectioned v1
-    payment. The internal free-text `terms`, `total_royalty` and
-    `source_contract_ids` are dropped: the clause is returned by
-    /registry/v1/splits under contract_terms.royalty_shares[].terms."""
+    """RoyaltyPayment dict -> the sectioned v1 payment. Internal `terms`,
+    `total_royalty` and `source_contract_ids` are dropped — the clause comes
+    back from /registry/v1/splits instead."""
     return PartnerPayment(
         song=p["song_title"],
         payee=PartnerPayee(name=p["party_name"], role=p["role"]),
@@ -235,13 +222,13 @@ def payment_to_dto(p: dict) -> PartnerPayment:
 
 
 def calc_result(payments: list[dict]) -> dict:
-    """The royalties result event body, minus `type` and `billing` (the router
-    adds those): a summary block, then the sectioned payments."""
+    """The royalties result body, minus `type` and `billing` (the router adds
+    those): a summary block, then the sectioned payments."""
     dtos = [payment_to_dto(p) for p in payments]
     summary = PartnerCalcSummary(
         payments=len(dtos),
-        # Sum the already-rounded payables so a partner adding up the lines
-        # they were shown gets exactly total_payable.
+        # Sum the already-rounded payables, so adding up the lines a partner
+        # was shown gives exactly total_payable.
         total_payable=round(sum(d.amounts.payable for d in dtos), 2),
         expense_review_required=any(d.share.basis == "net" for d in dtos),
     )
@@ -249,13 +236,10 @@ def calc_result(payments: list[dict]) -> dict:
 
 
 def to_partner_splits(pivot: dict) -> dict:
-    """Registry pivot (contract_splits.parse_royalty_splits) -> the API's
-    `splits` section. `main_artist` is the party the pivot flagged, by the name
-    the contract uses, or None when the name sent was not found (or none was
-    sent). `aliases` and the per-party flag are dropped. Percentages are
-    indexed directly (not `.get(..., 0.0)`): a pivot missing one is a bug in
-    the parse, and this is a money path — it must raise, not silently publish
-    a 0.0 split."""
+    """Registry pivot -> the API's `splits` section. `main_artist` is the party
+    the pivot flagged, by the contract's own spelling, or None. Percentages are
+    indexed directly, never `.get(..., 0.0)`: on a money path a missing one is
+    a parse bug that must raise, not publish a silent 0.0 split."""
     parties = pivot.get("parties") or []
     return PartnerSplits(
         main_artist=next((p["name"] for p in parties if p.get("is_main_artist")), None),
@@ -273,9 +257,8 @@ def to_partner_splits(pivot: dict) -> dict:
 
 
 def from_contract_data(cd: ContractData) -> PartnerContractTerms:
-    """Internal ContractData -> the frozen v1 terms DTO. The SAME shape
-    /oneclick/v1/royalties accepts as contract_terms, so a parse from
-    /registry/v1/splits feeds a calculation with no translation.
+    """Internal ContractData -> the frozen v1 terms DTO: the SAME shape
+    /oneclick/v1/royalties accepts, so a parse feeds a calculation untranslated.
     source_contract_ids is internal provenance and is dropped."""
     return PartnerContractTerms(
         parties=[PartnerParty(name=p.name, role=p.role, aliases=list(p.aliases)) for p in cd.parties],

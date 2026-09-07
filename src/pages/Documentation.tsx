@@ -18,6 +18,7 @@ import { useSmartBack } from "@/hooks/useSmartBack";
 import { useToolPrices } from "@/hooks/useCreditPacks";
 import { ACTION_ORDER, estimateCredits, SIZED_ACTIONS, TOOL_META, type ToolCreditPrices } from "@/lib/credits";
 import type { CreditAction } from "@/hooks/useCreditUsage";
+import { useCopied } from "@/components/ui/copy-button";
 import { PartnerApiConsole, type ConsoleKind } from "@/components/docs/PartnerApiConsole";
 import { MethodBadge, ResponseExample, Tag } from "@/components/docs/apiBits";
 import {
@@ -38,9 +39,8 @@ const HIDE_REGISTRY_AND_WORKS = false;
 
 interface SectionMeta { id: string; label: string; icon: React.ElementType; group: string; }
 
-// The sidebar has two folds: Platform (the product docs, grouped below) and
-// API (its own reference nav, further down). The flat SECTIONS list still
-// carries "api" last, so prev/next and the mobile chips reach it.
+// Two sidebar folds: Platform (grouped below) and API. The flat SECTIONS list
+// still carries "api" last, so prev/next and the mobile chips reach it.
 const PLATFORM_GROUPS: { group: string; ids: string[] }[] = [
   { group: "Getting started", ids: ["getting-started"] },
   { group: "Roster & projects", ids: ["artist-management", "portfolio", "project-detail", "work-detail", "rights-registry"] },
@@ -101,9 +101,7 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
 // Lets content-level cards switch the active section (avoids prop drilling).
 const SelectSectionContext = createContext<(id: string) => void>(() => {});
 
-// ---------------------------------------------------------------------------
-// API reference — tabs, sidebar nav, console kind
-// ---------------------------------------------------------------------------
+// ---- API reference: tabs, sidebar nav, console kind ----
 
 type ApiTabId = "overview" | "royalties" | "registry" | "splitsheet" | "zoe" | "errors" | "billing";
 
@@ -119,8 +117,7 @@ const API_TABS: { id: ApiTabId; label: string }[] = [
 const API_TAB_IDS = new Set<string>(API_TABS.map((t) => t.id));
 const parseApiTab = (s: string | null): ApiTabId => (s && API_TAB_IDS.has(s) ? (s as ApiTabId) : "overview");
 
-// Which console sits beside each tab: the billed endpoints get their own, the
-// rest share the free key check (GET /zoe/v1/models).
+// Which console sits beside each tab; the unbilled tabs share the key check.
 const CONSOLE_KIND: Record<ApiTabId, ConsoleKind> = {
   overview: "check", errors: "check", billing: "check",
   royalties: "royalties", registry: "registry", splitsheet: "splitsheet", zoe: "zoe",
@@ -155,7 +152,7 @@ const API_NAV: { group: string; items: ApiNavItem[] }[] = [
     { key: "err-stream", tab: "errors", anchor: "stream-error-codes", label: "Stream error codes", icon: List },
   ] },
 ];
-// The nav row that lights up when a tab is reached without clicking a row.
+// The row that lights up when a tab is reached without clicking one.
 const API_NAV_DEFAULT_KEY: Record<ApiTabId, string> = {
   overview: "overview", billing: "billing", errors: "err-http",
   royalties: "ep-royalties", registry: "ep-registry", splitsheet: "ep-splitsheet", zoe: "ep-zoe",
@@ -164,9 +161,8 @@ const API_NAV_DEFAULT_KEY: Record<ApiTabId, string> = {
 interface ApiTabState { tab: ApiTabId; select: (tab: ApiTabId, anchor?: string) => void; }
 const ApiTabContext = createContext<ApiTabState>({ tab: "overview", select: () => {} });
 
-// xl breakpoint (1280px) — where the console lives in the right rail rather
-// than under the article. Read synchronously so the console doesn't jump on
-// first paint; jsdom has no matchMedia, so tests render it inline.
+// Where the console moves into the right rail. Read synchronously so it
+// doesn't jump on first paint; jsdom has no matchMedia, so tests inline it.
 const WIDE_QUERY = "(min-width: 1280px)";
 function useWide() {
   const [wide, setWide] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.(WIDE_QUERY).matches);
@@ -180,9 +176,7 @@ function useWide() {
   return wide;
 }
 
-// ---------------------------------------------------------------------------
-// Sidebar folds — Platform (product docs) and API (the reference nav)
-// ---------------------------------------------------------------------------
+// ---- sidebar folds ----
 
 const navRowCls = (on: boolean) =>
   `flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13.5px] transition-colors ${on ? "bg-primary/10 font-semibold text-primary" : "font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`;
@@ -342,13 +336,7 @@ function PropTable({ rows, headers = ["Item", "Status", "Description"] }: {
 }
 
 function CodeBlock({ label, children }: { label?: string; children: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard?.writeText(children).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    }).catch(() => {});
-  };
+  const [copied, copy] = useCopied(children);
   return (
     <div className="my-5 overflow-hidden rounded-xl border border-border bg-muted/40">
       <div className="flex items-center gap-2.5 border-b border-border px-3.5 py-2.5">
@@ -1340,8 +1328,12 @@ const RoyaltyTrackingContent = () => (
 
 
 // ---------------------------------------------------------------------------
-// API — the partner-facing reference. Mirrors docs/partner-api-reference.md;
-// keep the two in step. The Try-it box posts straight to the partner host.
+// API — the partner-facing reference. This section is LAYOUT: every fact about
+// the wire format comes from components/docs/partnerApiSamples.ts, which is the
+// source of truth (the trial console renders from it too, so page and console
+// cannot disagree). docs/partner-api-reference.md is the hand-written partner
+// handout of the same facts — update it in the same commit. The Try-it box
+// posts straight to the partner host.
 // ---------------------------------------------------------------------------
 
 function SubHeading({ children }: { children: string }) {
@@ -1360,7 +1352,6 @@ const P = ({ children }: { children: React.ReactNode }) => (
 // ---------------------------------------------------------------------------
 // API reference — tabbed content. Ported from the "API docs — two directions"
 // design (direction A: one docs page, a tab strip, the console in the rail).
-// Mirrors docs/partner-api-reference.md — keep the two in step.
 // ---------------------------------------------------------------------------
 
 function ApiTabStrip({ tab, onSelect }: { tab: ApiTabId; onSelect: (tab: ApiTabId) => void }) {
@@ -1406,13 +1397,7 @@ function EndpointRow({ method, path, description, tag, onClick }: {
 function EndpointHero({ method, path, title, stats, children }: {
   method: "GET" | "POST"; path: string; title: string; stats: [string, string][]; children: React.ReactNode;
 }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard?.writeText(path).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    }).catch(() => {});
-  };
+  const [copied, copy] = useCopied(path);
   return (
     <div className="mb-6 rounded-[14px] border border-border bg-gradient-to-b from-muted/60 to-card px-5 pb-4 pt-4">
       <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -1439,7 +1424,7 @@ function EndpointHero({ method, path, title, stats, children }: {
   );
 }
 
-// Inputs / Outputs block of an endpoint tab. The name is a rail heading.
+// Inputs / Outputs block of an endpoint tab; the name is a rail heading.
 function Sect({ tone, name, sub, tag, children }: {
   tone: "in" | "out"; name: string; sub: string; tag: string; children: React.ReactNode;
 }) {

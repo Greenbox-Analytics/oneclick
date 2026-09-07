@@ -1,16 +1,20 @@
 // src/components/docs/partnerApiSamples.ts
-// Base URL, prices, Python samples and console presets for the API section of
-// the docs page. Kept out of the component files so fast refresh keeps working
-// (only-export-components). Mirrors docs/partner-api-reference.md — keep the
-// two in step.
+// Base URL, prices, Python samples, console presets and response walkthroughs
+// for the API section of the docs page. Kept out of the component files so fast
+// refresh keeps working (only-export-components).
+//
+// SOURCE OF TRUTH for everything the API section states about the wire format.
+// The docs page (Documentation.tsx) and the trial console (PartnerApiConsole)
+// both render FROM here, so those two cannot disagree. The partner handout,
+// docs/partner-api-reference.md, is a hand-written copy of the same facts and
+// is the ONLY file that has to be re-checked when these change — update it in
+// the same commit. Direction is one-way: change this file first.
 
 import type { Row } from "./RowsEditor";
 
 export const PARTNER_API_URL = (import.meta.env.VITE_PARTNER_API_URL || "").replace(/\/$/, "");
 
-// Base prices at the time of writing (credit_prices: partner_oneclick_run,
-// partner_registry_parse, partner_split_sheet, partner_zoe_message). The 402
-// body carries the live `price`.
+// Base prices at the time of writing; a 402 body carries the live `price`.
 export const ROYALTIES_PRICE = 30;
 export const REGISTRY_PRICE = 30;
 export const SPLIT_SHEET_PRICE = 20;
@@ -134,11 +138,10 @@ for chunk in zoe.chat.completions.create(model="zoe", messages=[...], stream=Tru
   },
 } as const;
 
-// ---- console presets ----------------------------------------------------------
-// Sample inputs for the "Trial a request" console. Every preset is a real,
-// valid request; the outcome described in its label is what the API does.
+// ---- console presets ----
+// Every preset is a real, valid request; its label says what the API does.
 
-export const STATEMENT_SAMPLE = `Title,Net Payable
+const STATEMENT_SAMPLE = `Title,Net Payable
 Blue Sky,1000.00
 Red Sun,500.00`;
 
@@ -149,7 +152,7 @@ export interface ConsolePreset {
   id: string;
   label: string;
   statement: string;
-  /** True when the preset sends PDFs: exactly one of contracts / contract_terms goes on the wire. */
+  /** True when the preset sends PDFs — exactly one of the two goes on the wire. */
   pdf: boolean;
   parties: Row[];
   works: Row[];
@@ -164,8 +167,8 @@ export const CONSOLE_PRESETS: ConsolePreset[] = [
   { id: "none", label: "No song matches (error)", statement: STATEMENT_SAMPLE, pdf: false, parties: [JANE], works: [{ title: "Purple Rain" }], shares: [share("gross")], expenses: [] },
 ];
 
-// The split sheet console's starting rows (SPLIT_SHEET_SAMPLE stays the docs
-// page's JSON example of the same document).
+// The split sheet console's starting rows; every cell is a string because the
+// rows editor holds strings.
 export const SPLIT_SHEET_PRESET = {
   work_title: "Blue Sky",
   work_type: "single",
@@ -177,27 +180,27 @@ export const SPLIT_SHEET_PRESET = {
   ] as Row[],
 };
 
-// The split sheet console's editable body (format is picked separately).
-export const SPLIT_SHEET_SAMPLE = `{
-  "work_title": "Blue Sky",
-  "work_type": "single",
-  "split_type": "both",
-  "date": "6 September 2026",
-  "contributors": [
-    {"name": "Jane Doe", "role": "Producer",
-     "publishing_share": 50, "master_percentage": 50},
-    {"name": "Sam Ray", "role": "Writer",
-     "publishing_share": 50, "master_percentage": 50}
-  ]
-}`;
+// The docs page's JSON example, DERIVED from the preset so the two can't
+// describe different documents. Shares are numbers on the wire.
+export const SPLIT_SHEET_SAMPLE = JSON.stringify(
+  {
+    ...SPLIT_SHEET_PRESET,
+    contributors: SPLIT_SHEET_PRESET.contributors.map((c) => ({
+      ...c,
+      publishing_share: Number(c.publishing_share),
+      master_percentage: Number(c.master_percentage),
+    })),
+  },
+  null,
+  2,
+);
 
-// Zoe on the API is stateless — no stored contracts — so the sample question
-// is one she can answer from general knowledge.
+// Zoe on the API is stateless, so the sample is answerable from general
+// knowledge.
 export const ZOE_SAMPLE_MESSAGE = "What is a mechanical royalty, and who collects it?";
 
-// ---- response walkthroughs -----------------------------------------------------
-// One entry per top-level key of a response, rendered by ResponseExample as a
-// captioned block with the JSON fragment and, where it helps, a field table.
+// ---- response walkthroughs ----
+// One entry per top-level response key, rendered by ResponseExample.
 
 export interface ResponseSection {
   key: string;

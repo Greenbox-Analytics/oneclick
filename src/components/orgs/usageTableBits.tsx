@@ -1,15 +1,22 @@
 // src/components/orgs/usageTableBits.tsx
-// Table furniture shared by the team Usage card (OrgUsageAnalysis) and the
-// profile's My API usage card. Presentational only — rows come in as props.
-// Per-tool COLUMNS are gone: they don't scale as tools are added, so each row
-// carries one MixBar and the breakdown lives in the detail dialog instead.
+// Card furniture shared by the team Usage card and the profile's My API usage
+// card: range picker, report download, tiles, tables. Rows come in as props.
+// No per-tool COLUMNS — they don't scale as tools are added, so each row
+// carries one MixBar and the breakdown lives in the detail dialog.
+import { useState } from "react";
+import { Download, Loader2 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { downloadPdf } from "@/lib/downloadPdf";
+import type { UsageRange } from "@/hooks/useOrgs";
 import { TOOLS } from "@/lib/usageTools";
 import {
   folderSubject,
   keySubject,
   memberSubject,
+  USAGE_RANGES,
   type FolderRow,
   type KeyUsageRow,
   type MemberRow,
@@ -17,6 +24,60 @@ import {
   type UsageSubject,
 } from "@/lib/orgUsage";
 import { fmtDate } from "@/lib/utils";
+
+/** The window switcher both cards carry. `label` names the group, since a
+ * page can show more than one. */
+export function RangePicker({
+  value,
+  onChange,
+  label,
+}: {
+  value: UsageRange;
+  onChange: (range: UsageRange) => void;
+  label: string;
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
+      {USAGE_RANGES.map((r) => (
+        <button
+          key={r.id}
+          type="button"
+          role="radio"
+          aria-checked={value === r.id}
+          title={r.title}
+          onClick={() => onChange(r.id)}
+          className={`rounded-md px-2.5 py-1 text-[12px] font-semibold transition-colors ${value === r.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+        >
+          {r.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Downloads the report at `url`, owning its own in-flight state. */
+export function ReportButton({ url, filename, disabled }: { url: string; filename: string; disabled?: boolean }) {
+  const { toast } = useToast();
+  const [downloading, setDownloading] = useState(false);
+
+  const download = async () => {
+    setDownloading(true);
+    try {
+      await downloadPdf(url, filename);
+    } catch {
+      toast({ title: "Couldn't download the report", description: "Please try again.", variant: "destructive" });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <Button size="sm" variant="outline" onClick={download} disabled={disabled || downloading}>
+      {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+      Download PDF
+    </Button>
+  );
+}
 
 export const Swatch = ({ color }: { color: string }) => (
   <span className="mr-1.5 inline-block h-2 w-2 rounded-sm align-middle" style={{ background: color }} />
@@ -50,8 +111,8 @@ export function Tile({
   );
 }
 
-/** One row's tool split as a single stacked bar — the column-free replacement
- * for the per-tool cells. The numbers live in its label and the detail dialog. */
+/** One row's tool split as a stacked bar; the numbers live in its label and
+ * the detail dialog. */
 export function MixBar({ tools, total }: { tools: ToolTotals; total: number }) {
   const spent = TOOLS.filter((t) => tools[t.id] > 0);
   const label = spent.length
@@ -70,8 +131,7 @@ export function MixBar({ tools, total }: { tools: ToolTotals; total: number }) {
   );
 }
 
-/** The vertical "By tool" bar list — one row per tool, always all of them so a
- * zero reads as a zero. Used by the Usage card and the detail dialog. */
+/** The "By tool" bar list — always every tool, so a zero reads as a zero. */
 export function ToolMix({ tools, total }: { tools: ToolTotals; total: number }) {
   return (
     <ul className="flex flex-col gap-1.5">
@@ -101,8 +161,8 @@ export function ToolMix({ tools, total }: { tools: ToolTotals; total: number }) 
 
 type Selectable = { onSelect?: (s: UsageSubject) => void };
 
-/** Row chrome for a clickable row. The name cell is a real button so the row is
- * reachable by keyboard, not mouse-only. */
+/** Row chrome for a clickable row; the name cell is a real button, so the row
+ * is keyboard-reachable. */
 const rowProps = (open: (() => void) | undefined) =>
   open ? { className: "cursor-pointer hover:bg-muted/40", onClick: open } : {};
 
@@ -114,6 +174,44 @@ const NameButton = ({ open, children }: { open?: () => void; children: React.Rea
   ) : (
     <span className="font-medium">{children}</span>
   );
+
+/** Total / Runs / Mix — the three cells every usage row ends on. `loaded` is
+ * false until the query resolves; a 0 there would read as "spent nothing". */
+function SpendCells({
+  total,
+  runs,
+  tools,
+  loaded,
+}: {
+  total: number;
+  runs: number;
+  tools: ToolTotals;
+  loaded: boolean;
+}) {
+  return (
+    <>
+      <TableCell className="text-right font-semibold tabular-nums">{loaded ? total.toLocaleString() : "—"}</TableCell>
+      <TableCell className="text-right tabular-nums">{loaded ? runs.toLocaleString() : "—"}</TableCell>
+      <TableCell className="w-[160px]">
+        <MixBar tools={tools} total={total} />
+      </TableCell>
+    </>
+  );
+}
+
+/** A key's name cell: label over prefix · status. Indented when grouped. */
+function KeyNameCell({ r, open, indent }: { r: KeyUsageRow; open?: () => void; indent?: boolean }) {
+  return (
+    <TableCell className={indent ? "pl-8" : undefined}>
+      <div className="text-sm">
+        <NameButton open={open}>{r.row.label}</NameButton>
+      </div>
+      <div className="font-mono text-[11px] text-muted-foreground">
+        {r.row.keyPrefix}…{r.row.status !== "active" ? ` · ${r.row.status}` : ""}
+      </div>
+    </TableCell>
+  );
+}
 
 export function MembersTable({
   rows,
@@ -148,13 +246,7 @@ export function MembersTable({
                     {r.seat.status !== "active" ? ` · ${r.seat.status}` : ""}
                   </div>
                 </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
-                  {loaded ? r.total.toLocaleString() : "—"}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">{loaded ? r.runs.toLocaleString() : "—"}</TableCell>
-                <TableCell className="w-[160px]">
-                  <MixBar tools={r.tools} total={r.total} />
-                </TableCell>
+                <SpendCells total={r.total} runs={r.runs} tools={r.tools} loaded={loaded} />
                 {showKeys && (
                   <TableCell>
                     {r.keys.length === 0 ? (
@@ -205,22 +297,9 @@ export function KeysTable({ rows, loaded, onSelect }: { rows: KeyUsageRow[]; loa
             const open = onSelect && (() => onSelect(keySubject(r)));
             return (
               <TableRow key={row.keyId} {...rowProps(open)}>
-                <TableCell>
-                  <div className="text-sm">
-                    <NameButton open={open}>{row.label}</NameButton>
-                  </div>
-                  <div className="font-mono text-[11px] text-muted-foreground">
-                    {row.keyPrefix}…{row.status !== "active" ? ` · ${row.status}` : ""}
-                  </div>
-                </TableCell>
+                <KeyNameCell r={r} open={open} />
                 <TableCell className="text-muted-foreground">{row.folderName ?? "—"}</TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
-                  {loaded ? total.toLocaleString() : "—"}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">{loaded ? r.runs.toLocaleString() : "—"}</TableCell>
-                <TableCell className="w-[160px]">
-                  <MixBar tools={tools} total={total} />
-                </TableCell>
+                <SpendCells total={total} runs={r.runs} tools={tools} loaded={loaded} />
                 <TableCell className="text-muted-foreground">{fmtDate(row.lastUsedAt)}</TableCell>
               </TableRow>
             );
@@ -255,13 +334,7 @@ export function FoldersTable({ rows, loaded, onSelect }: { rows: FolderRow[]; lo
                   <NameButton open={open}>{row.name}</NameButton>
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{row.keys.toLocaleString()}</TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
-                  {loaded ? total.toLocaleString() : "—"}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">{loaded ? r.runs.toLocaleString() : "—"}</TableCell>
-                <TableCell className="w-[160px]">
-                  <MixBar tools={tools} total={total} />
-                </TableCell>
+                <SpendCells total={total} runs={r.runs} tools={tools} loaded={loaded} />
               </TableRow>
             );
           })}
@@ -271,8 +344,8 @@ export function FoldersTable({ rows, loaded, onSelect }: { rows: FolderRow[]; lo
   );
 }
 
-/** The profile card's one table: each folder is a heading row with its subtotal,
- * followed by its keys. Both levels open the detail dialog. */
+/** The profile card's table: a folder heading row with its subtotal, then its
+ * keys. Both levels open the detail dialog. */
 export function KeysByFolderTable({
   groups,
   loaded,
@@ -303,15 +376,7 @@ export function KeysByFolderTable({
                     {keys.length} {keys.length === 1 ? "key" : "keys"}
                   </div>
                 </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
-                  {loaded ? folder.total.toLocaleString() : "—"}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {loaded ? folder.runs.toLocaleString() : "—"}
-                </TableCell>
-                <TableCell className="w-[160px]">
-                  <MixBar tools={folder.tools} total={folder.total} />
-                </TableCell>
+                <SpendCells total={folder.total} runs={folder.runs} tools={folder.tools} loaded={loaded} />
                 <TableCell />
               </TableRow>,
               ...(keys.length === 0
@@ -326,23 +391,8 @@ export function KeysByFolderTable({
                     const open = onSelect && (() => onSelect(keySubject(r)));
                     return (
                       <TableRow key={r.row.keyId} {...rowProps(open)}>
-                        <TableCell className="pl-8">
-                          <div className="text-sm">
-                            <NameButton open={open}>{r.row.label}</NameButton>
-                          </div>
-                          <div className="font-mono text-[11px] text-muted-foreground">
-                            {r.row.keyPrefix}…{r.row.status !== "active" ? ` · ${r.row.status}` : ""}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right font-semibold tabular-nums">
-                          {loaded ? r.total.toLocaleString() : "—"}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {loaded ? r.runs.toLocaleString() : "—"}
-                        </TableCell>
-                        <TableCell className="w-[160px]">
-                          <MixBar tools={r.tools} total={r.total} />
-                        </TableCell>
+                        <KeyNameCell r={r} open={open} indent />
+                        <SpendCells total={r.total} runs={r.runs} tools={r.tools} loaded={loaded} />
                         <TableCell className="text-muted-foreground">{fmtDate(r.row.lastUsedAt)}</TableCell>
                       </TableRow>
                     );

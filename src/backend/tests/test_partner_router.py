@@ -141,7 +141,7 @@ def test_admin_mints_lists_revokes_keys_on_product_host(client, monkeypatch, moc
         monkeypatch.setattr("subscriptions.admin_router.psvc.revoke_key", lambda sb, org_id, key_id: False)
         assert client.delete(f"/admin/orgs/{ORG_ID}/partner-keys/nope").status_code == 404
 
-        # Past expiry is a 422 at the edge on this path too (ExpiringKeyCreate).
+        # Past expiry is a 422 at the edge on this path too (PartnerKeyCreate).
         r = client.post(f"/admin/orgs/{ORG_ID}/partner-keys", json={"label": "x", "expires_at": "2020-01-01"})
         assert r.status_code == 422
     finally:

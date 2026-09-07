@@ -36,7 +36,7 @@ def test_request_id_without_a_period_is_still_stable():
 def test_get_price_reads_the_partner_action_row():
     sb = MagicMock()
     sb.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [{"credits": 30}]
-    assert psvc.get_price(sb) == 30
+    assert psvc.get_price(sb, psvc.ONECLICK_ACTION) == 30
     assert sb.table.return_value.select.return_value.eq.call_args[0] == ("action", "partner_oneclick_run")
 
 

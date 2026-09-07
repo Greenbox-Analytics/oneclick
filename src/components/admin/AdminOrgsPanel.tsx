@@ -237,7 +237,7 @@ function OrgDetailSheet({ org, onClose }: { org: AdminOrgRow | null; onClose: ()
             {org.memberCount} member{org.memberCount === 1 ? "" : "s"}
           </Tag>
           {org.archivedAt && <Tag tone="bad">Archived {shortDate(org.archivedAt)}</Tag>}
-          {org.partnerApiEnabled && <Tag tone="good">Partner API</Tag>}
+          {org.partnerApiEnabled && <Tag tone="ok">Partner API</Tag>}
         </div>
 
         <Tabs value={tab} onValueChange={setTab} className="mt-4">

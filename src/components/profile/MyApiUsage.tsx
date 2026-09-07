@@ -1,44 +1,27 @@
-// src/components/profile/MyApiUsage.tsx
-// Account & Billing → "My API usage": what the person's OWN partner API keys
-// spent, per team. A team's pool numbers stay admin-only (GET /orgs/{id}/usage);
-// this is the caller's own keys and nothing else, so a plain member can see it.
+// Account & Billing → "My API usage": what the caller's OWN partner keys spent,
+// per team. Pool numbers stay admin-only; this is their keys and nothing else,
+// so a plain member can see it.
 import { useState } from "react";
-import { Download, KeyRound, Loader2 } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { useCreditUsage, useMyApiUsage, type MyOrgApiUsage } from "@/hooks/useCreditUsage";
 import type { UsageRange } from "@/hooks/useOrgs";
-import { groupKeysByFolder, USAGE_RANGES, type UsageSubject } from "@/lib/orgUsage";
-import { KeysByFolderTable } from "@/components/orgs/usageTableBits";
+import { groupKeysByFolder, type UsageSubject } from "@/lib/orgUsage";
+import { KeysByFolderTable, RangePicker, ReportButton } from "@/components/orgs/usageTableBits";
 import { UsageDetailDialog } from "@/components/orgs/UsageDetailDialog";
-import { useToast } from "@/hooks/use-toast";
 import { API_URL } from "@/lib/apiFetch";
-import { downloadPdf } from "@/lib/downloadPdf";
 
 export function MyApiUsage() {
   const [range, setRange] = useState<UsageRange>("mtd");
-  // One dialog for the whole card — the org it belongs to rides along so its
-  // window and totals frame the numbers correctly.
+  // One dialog for the card; the org rides along so its window and totals
+  // frame the numbers.
   const [selected, setSelected] = useState<{ s: UsageSubject; org: MyOrgApiUsage } | null>(null);
-  const [downloading, setDownloading] = useState(false);
-  const { toast } = useToast();
   const { data, isSuccess, isError } = useMyApiUsage(range);
-  // Same gate as the Credits & usage card above it: flag off -> no credit surfaces.
+  // Same gate as the card above: flag off -> no credit surfaces.
   const { data: creditUsage } = useCreditUsage();
   const orgs = data?.orgs ?? [];
   const credits = orgs.reduce((n, o) => n + o.credits, 0);
   const runs = orgs.reduce((n, o) => n + o.runs, 0);
-
-  const download = async () => {
-    setDownloading(true);
-    try {
-      await downloadPdf(`${API_URL}/me/api-usage/report.pdf?range=${range}`, `my-api-usage-${range}.pdf`);
-    } catch {
-      toast({ title: "Couldn't download the report", description: "Please try again.", variant: "destructive" });
-    } finally {
-      setDownloading(false);
-    }
-  };
 
   if (!creditUsage?.enabled) return null;
 
@@ -58,29 +41,12 @@ export function MyApiUsage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div
-            role="radiogroup"
-            aria-label="API usage range"
-            className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5"
-          >
-            {USAGE_RANGES.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                role="radio"
-                aria-checked={range === r.id}
-                title={r.title}
-                onClick={() => setRange(r.id)}
-                className={`rounded-md px-2.5 py-1 text-[12px] font-semibold transition-colors ${range === r.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-          <Button size="sm" variant="outline" onClick={download} disabled={!isSuccess || downloading}>
-            {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            Download PDF
-          </Button>
+          <RangePicker value={range} onChange={setRange} label="API usage range" />
+          <ReportButton
+            url={`${API_URL}/me/api-usage/report.pdf?range=${range}`}
+            filename={`my-api-usage-${range}.pdf`}
+            disabled={!isSuccess}
+          />
         </div>
       </div>
 

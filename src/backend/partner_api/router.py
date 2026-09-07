@@ -1,25 +1,19 @@
-"""Partner API HTTP surface — API-key-authenticated, tool-first paths, one
-router per tool, each carrying its own prefix and version:
+"""Partner API HTTP surface — API-key auth, one router per tool, each carrying
+its own prefix and version:
 
-    POST /oneclick/v1/royalties        oneclick_router (here)
-    POST /registry/v1/splits   partner_api.registry.registry_router
-    POST /splitsheet/v1/documents      partner_api.splitsheet.splitsheet_router
-    …/zoe/v1/*                         partner_api.zoe.zoe_router (OpenAI-compatible)
+    POST /oneclick/v1/royalties     oneclick_router (here)
+    POST /registry/v1/splits        partner_api.registry
+    POST /splitsheet/v1/documents   partner_api.splitsheet
+    …/zoe/v1/*                      partner_api.zoe (OpenAI-compatible)
 
-main.py mounts them bare, and the host lockdown allowlists exactly these
-routes — a product route such as /oneclick/calculate-royalties shares the
-/oneclick prefix but is NOT one of them, so it stays 404 on the API host.
-There is no account-level route: the free key check is GET /zoe/v1/models,
-and every other route is a billed deliverable.
+main.py mounts them bare and the host lockdown allowlists exactly these ROUTES
+— a product route like /oneclick/calculate-royalties shares the prefix but is
+not one of them, so it stays 404 on the API host. GET /zoe/v1/models is the
+only free route; everything else is a billed deliverable.
 
-Keys are minted/listed/revoked by HUMANS elsewhere: the org's own admins on
-the console router (partner_api/org_router.py, on the product backend) and
-Msanii admins on subscriptions/admin_router.py. Nothing here mints: this
-router 404s unless PARTNER_API_ENABLED is set, and the product service never
-sets it.
-
-404s at the router level unless PARTNER_API_ENABLED + CREDITS_ENABLED +
-LICENSING_ENABLED are all set (require_licensing idiom: true rollback).
+Nothing here mints keys — humans do that on org_router.py (the org's admins)
+or admin_router.py (Msanii admins). 404s unless PARTNER_API_ENABLED +
+CREDITS_ENABLED + LICENSING_ENABLED are all set.
 """
 
 import asyncio
@@ -82,9 +76,89 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+# Analytics funnel prefix per billed action, so an action implies its events.
+EVENT_PREFIX = {
+    psvc.ONECLICK_ACTION: "partner_oneclick_calc",
+    psvc.REGISTRY_ACTION: "partner_registry_parse",
+}
+
+
+async def stream_billed_run(
+    sb,
+    ctx: PartnerContext,
+    *,
+    task,
+    action: str,
+    price: int,
+    pool: dict,
+    request_id: str,
+    idempotency_key: str | None,
+    on_error,
+    completed_props,
+):
+    """THE billed-SSE body: heartbeat, one result-or-error frame, then bill.
+    Shared by /oneclick/v1/royalties and /registry/v1/splits so the two can't
+    drift on the part that touches money.
+
+    No tmpdir cleanup here — the worker owns it (see run_partner_calc).
+
+    `on_error(exc)` maps a partner-visible failure to its error frame minus
+    `billing`; None sends it to the internal_error branch.
+    """
+    prefix = EVENT_PREFIX[action]
+    # Heartbeat: a proxied response dies after ~100s of silence and the LLM
+    # parse is that long. SSE comments don't pollute the event stream.
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=15)
+        if done:
+            break
+        yield ": ping\n\n"
+    try:
+        result, measured, usage = task.result()
+    except Exception as exc:
+        frame = on_error(exc)
+        if frame is None:
+            # request_id too: the only id the partner is handed back.
+            logging.exception(
+                "partner run failed action=%s org=%s key=%s request_id=%s", action, ctx.org_id, ctx.key_id, request_id
+            )
+            frame = {"type": "error", "code": "internal_error", "request_id": request_id}
+        analytics_capture(ctx.org_id, f"{prefix}_failed", {"error_code": frame["code"]})
+        yield _sse({**frame, "billing": psvc.unbilled()})
+        return
+    # Computed BEFORE the frame so the body can report what the call costs; the
+    # debit runs after it. A replay under an Idempotency-Key was charged on its
+    # first run (the RPC dedupes), so the body says so instead of the price.
+    charge, charge_meta = compute_charge(action, price, measured, usage)
+    replayed = bool(idempotency_key) and psvc.already_charged(sb, request_id)
+    billing = psvc.billing_block(charge, request_id, replayed=replayed)
+    yield _sse({"type": "result", **result, "billing": billing})
+    # Bill only AFTER the result is on the wire: the yield above raises
+    # GeneratorExit if the client is gone, so an undelivered run is free (owner
+    # decision 2026-09-04 — that loss is ours). A debit failure must not turn a
+    # finished run into a partner-visible error.
+    try:
+        psvc.debit_run(
+            sb,
+            wallet_id=pool["wallet_id"],
+            amount=charge,
+            request_id=request_id,
+            key_id=ctx.key_id,
+            metadata=charge_meta,
+            action=action,
+        )
+    except Exception:
+        logging.exception("partner debit failed action=%s org=%s request_id=%s", action, ctx.org_id, request_id)
+    analytics_capture(
+        ctx.org_id,
+        f"{prefix}_completed",
+        {**completed_props(result), "charged": billing["credits"], "replayed": replayed},
+    )
+
+
 def _save_upload(upload: UploadFile, dest: FSPath, max_bytes: int, code: str, hasher) -> int:
-    """Stream an upload to disk, 413 if it exceeds max_bytes. Feeds hasher so
-    the idempotency request id is bound to the payload. Returns bytes written."""
+    """Stream an upload to disk, 413 over max_bytes. Feeds hasher so the
+    idempotency id is bound to the payload. Returns bytes written."""
     written = 0
     with dest.open("wb") as out:
         while chunk := upload.file.read(1024 * 1024):
@@ -109,7 +183,7 @@ async def partner_calculate(
 ):
     sb = _get_supabase()
 
-    # ---- pre-stream validation: plain HTTP statuses --------------------------
+    # ---- pre-stream validation: plain HTTP statuses ----
     if bool(contracts) == (contract_terms is not None):
         raise HTTPException(
             status_code=422,
@@ -146,8 +220,8 @@ async def partner_calculate(
             p = tmp / f"contract_{i}.pdf"
             total += _save_upload(c, p, MAX_CONTRACTS_BYTES - total, "file_too_large", hasher)
             contract_paths.append(str(p))
-        # Hash the PARSED payload, not the raw string: whitespace-different
-        # JSON of the same terms is the same deliverable.
+        # Hash the PARSED payload: whitespace-different JSON of the same terms
+        # is the same deliverable.
         if contract_terms is not None:
             hasher.update(contract_terms.model_dump_json().encode())
         if expense_dicts:
@@ -161,10 +235,9 @@ async def partner_calculate(
                 "mode": "terms" if contract_terms is not None else "files",
             },
         )
-        # Started HERE, not in the generator: a client that disconnects before
-        # the stream body runs would never reach it, and run_partner_calc's
-        # finally is the only thing that deletes tmpdir. Must stay LAST in this
-        # try — past this point the worker owns the directory.
+        # Started HERE, not in the generator: a client that disconnects first
+        # would never reach it, and run_partner_calc's finally is the only
+        # thing that deletes tmpdir. Must stay LAST in this try.
         task = asyncio.create_task(
             asyncio.to_thread(
                 psvc.run_partner_calc,
@@ -178,92 +251,36 @@ async def partner_calculate(
             )
         )
     except Exception:
-        # Pre-stream failure: the worker never started, so the router still owns tmpdir.
+        # The worker never started, so the router still owns tmpdir.
         shutil.rmtree(tmpdir, ignore_errors=True)
         raise
 
-    async def generate():
-        # No cleanup here: run_partner_calc owns tmpdir. The worker thread
-        # can't be cancelled, so deleting files on client disconnect would
-        # yank them out from under it mid-read.
-        # Heartbeat: Cloudflare kills a proxied response after ~100s of
-        # silence, and the LLM parse is exactly that long. SSE comments
-        # keep bytes flowing without polluting the event stream.
-        while True:
-            done, _ = await asyncio.wait({task}, timeout=15)
-            if done:
-                break
-            yield ": ping\n\n"
-        try:
-            result, measured, usage = task.result()
-        except CalculationError as e:
-            analytics_capture(
-                ctx.org_id,
-                "partner_oneclick_calc_failed",
-                {"error_code": e.code},
-            )
-            # NB: the attribute is user_message (royalty_calculator.py:164) —
-            # e.message does not exist and would AttributeError mid-stream.
-            yield _sse(
-                {
-                    "type": "error",
-                    "code": e.code,
-                    "message": e.user_message,
-                    "suggestion": e.suggestion,
-                    # Structured context (available_columns, statement_songs…) —
-                    # what a partner needs to fix the input without a human here.
-                    "details": e.details,
-                    "billing": psvc.unbilled(),
-                }
-            )
-            return
-        except Exception:
-            # request_id too: it is the only id the partner is handed back.
-            logging.exception("partner calc failed org=%s key=%s request_id=%s", ctx.org_id, ctx.key_id, request_id)
-            analytics_capture(
-                ctx.org_id,
-                "partner_oneclick_calc_failed",
-                {"error_code": "internal_error"},
-            )
-            yield _sse(
-                {"type": "error", "code": "internal_error", "request_id": request_id, "billing": psvc.unbilled()}
-            )
-            return
-        # THE charge formula, computed BEFORE the frame so the body can report
-        # what this call costs; the debit still runs after the frame (below).
-        # A replay under an Idempotency-Key was charged on its first run — the
-        # debit RPC dedupes it — so the body says so instead of repeating the price.
-        # A racing duplicate reports the price while only one debit lands —
-        # over-reports, never under.
-        charge, charge_meta = compute_charge(psvc.ONECLICK_ACTION, price, measured, usage)
-        replayed = bool(idempotency_key) and psvc.already_charged(sb, request_id)
-        billing = psvc.billing_block(charge, request_id, replayed=replayed)
-        yield _sse({"type": "result", **result, "billing": billing})
-        # Bill only AFTER the result is on the wire. Nothing below runs if the
-        # client is gone: the yield above raises GeneratorExit on close, so a
-        # partner who never received an answer is never charged for one. The
-        # onus for a dropped connection is ours, not theirs (owner decision
-        # 2026-09-04) — the LLM spend on an undelivered run is our loss.
-        #
-        # Charge-on-success through THE charge formula (ai_pricing.compute_charge:
-        # base / metered / base + size tail, 2026-08-27) — the partner path
-        # must never grow its own max(). A debit failure must NOT turn a
-        # finished calc into a partner-visible error — log loudly, result sent.
-        try:
-            psvc.debit_run(
-                sb,
-                wallet_id=pool["wallet_id"],
-                amount=charge,
-                request_id=request_id,
-                key_id=ctx.key_id,
-                metadata=charge_meta,
-            )
-        except Exception:
-            logging.exception("partner debit failed org=%s request_id=%s", ctx.org_id, request_id)
-        analytics_capture(
-            ctx.org_id,
-            "partner_oneclick_calc_completed",
-            {"total_payments": result["summary"]["payments"], "charged": billing["credits"], "replayed": replayed},
-        )
+    def on_error(exc):
+        if not isinstance(exc, CalculationError):
+            return None
+        # NB: the attribute is user_message — .message would AttributeError
+        # mid-stream. `details` is the structured context (available_columns,
+        # statement_songs…) a partner needs to fix the input unaided.
+        return {
+            "type": "error",
+            "code": exc.code,
+            "message": exc.user_message,
+            "suggestion": exc.suggestion,
+            "details": exc.details,
+        }
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        stream_billed_run(
+            sb,
+            ctx,
+            task=task,
+            action=psvc.ONECLICK_ACTION,
+            price=price,
+            pool=pool,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            on_error=on_error,
+            completed_props=lambda result: {"total_payments": result["summary"]["payments"]},
+        ),
+        media_type="text/event-stream",
+    )

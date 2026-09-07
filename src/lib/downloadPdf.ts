@@ -1,6 +1,5 @@
-// src/lib/downloadPdf.ts
-// Authenticated PDF download (backend StreamingResponse → browser download).
-// Shared by the OneClick payout/receipt dialogs and the usage report buttons.
+// Authenticated PDF download, shared by the OneClick payout/receipt dialogs
+// and the usage report buttons.
 import { getAuthHeaders } from "@/lib/apiFetch";
 
 export async function downloadPdf(url: string, filename: string): Promise<void> {

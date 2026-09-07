@@ -1,14 +1,11 @@
-"""Downloadable PDF for the usage payloads built by orgs.service.org_usage_rollup.
+"""Downloadable PDF for the payloads orgs.service.org_usage_rollup builds.
 
 ONE renderer behind three routes — GET /orgs/{id}/usage/report.pdf, its
-Msanii-admin twin, and GET /me/api-usage/report.pdf — so the three can never
-drift apart. `sections` is what makes the personal report multi-org: one
-sub-heading + chart + key/folder tables per org, no member table.
+Msanii-admin twin, and GET /me/api-usage/report.pdf — so they can't drift.
+`sections` is what makes the personal report multi-org.
 
-Bucketing mirrors src/lib/orgUsage.ts (bucketSeries/bucketLabel) exactly: days
-for 7d/14d/mtd, ISO weeks for 1y, months for all; day and week windows are
-gap-filled from `since` to today so a quiet day reads as zero. Keep the two in
-step or the PDF and the on-screen card will disagree about the same window.
+Bucketing mirrors src/lib/orgUsage.ts exactly; keep the two in step or the PDF
+and the on-screen card will disagree about the same window.
 """
 
 import io
@@ -38,9 +35,8 @@ MUTED = colors.HexColor("#666666")
 SHADE = colors.HexColor("#f2f5f3")
 RULE = colors.HexColor("#dddddd")
 
-# The backend's copy of src/lib/usageTools.ts: (id, label, actions, colour).
-# Both are exhaustive over the credit actions; an action neither knows about is
-# ignored everywhere rather than crashing or landing in a fifth bucket.
+# The backend's copy of src/lib/usageTools.ts. Both are exhaustive over the
+# credit actions; an unknown action is ignored, never bucketed elsewhere.
 TOOLS = (
     ("oneclick", "OneClick", ("oneclick_run", "partner_oneclick_run"), "#5fbf7a"),
     ("registry", "Registry", ("registry_parse", "partner_registry_parse"), "#6ea8f5"),
@@ -60,8 +56,8 @@ def _empty_tools() -> dict[str, int]:
 
 
 def bucket_of(day: str, range_: str) -> str:
-    """The chart bucket a UTC day falls in: its Monday for 1y, the 1st of its
-    month for all, itself otherwise."""
+    """The bucket a UTC day falls in: its Monday for 1y, the 1st of its month
+    for all, itself otherwise."""
     if range_ == "1y":
         d = date.fromisoformat(day[:10])
         return (d - timedelta(days=d.weekday())).isoformat()
@@ -78,9 +74,9 @@ def bucket_label(bucket: str, range_: str) -> str:
 def bucket_series(
     series: list[dict], range_: str, since: str | None, today: str | None = None
 ) -> list[dict[str, object]]:
-    """[{bucket, label, tools, credits}] — the chart's x axis. Day and week
-    windows are filled from `since` to `today` (so gaps read as zero); all-time
-    lists only the months that actually carry spend."""
+    """The chart's x axis. Day and week windows are gap-filled from `since` to
+    `today` so a quiet day reads as zero; all-time lists only months with
+    spend."""
     today = today or datetime.now(UTC).date().isoformat()
     buckets: dict[str, dict[str, int]] = {}
     if since and range_ != "all":
@@ -103,8 +99,8 @@ def bucket_series(
 
 
 def merge_series(series_list) -> list[dict]:
-    """Fold several per-day series (per key, or per org) into one, same wire
-    shape. Used for the personal report's per-org and overall charts."""
+    """Fold several per-day series into one of the same shape — the personal
+    report's per-org and overall charts."""
     days: dict[str, dict[str, dict]] = {}
     for series in series_list:
         for day in series or []:
@@ -174,7 +170,7 @@ _base = getSampleStyleSheet()
 _TITLE = ParagraphStyle("UsageTitle", parent=_base["Title"], fontSize=22, alignment=0, spaceAfter=2, textColor=BRAND)
 _SUB = ParagraphStyle("UsageSub", parent=_base["Normal"], fontSize=11, textColor=MUTED, spaceAfter=2)
 _META = ParagraphStyle("UsageMeta", parent=_base["Normal"], fontSize=8, textColor=MUTED)
-# keepWithNext: a section heading must never orphan at the foot of a page.
+# keepWithNext: a heading must never orphan at the foot of a page.
 _H2 = ParagraphStyle(
     "UsageH2", parent=_base["Heading2"], fontSize=13, textColor=BRAND, spaceBefore=16, spaceAfter=6, keepWithNext=1
 )
@@ -192,7 +188,7 @@ _TDR = ParagraphStyle("UsageTDR", parent=_TD, alignment=2)
 
 
 def _table(headers: list[str], rows: list[list], widths: list[float], right: set[int]) -> Table:
-    """Paragraph cells (so long labels wrap), repeating header, zebra rows."""
+    """Paragraph cells so long labels wrap; repeating header, zebra rows."""
     data = [[Paragraph(escape(str(h)), _THR if i in right else _TH) for i, h in enumerate(headers)]]
     data += [[Paragraph(escape(str(c)), _TDR if i in right else _TD) for i, c in enumerate(r)] for r in rows]
     style = [
@@ -220,8 +216,8 @@ def _tile(label: str, value, sub: str = "") -> Paragraph:
 
 
 def _chart(buckets: list[dict], width: float = CONTENT_WIDTH) -> Drawing | None:
-    """Stacked bars, one series per tool that has spend. None when nothing was
-    spent in the window — the caller prints a line instead."""
+    """Stacked bars, one series per tool with spend. None when the window is
+    empty — the caller prints a line instead."""
     active = [t for t in TOOLS if any(b["tools"][t[0]] for b in buckets)]
     if not active or not buckets:
         return None
@@ -231,7 +227,7 @@ def _chart(buckets: list[dict], width: float = CONTENT_WIDTH) -> Drawing | None:
     chart.width, chart.height = width - 60, 145
     chart.data = [[b["tools"][t[0]] for b in buckets] for t in active]
     chart.categoryAxis.style = "stacked"
-    # Thin the labels out rather than letting them collide.
+    # Thin the labels rather than let them collide.
     step = max(1, -(-len(buckets) // 14))
     chart.categoryAxis.categoryNames = [b["label"] if i % step == 0 else "" for i, b in enumerate(buckets)]
     chart.categoryAxis.labels.fontName = "Helvetica"
@@ -252,7 +248,7 @@ def _chart(buckets: list[dict], width: float = CONTENT_WIDTH) -> Drawing | None:
     legend.x, legend.y = 40, 10
     legend.boxAnchor = "sw"
     legend.alignment = "right"  # text to the RIGHT of the swatch
-    legend.columnMaximum = 1  # one item per column => a single horizontal row
+    legend.columnMaximum = 1  # one per column => a single horizontal row
     legend.deltax = 85
     legend.fontName, legend.fontSize = "Helvetica", 7
     legend.dxTextSpace = 4
@@ -291,7 +287,7 @@ def _member_rows(seats: list[dict]) -> tuple[list[str], list[list], list[float],
             }
         )
     rows.sort(key=lambda r: -r["total"])
-    # Only tools with spend somewhere in this table earn a column.
+    # Only tools with spend anywhere in this table earn a column.
     active = [t for t in TOOLS if any(r["tools"][t[0]] for r in rows)]
     headers = ["Member", "Role", "Credits", "Runs"] + [t[1] for t in active]
     body = [
@@ -307,9 +303,8 @@ def _member_rows(seats: list[dict]) -> tuple[list[str], list[list], list[float],
 
 
 def render_org_report(title: str, payload: dict) -> bytes:
-    """An org_usage_rollup payload straight to PDF — the adapter both
-    org-usage routes (the admin console's and the Msanii-admin twin's) share so
-    the two can't map the payload differently."""
+    """An org_usage_rollup payload straight to PDF — shared by both org-usage
+    routes so they can't map it differently."""
     return render_usage_report(
         title=title,
         range_=payload.get("range", "mtd"),
@@ -337,11 +332,10 @@ def render_usage_report(
     """The usage PDF.
 
     `series`/`seats` drive the header tiles and the By tool table. `sections`
-    (each {heading, series, seats, by_key, by_folder}) splits the body — the
-    personal report passes one per org, everything else leaves it None and the
-    flat `series`/`seats`/`by_key`/`by_folder` become the single implicit
-    section. A section with a heading carries its own chart; the implicit one
-    charts at the top instead.
+    (each {heading, series, seats, by_key, by_folder}) splits the body: the
+    personal report passes one per org; everything else leaves it None and the
+    flat args become one implicit section, which charts at the top rather than
+    under a heading.
     """
     generated_at = generated_at or datetime.now(UTC)
     today = generated_at.astimezone(UTC).date()

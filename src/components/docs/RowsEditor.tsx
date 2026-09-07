@@ -1,11 +1,9 @@
 // src/components/docs/RowsEditor.tsx
-// Rows-of-fields editor for the console's list inputs (contributors, parties,
-// works, shares, expenses), plus RequestPreview, the read-only pretty-printed
-// JSON panel showing the exact body those rows produce. Every cell is a
-// string in state; the console turns rows into the JSON the API takes
-// (numbers cast by column kind), so nobody types JSON and "malformed JSON"
-// cannot happen. validateRows / rowsToObjects are pure and unit-tested;
-// errors render inline under the cell.
+// Rows-of-fields editor for the console's list inputs, plus RequestPreview —
+// the read-only JSON panel showing the body those rows produce. Every cell is
+// a string in state and the console casts by column kind, so nobody types JSON
+// and "malformed JSON" cannot happen. validateRows / rowsToObjects are pure
+// and unit-tested; errors render inline under the cell.
 import { useId } from "react";
 import { Plus, X } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -16,7 +14,7 @@ export interface Column {
   key: string;
   label: string;
   kind: "text" | "number" | "select";
-  /** Fixed options, or a function for options that depend on other rows (a share's party). */
+  /** Fixed, or a function when they depend on other rows (a share's party). */
   options?: readonly string[] | (() => string[]);
   placeholder?: string;
   required?: boolean;
@@ -69,7 +67,7 @@ export function rowsToObjects(columns: Column[], rows: Row[]): Record<string, st
   });
 }
 
-// Denser than the console's other inputs (h-[30px]/rounded-md, not h-[34px]/rounded-lg) — rows repeat, so compact wins.
+// Denser than the console's other inputs — rows repeat, so compact wins.
 const CELL =
   "block h-[30px] w-full rounded-md border border-border bg-background px-2 font-mono text-[12px] text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15";
 
@@ -154,8 +152,8 @@ export function RowsEditor({ label, columns, rows, onChange, blank, addLabel, er
   );
 }
 
-/** The exact body the console will send, read-only, so the form doubles as a
- * worked example of the request. */
+/** The exact body the console will send, so the form doubles as a worked
+ * example of the request. */
 export function RequestPreview({ body }: { body: unknown }) {
   const text = JSON.stringify(body, null, 2);
   return (

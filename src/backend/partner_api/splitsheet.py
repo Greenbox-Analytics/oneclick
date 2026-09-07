@@ -1,15 +1,12 @@
 """Split sheets on the API — POST /splitsheet/v1/documents.
 
-JSON in (the work, the date, the contributors and their shares), the finished
-PDF or Word document out — the same generators the product's Split Sheet tool
-uses. No AI runs, so a sheet always costs exactly the base
-(credit_prices.partner_split_sheet), charged per DOCUMENT — the pdf and the
-docx of one sheet are two deliverables — and debited only after the file is on
-the wire. Idempotent under Idempotency-Key: the same body in the same billing
-period is charged once. Nothing is stored.
+JSON in, the finished PDF or Word document out, through the product's own
+generators. No AI runs, so a sheet always costs the base, charged per DOCUMENT
+(the pdf and the docx of one sheet are two) and debited only after the file is
+on the wire. Idempotent under Idempotency-Key. Nothing is stored.
 
-The charge rides in headers — `Msanii-Credits` / `Msanii-Request-Id`, plus
-`Msanii-Replayed: true` on a replay — because the body is the document.
+The charge rides in `Msanii-Credits` / `Msanii-Request-Id` headers (plus
+`Msanii-Replayed` on a replay) because the body is the document.
 """
 
 import asyncio
@@ -64,8 +61,8 @@ async def partner_split_sheet(
         raise HTTPException(
             status_code=402, detail={"code": "insufficient_credits", "price": price, "balance": pool["balance"]}
         )
-    # The deliverable is a pure function of the validated body (format
-    # included), so that is what the idempotency id is bound to.
+    # The deliverable is a pure function of the validated body, format
+    # included — so that is what the idempotency id binds to.
     fingerprint = hashlib.sha256(req.model_dump_json().encode()).hexdigest()
     request_id = psvc.derive_request_id(ctx.key_id, idempotency_key, fingerprint, pool.get("period_end"))
     analytics_capture(
@@ -84,10 +81,9 @@ async def partner_split_sheet(
     safe_title = re.sub(r"[^a-zA-Z0-9._-]", "_", req.work_title)
     filename = f"Split_Sheet_{safe_title}.{req.format}"
 
-    # No LLM ran, so the charge is exactly the base and is known before the
-    # body: it rides in headers, because the body IS the document. A replay
-    # under an Idempotency-Key was charged on its first run (the debit RPC
-    # dedupes), so the headers say 0 instead of repeating the price.
+    # No LLM ran, so the charge is the base and is known before the body — it
+    # rides in headers because the body IS the document. A replay was charged
+    # on its first run, so the headers say 0 rather than repeat the price.
     charge, charge_meta = compute_charge(psvc.SPLIT_SHEET_ACTION, price, None, None)
     replayed = bool(idempotency_key) and psvc.already_charged(sb, request_id)
     billed = 0 if replayed else charge
@@ -101,8 +97,8 @@ async def partner_split_sheet(
         headers["Msanii-Replayed"] = "true"
 
     async def deliver():
-        # ONE frame: yield the file, then bill — nothing below runs for a
-        # client that is gone.
+        # ONE frame: yield the file, then bill. Nothing below runs for a gone
+        # client.
         yield data
         try:
             psvc.debit_run(

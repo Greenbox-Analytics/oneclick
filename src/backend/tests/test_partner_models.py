@@ -232,21 +232,21 @@ def test_partner_key_create_shapes():
     assert not hasattr(key, "user_ref")  # one key type — no hierarchy fields
     with pytest.raises(ValidationError):
         PartnerKeyCreate(label="")
-    with pytest.raises(ValidationError):  # inherited from ExpiringKeyCreate
+    with pytest.raises(ValidationError):
         PartnerKeyCreate(label="x", expires_at="2020-01-01")
 
 
-def test_expiring_key_create_rejects_past_and_normalizes_naive_to_utc():
+def test_key_create_rejects_past_expiry_and_normalizes_naive_to_utc():
     import pytest
     from pydantic import ValidationError
 
-    from partner_api.models import ExpiringKeyCreate
+    from partner_api.models import PartnerKeyCreate
 
     with pytest.raises(ValidationError):
-        ExpiringKeyCreate(expires_at="2020-01-01")
+        PartnerKeyCreate(label="x", expires_at="2020-01-01")
     with pytest.raises(ValidationError):
-        ExpiringKeyCreate(expires_at="2020-01-01T00:00:00Z")
-    ok = ExpiringKeyCreate(expires_at="2099-01-01")  # bare date -> naive midnight -> UTC
+        PartnerKeyCreate(label="x", expires_at="2020-01-01T00:00:00Z")
+    ok = PartnerKeyCreate(label="x", expires_at="2099-01-01")  # bare date -> naive midnight -> UTC
     assert ok.expires_at.tzinfo is not None
     assert ok.expires_at.utcoffset().total_seconds() == 0
-    assert ExpiringKeyCreate().expires_at is None
+    assert PartnerKeyCreate(label="x").expires_at is None

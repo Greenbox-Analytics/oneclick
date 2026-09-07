@@ -13,7 +13,7 @@ export interface AdminOrgRow {
   status: string;
   archivedAt: string | null;
   kind?: "self_serve" | "enterprise" | null;
-  /** Msanii-admin capability bit — on by default for enterprise orgs. */
+  /** On by default for enterprise orgs. */
   partnerApiEnabled: boolean;
   memberCount: number;
   bundleBalance: number;
@@ -105,9 +105,8 @@ export function useAdminOrgMutations() {
   return { grantCredits, setDispersal, setStatus, setPartnerApi };
 }
 
-// Read-only mirrors of the org-side usage/keys endpoints, for the Organizations
-// drawer. Same payloads, admin routes — so OrgUsageAnalysis can be handed these
-// in place of its own hooks.
+// Read-only mirrors of the org-side endpoints for the Organizations drawer:
+// same payloads on admin routes, so OrgUsageAnalysis can take these instead.
 export function useAdminOrgUsage(orgId?: string, range: UsageRange = "mtd"): UseQueryResult<OrgUsage> {
   return useQuery({
     queryKey: ["admin", "orgs", orgId, "usage", range],

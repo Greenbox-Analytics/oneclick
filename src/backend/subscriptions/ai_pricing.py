@@ -87,9 +87,8 @@ DEFAULT_TAIL_FREE_TOKENS = 6_500  # ~10 pages at ~650 tokens/page
 TAIL_FREE_TOKENS: dict[str, int] = {
     # Document extraction: ~10 pages included, then ~0.3 credits/page.
     "oneclick_run": 6_500,
-    # Same document-extraction shape as oneclick_run, same allowance. The dict
-    # fallback would give this number anyway; the explicit entry is what a
-    # future retune will look for.
+    # Same shape as oneclick_run, same allowance. The dict fallback gives this
+    # anyway; the explicit entry is what a retune will look for.
     "partner_oneclick_run": 6_500,
     "registry_parse": 6_500,
     "partner_registry_parse": 6_500,
@@ -138,34 +137,25 @@ def credits_for_excess(cost_usd: float, total_tokens: int, free_tokens: int) -> 
 
 
 def compute_charge(action: str, base: int, measured: int | None, usage: dict | None) -> tuple[int, dict]:
-    """THE charge for one metered action, and the ledger metadata that explains it.
+    """THE charge for one metered action, plus the ledger metadata explaining it.
 
-    Three terms, and the max() of all three is the charge (2026-08-27):
-
-      base              the published price of the deliverable, and a hard
-                        floor. Never charge below it.
-      measured          what the run actually cost, in credits (real OpenAI
-                        cost x CREDIT_MARKUP / price-per-credit). Keeps the
-                        guarantee that we never sell a run below COGS,
+    max() of three terms:
+      base              the published price, and a hard floor.
+      measured          what the run really cost, so we never sell below COGS
                         whatever the allowance is set to.
-      base + size tail  a run gets tail_free_tokens(action) of tokens
-                        included and pays for what it burns past that. This
-                        is what makes a 60-page contract cost more than a
-                        3-page one.
+      base + size tail  tail_free_tokens(action) included, then pay per token —
+                        what makes a 60-page contract cost more than a 3-page one.
 
-    `measured is None` = unmeasurable (no tracked scope, or a model missing
-    from MODEL_RATES): charge the base, and say so in the metadata. A cache
-    hit measures 0 and still pays the base — the user got the same
-    deliverable; the dedupe request_id is what stops a second charge.
+    `measured is None` = unmeasurable (no tracked scope, or a model missing from
+    MODEL_RATES): charge the base. A cache hit measures 0 and still pays the
+    base — same deliverable; the dedupe request_id stops the second charge.
 
-    Metadata: `metered` means "did a term ABOVE the base decide the amount",
-    NOT "was cost readable" — under base rates `measurable` is true on nearly
-    every LLM-touching row while the amount is still the base. `tail_credits`
-    and `metered_credits` record what each term wanted, so a ledger row alone
-    answers "charged for size, or for cost?" — the recalibration question.
+    In the metadata, `metered` means "a term ABOVE the base decided the amount",
+    NOT "cost was readable" — `measurable` is true on nearly every LLM row while
+    the amount is still the base. `tail_credits` / `metered_credits` record what
+    each term wanted, so one ledger row answers "size or cost?".
 
-    Callers: EntitlementsService.debit_for_action (product) and the partner
-    calculate endpoint. There must never be a third max() anywhere.
+    Callers: debit_for_action and the partner endpoints. Never a third max().
     """
     usage = usage or {}
     tail = 0

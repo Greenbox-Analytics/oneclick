@@ -1,7 +1,6 @@
 // src/lib/orgUsage.ts
-// Pure helpers behind the Teams Usage card (OrgUsageAnalysis.tsx): folding
-// per-action spend into tools, bucketing the per-day series for the chart,
-// and building the member / key table rows. No React, unit-tested.
+// Pure helpers behind the Teams Usage card: folding per-action spend into
+// tools, bucketing the per-day series, building the table rows. No React.
 import type {
   ActionSpend,
   FolderUsageRow,
@@ -25,7 +24,7 @@ export const USAGE_RANGES: { id: UsageRange; label: string; title: string }[] = 
 export type ToolTotals = Record<ToolId, number>;
 export const emptyTotals = (): ToolTotals => ({ oneclick: 0, registry: 0, splitsheet: 0, zoe: 0 });
 
-/** Credits per tool from per-action spend; actions no tool owns are dropped. */
+/** Credits per tool; actions no tool owns are dropped. */
 export function foldTools(actions: ActionSpend[]): ToolTotals {
   const t = emptyTotals();
   for (const a of actions) {
@@ -60,7 +59,7 @@ export function topTool(t: ToolTotals): { id: ToolId; label: string; share: numb
   return { id: best.id, label: best.label, share: t[best.id] / total };
 }
 
-/** Percent change against the previous window; null when there is nothing to compare against. */
+/** Percent change vs the previous window; null when there is nothing to compare. */
 export function delta(current: number, previous: number | null | undefined): number | null {
   if (previous == null) return null;
   if (previous === 0) return current === 0 ? 0 : null;
@@ -97,9 +96,9 @@ export interface Bucket {
   credits: number;
 }
 
-/** Days -> chart buckets: days for 7d / 14d / mtd, ISO weeks for 1y, months
- * for all. Day and week ranges are filled from `since` to `today` so a quiet
- * day reads as zero rather than vanishing; all time lists only months with spend. */
+/** Days -> chart buckets: days for 7d/14d/mtd, ISO weeks for 1y, months for
+ * all. Day and week ranges gap-fill from `since` to `today` so a quiet day
+ * reads as zero; all-time lists only months with spend. */
 export function bucketSeries(series: SeriesDay[], range: UsageRange, since: string | null, today: string = iso(new Date())): Bucket[] {
   const map = new Map<string, ToolTotals>();
   if (since && range !== "all") {
@@ -127,7 +126,7 @@ export interface MemberRow {
   total: number;
   runs: number;
   tools: ToolTotals;
-  /** Keys this member created — a key is the org's credential, attributed by creator. */
+  /** Keys this member created — a key is the org's, attributed by creator. */
   keys: PartnerKey[];
   /** Per-day spend for the detail dialog; [] on a backend that doesn't send it. */
   series: SeriesDay[];
@@ -157,10 +156,9 @@ export interface KeyUsageRow {
   series: SeriesDay[];
 }
 
-/** Payload-driven: label, status and folder all ride on the usage row, which
- * carries one entry per LISTED key (zero-spend included). No join with the key
- * list — a key past its 30-day retention is absent here on purpose, while its
- * spend still counts in the totals and its folder. */
+/** Payload-driven: label, status and folder ride on the usage row, one per
+ * LISTED key (zero-spend included). No join with the key list — a key past its
+ * 30-day retention is absent here, while its spend still counts. */
 export function keyUsageRows(byKey: PartnerKeyUsageRow[]): KeyUsageRow[] {
   return (byKey ?? [])
     .map((row) => ({ row, total: row.credits, runs: row.runs, tools: foldTools(row.byAction ?? []), series: row.series ?? [] }))
@@ -183,8 +181,8 @@ export function folderUsageRows(byFolder: FolderUsageRow[]): FolderRow[] {
 
 // ---- detail subjects ------------------------------------------------------------
 
-/** One thing the detail dialog can describe — a member, a key or a folder —
- * flattened so the dialog never branches on which kind it got. */
+/** What the detail dialog describes — a member, key or folder — flattened so
+ * the dialog never branches on which it got. */
 export interface UsageSubject {
   kind: "member" | "key" | "folder";
   id: string;
@@ -197,7 +195,7 @@ export interface UsageSubject {
   facts: { label: string; value: string }[];
 }
 
-// Roles and statuses are stored lower-case; the dialog shows them as words.
+// Stored lower-case; the dialog shows them as words.
 const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 export function memberSubject(r: MemberRow): UsageSubject {
@@ -252,8 +250,8 @@ export function folderSubject(r: FolderRow): UsageSubject {
 }
 
 /** Keys nested under their folder for the profile card. One group per folder
- * row (credits desc), keys in keyUsageRows order; anything whose folder isn't
- * listed falls into a synthetic "No folder" group, which always sorts last. */
+ * row; anything whose folder isn't listed falls into a synthetic "No folder"
+ * group, which sorts last. */
 export function groupKeysByFolder(
   byKey: PartnerKeyUsageRow[],
   byFolder: FolderUsageRow[],
@@ -268,8 +266,8 @@ export function groupKeysByFolder(
   const unfiled = keys.filter((k) => k.row.folderId == null || !known.has(k.row.folderId));
   const unfiledRow = folders.find((f) => f.row.folderId == null);
   if (unfiledRow || unfiled.length > 0) {
-    // No unfiled row in the payload: subtotal the keys ourselves so the group
-    // heading's bar and chart read the same as a server-built one would.
+    // No unfiled row in the payload: subtotal it ourselves so the heading
+    // reads the same as a server-built one.
     const total = unfiled.reduce((n, k) => n + k.total, 0);
     const tools = emptyTotals();
     for (const k of unfiled) for (const t of TOOLS) tools[t.id] += k.tools[t.id];
@@ -287,7 +285,7 @@ export function groupKeysByFolder(
   return groups;
 }
 
-/** Several per-day series summed into one (per day, per action). */
+/** Several per-day series summed into one. */
 export function mergeSeries(all: SeriesDay[][]): SeriesDay[] {
   const days = new Map<string, Map<string, ActionSpend>>();
   for (const series of all) {

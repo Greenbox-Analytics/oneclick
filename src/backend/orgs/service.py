@@ -20,9 +20,10 @@ import math
 import os
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
 from uuid import uuid4
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException, Query
 from supabase import Client
 
 import artist_access
@@ -36,28 +37,58 @@ logger = logging.getLogger(__name__)
 # ---- usage analysis (spec 2026-09-06 §6) -------------------------------------
 USAGE_RANGES = ("mtd", "7d", "14d", "1y", "all")
 _RANGE_DAYS = {"7d": 7, "14d": 14, "1y": 365}
+_RANGE_DESC = "mtd | 7d | 14d | 1y | all"
+
+
+def usage_range(range: str = Query("mtd", description=_RANGE_DESC)) -> str:
+    """The `range` query param, validated. ONE dependency for all five usage
+    routes, so they can't answer differently for the same bad input."""
+    if range not in USAGE_RANGES:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_range", "message": f"range must be one of {', '.join(USAGE_RANGES)}"},
+        )
+    return range
+
+
+# Annotated so a route just writes `range: UsageRange`.
+UsageRange = Annotated[str, Depends(usage_range)]
 
 
 def usage_window(range_: str, period_start: str | None, now: datetime | None = None) -> tuple[str | None, str | None]:
     """(since, previous_since) for a usage range, ISO-8601 UTC. `mtd` is the
     pool's billing period — the window caps reset on, so the analysis agrees
     with the members table's "Used this month". The previous window is the
-    same length, ending at `since`. `all` (and an mtd pool with no period yet)
-    has no floor and no previous window."""
+    same length, ending at `since`. `all` has no floor and no previous window.
+
+    A pool with NO period falls back to the calendar month, never to all-time.
+    `period_start` is written only by rollover_wallet, which the sweep calls
+    only for orgs with monthly_dispersal_credits > 0 — so a team funded by
+    transfers or packs has none, forever. Returning None there widened every
+    "this period" number to lifetime: "All time" in the header with MTD
+    selected, and spentThisPeriod no longer per-period. The calendar month is
+    also what the sweep would anchor a first period to.
+    """
     if range_ not in USAGE_RANGES:
         raise ValueError(f"unknown usage range {range_!r}")
     now = now or datetime.now(UTC)
     if range_ == "all":
         return None, None
     if range_ == "mtd":
-        if not period_start:
-            return None, None
-        since = datetime.fromisoformat(period_start.replace("Z", "+00:00"))
-        if since.tzinfo is None:
-            since = since.replace(tzinfo=UTC)
+        since = (
+            _parse_period_start(period_start)
+            if period_start
+            else now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        )
     else:
         since = now - timedelta(days=_RANGE_DAYS[range_])
     return since.isoformat(), (since - (now - since)).isoformat()
+
+
+def _parse_period_start(period_start: str) -> datetime:
+    """TIMESTAMPTZ -> aware datetime; a naive value reads as UTC."""
+    parsed = datetime.fromisoformat(period_start.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _bump(bucket: dict[str, dict], action: str, credits: int) -> None:
@@ -71,15 +102,14 @@ def _by_action(bucket: dict[str, dict]) -> list[dict]:
 
 
 def _bump_day(store: dict, entity, created: str | None, action: str | None, credits: int) -> None:
-    """Per-entity, per-UTC-day spend — the same accumulator as `days`, keyed by
-    key / folder / seat so every row can carry its own `series`. Attribution is
-    the caller's: this is bumped wherever the matching *_actions bucket is."""
+    """Per-entity, per-UTC-day spend — `days` keyed by key / folder / seat, so
+    every row can carry its own `series`."""
     if action and created:
         _bump(store.setdefault(entity, {}).setdefault(created[:10], {}), action, credits)
 
 
 def _series(days: dict[str, dict[str, dict]]) -> list[dict]:
-    """{day: {action: spend}} -> the wire shape, sorted, spend-bearing days only."""
+    """{day: {action: spend}} -> the wire shape, spend-bearing days only."""
     return [{"day": d, "actions": _by_action(acts)} for d, acts in sorted(days.items())]
 
 
@@ -612,16 +642,14 @@ async def get_org_usage(db: Client, user_id: str, org_id: str, range_: str = "mt
     `_resolve_user_email` ONCE and is written back onto the row, best-effort and
     deliberately non-raising: a failed heal must never break the usage read.
 
-    `range_` (spec 2026-09-06 §6): `mtd` (default — the pool's period, today's
-    payload plus the new fields), `7d`, `14d`, `1y`, `all`. Adds `byAction` per
-    seat and key, a per-day `series`, and `previous` (the same-length window
-    before `since`, totals only).
+    `range_`: `mtd` (default — the pool's period), `7d`, `14d`, `1y`, `all`.
+    Adds `byAction` per seat and key, a per-day `series`, and `previous` (the
+    same-length window before `since`, totals only).
 
-    Partner keys: `byKey` lists every LISTED key (a long-inactive one is hidden
-    but its spend still counts), `byFolder` rolls that spend up by each key's
-    CURRENT folder, and each seat carries `apiCredits`/`apiRuns` — spend through
-    the keys that member created, kept apart from the cap-relevant
-    `spentThisPeriod`.
+    Partner keys: `byKey` lists every LISTED key (a long-inactive one is hidden,
+    its spend still counted), `byFolder` rolls that up by each key's CURRENT
+    folder, and each seat carries `apiCredits`/`apiRuns` — kept apart from the
+    cap-relevant `spentThisPeriod`.
 
     # ponytail: full ledger scan per console load (two for the previous window);
     # "all" on a busy org is the scan to replace with a DB-side rollup first.
@@ -631,17 +659,14 @@ async def get_org_usage(db: Client, user_id: str, org_id: str, range_: str = "mt
 
 
 async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_created_by: str | None = None) -> dict:
-    """The payload itself — everything get_org_usage does after its admin
-    check. Called directly by the Msanii-admin route (GET /admin/orgs/{id}/usage,
-    authenticated as a platform admin, with no org membership to check) and by
-    GET /me/api-usage.
+    """The payload itself — everything get_org_usage does after its admin check.
+    Called directly by the Msanii-admin route (a platform admin holds no seat,
+    so there is no membership to check) and by GET /me/api-usage.
 
-    `only_created_by` narrows the payload to ONE member's keys and returns
-    early with just `range`/`since`/`byKey`/`byFolder` — the personal endpoint
-    (GET /me/api-usage) reads nothing else, and a plain member must not pay for
-    (or be shown) the org-wide half: no roster, no email heals on colleagues'
-    rows, no previous-window scan, no cumulative paid-in, and no folder they
-    have filed nothing into.
+    `only_created_by` narrows to ONE member's keys and returns early with just
+    `range`/`since`/`byKey`/`byFolder`: a plain member must not be shown — or
+    pay for — the org-wide half (no roster, no email heals on colleagues' rows,
+    no previous-window scan, no paid-in, no folder they have not filed into).
     """
     from partner_api import service as psvc
 
@@ -673,8 +698,8 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
     )
     default_cap = org_row.get("default_member_cap")
 
-    # Keys and folders BEFORE the ledger scan: the key -> folder and
-    # key -> creator maps are what the scan attributes each partner debit with.
+    # Before the ledger scan: the key -> folder and key -> creator maps are
+    # what it attributes each partner debit with.
     keys_q = (
         db.table("partner_api_keys")
         .select("id, label, key_prefix, status, expires_at, revoked_at, folder_id, created_by")
@@ -685,14 +710,14 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
     keys = keys_q.execute().data or []
     folders = db.table("partner_key_folders").select("id, name").eq("org_id", org_id).execute().data or []
     folder_names = {f["id"]: f.get("name") for f in folders}
-    # Hidden keys stay OUT of byKey but keep their spend: it still belongs to
-    # the org's totals, its folder's total, and its creator's seat.
+    # Hidden keys stay OUT of byKey but keep their spend — it still belongs to
+    # the org's totals, its folder, and its creator's seat.
     listed_keys = [k for k in keys if not psvc.is_hidden(k)]
     key_folder = {k["id"]: k.get("folder_id") for k in keys}
     seat_by_user = {m["user_id"]: m["id"] for m in members if m.get("user_id")}
-    # Key -> the seat of whoever minted it. A key with no creator, or one whose
-    # creator was never a member here, attributes to nobody: it stays in the
-    # org totals and in byKey/byFolder, but lands on no seat.
+    # Key -> the seat that minted it. A key with no creator, or one whose
+    # creator was never a member here, lands on no seat (but still counts in
+    # the org totals and byKey/byFolder).
     key_seat = {k["id"]: seat_by_user.get(k.get("created_by")) for k in keys}
 
     pool_wallet = wallets.read_wallet(db, "org", org_id)
@@ -718,10 +743,9 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
         ledger_rows = fetch_all(_ledger_query)
 
         if previous_since and not scoped:
-            # The same-length window before `since`, totals only — what the
-            # analysis card's deltas compare against. Counted by the same rule
-            # as `series` (action-bearing debits), or the tile would compare
-            # unlike totals.
+            # The same-length window before `since`, totals only. Counted by
+            # the same rule as `series` (action-bearing debits), or the tile
+            # compares unlike totals.
             def _previous_query():
                 return (
                     db.table("credit_ledger")
@@ -742,31 +766,28 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
     # no 'overage_debit' kind to fold in as there is on the personal view.
     spent_by_member: Counter[str] = Counter()
     member_actions: dict[str, dict[str, dict]] = {}
-    # Partner API spend per key (phase-2 portal, spec 2026-09-04 §3): the same
-    # debit rows, grouped by metadata.partner_key_id. source='partner_api' AND
-    # a key id — member spend carries neither and must not leak in, and a
-    # partner debit carries no org_member_id so it never lands in a seat.
+    # Partner spend per key: the same debit rows, grouped by
+    # metadata.partner_key_id. Both source='partner_api' AND a key id — member
+    # spend carries neither, and a partner debit carries no org_member_id.
     by_key: dict[str, dict] = {}
     key_actions: dict[str, dict[str, dict]] = {}
-    # Spend per folder (by each key's CURRENT folder, so moving a key moves its
-    # history) and per seat-through-a-key. API spend is tracked SEPARATELY from
-    # spentThisPeriod: the latter is what the members table compares to a cap,
-    # and a key's spend moves no cap counter (a key is the org's credential).
+    # Per folder (by each key's CURRENT folder, so moving a key moves its
+    # history) and per seat-through-a-key. Kept SEPARATE from spentThisPeriod,
+    # which is what the members table compares to a cap: a key moves no cap.
     folder_spend: dict[str | None, dict] = {}
     folder_actions: dict[str | None, dict[str, dict]] = {}
     api_by_member: Counter[str] = Counter()
     api_runs_by_member: Counter[str] = Counter()
-    # Credits per UTC day per action — PostgREST renders timestamptz in UTC —
-    # the analysis card's chart. Only days with spend are listed; the client
-    # fills the gaps.
+    # Credits per UTC day per action (PostgREST renders timestamptz in UTC) —
+    # the chart. Only days with spend; the client fills the gaps.
     days: dict[str, dict[str, dict]] = {}
-    # The same, split per entity so each byKey / byFolder / seat row carries
-    # its own series (spec 2026-09-06 §6, per-entity time series).
+    # The same, per entity, so each byKey / byFolder / seat row carries its own
+    # series.
     key_days: dict[str, dict[str, dict[str, dict]]] = {}
     folder_days: dict[str | None, dict[str, dict[str, dict]]] = {}
     member_days: dict[str, dict[str, dict[str, dict]]] = {}
     for r in ledger_rows:
-        # The query already filters kind, so this is belt-and-braces.
+        # The query already filters kind; belt-and-braces.
         if r.get("kind") != "debit":
             continue
         meta = r.get("metadata") or {}
@@ -790,10 +811,9 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
             if action:
                 _bump(key_actions.setdefault(key_id, {}), action, credits)
             _bump_day(key_days, key_id, created, action, credits)
-            # An unknown key (a deleted row) has no folder and no seat: it
-            # falls into the unfiled bucket and lands on no seat. Under
-            # only_created_by "unknown" means "someone else's key", which must
-            # not be counted at all.
+            # An unknown key (a deleted row) falls into the unfiled bucket and
+            # lands on no seat. Under only_created_by, "unknown" means someone
+            # else's key — not to be counted at all.
             if key_id in key_folder or not only_created_by:
                 fid = key_folder.get(key_id)
                 fslot = folder_spend.setdefault(fid, {"credits": 0, "runs": 0})
@@ -815,8 +835,8 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
         slot["byAction"] = _by_action(key_actions.get(key_id, {}))
         slot["series"] = _series(key_days.get(key_id, {}))
 
-    # One row per LISTED key, spend or not — a key an admin can see but has
-    # never used is exactly what they need to notice.
+    # One row per LISTED key, spend or not: an unused key is exactly what an
+    # admin needs to notice.
     by_key_rows = []
     for k in listed_keys:
         spend = by_key.get(k["id"], {})
@@ -840,16 +860,15 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
 
     listed_per_folder = Counter(k.get("folder_id") for k in listed_keys)
     by_folder = []
-    # Under only_created_by, seed with nothing: a folder only earns a row by
-    # containing one of the caller's own keys or carrying their spend. Seeding
-    # from the org-wide folder_names (unscoped case) would otherwise leak
-    # every colleague's folder name to a plain member at 0 credits.
+    # Under only_created_by, seed with nothing: a folder earns a row only by
+    # holding one of the caller's keys or their spend. Seeding from the
+    # org-wide names would leak every colleague's folder at 0 credits.
     folder_seed = set() if only_created_by else set(folder_names)
     for fid in folder_seed | set(folder_spend) | set(listed_per_folder):
         spend = folder_spend.get(fid, {})
         keys_in_folder = listed_per_folder.get(fid, 0)
         # An empty folder still shows (someone just made it); the synthetic
-        # "No folder" row only shows when there is something unfiled.
+        # "No folder" row only when something is unfiled.
         if fid is None and not keys_in_folder and not spend:
             continue
         by_folder.append(
@@ -866,10 +885,9 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
     by_folder.sort(key=lambda f: (-f["credits"], f["name"]))
 
     if scoped:
-        # /me/api-usage reads only these four fields — skip the seats loop
-        # (and its _member_email auth-admin lookups/write-backs), the pool
-        # balance, and cumulative_paid_in: none of that is a plain member's
-        # business, and none of it is shown to them.
+        # /me/api-usage reads only these four — skip the seats loop (and its
+        # auth-admin lookups), the pool balance and paid-in: none of it is a
+        # plain member's business.
         return {"range": range_, "since": since, "byKey": by_key_rows, "byFolder": by_folder}
 
     seats = []
@@ -894,9 +912,8 @@ async def org_usage_rollup(db: Client, org_id: str, range_: str = "mtd", only_cr
                 "effectiveCap": effective_cap,
                 "capUsed": m.get("cap_used") or 0,
                 "spentThisPeriod": spent,
-                # Spend through the API keys this member created. Kept apart
-                # from spentThisPeriod because only the latter is compared to
-                # the member's cap — a key moves no cap counter.
+                # Spend through this member's keys. Apart from
+                # spentThisPeriod, which is what the cap is compared to.
                 "apiCredits": api_credits,
                 "apiRuns": api_runs_by_member.get(m["id"], 0),
                 "byAction": _by_action(member_actions.get(m["id"], {})),
@@ -1421,16 +1438,13 @@ def create_org_join_notifications(db: Client, org_id: str, member_user_id: str, 
 
 
 def notify_admins_of_removed_members_keys(db: Client, org_id: str, leaver_user_id: str | None) -> int:
-    """Removal leaves the leaver's partner API keys ALIVE on purpose — keys are
-    the org's, and auto-revoking would take down "Production backend" because
-    a person left (spec 2026-09-04 §3b). So the remaining admins must be told
-    there is something to rotate.
+    """Removal leaves the leaver's keys ALIVE on purpose — they are the org's,
+    and auto-revoking would take down "Production backend" because a person
+    left. So the remaining admins must be told there is something to rotate.
 
     One 'confirmation' row per remaining ACTIVE admin, leaver excluded — never
-    the 'invitation' type, which renders Accept/Decline and is dodged by
-    mark_all_notifications_read. Only when the leaver created at least one
-    still-active key in THIS org. Best-effort and never raises: the removal is
-    already committed when this runs. Returns the number of rows written.
+    'invitation', which renders Accept/Decline. Only fires when the leaver left
+    an active key behind. Best-effort: the removal is already committed.
     """
     if not leaver_user_id:
         return 0
@@ -1803,10 +1817,9 @@ async def _offboard(db: Client, user_id: str, org_id: str, member_id: str, final
     _revoke_offboarded_member_access(db, org_id, row.get("user_id"), final_status)
     _cancel_topup_if_purchaser(db, org_id, row.get("user_id"))
     if final_status == "removed" and transitioned:
-        # Keys outlive their minter (spec 2026-09-04 §3b): tell the remaining
-        # admins there is something to rotate. Suspension is reversible and
-        # purges nothing, so it stays silent; a retried removal already told them.
-        # The notifier swallows its own failures — a notice never fails a removal.
+        # Keys outlive their minter, so tell the remaining admins to rotate.
+        # Suspension is reversible and stays silent; a retried removal already
+        # told them. The notifier swallows its own failures.
         notify_admins_of_removed_members_keys(db, org_id, row.get("user_id"))
     return row
 

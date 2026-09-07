@@ -1,9 +1,8 @@
 """API-key lifecycle + request auth for the partner API.
 
-ONE key type (2026-09-04, owner decision — the backend/license hierarchy is
-gone): a key is an org credential. It resolves to its org, spends that org's
-pool, and can do everything the API offers. Only SHA-256 hashes are stored;
-the plaintext leaves this module exactly once, in mint_key's return value.
+ONE key type: a key is an org credential — it resolves to its org, spends that
+org's pool, and can do everything the API offers. Only SHA-256 hashes are
+stored; the plaintext leaves this module once, in mint_key's return value.
 """
 
 import hashlib
@@ -15,16 +14,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 KEY_PREFIX = "mk_live_"
-# An inactive key (revoked or expired) drops off the console this long after
-# it went inactive. HIDDEN, never deleted: the row stays, so its spend keeps
-# counting in the org's totals, series and folder rollups.
+# An inactive key is HIDDEN from the console after this, never deleted: the row
+# stays, so its spend keeps counting in the org's totals and rollups.
 INACTIVE_KEY_TTL = timedelta(days=30)
 # Explicit columns, so a secret or a hash can never ride along in a list.
 KEY_COLUMNS = (
     "id, org_id, label, key_prefix, status, expires_at, revoked_at, folder_id, created_by, created_at, last_used_at"
 )
-# The API's own credit_prices rows — never the product's. One per tool; the
-# partner deliverable is priced independently of the in-app one.
+# The API's own credit_prices rows — each partner deliverable is priced
+# independently of the in-app one.
 ONECLICK_ACTION = "partner_oneclick_run"
 REGISTRY_ACTION = "partner_registry_parse"
 SPLIT_SHEET_ACTION = "partner_split_sheet"
@@ -36,8 +34,8 @@ def partner_api_enabled() -> bool:
 
 
 def partner_surface_enabled() -> bool:
-    """The router gate: the partner surface depends on prices/wallets (credits)
-    and orgs (licensing) as much as on its own flag."""
+    """Router gate: the surface needs prices/wallets (credits) and orgs
+    (licensing) as much as its own flag."""
     from subscriptions.service import credits_enabled, licensing_enabled
 
     return partner_api_enabled() and credits_enabled() and licensing_enabled()
@@ -63,9 +61,8 @@ def mint_key(
     folder_id: str | None = None,
 ) -> dict:
     """Insert a key row; the returned dict carries the plaintext under 'secret'
-    (shown once, never stored). An unknown folder raises ValueError — a key
-    filed into another org's folder would leak that folder's name back through
-    the usage rollup."""
+    (shown once, never stored). Unknown folder -> ValueError: filing a key into
+    another org's folder would leak that folder's name via the usage rollup."""
     if folder_id is not None and not folder_belongs(sb, org_id, folder_id):
         raise ValueError("unknown folder")
     secret_key = KEY_PREFIX + secrets.token_urlsafe(32)
@@ -86,18 +83,16 @@ def mint_key(
 
 
 def list_keys(sb, org_id: str) -> list[dict]:
-    """An org's LISTED keys — explicit columns, so secrets and hashes can't
-    appear, minus the long-inactive ones (is_hidden). Filtered in Python
-    because the predicate is two nullable timestamps and a status, and the
-    row count per org is tiny."""
+    """An org's LISTED keys, minus the long-inactive ones. Filtered in Python:
+    the predicate is two nullable timestamps and a status, over few rows."""
     rows = sb.table("partner_api_keys").select(KEY_COLUMNS).eq("org_id", org_id).execute().data or []
     return [r for r in rows if not is_hidden(r)]
 
 
 def revoke_key(sb, org_id: str, key_id: str) -> bool:
-    """Returns False when nothing matched (unknown id, or another org's key)
-    so the router can 404 instead of reporting a revoke that never happened.
-    Stamps revoked_at: it is the clock the 30-day hiding runs on."""
+    """False when nothing matched (unknown id, or another org's key), so the
+    router 404s instead of reporting a revoke that never happened. revoked_at
+    is the clock the 30-day hiding runs on."""
     res = (
         sb.table("partner_api_keys")
         .update({"status": "revoked", "revoked_at": datetime.now(UTC).isoformat()})
@@ -109,8 +104,6 @@ def revoke_key(sb, org_id: str, key_id: str) -> bool:
 
 
 def _expired(row: dict, now: datetime | None = None) -> bool:
-    # TIMESTAMPTZ arrives as ISO-8601 with an offset; 3.11's fromisoformat
-    # reads it (a trailing "Z" included), so there is nothing to catch.
     raw = row.get("expires_at")
     return bool(raw) and datetime.fromisoformat(raw) <= (now or datetime.now(UTC))
 
@@ -120,11 +113,9 @@ def _stale(raw: str | None, cutoff: datetime) -> bool:
 
 
 def is_hidden(row: dict, now: datetime | None = None) -> bool:
-    """Has this key been inactive long enough to drop off the console?
-
-    A revoked row with NO revoked_at (pre-migration data) is never hidden: the
-    only honest answer to "how long ago?" is "unknown", and hiding a key an
-    admin can still see spend for is worse than showing one too many."""
+    """Inactive long enough to drop off the console? A revoked row with no
+    revoked_at (pre-migration) is never hidden — "how long ago?" has no honest
+    answer, and showing one key too many beats hiding one."""
     cutoff = (now or datetime.now(UTC)) - INACTIVE_KEY_TTL
     if row.get("status") == "revoked" and _stale(row.get("revoked_at"), cutoff):
         return True
@@ -132,8 +123,8 @@ def is_hidden(row: dict, now: datetime | None = None) -> bool:
 
 
 def key_status(row: dict, now: datetime | None = None) -> str:
-    """ "active" | "revoked" | "expired" — what the console shows. Revoked wins:
-    a key revoked before its expiry was killed, not left to lapse."""
+    """What the console shows. Revoked wins: a key revoked before its expiry
+    was killed, not left to lapse."""
     if row.get("status") == "revoked":
         return "revoked"
     return "expired" if _expired(row, now) else "active"
@@ -160,11 +151,10 @@ def list_folders(sb, org_id: str) -> list[dict]:
 
 
 def create_folder(sb, org_id: str, name: str) -> dict:
-    """Idempotent on the name (case-insensitively): the UI is "type a folder
-    name", so typing one that already exists must file the key there rather
-    than 409 at someone who did nothing wrong. The returned row carries a
-    transient `created` flag — the router pops it and only fires analytics on
-    a real insert."""
+    """Idempotent on the name, case-insensitively: the UI is "type a folder
+    name", so re-typing an existing one files the key there rather than 409ing.
+    The transient `created` flag lets the router fire analytics on a real
+    insert only."""
     name = (name or "").strip()
     if not 1 <= len(name) <= 80:
         raise ValueError("folder name must be 1-80 characters")
@@ -179,8 +169,7 @@ def create_folder(sb, org_id: str, name: str) -> dict:
         res = sb.table("partner_key_folders").insert({"org_id": org_id, "name": name}).execute()
     except Exception as exc:
         # Two admins typing the same name at once: the (org_id, name) unique
-        # index is the real arbiter, so lose the race by re-reading, never 500.
-        # Same idiom as orgs.service / projects.service.
+        # index is the arbiter, so lose the race by re-reading, never 500.
         if "23505" not in str(exc) and "duplicate key" not in str(exc).lower():
             raise
         raced = _match()
@@ -192,9 +181,8 @@ def create_folder(sb, org_id: str, name: str) -> dict:
 
 
 def set_key_folder(sb, org_id: str, key_id: str, folder_id: str | None) -> bool:
-    """False = nothing moved: the folder is not this org's, or the key isn't
-    (unknown id, or another org's). Both scoped by org_id, so a caller can
-    never file someone else's key or read a foreign folder's existence."""
+    """False = nothing moved: the folder or the key is not this org's. Both
+    scoped by org_id, so a caller can never touch another org's rows."""
     if folder_id is not None and not folder_belongs(sb, org_id, folder_id):
         return False
     res = sb.table("partner_api_keys").update({"folder_id": folder_id}).eq("org_id", org_id).eq("id", key_id).execute()
@@ -202,8 +190,8 @@ def set_key_folder(sb, org_id: str, key_id: str, folder_id: str | None) -> bool:
 
 
 def resolve_key(sb, bearer: str | None) -> PartnerContext | None:
-    """Bearer secret -> PartnerContext, or None (caller maps None to 401/403).
-    Checks: key active + unexpired; org active, not archived, partner_api_enabled."""
+    """Bearer secret -> PartnerContext, or None (the caller 401s). Checks: key
+    active + unexpired; org active, not archived, partner_api_enabled."""
     if not bearer or not bearer.startswith(KEY_PREFIX):
         return None
     res = (
@@ -242,12 +230,10 @@ def resolve_key(sb, bearer: str | None) -> PartnerContext | None:
 # ---- billing ----------------------------------------------------------------
 
 
-def get_price(sb, action: str = ONECLICK_ACTION) -> int:
-    """The BASE for a partner action (partner_oneclick_run, partner_registry_parse,
-    partner_split_sheet, partner_zoe_message)
-    from credit_prices (public-read table). The base is the floor; the charge
-    itself comes from ai_pricing.compute_charge. A missing row is a deploy
-    error, never a free run."""
+def get_price(sb, action: str) -> int:
+    """The BASE for a partner action, from credit_prices. A floor, not the
+    charge — that comes from ai_pricing.compute_charge. A missing row is a
+    deploy error, never a free run."""
     res = sb.table("credit_prices").select("credits").eq("action", action).execute()
     if not res.data:
         raise RuntimeError(f"no credit price seeded for {action}")
@@ -255,13 +241,10 @@ def get_price(sb, action: str = ONECLICK_ACTION) -> int:
 
 
 def check_pool(sb, org_id: str, price: int) -> dict:
-    """THE billing gate. debit_credits deliberately tolerates overdraft
-    (concurrency drift lands on the bundle, which may go negative) and no
-    member cap applies on the partner path — so this pre-check is the only
-    authority. Mirrors _check_credits_org's balance >= price comparison.
-
-    `period_end` rides along for derive_request_id — the dedupe id must be
-    scoped to the pool's billing period, and this is the read that has it."""
+    """THE billing gate: debit_credits tolerates overdraft and no member cap
+    applies to a key, so this pre-check is the only authority. `period_end`
+    rides along for derive_request_id, which scopes the dedupe id to the
+    pool's billing period."""
     from orgs.wallets import read_or_create_org_wallet
 
     pool = read_or_create_org_wallet(sb, org_id)
@@ -277,17 +260,16 @@ def check_pool(sb, org_id: str, price: int) -> dict:
 def derive_request_id(
     key_id: str, idempotency_key: str | None, payload_fingerprint: str, period_end: str | None
 ) -> str:
-    """debit_credits dedupes on p_request_id. Namespaced by key id (one
-    partner's retry header can never collide with another's, or with internal
-    uuid4 debits), bound to the payload fingerprint — otherwise one header
-    value ridden across DIFFERENT payloads would make every run after the
-    first a free duplicate debit — AND to the pool's billing period, matching
-    the product path (enforcement.gated_credits). Without the period term
-    idx_credit_ledger_request_id, a global never-expiring unique index, would
-    keep matching that first row forever: one pinned header would buy a year
-    of runs for one charge. Same key + same deliverable + same period: charged
-    once. New deliverable, or a new period: pays. No header => fresh uuid4:
-    each retry pays."""
+    """The id debit_credits dedupes on. Same key + same deliverable + same
+    period is charged once; a new deliverable or a new period pays; no header
+    means a fresh uuid4, so every retry pays.
+
+    All three terms are load-bearing. The key id keeps one partner's header
+    from colliding with another's. The fingerprint stops one header ridden
+    across different payloads making every later run a free duplicate. The
+    period stops idx_credit_ledger_request_id — global and never-expiring —
+    matching that first row forever, which would buy a year of runs for one
+    charge."""
     if idempotency_key:
         period = period_end or "noperiod"
         return str(uuid.uuid5(uuid.UUID(key_id), f"{idempotency_key}:{payload_fingerprint}:{period}"))
@@ -295,14 +277,10 @@ def derive_request_id(
 
 
 def already_charged(sb, request_id: str) -> bool:
-    """Has this request id been debited already? ONE indexed read on
-    idx_credit_ledger_request_id, so a replay under an Idempotency-Key can say
-    `credits: 0, replayed: true` (spec 2026-09-06 §3.1). Only meaningful for a
-    DERIVED id — a fresh uuid4 can never match, so callers skip the read when
-    no header was sent. Advisory only — `debit_credits`'s own p_request_id
-    check is the authority. Two identical calls racing, or a failed read,
-    both report the price while one is charged: over-reports, never
-    under-reports, never fails a delivered run."""
+    """Already debited? One indexed read, so a replay under an Idempotency-Key
+    can report `credits: 0, replayed: true`. Only meaningful for a DERIVED id.
+    Advisory — debit_credits' own check is the authority — and it fails safe:
+    a race or a failed read over-reports the price, never under-reports."""
     try:
         res = sb.table("credit_ledger").select("id").eq("request_id", request_id).limit(1).execute()
         return bool(res.data)
@@ -334,16 +312,11 @@ def debit_run(
     metadata: dict | None = None,
     action: str = ONECLICK_ACTION,
 ):
-    """Direct RPC on purpose: debit_for_action builds its own metadata from a
-    CreditGrant and has no hook for partner attribution. `metadata` is the
-    compute_charge explanation (base / metered / tail / tokens) — the SAME
-    keys a product row carries — with the key id layered on top (what
-    get_org_usage.byKey groups on). No p_member_id — a key is the ORG's
-    credential, not a member's, so no cap counter moves.
-
-    `amount` is compute_charge's result, NEVER get_price's base — the name
-    says so because the base is the floor, not the charge. Returns the RPC's
-    result so a caller can tell a real debit from {"duplicate": true}."""
+    """Direct RPC on purpose: debit_for_action builds metadata from a
+    CreditGrant and has no hook for partner attribution. `metadata` is
+    compute_charge's explanation plus the key id (what byKey groups on). No
+    p_member_id: a key is the ORG's credential, so no cap counter moves.
+    `amount` is compute_charge's result, NEVER get_price's base."""
     res = sb.rpc(
         "debit_credits",
         {
@@ -366,14 +339,10 @@ def debit_run(
 
 
 def created_by_labels(sb, org_id: str, keys: list[dict]) -> dict[str, str]:
-    """user_id -> display email for the Created by column.
-
-    One org_members read for the org (creators are normally members, and a
-    REMOVED member's row still carries the email — which is exactly the case
-    the column exists for), then the auth-admin lookup ONCE per id that read
-    did not cover. Best-effort, never raises: an unlabelled column must not
-    fail the key list.
-    """
+    """user_id -> display email for the Created by column. One org_members read
+    (a REMOVED member's row still carries the email, which is the case the
+    column exists for), then one auth-admin lookup per id it missed.
+    Best-effort: an unlabelled column must not fail the key list."""
     from orgs.service import _resolve_user_email
 
     ids = {k["created_by"] for k in keys if k.get("created_by")}
@@ -403,8 +372,8 @@ def created_by_labels(sb, org_id: str, keys: list[dict]) -> dict[str, str]:
 
 
 def key_console(sb, org_id: str) -> dict:
-    """The key-console payload both surfaces return — the org admin's console
-    and the Msanii admin's. One helper so the two can't drift."""
+    """The key-console payload both the org admin's console and the Msanii
+    admin's return, so the two can't drift."""
     keys = list_keys(sb, org_id)
     labels = created_by_labels(sb, org_id, keys)
     for k in keys:
@@ -425,24 +394,19 @@ def run_partner_calc(
     contract_terms,  # PartnerContractTerms | None
     expenses: list[dict] | None,
 ) -> tuple[dict, int | None, dict | None]:
-    """Synchronous calc pipeline (runs in a worker thread). Raises
-    CalculationError for partner-visible failures.
+    """Synchronous calc pipeline (worker thread). Raises CalculationError for
+    partner-visible failures.
 
-    OWNS tmpdir cleanup: asyncio.to_thread can't be cancelled, so on client
-    disconnect the generator dies while this thread still reads the files —
-    cleanup must live where the files are used, in this finally.
+    File mode: pdf -> markdown -> get_or_parse (shared cross-tenant cache,
+    keyed by SHA-256 of the parse text) -> merge -> calc. Terms mode: DTO ->
+    ContractData -> calc, no LLM.
 
-    File mode: pdf -> markdown -> get_or_parse (shared cache — deliberately
-    cross-tenant, keyed by SHA-256 of the parse text) -> merge -> calc.
-    Terms mode: DTO -> ContractData -> calc. No LLM touched.
+    OWNS tmpdir cleanup: to_thread can't be cancelled, so on client disconnect
+    the generator dies while this thread is still reading the files.
 
-    Returns (result, measured_credits, usage): the sectioned v1 result dict
-    (`summary` + `payments`) plus the two pricing inputs, both read INSIDE the
-    tracking scope (the accumulator is a contextvar). Terms mode never opens a
-    scope, so both are None = "unmeasured" and the caller charges the base.
-    The caller prices with ai_pricing.compute_charge — the product's
-    three-term formula (base / metered / base + size tail) — never a local
-    max().
+    Returns (result, measured, usage) — the two pricing inputs read INSIDE the
+    tracking scope. Terms mode opens no scope, so both are None = unmeasured
+    and the caller charges the base.
     """
     import shutil
     from dataclasses import asdict
@@ -458,9 +422,8 @@ def run_partner_calc(
         measured = None
         usage = None
 
-        # Order is load-bearing: cheap validation before billable work. Every
-        # statement failure is a CalculationError, and the router returns
-        # without debiting — parsing first would hand out free LLM runs.
+        # Order is load-bearing: cheap validation before billable work, or a
+        # bad statement buys a free LLM run.
         song_totals = calc.read_royalty_statement(statement_path)
 
         if contract_terms is not None:
@@ -471,9 +434,8 @@ def run_partner_calc(
                 for path in contract_paths:
                     md = pdf_to_markdown(path)
                     datas.append(get_or_parse(sb, (lambda m=md: m)))
-                # Both reads MUST happen inside the scope: the accumulator
-                # resets when it exits. None from credits_for_llm_usage means
-                # a model missing from MODEL_RATES — unmeasurable, base only.
+                # Inside the scope: the accumulator resets when it exits.
+                # None = a model missing from MODEL_RATES, so base only.
                 measured = credits_for_llm_usage()
                 usage = llm_usage_snapshot()
             merged = calc.merge_contracts(datas) if len(datas) > 1 else datas[0]
@@ -496,19 +458,15 @@ def run_partner_parse(
     contract_paths: list[str],
     main_artist_name: str = "",
 ) -> tuple[dict, int | None, dict | None]:
-    """Synchronous parse pipeline for /registry/v1/splits (worker
-    thread). OWNS tmpdir cleanup, for the same reason run_partner_calc does.
+    """Parse pipeline for /registry/v1/splits (worker thread). Owns tmpdir
+    cleanup and reads its pricing inputs in-scope, like run_partner_calc.
 
-    pdf -> markdown -> get_or_parse (the shared parse cache — deliberately
-    cross-tenant, keyed by SHA-256 of the contract text, holding no org data)
-    -> merge -> two views of one contract: `contract_terms`, the frozen v1
-    terms DTO that /oneclick/v1/royalties accepts verbatim, and `splits`, the
-    Registry's per-party master / publishing / SoundExchange pivot.
+    pdf -> markdown -> get_or_parse -> merge -> two views of one contract:
+    `contract_terms`, the frozen DTO /oneclick/v1/royalties takes verbatim,
+    and `splits`, the Registry's per-party pivot.
 
-    ValueError = the contract could not be read (no text, not a PDF) and is
-    partner-visible; anything else is ours. Returns (result, measured, usage),
-    the result being the sectioned v1 shape (`contract_terms` + `splits`),
-    with both pricing inputs read INSIDE the tracking scope, like the calc.
+    ValueError = unreadable contract, and is partner-visible; anything else
+    is ours.
     """
     import shutil
 

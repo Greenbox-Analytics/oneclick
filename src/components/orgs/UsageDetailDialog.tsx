@@ -1,7 +1,6 @@
-// src/components/orgs/UsageDetailDialog.tsx
-// The breakdown behind one row of a usage table — a member, an API key or a
-// folder. Purely presentational: the caller hands it a UsageSubject already
-// built from the payload it fetched, so this file never fetches anything.
+// The breakdown behind one row of a usage table — a member, key or folder.
+// Presentational: the caller hands it a UsageSubject built from the payload it
+// already fetched, so this never fetches.
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -29,7 +28,7 @@ export function UsageDetailDialog({
   subject: UsageSubject | null;
   range: UsageRange;
   since: string | null;
-  /** Credits spent across the whole window, for the "share of total" tile. */
+  /** Window-wide spend, for the "share of total" tile. */
   windowTotal: number;
   onClose: () => void;
 }) {

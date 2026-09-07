@@ -132,7 +132,7 @@ export function useAdminMutations() {
     qc.invalidateQueries({ queryKey: ["entitlements", userId] });
   };
 
-  // Manual paid-tier grant (no Stripe) — Basic or Pro. Revoke drops to free.
+  // Manual paid-tier grant, no Stripe. Revoke drops to free.
   const grantTier = useMutation({
     mutationFn: async ({ userId, tier }: { userId: string; tier: "basic" | "pro" }) =>
       apiFetch(`${API_URL}/admin/users/${userId}/grant`, { method: "POST", body: JSON.stringify({ tier }) }),

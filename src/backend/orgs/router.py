@@ -8,7 +8,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
@@ -434,7 +434,7 @@ async def release_coverage(org_id: str, user_id: str = Depends(get_current_user_
 @router.get("/{org_id}/usage")
 async def get_org_usage(
     org_id: str,
-    range: str = Query("mtd", description="mtd | 7d | 14d | 1y | all"),
+    range: service.UsageRange,
     user_id: str = Depends(get_current_user_id),
 ):
     """Admin-only per-member usage rollup — pool balance, cumulative paid-in,
@@ -443,28 +443,18 @@ async def get_org_usage(
     all; spec 2026-09-06 §6). Authz denial (403) is raised directly from
     orgs.authz.require_admin inside the service, same as every other
     admin-gated endpoint in this router."""
-    if range not in service.USAGE_RANGES:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "invalid_range", "message": f"range must be one of {', '.join(service.USAGE_RANGES)}"},
-        )
     return await service.get_org_usage(_get_supabase(), user_id, org_id, range_=range)
 
 
 @router.get("/{org_id}/usage/report.pdf")
 async def get_org_usage_report(
     org_id: str,
-    range: str = Query("mtd", description="mtd | 7d | 14d | 1y | all"),
+    range: service.UsageRange,
     user_id: str = Depends(get_current_user_id),
 ):
     """The same admin-only payload as GET /orgs/{id}/usage, rendered as a
     downloadable PDF. Goes through service.get_org_usage so the org-admin gate
     is the one already there — never re-implemented here."""
-    if range not in service.USAGE_RANGES:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "invalid_range", "message": f"range must be one of {', '.join(service.USAGE_RANGES)}"},
-        )
     db = _get_supabase()
     data = await service.get_org_usage(db, user_id, org_id, range_=range)
     name = (db.table("organizations").select("name").eq("id", org_id).execute().data or [{}])[0].get("name") or "Team"

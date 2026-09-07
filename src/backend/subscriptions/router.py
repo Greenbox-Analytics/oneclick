@@ -9,7 +9,7 @@ No /refresh endpoint — frontend calls queryClient.invalidateQueries(['entitlem
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 # Ensure backend dir is in path (matches the pattern in boards/router.py)
@@ -19,6 +19,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from analytics import capture as analytics_capture
 from auth import get_current_user_email, get_current_user_id
+from orgs import service as orgs_service
 from subscriptions.admin_auth import is_user_admin
 from subscriptions.deps import _get_entitlements_service
 from subscriptions.service import EntitlementsService, credits_enabled, licensing_enabled
@@ -55,29 +56,20 @@ async def get_my_credit_usage(user_id: str = Depends(get_current_user_id)):
 
 
 async def _my_api_usage(user_id: str, range_: str) -> dict:
-    """The /me/api-usage payload — shared by the JSON endpoint and its PDF twin
-    so the two can never disagree about the same window.
+    """The /me/api-usage payload, shared by the JSON endpoint and its PDF twin
+    so the two can't disagree about the same window.
 
-    Partner-API spend through the caller's OWN keys, in every org where they
-    hold an ACTIVE seat.
-
-    MY usage, like /me/credits/usage: the rollup is scoped to keys the caller
-    created (`only_created_by`), so a member sees their own keys and never a
-    colleague's — the org-wide view stays admin-only on GET /orgs/{id}/usage.
-    `credits`/`runs` sum the returned byKey rows, so a hidden (long-inactive)
-    key's spend is not counted here even though it still counts for the org.
+    Partner spend through the caller's OWN keys, in every org where they hold an
+    active seat. MY usage, like /me/credits/usage: scoped by `only_created_by`,
+    so a member never sees a colleague's key — the org-wide view stays
+    admin-only. `credits`/`runs` sum the returned rows, so a hidden key's spend
+    is absent here while still counting for the org.
     """
     if not (credits_enabled() and licensing_enabled()):
         return {"range": range_, "orgs": []}
 
     from main import get_supabase_client
-    from orgs import service as orgs_service
 
-    if range_ not in orgs_service.USAGE_RANGES:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "invalid_range", "message": f"range must be one of {', '.join(orgs_service.USAGE_RANGES)}"},
-        )
     sb = get_supabase_client()
     memberships = (
         sb.table("org_members").select("org_id").eq("user_id", user_id).eq("status", "active").execute().data or []
@@ -112,7 +104,7 @@ async def _my_api_usage(user_id: str, range_: str) -> dict:
 
 @router.get("/me/api-usage")
 async def get_my_api_usage(
-    range: str = Query("mtd", description="mtd | 7d | 14d | 1y | all"),
+    range: orgs_service.UsageRange,
     user_id: str = Depends(get_current_user_id),
 ):
     """Partner-API spend through the caller's OWN keys — see _my_api_usage."""
@@ -121,13 +113,12 @@ async def get_my_api_usage(
 
 @router.get("/me/api-usage/report.pdf")
 async def get_my_api_usage_report(
-    range: str = Query("mtd", description="mtd | 7d | 14d | 1y | all"),
+    range: orgs_service.UsageRange,
     user_id: str = Depends(get_current_user_id),
 ):
-    """The same data as GET /me/api-usage, as a downloadable PDF: one section
-    per org (its own chart, keys and folders) and no member table — a plain
-    member's own keys are all this endpoint ever sees. Flags off renders the
-    empty report rather than 404ing, matching the JSON's empty `orgs`."""
+    """GET /me/api-usage as a PDF: one section per org, no member table — a
+    member's own keys are all this endpoint sees. Flags off renders the empty
+    report rather than 404ing, matching the JSON."""
     from orgs import usage_report
 
     data = await _my_api_usage(user_id, range)
@@ -146,9 +137,9 @@ async def get_my_api_usage_report(
         title="My API usage",
         subtitle="Usage report",
         range_=data["range"],
-        # ponytail: one floor for every section. Two orgs on different billing
-        # periods gap-fill their charts from the first org's; per-section
-        # `since` if that ever misleads someone.
+        # ponytail: one floor for every section — two orgs on different
+        # billing periods gap-fill from the first's. Per-section `since` if
+        # that ever misleads someone.
         since=orgs[0]["since"] if orgs else None,
         series=usage_report.merge_series(s["series"] for s in sections),
         seats=None,

@@ -45,9 +45,7 @@ export interface OrgSummary {
   status: OrgStatus;
   archived_at?: string | null;
   kind?: OrgKind;
-  /** Msanii-admin-set capability bit: this org may use the partner API and
-   * manage its keys from the console (OrgApiKeysPanel). The backend spreads
-   * the column via select("*"); the type was the only thing missing. */
+  /** Msanii-admin-set: this org may use the partner API and manage its keys. */
   partner_api_enabled?: boolean;
   /** Admin currently on the hook for this org's slot/storage/billing. Stays
    * set (last coverer) even when released — see release_coverage. */
@@ -117,7 +115,7 @@ export interface OrgAdminContact {
   fullName: string | null;
 }
 
-/** Usage windows (spec 2026-09-06 §6): mtd = the pool's billing period. */
+/** Usage windows; mtd = the pool's billing period. */
 export type UsageRange = "7d" | "14d" | "mtd" | "1y" | "all";
 
 export interface ActionSpend {
@@ -127,7 +125,7 @@ export interface ActionSpend {
 }
 
 export interface SeriesDay {
-  /** UTC date, YYYY-MM-DD. Only days with spend are listed. */
+  /** UTC date. Only days with spend are listed. */
   day: string;
   actions: ActionSpend[];
 }
@@ -147,22 +145,22 @@ export interface OrgSeatUsage {
   effectiveCap: number | null;
   /** Counter maintained by debit_credits, reset each period. */
   capUsed: number;
-  /** Ledger-derived spend for the pool's current period. PRODUCT ONLY — the
-   * members table compares it to the cap, and API spend isn't capped per seat. */
+  /** Ledger spend for the pool's current period. PRODUCT ONLY: this is what
+   * the members table compares to the cap, and a key moves no cap. */
   spentThisPeriod: number;
   /** Spend through keys this member CREATED. Optional for deploy skew. */
   apiCredits?: number;
   apiRuns?: number;
   /** Product AND partner actions — the tool columns fold both. */
   byAction: ActionSpend[];
-  /** Per-day spend for this row over the same window as the top-level series.
-   * Optional for deploy skew — a backend without it means "no breakdown", not zero spend. */
+  /** Per-day spend for this row. Optional for deploy skew: absent means "no
+   * breakdown", never zero spend. */
   series?: SeriesDay[];
 }
 
-/** One partner API key's spend this pool period (get_org_usage.byKey). One row
- * per LISTED key — zero-spend keys included, keys past the 30-day retention
- * absent — so labels, status and folder come from here, not a client-side join. */
+/** One key's spend this pool period. One row per LISTED key (zero-spend
+ * included, past-retention absent), so labels, status and folder come from
+ * here rather than a client-side join. */
 export interface PartnerKeyUsageRow {
   keyId: string;
   label: string;
@@ -174,12 +172,11 @@ export interface PartnerKeyUsageRow {
   runs: number;
   lastUsedAt: string | null;
   byAction: ActionSpend[];
-  /** Per-day spend for this row over the same window as the top-level series.
-   * Optional for deploy skew — a backend without it means "no breakdown", not zero spend. */
+  /** Per-day spend for this row; optional for deploy skew. */
   series?: SeriesDay[];
 }
 
-/** Spend rolled up by the key's CURRENT folder; the unfiled row is folderId null. */
+/** Spend by the key's CURRENT folder; the unfiled row is folderId null. */
 export interface FolderUsageRow {
   folderId: string | null;
   name: string;
@@ -187,8 +184,7 @@ export interface FolderUsageRow {
   credits: number;
   runs: number;
   byAction: ActionSpend[];
-  /** Per-day spend for this row over the same window as the top-level series.
-   * Optional for deploy skew — a backend without it means "no breakdown", not zero spend. */
+  /** Per-day spend for this row; optional for deploy skew. */
   series?: SeriesDay[];
 }
 
@@ -201,14 +197,14 @@ export interface OrgUsage {
   periodStart: string | null;
   periodEnd: string | null;
   seats: OrgSeatUsage[];
-  /** Partner API spend per key, credits desc; [] for an org with no partner traffic. */
+  /** Partner spend per key, credits desc; [] with no partner traffic. */
   byKey: PartnerKeyUsageRow[];
-  /** The same spend grouped by folder, credits desc. */
+  /** The same, grouped by folder. */
   byFolder: FolderUsageRow[];
   range: UsageRange;
-  /** Floor of the window, ISO; null for all time. */
+  /** Floor of the window; null for all time. */
   since: string | null;
-  /** Totals of the same-length window before `since`; null when there is none. */
+  /** Totals of the same-length window before `since`, or null. */
   previous: { credits: number; runs: number } | null;
   series: SeriesDay[];
 }
@@ -508,8 +504,8 @@ export function useDissolveOrg() {
 export function useOrgUsage(orgId?: string, range: UsageRange = "mtd") {
   const { user } = useAuth();
   return useQuery<OrgUsage>({
-    // The range is part of the key: the members table keeps its MTD numbers
-    // while the Usage card looks at a year.
+    // The range is part of the key, so the members table keeps its MTD
+    // numbers while the Usage card looks at a year.
     queryKey: ["orgs", orgId, "usage", range],
     queryFn: () => apiFetch<OrgUsage>(`${API_URL}/orgs/${orgId}/usage?range=${range}`),
     enabled: !!user?.id && !!orgId,

@@ -1,7 +1,5 @@
-// src/components/orgs/OrgApiKeysPanel.tsx
-// Admin console: the partner API keys of a partner-enabled org, with per-key
-// spend this period (useOrgUsage().byKey). Rendered by AdminConsole only when
-// org.partner_api_enabled — never for members, never for a non-enabled org.
+// Admin console: a partner-enabled org's API keys, with this period's per-key
+// spend from useOrgUsage().byKey. Mounted only when org.partner_api_enabled.
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { BookOpen, KeyRound, Loader2, Plus } from "lucide-react";
@@ -45,7 +43,7 @@ function KeyRow({
 }: {
   row: KeyRowData;
   folderName: string | null;
-  /** False until the separate usage query resolves — a spend of 0 would read as "this key spent nothing". */
+  /** False until the usage query resolves; a 0 would read as "spent nothing". */
   usageLoaded: boolean;
   onRevoke: (r: KeyRowData) => void;
   onMove: (r: KeyRowData) => void;
@@ -62,7 +60,8 @@ function KeyRow({
       </TableCell>
       <TableCell className="text-right tabular-nums">{usageLoaded ? (usage?.credits ?? 0) : "—"}</TableCell>
       <TableCell className="text-right tabular-nums">{usageLoaded ? (usage?.runs ?? 0) : "—"}</TableCell>
-      {/* last_used_at is stamped on every resolve; usage.lastUsedAt only on a debited run this period. */}
+      {/* last_used_at is stamped on every resolve; usage.lastUsedAt only on a
+          debited run this period. */}
       <TableCell className="text-muted-foreground">{fmtDate(key.last_used_at ?? usage?.lastUsedAt)}</TableCell>
       <TableCell className="text-right whitespace-nowrap">
         <Button variant="ghost" size="sm" aria-label={`Move ${key.label} to a folder`} onClick={() => onMove(row)}>
@@ -88,8 +87,8 @@ export function OrgApiKeysPanel({ orgId }: { orgId: string }) {
   const [moving, setMoving] = useState<KeyRowData | null>(null);
   const folders = data?.folders ?? [];
 
-  // Never fall through to the empty state on a failed load: it invites minting
-  // a duplicate of a key they already have.
+  // Never fall through to the empty state on a failed load — it invites
+  // minting a duplicate of a key they already have.
   if (isError) {
     return (
       <Card className="p-6 text-sm text-muted-foreground text-center py-10">
@@ -183,7 +182,7 @@ export function OrgApiKeysPanel({ orgId }: { orgId: string }) {
 
       <CreateApiKeyDialog orgId={orgId} folders={folders} open={createOpen} onOpenChange={setCreateOpen} />
 
-      {/* Keyed so the picker re-seeds from the row's current folder each time. */}
+      {/* Keyed so the picker re-seeds from the row's folder each time. */}
       <MoveToFolderDialog
         key={moving?.key.id ?? "none"}
         orgId={orgId}
@@ -213,8 +212,8 @@ export function OrgApiKeysPanel({ orgId }: { orgId: string }) {
   );
 }
 
-/** Reassigns a key's folder. Spend is attributed by the key's CURRENT folder,
- * so this moves its history too — the copy says as much. */
+/** Reassigns a key's folder. Spend follows the CURRENT folder, so this moves
+ * its history too — the copy says as much. */
 function MoveToFolderDialog({
   orgId,
   folders,

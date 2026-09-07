@@ -1,15 +1,13 @@
 // src/hooks/usePartnerKeys.ts
-// Phase-2 portal (spec 2026-09-04): an org admin's partner API keys. Per-key
-// spend is NOT here — it rides on useOrgUsage (get_org_usage.byKey). Same
-// idioms as useOrgs.ts; query key ["orgs", orgId, "partner-keys"].
+// An org admin's partner API keys. Per-key SPEND is not here — it rides on
+// useOrgUsage's byKey.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { API_URL, apiFetch } from "@/lib/apiFetch";
 
-/** One row of GET /orgs/{id}/partner-keys. `status` is what is STORED —
- * "expired" is derived client-side (lib/partnerKeys.keyStatus).
- * `created_by_label` is the creator's resolved email. */
+/** One row of GET /orgs/{id}/partner-keys. `status` is what is STORED;
+ * "expired" is derived client-side by lib/partnerKeys.keyStatus. */
 export interface PartnerKey {
   id: string;
   label: string;
@@ -25,8 +23,8 @@ export interface PartnerKey {
   folder_id: string | null;
 }
 
-/** A team's grouping of keys — a use case or project. Spend is attributed by
- * the key's CURRENT folder, so moving a key moves its history with it. */
+/** A team's grouping of keys. Spend follows the key's CURRENT folder, so
+ * moving a key moves its history. */
 export interface PartnerKeyFolder {
   id: string;
   org_id: string;
@@ -67,9 +65,8 @@ export function usePartnerKeys(orgId?: string) {
   });
 }
 
-/** No success toast: the dialog owns the success state (it has a secret to
- * show). No onError toast either — the dialog renders the ApiError message
- * inline next to the form, like OrgInvitesPanel does for the seat wall. */
+/** No toasts either way: the dialog owns success (it has a secret to show)
+ * and renders the error inline beside the form. */
 export function useCreatePartnerKey() {
   const qc = useQueryClient();
   return useMutation<MintedPartnerKey, Error, CreatePartnerKeyInput>({
@@ -97,7 +94,7 @@ export function useRevokePartnerKey() {
   });
 }
 
-/** Idempotent on an existing name, so "New folder…" can be submitted twice. */
+/** Idempotent on the name, so "New folder…" survives a double submit. */
 export function useCreatePartnerKeyFolder() {
   const qc = useQueryClient();
   return useMutation<PartnerKeyFolder, Error, { orgId: string; name: string }>({
@@ -112,7 +109,7 @@ export function useCreatePartnerKeyFolder() {
   });
 }
 
-/** Spend is attributed by the key's CURRENT folder, so usage moves too. */
+/** Spend follows the key's CURRENT folder, so usage moves too. */
 export function useSetPartnerKeyFolder() {
   const qc = useQueryClient();
   return useMutation<{ ok: boolean }, Error, { orgId: string; keyId: string; folderId: string | null }>({

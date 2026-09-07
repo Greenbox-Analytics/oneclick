@@ -1,10 +1,9 @@
-"""Org-admin (JWT) partner-key management — the phase-2 portal surface.
+"""Org-admin (JWT) partner-key management — the portal surface.
 
 Mounted at /orgs on the PRODUCT backend. Gated on the DB column
-organizations.partner_api_enabled (set by a Msanii admin), NOT on the
-PARTNER_API_ENABLED env flag: that flag marks the partner HOST, whose
-_partner_host_lockdown middleware 404s this router before it is reached.
-Spec: docs/superpowers/specs/2026-09-04-partner-portal-api-keys-design.md.
+organizations.partner_api_enabled, NOT on the PARTNER_API_ENABLED env flag:
+that flag marks the partner HOST, whose lockdown middleware 404s this router
+before it is reached.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,8 +18,8 @@ from subscriptions.service import credits_enabled, licensing_enabled
 
 
 def require_org_key_surface() -> None:
-    """require_licensing idiom, both flags: keys spend credits from an org
-    pool, so prices/wallets AND orgs are load-bearing. 404 = true rollback."""
+    """Keys spend an org pool, so both flags are load-bearing. 404 = true
+    rollback."""
     if not (credits_enabled() and licensing_enabled()):
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -35,18 +34,16 @@ def _get_supabase():
 
 
 def _partner_api_enabled(sb, org_id: str) -> bool:
-    """Own read, not a column on the shared `_first_org` select: that column
-    arrives in a migration applied by hand after deploy, and widening
-    `_first_org` would 500 every org lifecycle guard until it lands."""
+    """Own read, not a column on the shared `_first_org` select: widening that
+    would 500 every org lifecycle guard until the migration lands."""
     res = sb.table("organizations").select("partner_api_enabled").eq("id", org_id).execute()
     return bool(res.data and res.data[0].get("partner_api_enabled"))
 
 
 def _gate(sb, user_id: str, org_id: str, *, mutating: bool) -> dict:
-    """Authz FIRST — a non-admin gets 403 before anything about the org
-    (existence, capability, lifecycle) can leak. Then the capability bit,
-    then lifecycle for writes only: reads on an archived org still work so an
-    admin can see what keys existed."""
+    """Authz FIRST, so a non-admin learns nothing about the org (existence,
+    capability, lifecycle). Then the capability bit, then lifecycle for writes
+    only — reads on an archived org still show what keys existed."""
     authz.require_admin(sb, user_id, org_id)
     org = orgs_service._first_org(sb, org_id)
     if not org:
@@ -60,9 +57,8 @@ def _gate(sb, user_id: str, org_id: str, *, mutating: bool) -> dict:
 
 @router.get("/{org_id}/partner-keys")
 async def list_org_partner_keys(org_id: str, user_id: str = Depends(get_current_user_id)) -> dict:
-    """The org's listed keys (long-inactive ones are hidden, never deleted)
-    plus its folders. list_keys selects explicit columns, so secrets/hashes
-    can't appear."""
+    """The org's listed keys plus its folders. list_keys selects explicit
+    columns, so secrets and hashes can't appear."""
     sb = _get_supabase()
     _gate(sb, user_id, org_id, mutating=False)
     return psvc.key_console(sb, org_id)
@@ -72,8 +68,8 @@ async def list_org_partner_keys(org_id: str, user_id: str = Depends(get_current_
 async def create_org_partner_key(
     org_id: str, body: PartnerKeyCreate, user_id: str = Depends(get_current_user_id)
 ) -> dict:
-    """Same body as the Msanii-admin mint (PartnerKeyCreate). The response
-    carries the plaintext secret EXACTLY ONCE."""
+    """Same body as the Msanii-admin mint. The response carries the plaintext
+    secret EXACTLY ONCE."""
     sb = _get_supabase()
     _gate(sb, user_id, org_id, mutating=True)
     try:
@@ -95,8 +91,7 @@ async def create_org_partner_key(
 async def create_org_key_folder(
     org_id: str, body: KeyFolderCreate, user_id: str = Depends(get_current_user_id)
 ) -> dict:
-    """Idempotent on the name — an existing folder comes back as-is, and only
-    a real insert is worth an analytics event."""
+    """Idempotent on the name; only a real insert is worth an event."""
     sb = _get_supabase()
     _gate(sb, user_id, org_id, mutating=True)
     try:
@@ -112,9 +107,9 @@ async def create_org_key_folder(
 async def set_org_key_folder(
     org_id: str, key_id: str, body: KeyFolderAssign, user_id: str = Depends(get_current_user_id)
 ) -> dict:
-    """Move a key between folders (null = unfile it). Spend follows the key's
-    CURRENT folder, so this moves its history too. One write; the folder is
-    re-read only to tell "unknown folder" (422) from "not your key" (404)."""
+    """Move a key between folders (null = unfile). Spend follows the key's
+    CURRENT folder, so this moves its history too. The folder is re-read only
+    to tell "unknown folder" (422) from "not your key" (404)."""
     sb = _get_supabase()
     _gate(sb, user_id, org_id, mutating=True)
     if not psvc.set_key_folder(sb, org_id, key_id, body.folder_id):
@@ -127,8 +122,7 @@ async def set_org_key_folder(
 @router.delete("/{org_id}/partner-keys/{key_id}")
 async def revoke_org_partner_key(org_id: str, key_id: str, user_id: str = Depends(get_current_user_id)) -> dict:
     """revoke_key scopes on org_id and reports no match as False — a foreign
-    id, or a race where another admin revoked it first — so that False IS
-    the 404. No pre-read of the key list."""
+    id, or another admin winning the race — so False IS the 404."""
     sb = _get_supabase()
     _gate(sb, user_id, org_id, mutating=True)
     if not psvc.revoke_key(sb, org_id, key_id):

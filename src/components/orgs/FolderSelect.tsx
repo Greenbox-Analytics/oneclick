@@ -1,7 +1,6 @@
-// src/components/orgs/FolderSelect.tsx
-// The folder picker shared by "New API key" and "Move to folder": No folder /
-// an existing folder / a new one typed inline. Native <select>, same as the
-// API console's — no Radix portal to fight in a dialog.
+// The folder picker shared by "New API key" and "Move to folder": none, an
+// existing folder, or a new one typed inline. Native <select> — no Radix
+// portal to fight inside a dialog.
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +13,7 @@ const SELECT =
   "block h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15";
 
 /** Picker state plus the create-then-assign step, so both callers resolve a
- * folder the same way: `resolve()` returns the folder id to send. */
+ * folder the same way. */
 export function useFolderChoice(orgId: string, initial: string | null = null) {
   const createFolder = useCreatePartnerKeyFolder();
   const [value, setValue] = useState<string>(initial ?? "");
@@ -27,15 +26,14 @@ export function useFolderChoice(orgId: string, initial: string | null = null) {
     setNewName("");
   };
 
-  /** Hands the caller the folder id to send. Only the "New folder…" path is
-   * async — an existing choice resolves in the same tick the button is clicked,
-   * so the caller's mutate stays synchronous in the common case. */
+  /** Hands the caller the folder id to send. Only "New folder…" is async, so
+   * the common case stays synchronous. */
   const resolve = (then: (folderId: string | null) => void) => {
     if (value !== NEW_FOLDER) {
       then(value || null);
       return;
     }
-    // The endpoint is idempotent on the name, so a retry is safe.
+    // Idempotent on the name, so a retry is safe.
     createFolder.mutateAsync({ orgId, name: newName.trim() }).then((folder) => then(folder.id), () => {});
   };
 

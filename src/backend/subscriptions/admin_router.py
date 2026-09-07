@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, EmailStr, Field
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from auth import get_current_user_email, get_current_user_id
+from orgs import service as orgs_service
 from orgs.models import OrgDispersalUpdate
 from partner_api import service as psvc
 from partner_api.models import PartnerKeyCreate
@@ -80,8 +81,8 @@ class PartnerApiToggle(BaseModel):
 
 
 class TierGrant(BaseModel):
-    # Which paid tier to hand out. Defaults to the entry tier so a bodiless
-    # POST (the pre-2026-09-04 client) keeps meaning "grant Basic".
+    # Defaults to the entry tier, so a bodiless POST from an older client
+    # still means "grant Basic".
     tier: Literal["basic", "pro"] = "basic"
 
 
@@ -497,7 +498,6 @@ async def set_org_dispersal(
     dispersal credits, which is what keeps its once-per-month idempotency honest.
     """
     from main import get_supabase_client
-    from orgs import service as orgs_service
 
     sb = get_supabase_client()
     org = sb.table("organizations").select("id").eq("id", org_id).maybe_single().execute()
@@ -521,10 +521,9 @@ async def set_org_partner_api(
     body: PartnerApiToggle,
     _admin: str = Depends(require_admin),
 ) -> dict:
-    """Grant/revoke the partner API surface for an org. MSANII ADMIN ONLY —
-    same reasoning as dispersal: any signed-in user can create an org and is
-    auto-made its admin, so a customer-writable capability dial would hand the
-    partner surface (and its org-pool spend path) to anyone."""
+    """Grant/revoke the partner API surface. MSANII ADMIN ONLY, same reasoning
+    as dispersal: anyone can create an org and is auto-made its admin, so a
+    customer-writable dial would hand the surface to everyone."""
     from main import get_supabase_client
 
     sb = get_supabase_client()
@@ -533,12 +532,9 @@ async def set_org_partner_api(
     return {"org_id": org_id, "partner_api_enabled": body.enabled}
 
 
-# Key lifecycle. Msanii-admin for the SAME reason as the toggle — a key spends
-# the org pool, so whoever can mint one holds the whole partner surface. Lives
-# on the PRODUCT backend on purpose:
-# not partner-flag-gated (an operator must be able to prepare keys before the
-# partner service is even deployed), and the partner host's lockdown
-# middleware makes these unreachable there anyway.
+# Key lifecycle. Msanii-admin for the same reason as the toggle: a key spends
+# the org pool. On the PRODUCT backend on purpose — not partner-flag-gated, so
+# an operator can prepare keys before the partner service is even deployed.
 
 
 @router.post("/orgs/{org_id}/partner-keys")
@@ -548,8 +544,8 @@ async def create_partner_key(
     _admin: str = Depends(require_admin),
     admin_id: str = Depends(get_current_user_id),
 ) -> dict:
-    """Mint a key for the org — the same body the org console posts. The
-    response carries the plaintext secret EXACTLY ONCE."""
+    """Mint a key — same body as the org console. The response carries the
+    plaintext secret EXACTLY ONCE."""
     from main import get_supabase_client
 
     sb = get_supabase_client()
@@ -578,39 +574,27 @@ async def list_partner_keys(org_id: str, _admin: str = Depends(require_admin)) -
 @router.get("/orgs/{org_id}/usage")
 async def get_admin_org_usage(
     org_id: str,
-    range: str = Query("mtd", description="mtd | 7d | 14d | 1y | all"),
+    range: orgs_service.UsageRange,
     _admin: str = Depends(require_admin),
 ) -> dict:
-    """Any org's usage payload, identical in shape to GET /orgs/{id}/usage.
-    Calls the rollup directly: require_admin already authenticated a MSANII
-    admin, who holds no seat in the org and so cannot pass its admin check."""
+    """Any org's usage payload, same shape as GET /orgs/{id}/usage. Calls the
+    rollup directly: a Msanii admin holds no seat, so it cannot pass the org's
+    own admin check."""
     from main import get_supabase_client
-    from orgs import service as orgs_service
 
-    if range not in orgs_service.USAGE_RANGES:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "invalid_range", "message": f"range must be one of {', '.join(orgs_service.USAGE_RANGES)}"},
-        )
     return await orgs_service.org_usage_rollup(get_supabase_client(), org_id, range_=range)
 
 
 @router.get("/orgs/{org_id}/usage/report.pdf")
 async def get_admin_org_usage_report(
     org_id: str,
-    range: str = Query("mtd", description="mtd | 7d | 14d | 1y | all"),
+    range: orgs_service.UsageRange,
     _admin: str = Depends(require_admin),
 ):
     """The same payload as GET /admin/orgs/{id}/usage, as a downloadable PDF."""
     from main import get_supabase_client
-    from orgs import service as orgs_service
     from orgs import usage_report
 
-    if range not in orgs_service.USAGE_RANGES:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "invalid_range", "message": f"range must be one of {', '.join(orgs_service.USAGE_RANGES)}"},
-        )
     db = get_supabase_client()
     data = await orgs_service.org_usage_rollup(db, org_id, range_=range)
     name = (db.table("organizations").select("name").eq("id", org_id).execute().data or [{}])[0].get("name") or "Team"

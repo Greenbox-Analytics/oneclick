@@ -101,9 +101,8 @@ app.include_router(sweep_router)
 app.include_router(admin_analytics_router, prefix="/admin/analytics", tags=["admin-analytics"])
 app.include_router(orgs_router, prefix="/orgs", tags=["Organizations"])
 app.include_router(partner_org_keys_router, prefix="/orgs", tags=["Partner API Keys"])
-# Tool-first paths, one router per tool, each carrying its own prefix
-# (/oneclick/v1, /registry/v1, /splitsheet/v1, /zoe/v1). The tuple is also
-# the host lockdown's allowlist.
+# One router per tool, each carrying its own prefix. The tuple is also the
+# host lockdown's allowlist.
 PARTNER_API_ROUTERS = (partner_oneclick_router, partner_registry_router, partner_splitsheet_router, partner_zoe_router)
 for _r in PARTNER_API_ROUTERS:
     app.include_router(_r, tags=["Partner API"])
@@ -168,9 +167,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    # The partner API's billing headers (a split sheet carries the charge in
-    # headers because the body is the document) and the download filename —
-    # a browser hides every custom response header not listed here.
+    # The partner API's billing headers and the download filename: a browser
+    # hides every custom response header not listed here.
     expose_headers=["Content-Disposition", "Msanii-Credits", "Msanii-Request-Id", "Msanii-Replayed"],
 )
 
@@ -194,17 +192,16 @@ logger = _logging.getLogger(__name__)
 
 
 # Partner host lockdown. Service #2 runs THIS image with PARTNER_API_ENABLED
-# set, so without this every product route — admin, Stripe webhooks, /docs —
-# answers on api.<domain> AND on the raw *.run.app URL that bypasses
-# Cloudflare. The edge allowlist (Task 7) is the belt; this is the braces: the
-# boundary is a property of the build, not of a WAF rule someone has to
-# remember. Product services never set the flag, so this is a no-op there.
+# set, so without it every product route — admin, Stripe webhooks, /docs —
+# answers on api.<domain> and on the raw *.run.app URL that bypasses the edge.
+# This makes the boundary a property of the build, not of a WAF rule someone
+# has to remember. Product services never set the flag, so it is a no-op there.
 @app.middleware("http")
 async def _partner_host_lockdown(request, call_next):
     from partner_api.service import partner_api_enabled
 
-    # Allowlist by ROUTE, not prefix: the API shares /oneclick and /zoe with
-    # product routes, and only the partner routers' own paths may answer here.
+    # By ROUTE, not prefix: the API shares /oneclick and /zoe with product
+    # routes, and only the partner routers' own paths may answer here.
     path = request.url.path
     if partner_api_enabled() and not (path == "/health" or any(rx.match(path) for rx in _PARTNER_API_PATHS)):
         return _JSONResponse({"detail": "Not found"}, status_code=404)
@@ -2666,14 +2663,13 @@ async def oneclick_calculate_royalties_stream(
                         print(f"[royalties] cache-hit sync failed for calc {cached_calc['id']}: {e}")
 
                     yield f"data: {json.dumps(result)}\n\n"
-                    # Charge only once the result frame is on the wire — a client
-                    # that dropped closes this generator at the yield above and is
-                    # never billed for an answer it did not receive. This branch is
-                    # inside set_llm_context and makes no LLM call, so it measures 0
-                    # and pays exactly the base — the price of the deliverable,
-                    # identical to a fresh run's. The debit is idempotent per billing
-                    # period via the grant's deterministic request_id, so an SSE
-                    # reconnect or double-submit cannot charge twice.
+                    # Charge only once the frame is on the wire: a client that
+                    # dropped closes this generator at the yield above and is
+                    # never billed for an answer it did not get. No LLM call
+                    # here, so it measures 0 and pays the base — the same price
+                    # a fresh run charges for the same deliverable. Idempotent
+                    # per period via the grant's request_id, so a reconnect or
+                    # double-submit cannot charge twice.
                     _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
                     if gate_event:
                         yield f"data: {json.dumps(gate_event)}\n\n"
@@ -2897,11 +2893,10 @@ async def oneclick_calculate_royalties_stream(
 
                 yield f"data: {json.dumps(result)}\n\n"
 
-                # Charge on success, and success means DELIVERED: the yield above
-                # raises GeneratorExit if the client is gone, so nothing here runs
-                # and an undelivered run is free (owner decision 2026-09-04 — the
-                # onus for a dropped connection is ours). The cache-hit branch
-                # charges the same way, so both paths bill exactly once.
+                # Success means DELIVERED: the yield above raises GeneratorExit
+                # if the client is gone, so an undelivered run is free (owner
+                # decision 2026-09-04 — that loss is ours). The cache-hit branch
+                # charges the same way, so both bill exactly once.
                 _get_entitlements_service().debit_for_action(user_id, oneclick_grant)
 
                 # Fires for overall="unavailable" too — the event's `overall` property lets
